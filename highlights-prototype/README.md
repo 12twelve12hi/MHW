@@ -31,6 +31,9 @@ There is also a web version (no install, private to its owner until shared from 
 
 ## How to try it
 
+A short intro video plays on first launch (Skip closes it; ⋯ › Watch the intro video plays it again). It was
+recorded from the prototype itself (`www/onboarding.webm` / `.mp4`).
+
 | | Original | Christine |
 |---|---|---|
 | Select | Long-press a word; lift for the sentence, or drag for words. Tap the selection again for the paragraph. Drag the round handles to adjust. The pen selects as it drags. | Same |

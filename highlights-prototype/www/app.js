@@ -2424,6 +2424,7 @@
       h('div', { class: 'seg', role: 'group', 'aria-label': label }, opts.map(([v, l]) => h('button', { type: 'button', 'aria-pressed': String(st[key] === v),
         onclick: () => { st[key] = v; save(); applySettings(); renderMenu(); } }, l))));
     el.append(
+      h('button', { type: 'button', class: 'mrow', role: 'menuitem', onclick: () => { closeMenu(); showOnboarding(); } }, 'Watch the intro video'),
       h('button', { type: 'button', class: 'mrow', role: 'menuitem', onclick: () => { closeMenu(); S.introSeen[st.mode] = false; save(); renderIntro(); reader.scrollTop = 0; } }, 'How to try it'),
       h('div', { class: 'rule' }),
       toggle('Long-press picks the sentence', 'sentence'),
@@ -2502,6 +2503,42 @@
   function hideToast() { clearTimeout(toastTimer); $('#toast').hidden = true; }
 
   // ---------------------------------------------------------------- intro, settings, view
+
+  // A short, skippable video of both designs, shown on first launch and from the ⋯ menu.
+  function showOnboarding() {
+    closeOnboarding();
+    const done = () => {
+      S.introSeen.video = true;
+      save();
+      closeOnboarding();
+    };
+    const video = h('video', { class: 'onboard-video', poster: 'onboarding-poster.jpg', muted: true, autoplay: true, playsinline: true, controls: true, preload: 'auto', 'aria-label': 'How to try the prototype' },
+      h('source', { src: 'onboarding.webm', type: 'video/webm' }),
+      h('source', { src: 'onboarding.mp4', type: 'video/mp4' }));
+    video.muted = true;
+    video.addEventListener('ended', () => { startBtn.textContent = 'Start reading'; startBtn.focus(); });
+    const startBtn = h('button', { type: 'button', class: 'btn primary', onclick: done }, 'Start reading');
+    const el = h('div', { class: 'onboard', role: 'dialog', 'aria-label': 'How to try it' },
+      h('div', { class: 'onboard-card' },
+        h('div', { class: 'onboard-head' },
+          h('h2', null, 'How to try it'),
+          h('button', { type: 'button', class: 'btn quiet', onclick: done }, 'Skip')),
+        h('p', { class: 'meta' }, 'Under a minute: Christine\u2019s Save passage menu, then today\u2019s Reader for comparison.'),
+        video,
+        h('div', { class: 'onboard-foot' }, startBtn)));
+    document.body.append(el);
+    ui.onboard = el;
+    const play = video.play();
+    if (play && play.catch) play.catch(() => { /* the viewer can press play */ });
+  }
+
+  function closeOnboarding() {
+    if (!ui.onboard) return;
+    const v = ui.onboard.querySelector('video');
+    if (v) { try { v.pause(); } catch (e) { /* ignore */ } }
+    ui.onboard.remove();
+    ui.onboard = null;
+  }
 
   function renderIntro() {
     introEl.textContent = '';
@@ -2607,6 +2644,7 @@
 
   // Back (Android) and Escape close the top-most thing first. Returns true when something closed.
   window.protoHandleBack = () => {
+    if (ui.onboard) { S.introSeen.video = true; save(); closeOnboarding(); return true; }
     if (ui.picker) { closePicker(); return true; }
     if (ui.recbar) {
       if (rec) stopRecording(true);
@@ -2660,6 +2698,8 @@
   $('#view-annotations').addEventListener('click', () => setView('annotations'));
   $('#open-panel').addEventListener('click', () => (ui.panel ? closePanel() : openPanel()));
   $('#open-settings').addEventListener('click', () => (ui.menu ? closeMenu() : openMenu()));
+
+  if (!S.introSeen.video && !/novideo/.test(location.search)) showOnboarding();
 
   if (window.ResizeObserver) new ResizeObserver(scheduleRender).observe(textEl);
   window.addEventListener('resize', scheduleRender);

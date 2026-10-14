@@ -1067,3 +1067,18 @@ body.mode-christine .intro h2 {
 @media (max-width: 560px) {
   .mode-seg button { min-width: 0; }
 }
+
+/* Onboarding video */
+.onboard {
+  position: fixed; inset: 0; z-index: 90;
+  display: flex; align-items: center; justify-content: center;
+  padding-top: calc(16px + var(--native-top)); padding-bottom: 16px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  background: var(--paper);
+}
+.onboard-card { width: min(560px, 100%); max-height: 100%; display: flex; flex-direction: column; gap: 10px; font-family: var(--font-ui); }
+.onboard-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.onboard-head h2 { margin: 0; font-family: var(--font-read); font-style: italic; font-weight: 500; font-size: 28px; line-height: 34px; }
+.onboard .meta { margin: 0; }
+.onboard-video { display: block; width: 100%; min-height: 0; flex: 1 1 auto; max-height: calc(100vh - 220px); object-fit: contain; background: var(--card); border: var(--border) solid var(--ink); border-radius: 6px; }
+.onboard-foot { display: flex; justify-content: flex-end; }
