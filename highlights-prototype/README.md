@@ -4,10 +4,12 @@ A throwaway tablet prototype for comparing two designs of the Daylight Reader's 
 
 - **Original**: today's Reader, rebuilt from its source (`a12k-a2b/daylight-reader`): the selection strip with four
   gray levels, mic, Note, Copy and More; the "Note · Undo" chip; the popover you get by tapping a highlight; the note
-  sheet with Type it / Write it; the recording bar; symbols in the left margin.
-- **Christine**: Christine's proposal (email of Oct 12, "proposed star highlights solution.pdf"), with its own coat of
-  paint: the **Save passage** quick select, the hold / edit view, formatting presets per category, symbols in the
-  right margin, and the **Annotations** view with note previews over the text.
+  sheet with Type it / Write it; the recording bar and voice player; the pen's side-button tap. Book pages show no
+  margin symbols, as in the Reader's reflowed books; ⋯ › Page › PDF shows them as on fixed pages.
+- **Christine**: Christine's proposal (email of Oct 12, "proposed star highlights solution.pdf") with its own coat of
+  paint (a bookish look chosen from three design directions): the **Save passage** quick select, the hold / edit
+  view, formatting presets per category, symbols in the right margin, and the **Annotations** view with note
+  previews over the text.
 
 Switch between them with **Original | Christine** at the top left. Each design keeps its own highlights, so you can
 mark the same passages in both and compare.
@@ -23,6 +25,10 @@ Every push to `claude/highlights-menu-ux-9i3p5j` rebuilds it (GitHub Actions, `.
 All builds are signed with the same throwaway key, so a new one installs over the old one and keeps your highlights.
 The build number shows at the bottom of the ⋯ menu.
 
+There is also a web version (no install, private to its owner until shared from its Share menu):
+<https://claude.ai/artifact/YapXZVcJdqi7NkdWBBJR7X>. The microphone isn't available there, so voice notes offer
+"Pretend to record".
+
 ## How to try it
 
 | | Original | Christine |
@@ -34,18 +40,25 @@ The build number shows at the bottom of the ⋯ menu.
 | Notes on the page | Note glyph in the right margin, tap to peek | Switch to **Annotations**: note previews over the text; tap to open; hold two fingers still to see underneath |
 
 The ⋯ menu has the how-to card again, text size, theme, highlight ink (grays for the DC-1, lavender as in the
-mock-up), symbol side (Christine), and buttons to clear or reset the demo.
+mock-up), and buttons to clear or reset the demo. In Christine mode it also has hints, formatting previews on the
+category buttons, and symbol side; in Original mode, the page type.
 
 ## Decisions the prototype makes where the mock-up is open
 
-- **Categories without a default formatting** ask each time: tapping one opens the edit view.
-- **"Set as default for category"** is ticked when a passage follows its category's preset. Picking a formatting
-  while it is ticked changes the preset for every passage that follows it; untick it first for a one-time choice.
-- **The pencil** opens the edit view on the selection with the last-used category, where + adds a category and the
-  name field renames it.
-- **Shade**: Highlight uses the category's gray (the Reader's four levels); the shade row appears under Highlight.
-- **Voice notes** record audio on the tablet. Speech-to-text is not connected in this prototype, so the transcript
-  preview starts empty unless the browser offers speech recognition; type into it to try the "editable transcript".
+- **Presets apply to new saves only.** Each passage keeps the formatting it was saved with. With "Set as default for
+  category" ticked, what you pick also becomes the category's preset for future taps; unticked, it is just for this
+  passage. Passages saved earlier never change.
+- **Categories without a preset** ask each time: tapping one opens the edit view. A category made with + starts with
+  the passage's current look as its preset.
+- **The pencil** opens the edit view without saving anything; choose a category (or + to add one) to save the passage.
+- **Shade**: Highlight uses one of the Reader's four grays; the shade row appears under Highlight and follows the same
+  preset rule.
+- **Formatting previews**: category buttons show their preset (★ on a gray band, ? with a squiggle). Turn this off in
+  ⋯ to see her plain symbols.
+- **Voice notes** record audio on the tablet. Speech-to-text is not connected in the APK (Android's WebView has no
+  recogniser), so the transcript preview starts empty; type into it to try the "editable transcript". The sample
+  passage "Time is but the stream…" has a voice note with a transcript (no audio). In Chrome on a computer, the
+  browser's speech recognition fills the transcript live.
 - **Two-finger peek** needs both fingers held still for about 0.3 s, so it can't be confused with the Reader's
   two-finger tap for undo.
 
