@@ -1,1 +1,54 @@
-<!doctype html><title>stub</title>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Save Passage Prototype</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#FAF8F5">
+<meta name="description" content="A tablet prototype of the Daylight Reader's Save passage menu: categories, formatting, symbols, text and voice notes, and an annotations view.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="seg mode-seg" role="group" aria-label="Design to try">
+      <button type="button" id="mode-original" aria-pressed="false">Original</button>
+      <button type="button" id="mode-christine" aria-pressed="true">Christine</button>
+    </div>
+    <div class="book">
+      <span class="book-title" id="book-title">Walden</span>
+      <span class="book-meta" id="book-meta"></span>
+    </div>
+    <div class="seg" id="view-seg" role="group" aria-label="Reading view">
+      <button type="button" id="view-regular" aria-pressed="true">Regular</button>
+      <button type="button" id="view-annotations" aria-pressed="false">Annotations</button>
+    </div>
+    <button type="button" class="icon-btn" id="open-panel" aria-label="Saved passages" title="Saved passages">
+      <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+    </button>
+    <button type="button" class="icon-btn" id="open-settings" aria-label="Prototype settings" title="Prototype settings" aria-expanded="false">
+      <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><circle cx="5" cy="12" r="1.75" fill="currentColor"/><circle cx="12" cy="12" r="1.75" fill="currentColor"/><circle cx="19" cy="12" r="1.75" fill="currentColor"/></svg>
+    </button>
+  </header>
+
+  <main id="reader" aria-label="Reading">
+    <div class="page" id="page">
+      <div class="layer layer-under" id="layer-under" aria-hidden="true"></div>
+      <article class="text" id="text"></article>
+      <div class="layer layer-over" id="layer-over" aria-hidden="true"></div>
+      <div class="layer layer-ui" id="layer-ui"></div>
+    </div>
+  </main>
+</div>
+
+<div id="overlay-root"></div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="content.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
