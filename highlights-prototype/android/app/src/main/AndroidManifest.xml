@@ -35,6 +35,13 @@
         </provider>
     </application>
 
+    <!-- Android 11+ only lets the app see the speech recognition service if it says it will look for it. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />

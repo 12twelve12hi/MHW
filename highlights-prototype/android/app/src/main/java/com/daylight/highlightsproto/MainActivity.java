@@ -12,6 +12,8 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Voice-note transcripts from Android's own speech recognition.
+        registerPlugin(TranscriberPlugin.class);
         super.onCreate(savedInstanceState);
 
         WebView webView = getBridge().getWebView();

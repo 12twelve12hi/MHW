@@ -55,10 +55,12 @@ category buttons, and symbol side; in Original mode, the page type.
   preset rule.
 - **Formatting previews**: category buttons show their preset (★ on a gray band, ? with a squiggle). Turn this off in
   ⋯ to see her plain symbols.
-- **Voice notes** record audio on the tablet. Speech-to-text is not connected in the APK (Android's WebView has no
-  recogniser), so the transcript preview starts empty; type into it to try the "editable transcript". The sample
-  passage "Time is but the stream…" has a voice note with a transcript (no audio). In Chrome on a computer, the
-  browser's speech recognition fills the transcript live.
+- **Voice notes** in the APK use Android's own speech recognition (`TranscriberPlugin.java`): the transcript fills in
+  live while you talk and stays editable afterwards. The plugin records the audio itself and feeds the same stream to
+  the recogniser, so the note keeps both. If the tablet's speech service can't take a shared stream, it listens on its
+  own instead and the note keeps the transcript but not the audio (the recorder says so). If the tablet has no speech
+  service at all, recording works and you type the transcript. In Chrome on a computer, the browser's speech
+  recognition fills it in. The sample passage "Time is but the stream…" has a voice note with a transcript.
 - **Two-finger peek** needs both fingers held still for about 0.3 s, so it can't be confused with the Reader's
   two-finger tap for undo.
 

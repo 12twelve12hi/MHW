@@ -1415,11 +1415,24 @@
     return { render(problem) { renderVoiceArea(r, p, problem); updateSheet(r, p); } };
   }
 
+  // In the APK, the Transcriber plugin (TranscriberPlugin.java) records and transcribes with Android's own
+  // speech recognition. In a browser, MediaRecorder records and the Web Speech API transcribes where it exists.
+  const Native = NATIVE && window.Capacitor && window.Capacitor.nativePromise && window.Capacitor.addListener ? {
+    call: (m, o) => window.Capacitor.nativePromise('Transcriber', m, o || {}),
+    on: (ev, cb) => window.Capacitor.addListener('Transcriber', ev, cb),
+  } : null;
+
   async function startRecording(p, host) {
     if (rec) return;
     const state = { pid: p.id, host, started: null, peaks: [], chunks: [], simulated: false, transcript: '', interim: '', timer: null, mode: S.settings.mode };
     rec = state;
     host.render();
+    if (Native) {
+      let avail = null;
+      try { avail = await Native.call('available'); } catch (e) { avail = null; }
+      if (rec !== state) return;
+      if (avail && avail.available) { startNativeRecording(state, host); return; }
+    }
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('no getUserMedia');
       state.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -1482,6 +1495,36 @@
     host.render();
   }
 
+  async function startNativeRecording(state, host) {
+    state.native = true;
+    state.subs = [
+      Native.on('partial', (e) => {
+        state.transcript = (e && e.text) || '';
+        if (state.tEl) state.tEl.textContent = state.transcript || 'Listening\u2026';
+      }),
+      Native.on('level', (e) => { state.lastPeak = e && typeof e.peak === 'number' ? e.peak : 0; }),
+      Native.on('mode', (e) => {
+        state.nativeMode = e && e.mode;
+        if (state.tEl && state.nativeMode === 'mic') state.tEl.textContent = 'Transcribing with the tablet\u2019s speech service; this note keeps the text but not the audio.';
+      }),
+      Native.on('error', (e) => { state.srFailed = true; if (state.tEl) state.tEl.textContent = (e && e.message) || 'Speech-to-text stopped.'; }),
+    ];
+    try {
+      const r = await Native.call('start', { lang: navigator.language || 'en-US' });
+      state.nativeMode = r && r.mode;
+    } catch (err) {
+      for (const s of state.subs) try { s.remove(); } catch (e) { /* gone */ }
+      if (rec === state) rec = null;
+      host.render('nomic');
+      return;
+    }
+    if (rec !== state) { Native.call('cancel').catch(() => {}); for (const s of state.subs) try { s.remove(); } catch (e) { /* gone */ } return; }
+    state.sr = true;
+    state.started = Date.now();
+    state.timer = setInterval(() => tickRecording(state), 100);
+    host.render();
+  }
+
   function startPretend(p, host) {
     if (rec) return;
     const state = { pid: p.id, host, started: Date.now(), peaks: [], chunks: [], simulated: true, transcript: '', interim: '', phase: Math.random() * 6, mode: S.settings.mode };
@@ -1495,6 +1538,8 @@
     if (state.simulated) {
       state.phase += 0.35;
       peak = Math.max(0.05, Math.abs(Math.sin(state.phase) * 0.6 + Math.sin(state.phase * 2.7) * 0.3) * (0.6 + Math.random() * 0.4));
+    } else if (state.native) {
+      peak = Math.max(0.03, state.lastPeak || 0);
     } else if (state.an) {
       state.an.getByteTimeDomainData(state.buf);
       let m = 0;
@@ -1541,7 +1586,7 @@
         transcript: ((state.transcript || '') + ' ' + (state.interim || '')).trim(),
         hasAudio: !!blob,
         simulated: state.simulated,
-        stt: !!(state.sr && !state.srFailed),
+        stt: !!(state.sr && (!state.srFailed || state.transcript)),
       };
       if (!p) return;
       const sameMode = state.mode === S.settings.mode;
@@ -1566,6 +1611,22 @@
     };
     // The bar goes away at once; the audio file finishes in the background.
     state.host.render();
+    if (state.native) {
+      const done = (blob) => { for (const s of state.subs || []) try { s.remove(); } catch (e) { /* gone */ } finish(blob); };
+      Native.call('stop').then((r) => {
+        state.transcript = (r && r.transcript) || state.transcript || '';
+        state.interim = '';
+        let blob = null;
+        if (r && r.audio) {
+          const bin = atob(r.audio);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          blob = new Blob([bytes], { type: 'audio/wav' });
+        }
+        done(blob);
+      }, () => done(null));
+      return;
+    }
     if (state.mr && state.mr.state !== 'inactive') {
       state.mr.onstop = () => finish(state.chunks.length ? new Blob(state.chunks, { type: state.mr.mimeType || 'audio/webm' }) : null);
       try { state.mr.stop(); } catch (e) { finish(null); }
@@ -1602,7 +1663,7 @@
         waveEl,
         h('button', { type: 'button', class: 'btn primary', onclick: () => stopRecording(true) }, 'Stop')));
       if (rec.simulated) r.voiceArea.append(h('div', { class: 'meta', style: { marginTop: '6px' } }, 'Pretend recording: this screen can’t use the microphone, so nothing is captured.'));
-      if (!rec.simulated && SpeechRec) {
+      if (!rec.simulated && (SpeechRec || rec.native)) {
         rec.tEl = h('div', { class: 'meta', style: { marginTop: '6px' } }, rec.started ? 'Listening\u2026' : 'Waiting for the microphone\u2026');
         r.voiceArea.append(rec.tEl);
       }
@@ -1633,7 +1694,7 @@
     if (!v.transcript) {
       r.voiceArea.append(h('div', { class: 'meta', style: { marginTop: '6px' } },
         v.stt ? 'No words came through this time. Type what you said if you like.'
-          : 'Speech-to-text isn\u2019t connected in this prototype, so type what you said to try the editable transcript.'));
+          : (NATIVE ? 'This tablet has no speech recognition service, so type what you said.' : 'Speech-to-text isn\u2019t connected in this browser, so type what you said to try the editable transcript.')));
     }
   }
 
