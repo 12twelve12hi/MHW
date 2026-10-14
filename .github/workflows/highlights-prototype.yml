@@ -49,7 +49,8 @@ jobs:
         run: npm ci
 
       - name: Stamp the build number
-        run: echo "{\"build\": ${{ github.run_number }}, \"sha\": \"${GITHUB_SHA}\"}" > www/build.json
+        run: |
+          printf '{"build": %s, "sha": "%s"}\n' "${{ github.run_number }}" "$GITHUB_SHA" > www/build.json
 
       - name: Copy the web app into the Android project
         run: npx cap sync android
@@ -96,7 +97,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Stamp the build number
-        run: echo "{\"build\": ${{ github.run_number }}, \"sha\": \"${GITHUB_SHA}\"}" > highlights-prototype/www/build.json
+        run: |
+          printf '{"build": %s, "sha": "%s"}\n' "${{ github.run_number }}" "$GITHUB_SHA" > highlights-prototype/www/build.json
       - uses: actions/upload-pages-artifact@v3
         with:
           path: highlights-prototype/www
