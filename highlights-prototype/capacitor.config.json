@@ -1,0 +1,8 @@
+{
+  "appId": "com.daylight.highlightsproto",
+  "appName": "Highlights Proto",
+  "webDir": "www",
+  "android": {
+    "webContentsDebuggingEnabled": true
+  }
+}

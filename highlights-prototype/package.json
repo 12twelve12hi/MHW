@@ -1,0 +1,17 @@
+{
+  "name": "highlights-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Throwaway prototype of the Daylight Reader 'Save passage' highlight and annotation menu",
+  "scripts": {
+    "serve": "npx --yes http-server www -p 8080 -c-1",
+    "sync": "npx cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/core": "^8.5.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.3"
+  }
+}

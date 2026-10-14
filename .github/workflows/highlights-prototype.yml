@@ -1,0 +1,99 @@
+name: Highlights prototype
+
+# Builds the Capacitor APK of highlights-prototype/www on every push to the prototype branch and
+# publishes it to the "highlights-prototype-latest" release, so the download link never changes.
+on:
+  push:
+    branches: [claude/highlights-menu-ux-9i3p5j]
+    paths:
+      - 'highlights-prototype/**'
+      - '.github/workflows/highlights-prototype.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: highlights-prototype
+  cancel-in-progress: true
+
+env:
+  RELEASE_TAG: highlights-prototype-latest
+  APK_NAME: highlights-prototype.apk
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: highlights-prototype
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: highlights-prototype/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Capacitor
+        run: npm ci
+
+      - name: Copy the web app into the Android project
+        run: npx cap sync android
+
+      - name: Build the APK
+        working-directory: highlights-prototype/android
+        env:
+          PROTO_VERSION_CODE: ${{ github.run_number }}
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Name the APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk "$APK_NAME"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: highlights-prototype-apk
+          path: highlights-prototype/${{ env.APK_NAME }}
+
+      - name: Publish to the latest-build release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          notes="Build ${{ github.run_number }} of ${GITHUB_SHA::7} on ${{ github.ref_name }}.
+
+          On the tablet: download ${APK_NAME} below, open it, and allow installs from your browser if Android asks.
+          Each new build installs over the previous one."
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --prerelease --notes "$notes"
+          else
+            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --prerelease \
+              --title "Highlights prototype (latest build)" --notes "$notes"
+          fi
+          gh release upload "$RELEASE_TAG" "$APK_NAME" --clobber
+
+  # Optional: serves the same web app at https://<owner>.github.io/<repo>/ once GitHub Pages is
+  # switched on (Settings > Pages > Source: GitHub Actions). Until then this job fails quietly.
+  pages:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: highlights-prototype/www
+      - id: deploy
+        uses: actions/deploy-pages@v4
