@@ -99,6 +99,10 @@
     for (const ch of input) {
       const cp = ch.codePointAt(0);
       if (/\s/u.test(ch) || cp < 0x20 || (cp >= 0x7f && cp < 0xa0)) continue;
+      // Invisible format characters draw nothing; keep the joiner only inside an emoji sequence.
+      if (/\p{Cf}/u.test(ch) && !(cp === 0x200d && clean)) continue;
+      if (/[\p{Mn}\p{Me}]/u.test(ch) && !clean) continue;
+      if (/^[\u3164\uffa0\u115f\u1160]$/.test(ch)) continue;
       if ((cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2066 && cp <= 0x2069) || cp === 0x200e || cp === 0x200f || cp === 0x61c) continue;
       if (cp === 0xfeff || cp === 0xfffd) continue;
       clean += ch;
@@ -111,7 +115,7 @@
       if (!it.done) first = it.value.segment;
     } catch (e) { first = Array.from(clean)[0]; }
     if (first.length > 32) first = Array.from(first).slice(0, 8).join('');
-    return /^[‍︀-️]+$/.test(first) ? null : first;
+    return /^[\u200d\ufe00-\ufe0f\p{M}\p{Cf}]+$/u.test(first) ? null : first;
   }
 
   // ---------------------------------------------------------------- state
@@ -127,6 +131,8 @@
     ink: 'gray',
     theme: 'system',
     symbolSide: 'right',
+    catPreview: true,       // Christine: category buttons show their preset formatting
+    pageType: 'book',       // Original: 'book' (reflowed, no margin symbols) or 'pdf' (symbols and note glyphs)
     lastCategoryId: 'star',
   };
   let S = null;
@@ -143,13 +149,23 @@
     ];
   }
 
-  function seedPassages() {
+  // A sample voice note has a transcript and a made-up waveform but no audio.
+  function sampleVoice(v) {
+    if (!v) return null;
+    const waveform = [];
+    for (let i = 0; i < 64; i++) waveform.push(Math.round((0.25 + 0.75 * Math.abs(Math.sin(i * 0.55) * Math.cos(i * 0.17))) * 100) / 100);
+    return { id: 'sample-' + uid(), durationMs: v.durationMs, waveform, transcript: v.transcript, hasAudio: false, sample: true };
+  }
+
+  // Each passage keeps the formatting and shade it was saved with; a category's preset only applies to new saves.
+  function seedPassages(categories) {
     const out = [];
     let t = Date.now() - 60000;
     for (const s of C.samples) {
       const r = findQuote(s.quote);
       if (!r) continue;
-      out.push({ id: uid(), start: r[0], end: r[1], categoryId: s.category, ownFormat: null, note: s.note || '', voice: null, created: t++ });
+      const c = categories.find((x) => x.id === s.category) || categories[0];
+      out.push({ id: uid(), start: r[0], end: r[1], categoryId: c.id, format: c.format, gray: c.gray, note: s.note || '', voice: sampleVoice(s.voice), created: t++ });
     }
     return out;
   }
@@ -161,13 +177,14 @@
     for (const s of C.samples) {
       const r = findQuote(s.quote);
       if (!r) continue;
-      out.push({ id: uid(), start: r[0], end: r[1], level: s.category === 'question' ? 3 : 2, style: 'band', symbol: null, note: s.note || '', ink: null, voice: null, created: t++ });
+      out.push({ id: uid(), start: r[0], end: r[1], level: s.category === 'question' ? 3 : 2, style: 'band', symbol: null, note: s.note || '', ink: null, voice: sampleVoice(s.voice), created: t++ });
     }
     return out;
   }
 
   function seedState() {
-    return { categories: freshCategories(), passages: seedPassages(), orig: seedOriginal(), settings: Object.assign({}, DEFAULT_SETTINGS), introSeen: {} };
+    const categories = freshCategories();
+    return { categories, passages: seedPassages(categories), orig: seedOriginal(), settings: Object.assign({}, DEFAULT_SETTINGS), introSeen: {} };
   }
 
   function loadState() {
@@ -177,6 +194,15 @@
     raw.settings = Object.assign({}, DEFAULT_SETTINGS, raw.settings || {});
     const ok = (p) => p && p.start >= 0 && p.end < W.length && p.start <= p.end;
     raw.passages = raw.passages.filter(ok);
+    // Builds before 4 stored "follow the category" (ownFormat null) instead of each passage's own look.
+    for (const p of raw.passages) {
+      if (!('format' in p)) {
+        const c = raw.categories.find((x) => x.id === p.categoryId) || raw.categories[0];
+        p.format = p.ownFormat == null ? (c.format || null) : (p.ownFormat === 'none' ? null : p.ownFormat);
+        p.gray = c.gray;
+        delete p.ownFormat;
+      }
+    }
     raw.orig = Array.isArray(raw.orig) ? raw.orig.filter(ok) : seedOriginal();
     if (!raw.introSeen || typeof raw.introSeen !== 'object') raw.introSeen = {};
     return raw;
@@ -194,6 +220,7 @@
 
   function snapshot() { return JSON.stringify({ categories: S.categories, passages: S.passages, orig: S.orig }); }
   function restore(snap) {
+    const reopen = ui.sheet && ui.sheet.pid ? ui.sheet.pid : null;
     const v = JSON.parse(snap);
     S.categories = v.categories;
     S.passages = v.passages;
@@ -204,17 +231,15 @@
     closeMarkPopover();
     hideChip();
     renderAll();
+    if (reopen && byId(reopen)) openSheet(reopen, 'tap');
   }
 
   const byId = (id) => S.passages.find((p) => p.id === id) || S.orig.find((p) => p.id === id);
   const curList = () => (isOrig() ? S.orig : S.passages);
   const catById = (id) => S.categories.find((c) => c.id === id);
   const catOf = (p) => catById(p.categoryId) || S.categories[0];
-  // A passage either follows its category's default formatting (ownFormat null) or has its own one-time choice.
-  function effFormat(p) {
-    if (p.ownFormat == null) return catOf(p).format || null;
-    return p.ownFormat === 'none' ? null : p.ownFormat;
-  }
+  const effFormat = (p) => p.format || null;
+  const grayOf = (p) => p.gray || catOf(p).gray;
   const hasNote = (p) => !!((p.note && p.note.trim()) || p.voice);
 
   // Recorded audio lives in IndexedDB (localStorage can't hold it), with a memory copy for this visit.
@@ -239,6 +264,16 @@
     if (!db) return;
     try { db.transaction('audio', 'readwrite').objectStore('audio').put(blob, id); } catch (e) { /* memory copy only */ }
   }
+  async function delAudio(id) {
+    audioMem.delete(id);
+    const db = await idb();
+    if (!db) return;
+    try { db.transaction('audio', 'readwrite').objectStore('audio').delete(id); } catch (e) { /* gone already */ }
+  }
+  function forgetAudio(list) {
+    for (const p of list) if (p.voice && p.voice.hasAudio) delAudio(p.voice.id);
+  }
+
   async function getAudio(id) {
     if (audioMem.has(id)) return audioMem.get(id);
     const db = await idb();
@@ -397,9 +432,11 @@
     return el;
   }
 
-  function drawLook(fmt, gray, L) {
+  function drawLook(fmt, gray, L, first, last) {
     const bottom = L.top + L.height;
-    if (fmt === 'highlight') marksUnder.append(box('band', L, { '--band': `var(--band-${gray})` }));
+    if (fmt === 'highlight') {
+      marksUnder.append(box('band' + (first ? ' first' : '') + (last ? ' last' : ''), L, { '--band': `var(--band-${gray})` }));
+    }
     else if (fmt === 'underline') marksOver.append(box('line-mark', { left: L.left, top: bottom - 3, width: L.width }));
     else if (fmt === 'dash') marksOver.append(box('line-mark dash', { left: L.left, top: bottom - 3, width: L.width }));
     else if (fmt === 'squiggly') marksOver.append(box('line-mark squiggly', { left: L.left, top: bottom - 3.5, width: L.width }));
@@ -428,39 +465,30 @@
       if (!lines.length) continue;
       const cat = catOf(p);
       const fmt = effFormat(p);
-      for (const L of lines) drawLook(fmt, cat.gray, L);
+      lines.forEach((L, i) => drawLook(fmt, grayOf(p), L, i === 0, i === lines.length - 1));
 
       // The category symbol sits in the margin, level with the passage's first line.
+      // Two fit side by side; more stack downward so none runs off the screen.
       const first = lines[0];
       const key = Math.round(first.top / 4);
       const n = slots.get(key) || 0;
       slots.set(key, n + 1);
-      const x = left ? col.left - 36 - n * 26 : col.right + 10 + n * 26;
-      const y = first.top + first.height / 2 - 14;
+      const dx = (n % 2) * 26, dy = Math.floor(n / 2) * 28;
+      const x = left ? col.left - 36 - dx : col.right + 10 + dx;
+      const y = first.top + first.height / 2 - 14 + dy;
       marksUi.append(h('button', {
-        class: 'sym', type: 'button', style: { left: x, top: y },
+        class: 'sym' + (ui.sheet && ui.sheet.pid === p.id ? ' current' : ''), type: 'button', style: { left: x, top: y },
         'aria-label': `${cat.name}. Open this passage`, title: cat.name,
         onclick: () => openSheet(p.id, 'symbol'),
-      }, cat.symbol));
-
-      // In the regular view, a note or voice note shows as a small mark under the symbol.
-      if (S.settings.view === 'regular' && hasNote(p)) {
-        const ind = h('button', {
-          class: 'sym-note', type: 'button', style: { left: x, top: y + 30 },
-          'aria-label': 'Open my note', onclick: () => { ui.expanded = p.id; renderMarks(); },
-        });
-        if (p.note && p.note.trim()) ind.append(icon('note', 18));
-        if (p.voice) ind.append(stamp(p.voice));
-        marksUi.append(ind);
-      }
+      }, h('span', { class: 'g' }, cat.symbol)));
     }
     renderNotes(list, col);
     renderFocus();
   }
 
-  // The passage open in the sheet gets an ink bar beside it, so it's clear what the sheet is editing.
+  // The passage open in the sheet gets a bar beside it, so it's clear what the sheet is editing.
   function renderFocus() {
-    if (!ui.sheet) return;
+    if (!ui.sheet || !ui.sheet.pid) return;
     const p = byId(ui.sheet.pid);
     if (!p || !p._lines || !p._lines.length) return;
     const col = column();
@@ -471,12 +499,6 @@
 
   // ---------------------------------------------------------------- annotations view: note boxes over the text
 
-  function noteSummary(p) {
-    const parts = [];
-    if (p.note && p.note.trim()) parts.push(p.note.trim());
-    return parts.join('\n');
-  }
-
   function voiceLine(v) {
     return h('div', { class: 'xvoice' }, icon('mic', 16), h('span', null, `Voice note, ${fmtTime(v.durationMs)}`));
   }
@@ -486,7 +508,7 @@
     const colW = col.right - col.left;
     const pageW = pageEl.clientWidth;
     const placed = [];
-    for (const p of list) {
+    for (const p of list) {   // reading order
       const expanded = ui.expanded === p.id;
       if (!(expanded || (annotations && hasNote(p)))) continue;
       if (!p._lines || !p._lines.length) continue;
@@ -496,17 +518,23 @@
       marksUi.append(el);
       const ht = el.offsetHeight;
       const first = p._lines[0];
-      let x = clamp(col.right + 40 - w, 8, pageW - w - 8);
-      let y = first.top - ht - 3;
+      // Right-aligned to the text column, so a box never covers the symbols in the margin.
+      const x = clamp(col.right + 4 - w, 8, pageW - w - 8);
+      let y = first.top - ht - 6;
       if (!expanded) {
-        for (const q of placed) {
-          const hits = x < q.x + q.w && q.x < x + w && y < q.y + q.h + 4 && q.y < y + ht + 4;
-          if (hits) y = q.y - ht - 6;
+        // Sit just above the passage, covering the line before it (as in the sketch); if that spot is taken,
+        // move up past every box in the way until it overlaps none.
+        const want = y;
+        for (let guard = 0; guard < 60; guard++) {
+          const hit = placed.find((q) => x < q.x + q.w && q.x < x + w && y < q.y + q.h + 6 && q.y < y + ht + 6);
+          if (!hit) break;
+          y = hit.y - ht - 6;
         }
         placed.push({ x, y, w, h: ht });
+        el.dataset.anchored = String(y === want);
       } else {
         const visTop = reader.getBoundingClientRect().top - origin().y + 8;
-        if (y < visTop) y = Math.min(visTop, first.top + first.height + 6);
+        if (y < visTop) y = Math.max(visTop, first.top + first.height + 6);
       }
       el.style.left = x + 'px';
       el.style.top = Math.max(0, y) + 'px';
@@ -515,7 +543,7 @@
 
   function notePreview(p) {
     const el = h('button', { class: 'xnote', type: 'button', 'aria-label': 'Open this note' });
-    const text = noteSummary(p) || (p.voice && p.voice.transcript) || '';
+    const text = (p.note && p.note.trim()) || (p.voice && p.voice.transcript) || '';
     if (text) el.append(h('div', { class: 'xtext' }, text));
     if (p.voice) el.append(voiceLine(p.voice));
     el.addEventListener('click', () => { ui.expanded = p.id; renderMarks(); });
@@ -529,8 +557,7 @@
     el.append(h('p', { class: 'xquote' }, '“' + quoteOf(p) + '”'));
     if (p.note && p.note.trim()) el.append(h('div', { class: 'xtext' }, p.note.trim()));
     if (p.voice) {
-      const pl = playerRow(p.voice);
-      el.append(pl);
+      el.append(playerRow(p.voice));
       if (p.voice.transcript) el.append(h('div', { class: 'xtext', style: { marginTop: '8px' } }, p.voice.transcript));
     }
     el.append(h('div', { class: 'xactions' },
@@ -597,11 +624,13 @@
 
   reader.addEventListener('pointerdown', (e) => {
     if (!e.isPrimary) { cancelGesture(); return; }
+    if (ui.swallowGesture) { ui.swallowGesture = false; return; }
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (isUiTarget(e.target)) return;
     const word = wordNear(e.clientX, e.clientY, 24);
-    g = { id: e.pointerId, type: e.pointerType || 'touch', x0: e.clientX, y0: e.clientY, word, moved: false, long: false, timer: null };
-    if (word >= 0 && !ui.sheet && !ui.noteSheet) g.timer = setTimeout(onLongPress, LONG_PRESS_MS);
+    const barrel = e.pointerType === 'pen' && (e.buttons & 2) === 2;
+    g = { id: e.pointerId, type: e.pointerType || 'touch', x0: e.clientX, y0: e.clientY, t0: now(), word, moved: false, long: false, timer: null, barrel };
+    if (word >= 0 && !ui.sheet && !ui.noteSheet && !barrel) g.timer = setTimeout(onLongPress, LONG_PRESS_MS);
   });
 
   reader.addEventListener('pointermove', (e) => {
@@ -635,6 +664,10 @@
     clearTimeout(gg.timer);
     if (sel.dragging === 'press' || sel.dragging === 'drag') {
       finishDrag(sel.dragging === 'press' && !gg.moved);
+      return;
+    }
+    if (gg.barrel) {
+      if (!gg.moved && now() - gg.t0 < 250 && isOrig()) penQuickHighlight(gg.word);
       return;
     }
     if (!gg.moved && !gg.long) onTap(e.clientX, e.clientY);
@@ -700,6 +733,8 @@
   // While dragging a selection near the top or bottom of the page, scroll the text.
   function autoScroll() {
     if (!sel.dragging || !lastPt) { autoRAF = null; return; }
+    // A long-press held still near the edge must not scroll; only a drag does.
+    if (sel.dragging !== 'handle' && !(g && g.moved)) { autoRAF = requestAnimationFrame(autoScroll); return; }
     const r = reader.getBoundingClientRect();
     const edge = 44;
     let dy = 0;
@@ -718,7 +753,6 @@
     if (ui.markPop) { closeMarkPopover(); return; }
     if (ui.menu) { closeMenu(); return; }
     if (ui.expanded) { ui.expanded = null; stopPlayer(); renderMarks(); return; }
-    hideChip();
     const w = wordNear(x, y, 14);
     if (hasSel()) {
       if (w >= sel.a && w <= sel.b) {
@@ -754,7 +788,7 @@
     return best;
   }
 
-  // Selection handles: drag either end word by word.
+  // Selection handles: drag either end word by word. A tap on a knob without moving counts as a tap on the text.
   let hd = null;
   for (const knob of [knobStart, knobEnd]) {
     knob.addEventListener('pointerdown', (e) => {
@@ -762,30 +796,37 @@
       e.stopPropagation();
       if (!hasSel()) return;
       try { knob.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
-      closeQuick();
-      const kind = knob.dataset.kind;
-      const lines = lineRects(sel.a, sel.b);
-      const o = origin();
-      const L = kind === 'start' ? lines[0] : lines[lines.length - 1];
-      const tx = o.x + (kind === 'start' ? L.left + 2 : L.left + L.width - 2);
-      const ty = o.y + L.top + L.height / 2;
-      dragOffset = { x: tx - e.clientX, y: ty - e.clientY };
-      sel.anchor = kind === 'start' ? sel.b : sel.a;
-      sel.focus = kind === 'start' ? sel.a : sel.b;
-      sel.fresh = null;
-      sel.dragging = 'handle';
-      hd = { id: e.pointerId };
-      lastPt = { x: e.clientX, y: e.clientY };
-      if (!autoRAF) autoRAF = requestAnimationFrame(autoScroll);
+      hd = { id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false, kind: knob.dataset.kind };
     });
     knob.addEventListener('pointermove', (e) => {
       if (!hd || e.pointerId !== hd.id) return;
+      if (!hd.moved) {
+        if (Math.hypot(e.clientX - hd.x0, e.clientY - hd.y0) < 6) return;
+        hd.moved = true;
+        closeQuick();
+        const lines = lineRects(sel.a, sel.b);
+        const o = origin();
+        const L = hd.kind === 'start' ? lines[0] : lines[lines.length - 1];
+        const tx = o.x + (hd.kind === 'start' ? L.left + 2 : L.left + L.width - 2);
+        const ty = o.y + L.top + L.height / 2;
+        dragOffset = { x: tx - hd.x0, y: ty - hd.y0 };
+        sel.anchor = hd.kind === 'start' ? sel.b : sel.a;
+        sel.focus = hd.kind === 'start' ? sel.a : sel.b;
+        sel.fresh = null;
+        sel.dragging = 'handle';
+        if (!autoRAF) autoRAF = requestAnimationFrame(autoScroll);
+      }
       lastPt = { x: e.clientX, y: e.clientY };
       updateDrag();
     });
     const end = (e) => {
       if (!hd || e.pointerId !== hd.id) return;
+      const moved = hd.moved;
       hd = null;
+      if (!moved) {
+        if (e.type === 'pointerup') onTap(e.clientX, e.clientY);
+        return;
+      }
       sel.dragging = null;
       lastPt = null;
       showQuick();
@@ -799,8 +840,10 @@
   const peek = { timer: null, on: false, pts: null };
   reader.addEventListener('touchstart', (e) => {
     if (e.touches.length === 2) {
+      const stillPress = sel.dragging === 'press' && !(g && g.moved);
       cancelGesture();
-      if (sel.dragging === 'press' || sel.dragging === 'drag') finishDrag(false);
+      if (stillPress) clearSel();
+      else if (sel.dragging === 'press' || sel.dragging === 'drag') finishDrag(false);
       peek.pts = Array.from(e.touches).map((t) => ({ id: t.identifier, x: t.clientX, y: t.clientY }));
       clearTimeout(peek.timer);
       peek.timer = setTimeout(() => {
@@ -842,6 +885,24 @@
 
   // ---------------------------------------------------------------- press and hold on buttons
 
+  // A sheet or popover that opens under the finger mid-gesture would otherwise get that same tap's click,
+  // landing on whatever control is now under it. Anything that opens UI that way shields the next clicks.
+  // The stray click follows the finger's lift within a few milliseconds, so the shield covers the lift
+  // and a short moment after it, and never a deliberate next tap.
+  let clickShieldUntil = 0;
+  let shieldUntilLift = false;
+  function shieldClicks(ms) { clickShieldUntil = Math.max(clickShieldUntil, now() + (ms || 300)); }
+  function shieldUntilFingerLifts() { shieldUntilLift = true; clickShieldUntil = now() + 10000; }
+  document.addEventListener('pointerup', () => {
+    if (shieldUntilLift) { shieldUntilLift = false; clickShieldUntil = now() + 300; }
+  }, true);
+  document.addEventListener('pointercancel', () => {
+    if (shieldUntilLift) { shieldUntilLift = false; clickShieldUntil = now() + 300; }
+  }, true);
+  document.addEventListener('click', (e) => {
+    if (now() < clickShieldUntil) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
+
   function attachHold(el, onTap, onHold) {
     let timer = null, held = false, id = null, x0 = 0, y0 = 0;
     const cancel = () => { clearTimeout(timer); timer = null; id = null; el.classList.remove('pressed'); };
@@ -857,6 +918,7 @@
         el.classList.remove('pressed');
         el.classList.add('held');
         setTimeout(() => el.classList.remove('held'), 140);
+        shieldUntilFingerLifts();
         onHold();
       }, HOLD_MS);
     });
@@ -869,7 +931,7 @@
       const wasHeld = held;
       const live = !!timer;
       cancel();
-      if (!wasHeld && live) onTap();
+      if (!wasHeld && live) { shieldClicks(); onTap(); }
     });
     el.addEventListener('pointercancel', cancel);
     el.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -879,9 +941,9 @@
     });
   }
 
-  // A category's button shows its symbol wearing the category's formatting.
+  // A category's button: its symbol, wearing the category's preset formatting when previews are on.
   function catButton(c, opts) {
-    const fmt = c.format;
+    const fmt = S.settings.catPreview ? c.format : null;
     const b = h('button', {
       type: 'button',
       class: 'cat' + (fmt ? ' look-' + fmt : ''),
@@ -918,7 +980,7 @@
 
   // Put a popover 8px below some lines (plus room for a handle), or above them if there's no room,
   // at least 16px from the sides of the screen (DlLayoutMath.popoverPosition).
-  function placeNear(pop, lines, gap) {
+  function placeNear(pop, lines, gap, alignLeft) {
     const o = origin();
     const rr = reader.getBoundingClientRect();
     const sheetH = ui.sheet || ui.noteSheet ? (ui.sheet || ui.noteSheet).el.offsetHeight : 0;
@@ -933,7 +995,8 @@
     let y = bottom + gap;
     if (y + ph > visBottom - 8) y = top - gap + 2 - ph;
     if (y < visTop + 8) y = clamp(bottom + gap, visTop + 8, Math.max(visTop + 8, visBottom - ph - 8));
-    const x = clamp((minL + maxR) / 2 - pw / 2, visLeft + 16, Math.max(visLeft + 16, visRight - 16 - pw));
+    const want = alignLeft ? minL : (minL + maxR) / 2 - pw / 2;
+    const x = clamp(want, visLeft + 16, Math.max(visLeft + 16, visRight - 16 - pw));
     pop.style.left = x + 'px';
     pop.style.top = y + 'px';
   }
@@ -942,13 +1005,16 @@
     if (ui.quick) { ui.quick.remove(); ui.quick = null; }
   }
 
-  function upsertPassage(c) {
-    let p = S.passages.find((q) => q.start === sel.a && q.end === sel.b);
+  // A new passage takes its category's preset formatting and shade.
+  function upsertPassage(c, range) {
+    const [a, b] = range || [sel.a, sel.b];
+    let p = S.passages.find((q) => q.start === a && q.end === b);
     if (p) {
       p.categoryId = c.id;
-      p.ownFormat = c.format ? null : 'none';
+      p.format = c.format || null;
+      p.gray = c.gray;
     } else {
-      p = { id: uid(), start: sel.a, end: sel.b, categoryId: c.id, ownFormat: c.format ? null : 'none', note: '', voice: null, created: Date.now() };
+      p = { id: uid(), start: a, end: b, categoryId: c.id, format: c.format || null, gray: c.gray, note: '', voice: null, created: Date.now() };
       S.passages.push(p);
     }
     S.settings.lastCategoryId = c.id;
@@ -961,13 +1027,10 @@
     const p = upsertPassage(c);
     clearSel();
     save();
-    // A category with no default formatting asks each time.
+    // A category with no preset formatting asks each time.
     if (!c.format) { openSheet(p.id, 'nodefault'); return; }
     renderMarks();
-    toast(`Saved to ${c.symbol} ${c.name}.`, [
-      { label: 'Add note', run: () => openSheet(p.id, 'note') },
-      { label: 'Undo', run: () => restore(before) },
-    ]);
+    toast(`Saved to ${c.symbol}.`, [{ label: 'Undo', run: () => restore(before) }]);
   }
 
   function holdOpen(c) {
@@ -978,40 +1041,74 @@
     openSheet(p.id, 'hold');
   }
 
+  // The pencil opens the edit view without saving anything until a category is chosen.
   function editOpen() {
     if (!hasSel()) return;
-    const c = catById(S.settings.lastCategoryId) || S.categories[0];
-    const p = upsertPassage(c);
-    clearSel();
-    save();
-    openSheet(p.id, 'edit');
+    closeQuick();
+    openSheet(null, 'edit', [sel.a, sel.b]);
   }
 
   // ---------------------------------------------------------------- Save passage: hold / edit view
 
-  function openSheet(pid, via) {
-    const p = byId(pid);
-    if (!p) return;
-    if (ui.sheet) closeSheet(true);
+  function openSheet(pid, via, draftRange) {
+    const p = pid ? byId(pid) : null;
+    if (pid && !p) return;
+    shieldClicks();
+    if (ui.sheet) closeSheet();
     closeQuick();
     closeMenu();
     closePanel();
-    if (hasSel()) clearSel();
+    hideToast();
+    if (p && hasSel()) clearSel();
     ui.expanded = null;
     const isNew = !['tap', 'symbol', 'panel', 'card'].includes(via);
-    const r = {};
     const el = h('div', { class: 'sheet', role: 'dialog', 'aria-label': isNew ? 'Save passage' : 'Edit passage' });
-
     el.append(h('div', { class: 'sheet-head' }, h('h2', null, isNew ? 'Save passage' : 'Edit passage')));
+    const r = { cats: h('div', { class: 'cat-row', role: 'group', 'aria-label': 'Category' }) };
 
-    // Categories (selected = the passage's), plus "add".
-    r.cats = h('div', { class: 'cat-row', role: 'group', 'aria-label': 'Category' });
+    if (!p) {
+      // Draft: the selection is not saved yet. Choosing a category (or adding one) saves it.
+      const commit = (c) => {
+        const q = upsertPassage(c, draftRange);
+        save();
+        clearSel();
+        openSheet(q.id, 'edit');
+      };
+      for (const c of S.categories) r.cats.append(catButton(c, { pressed: false, titleName: true, onTap: () => commit(c), onHold: () => commit(c) }));
+      r.cats.append(h('button', { type: 'button', class: 'cat ghost', 'aria-label': 'Add a category', title: 'Add a category', onclick: () => {
+        const c = newCategory('highlight');
+        S.categories.push(c);
+        const q = upsertPassage(c, draftRange);
+        save();
+        clearSel();
+        openSheet(q.id, 'edit');
+        if (ui.sheet) { ui.sheet.r.name.focus(); ui.sheet.r.name.select(); }
+      } }, icon('plus', 26)));
+      el.append(h('section', null, r.cats,
+        h('p', { class: 'meta', style: { margin: '12px 0 0' } }, 'Choose a category for this passage, or add one with +. Hold a category in Save passage to edit it.')));
+      el.append(h('div', { class: 'sheet-foot' },
+        h('span'),
+        h('button', { type: 'button', class: 'btn primary', onclick: () => closeSheet() }, 'Done')));
+      overlayRoot.append(el);
+      ui.sheet = { el, pid: null, r, via, draft: true };
+      $('#toast').classList.add('raised');
+      const ro = new ResizeObserver(() => fitSheet(false));
+      ro.observe(el);
+      ui.sheet.ro = ro;
+      fitSheet(false);
+      return;
+    }
+
+    // The preset checkbox starts ticked when this passage wears its category's preset.
+    const c0 = catOf(p);
+    r.setDefault = !!c0.format && p.format === c0.format && grayOf(p) === c0.gray;
+
     // The category's name, editable in place.
     r.name = h('input', { type: 'text', id: 'cat-name', maxlength: '40', autocomplete: 'off', spellcheck: 'false', enterkeyhint: 'done', 'aria-label': 'Category name' });
     r.name.addEventListener('input', () => {
       catOf(p).name = r.name.value;
       saveSoon();
-      refreshCatButtons(r, p);
+      buildCatRow(r, p);
     });
     r.name.addEventListener('change', () => {
       const c = catOf(p);
@@ -1055,12 +1152,9 @@
     // Formatting.
     r.defaultBox = h('button', { type: 'button', class: 'checkbox', role: 'checkbox', 'aria-checked': 'true', onclick: () => toggleDefault(r, p) },
       h('span', { class: 'box' }, icon('check', 18)), h('span', { class: 'label' }, 'Set as default for category'));
-    r.chips = FORMATS.map((f) => {
-      const chip = h('button', { type: 'button', class: 'chip look-' + f.id, 'aria-pressed': 'false', 'data-format': f.id, onclick: () => pickFormat(r, p, f.id) },
-        h('span', { class: 'look' }, f.label));
-      return chip;
-    });
-    r.formatNote = h('div', { class: 'meta', style: { marginTop: '6px' } });
+    r.chips = FORMATS.map((f) => h('button', { type: 'button', class: 'chip look-' + f.id, 'aria-pressed': 'false', 'data-format': f.id, onclick: () => pickFormat(r, p, f.id) },
+      h('span', { class: 'look' }, f.label)));
+    r.formatNote = h('div', { class: 'meta format-note', style: { marginTop: '6px' } });
     r.shades = SHADES.map((g) => h('button', { type: 'button', class: 'shade', 'aria-pressed': 'false', 'aria-label': `Shade ${g}`, style: { '--band': `var(--band-${g})` }, onclick: () => pickShade(r, p, g) }));
     r.shadeRow = h('div', { class: 'shade-row' }, h('span', { class: 'meta' }, 'Shade'), r.shades);
     el.append(h('section', null,
@@ -1074,8 +1168,7 @@
       const c = catOf(p);
       openPicker({ current: c.symbol, choose: (sym) => { c.symbol = sym; save(); buildCatRow(r, p); updateSheet(r, p); renderMarks(); } });
     } });
-    el.append(h('section', null, h('div', { class: 'symbol-row' }, h('span', { class: 'counter' }, 'Select symbol'), r.symbolBtn,
-      h('span', { class: 'meta' }, 'Opens the symbol and emoji menu'))));
+    el.append(h('section', null, h('div', { class: 'symbol-row' }, h('span', { class: 'counter' }, 'Select symbol'), r.symbolBtn)));
 
     el.append(h('div', { class: 'sheet-foot' },
       h('button', { type: 'button', class: 'btn quiet', onclick: () => removePassage(p) }, 'Remove highlight'),
@@ -1090,8 +1183,8 @@
     r.name.value = catOf(p).name;
     if (via === 'note') showTextNote(r, p);
 
-    // Keep the passage in view above the sheet.
-    const ro = new ResizeObserver(() => fitSheet());
+    // Keep the passage in view above the sheet, also as the sheet grows with a long note.
+    const ro = new ResizeObserver(() => fitSheet(true));
     ro.observe(el);
     ui.sheet.ro = ro;
     fitSheet(true);
@@ -1103,7 +1196,7 @@
     const hgt = ui.sheet.el.offsetHeight;
     pageEl.style.paddingBottom = (hgt + 48) + 'px';
     document.documentElement.style.setProperty('--sheet-h', hgt + 'px');
-    if (!scroll) return;
+    if (!scroll || !ui.sheet.pid) return;
     const p = byId(ui.sheet.pid);
     if (!p) return;
     const lines = lineRects(p.start, p.end);
@@ -1114,7 +1207,7 @@
     const top = o.y + lines[0].top;
     const bottom = o.y + lines[lines.length - 1].top + lines[lines.length - 1].height;
     const room = sheetTop - rr.top;
-    if (top < rr.top + 8 || bottom > sheetTop - 16) {
+    if (top < rr.top + 8 || Math.min(bottom, top + 60) > sheetTop - 16) {
       const want = rr.top + Math.max(16, Math.min(room * 0.2, room - (bottom - top) - 16));
       reader.scrollTop += top - want;
     }
@@ -1122,22 +1215,20 @@
 
   function closeSheet() {
     if (!ui.sheet) return;
-    if (rec) stopRecording(true);
+    if (rec && ui.sheet.pid && rec.pid === ui.sheet.pid) stopRecording(true);
     stopPlayer();
-    const { el, ro, pid } = ui.sheet;
+    const { el, ro, draft } = ui.sheet;
     if (ro) ro.disconnect();
-    const p = byId(pid);
-    if (p) {
-      const c = catOf(p);
-      c.name = (c.name || '').trim() || 'Untitled';
-      if (p.note) p.note = p.note.replace(/\s+$/, '');
-    }
+    for (const c of S.categories) c.name = (c.name || '').trim() || 'Untitled';
+    const p = ui.sheet.pid ? byId(ui.sheet.pid) : null;
+    if (p && p.note) p.note = p.note.replace(/\s+$/, '');
     el.remove();
     ui.sheet = null;
     $('#toast').classList.remove('raised');
     closePicker();
     pageEl.style.paddingBottom = '';
     document.documentElement.style.setProperty('--sheet-h', '0px');
+    if (draft && hasSel()) clearSel();
     save();
     renderMarks();
   }
@@ -1147,47 +1238,50 @@
     for (const c of S.categories) {
       r.cats.append(catButton(c, { pressed: c.id === p.categoryId, titleName: true, onTap: () => assignCategory(r, p, c), onHold: () => assignCategory(r, p, c) }));
     }
-    const add = h('button', { type: 'button', class: 'cat ghost', 'aria-label': 'Add a category', title: 'Add a category', onclick: () => addCategory(r, p) }, icon('plus', 26));
-    r.cats.append(add);
-  }
-
-  function refreshCatButtons(r, p) {
-    buildCatRow(r, p);
+    r.cats.append(h('button', { type: 'button', class: 'cat ghost', 'aria-label': 'Add a category', title: 'Add a category', onclick: () => addCategory(r, p) }, icon('plus', 26)));
   }
 
   function updateSheet(r, p) {
     const c = catOf(p);
     const eff = effFormat(p);
-    const followsDefault = p.ownFormat == null;
     for (const b of r.cats.querySelectorAll('.cat[data-cat]')) b.setAttribute('aria-pressed', String(b.dataset.cat === p.categoryId));
     if (document.activeElement !== r.name) r.name.value = c.name;
     r.delCat.hidden = S.categories.length < 2;
     const hasText = !r.noteArea.hidden;
     r.noteBtn.textContent = hasText ? 'Text note' : 'Add text note';
-    r.noteBtn.classList.toggle('pressed', false);
     r.noteBtn.setAttribute('aria-pressed', String(hasText));
-    r.voiceBtn.lastChild.textContent = p.voice ? 'Voice note' : (rec ? 'Recording' : 'Add voice note');
-    r.voiceBtn.setAttribute('aria-pressed', String(!!p.voice || !!rec));
-    r.defaultBox.setAttribute('aria-checked', String(followsDefault));
-    for (const chip of r.chips) chip.setAttribute('aria-pressed', String(chip.dataset.format === eff));
-    for (const chip of r.chips) chip.style.setProperty('--band', `var(--band-${c.gray})`);
-    r.shadeRow.hidden = eff !== 'highlight';
-    r.shades.forEach((s, i) => s.setAttribute('aria-pressed', String(c.gray === i + 1)));
-    const sym = `${c.symbol} ${c.name.trim() || 'this category'}`;
-    if (followsDefault) {
-      r.formatNote.textContent = eff
-        ? `This is ${sym}'s formatting. Tapping ${c.symbol} in Save passage uses it.`
-        : `${sym} has no default formatting, so it asks each time.`;
-    } else {
-      r.formatNote.textContent = eff ? 'Just for this passage.' : 'No formatting on this passage, only its symbol.';
+    r.voiceBtn.lastChild.textContent = p.voice ? 'Voice note' : (rec && rec.pid === p.id ? 'Recording' : 'Add voice note');
+    r.voiceBtn.setAttribute('aria-pressed', String(!!p.voice || !!(rec && rec.pid === p.id)));
+    r.defaultBox.setAttribute('aria-checked', String(!!r.setDefault));
+    for (const chip of r.chips) {
+      chip.setAttribute('aria-pressed', String(chip.dataset.format === eff));
+      chip.style.setProperty('--band', `var(--band-${grayOf(p)})`);
     }
-    r.symbolBtn.textContent = c.symbol;
+    r.shadeRow.hidden = eff !== 'highlight';
+    r.shades.forEach((s, i) => s.setAttribute('aria-pressed', String(grayOf(p) === i + 1)));
+    const sym = c.symbol;
+    r.formatNote.hidden = !S.settings.hints;
+    if (r.setDefault) {
+      r.formatNote.textContent = eff
+        ? `Tapping ${sym} in Save passage uses this. Passages you already saved keep their own.`
+        : `${sym} has no preset, so it asks each time.`;
+    } else {
+      r.formatNote.textContent = 'Just for this passage.';
+    }
+    r.symbolBtn.replaceChildren(h('span', { class: 'g' }, c.symbol));
   }
 
   function assignCategory(r, p, c) {
-    const prev = effFormat(p);
+    const old = catOf(p);
+    old.name = (old.name || '').trim() || 'Untitled';
     p.categoryId = c.id;
-    p.ownFormat = c.format ? null : (prev || 'none');
+    if (c.format) {
+      p.format = c.format;
+      p.gray = c.gray;
+      r.setDefault = true;
+    } else {
+      r.setDefault = false;
+    }
     S.settings.lastCategoryId = c.id;
     save();
     r.name.value = c.name;
@@ -1196,11 +1290,16 @@
     renderMarks();
   }
 
-  function addCategory(r, p) {
+  function newCategory(format) {
     const used = new Set(S.categories.map((c) => c.symbol));
     const symbol = NEW_CATEGORY_SYMBOLS.find((s) => !used.has(s)) || '●';
     const gray = SHADES.find((g) => !S.categories.some((c) => c.gray === g)) || ((S.categories.length % 4) + 1);
-    const c = { id: uid(), name: 'New category', symbol, gray, format: null };
+    return { id: uid(), name: 'New category', symbol, gray, format: format || 'highlight' };
+  }
+
+  // A new category starts with this passage's look as its preset, so tapping it later saves straight away.
+  function addCategory(r, p) {
+    const c = newCategory(effFormat(p) || 'highlight');
     S.categories.push(c);
     buildCatRow(r, p);
     assignCategory(r, p, c);
@@ -1216,14 +1315,15 @@
     const count = S.passages.filter((q) => q.categoryId === c.id).length;
     r.confirm.textContent = '';
     r.confirm.append(h('div', { class: 'confirm' },
-      h('div', null, `Delete ${c.symbol} ${c.name}? ${count === 1 ? 'Its passage moves' : `Its ${count} passages move`} to ${to.symbol} ${to.name}.`),
+      h('div', null, `Delete ${c.symbol} ${c.name}? ${count === 1 ? 'Its passage moves' : `Its ${count} passages move`} to ${to.symbol} ${to.name} and keep their formatting.`),
       h('div', { class: 'row' },
         h('button', { type: 'button', class: 'btn small', onclick: () => { r.confirm.textContent = ''; } }, 'Keep it'),
         h('button', { type: 'button', class: 'btn small primary', onclick: () => {
           const before = snapshot();
-          for (const q of S.passages) if (q.categoryId === c.id) { const eff = effFormat(q); q.categoryId = to.id; q.ownFormat = eff === (to.format || null) ? null : (eff || 'none'); }
+          for (const q of S.passages) if (q.categoryId === c.id) q.categoryId = to.id;
           S.categories = others;
           if (S.settings.lastCategoryId === c.id) S.settings.lastCategoryId = to.id;
+          r.setDefault = !!to.format && p.format === to.format && grayOf(p) === to.gray;
           r.confirm.textContent = '';
           save();
           buildCatRow(r, p);
@@ -1233,25 +1333,24 @@
         } }, 'Delete category'))));
   }
 
+  // Ticked: what is chosen here also becomes the category's preset for future taps.
+  // Unticked: the choice is just for this passage. Passages already saved never change.
   function toggleDefault(r, p) {
-    const c = catOf(p);
-    const eff = effFormat(p);
-    if (p.ownFormat == null) {
-      p.ownFormat = eff || 'none';           // keep the look, just for this passage
-    } else {
-      c.format = eff;                          // this look becomes the category's preset
-      p.ownFormat = null;
+    r.setDefault = !r.setDefault;
+    if (r.setDefault) {
+      const c = catOf(p);
+      c.format = effFormat(p);
+      c.gray = grayOf(p);
+      buildCatRow(r, p);
     }
     save();
-    buildCatRow(r, p);
     updateSheet(r, p);
-    renderMarks();
   }
 
   function pickFormat(r, p, f) {
-    const c = catOf(p);
     const next = effFormat(p) === f ? null : f;
-    if (p.ownFormat == null) c.format = next; else p.ownFormat = next || 'none';
+    p.format = next;
+    if (r.setDefault) catOf(p).format = next;
     save();
     buildCatRow(r, p);
     updateSheet(r, p);
@@ -1259,7 +1358,8 @@
   }
 
   function pickShade(r, p, gray) {
-    catOf(p).gray = gray;
+    p.gray = gray;
+    if (r.setDefault) catOf(p).gray = gray;
     save();
     buildCatRow(r, p);
     updateSheet(r, p);
@@ -1299,7 +1399,8 @@
   }
 
   async function startRecording(p, host) {
-    const state = { pid: p.id, host, started: Date.now(), peaks: [], chunks: [], simulated: false, transcript: '', interim: '', timer: null };
+    if (rec) return;
+    const state = { pid: p.id, host, started: null, peaks: [], chunks: [], simulated: false, transcript: '', interim: '', timer: null, mode: S.settings.mode };
     rec = state;
     host.render();
     try {
@@ -1317,6 +1418,7 @@
       state.mr = mime ? new MediaRecorder(state.stream, { mimeType: mime }) : new MediaRecorder(state.stream);
       state.mr.ondataavailable = (e) => { if (e.data && e.data.size) state.chunks.push(e.data); };
       state.mr.start(250);
+      state.started = Date.now();
     } catch (err) {
       state.stream.getTracks().forEach((t) => t.stop());
       rec = null;
@@ -1338,15 +1440,15 @@
         sr.continuous = true;
         sr.interimResults = true;
         sr.lang = navigator.language || 'en-US';
+        // Final results add up across restarts of recognition; interim text is only the latest guess.
         sr.onresult = (e) => {
-          let fin = '', inter = '';
-          for (let i = 0; i < e.results.length; i++) {
+          let inter = '';
+          for (let i = e.resultIndex; i < e.results.length; i++) {
             const t = e.results[i][0].transcript;
-            if (e.results[i].isFinal) fin += t; else inter += t;
+            if (e.results[i].isFinal) state.transcript += t.trim() + ' '; else inter += t;
           }
-          state.transcript = fin;
           state.interim = inter;
-          if (state.tEl) state.tEl.textContent = (fin + ' ' + inter).trim() || 'Listening…';
+          if (state.tEl) state.tEl.textContent = (state.transcript + inter).trim() || 'Listening\u2026';
         };
         sr.onerror = () => { state.srFailed = true; };
         sr.onend = () => { if (rec === state && !state.srFailed) { try { sr.start(); } catch (e) { /* ended */ } } };
@@ -1359,7 +1461,8 @@
   }
 
   function startPretend(p, host) {
-    const state = { pid: p.id, host, started: Date.now(), peaks: [], chunks: [], simulated: true, transcript: '', interim: '', phase: Math.random() * 6 };
+    if (rec) return;
+    const state = { pid: p.id, host, started: Date.now(), peaks: [], chunks: [], simulated: true, transcript: '', interim: '', phase: Math.random() * 6, mode: S.settings.mode };
     rec = state;
     state.timer = setInterval(() => tickRecording(state), 100);
     host.render();
@@ -1376,6 +1479,7 @@
       for (let i = 0; i < state.buf.length; i++) m = Math.max(m, Math.abs(state.buf[i] - 128));
       peak = Math.min(1, (m / 128) * 1.6);
     } else peak = 0.2;
+    if (!state.started) return;
     state.peaks.push(peak);
     const elapsed = Date.now() - state.started;
     if (state.timerEl) state.timerEl.textContent = fmtTime(elapsed);
@@ -1396,6 +1500,12 @@
     if (!state) return;
     rec = null;
     clearInterval(state.timer);
+    // Stopped before the microphone was ready: nothing was recorded.
+    if (!state.started) {
+      state.cancelled = true;
+      state.host.render();
+      return;
+    }
     const durationMs = Date.now() - state.started;
     const p = byId(state.pid);
     const finish = (blob) => {
@@ -1410,14 +1520,22 @@
         hasAudio: !!blob,
         simulated: state.simulated,
       };
-      if (blob) putAudio(voice.id, blob);
       if (!p) return;
+      const sameMode = state.mode === S.settings.mode;
       if (keep) {
+        if (blob) putAudio(voice.id, blob);
+        if (p.voice && p.voice.hasAudio) delAudio(p.voice.id);
         p.voice = voice;
         save();
-        toast('Saved my voice note.');
-      } else {
-        toast('Recording discarded.', [{ label: 'Undo', run: () => { p.voice = voice; save(); state.host.render(); renderMarks(); } }]);
+        if (sameMode) toast('Saved my voice note.');
+      } else if (sameMode) {
+        toast('Voice note removed.', [{ label: 'Undo', run: () => {
+          if (blob) putAudio(voice.id, blob);
+          p.voice = voice;
+          save();
+          if (!rec) state.host.render();
+          renderMarks();
+        } }], 4000);
       }
       state.host.render();
       renderMarks();
@@ -1449,7 +1567,7 @@
   function renderVoiceArea(r, p, problem) {
     r.voiceArea.textContent = '';
     if (rec && rec.pid === p.id) {
-      const timerEl = h('span', { class: 'timer' }, fmtTime(Date.now() - rec.started));
+      const timerEl = h('span', { class: 'timer' }, rec.started ? fmtTime(Date.now() - rec.started) : '0:00');
       const waveEl = h('div', { class: 'wave' });
       for (let i = 0; i < 40; i++) waveEl.append(h('i'));
       rec.timerEl = timerEl;
@@ -1461,8 +1579,8 @@
         waveEl,
         h('button', { type: 'button', class: 'btn primary', onclick: () => stopRecording(true) }, 'Stop')));
       if (rec.simulated) r.voiceArea.append(h('div', { class: 'meta', style: { marginTop: '6px' } }, 'Pretend recording: this screen can’t use the microphone, so nothing is captured.'));
-      if (rec.sr || SpeechRec) {
-        rec.tEl = h('div', { class: 'meta', style: { marginTop: '6px' } }, 'Listening…');
+      if (!rec.simulated && SpeechRec) {
+        rec.tEl = h('div', { class: 'meta', style: { marginTop: '6px' } }, rec.started ? 'Listening\u2026' : 'Waiting for the microphone\u2026');
         r.voiceArea.append(rec.tEl);
       }
       return;
@@ -1491,8 +1609,8 @@
     requestAnimationFrame(() => grow(ta));
     if (!v.transcript) {
       r.voiceArea.append(h('div', { class: 'meta', style: { marginTop: '6px' } },
-        SpeechRec ? 'I didn’t catch any words. Type what you said if you like.'
-          : 'Speech-to-text isn’t connected in this prototype, so type what you said if you like.'));
+        (SpeechRec && !v.simulated && !v.sample) ? 'No words came through this time. Type what you said if you like.'
+          : 'Speech-to-text isn\u2019t connected in this prototype, so type what you said to try the editable transcript.'));
     }
   }
 
@@ -1525,6 +1643,7 @@
       if (!blob) { toast('I can’t find that recording on this device.'); return; }
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
+      audio.playbackRate = playbackRate;
       const els = Array.from(waveEl.children);
       player = { vid: v.id, audio, url, btn, bars: els };
       btn.replaceChildren(icon('pause', 22));
@@ -1541,52 +1660,62 @@
   }
 
   // ================================================================ Original mode: today's Reader
-  // Modelled on the Reader's SelectionStrip, MarkPopover, NotePeekCard, NoteSheet and VoiceRecorderBar.
+  // Modelled on the Reader's SelectionStrip, MarkPopover, NotePeekCard, NoteSheet, VoiceRecorderBar and
+  // VoicePlayerSheet. On a reflowed book (the default here) the Reader draws no margin symbols or note glyphs;
+  // the "PDF page" setting shows them as on fixed pages.
 
   const LEVEL_SYMBOLS = ['○', '★', '?', '✓'];   // Symbols.BUILT_IN
   const LEVEL_PCT = [14, 27, 41, 53];
   const LOOKS = [['band', 'Highlight'], ['underline', 'Underline'], ['strike', 'Strike out'], ['squiggly', 'Squiggly']];
+  const SPEEDS = [1, 1.25, 1.5, 2];
+  let playbackRate = 1;
   const levelSym = (p) => p.symbol || LEVEL_SYMBOLS[p.level - 1];
   const hasOrigNote = (p) => !!((p.note && p.note.trim()) || (p.ink && p.ink.strokes && p.ink.strokes.length));
+  const isPdf = () => S.settings.pageType === 'pdf';
+  // A pen tap on Note opens "Write it" for an empty note, a finger tap "Type it".
+  const noteTab = (p) => (lastPointerType === 'pen' && !hasOrigNote(p) ? 'write' : undefined);
 
   function renderOriginalMarks() {
     const col = column();
     const list = S.orig.slice().sort((p, q) => p.start - q.start || p.created - q.created);
-    const rightSlots = new Map();
+    const leftSlots = new Map();
     for (const p of list) {
       const lines = lineRects(p.start, p.end);
       p._lines = lines;
       if (!lines.length) continue;
-      for (const L of lines) {
+      lines.forEach((L) => {
         if (p.style === 'note') marksOver.append(box('line-mark dotted', { left: L.left, top: L.top + L.height - 2.5, width: L.width }));
         else drawLook(p.style === 'band' ? 'highlight' : p.style, p.level, L);
-      }
+      });
       const first = lines[0], last = lines[lines.length - 1];
-      // The symbol sits in the margin left of the first line (SymbolPlacement on PDF pages).
-      if (p.style !== 'note') {
-        marksUi.append(h('button', {
-          class: 'sym small', type: 'button', style: { left: col.left - 22, top: first.top + first.height / 2 - 10 },
-          'aria-label': 'Open this highlight', onclick: () => openMarkPopover(p.id),
-        }, h('span', { class: 'g' }, levelSym(p))));
+      if (isPdf()) {
+        // The symbol sits in the margin left of the first line (SymbolPlacement); several on one line stack.
+        if (p.style !== 'note') {
+          const k = Math.round(first.top / 4);
+          const n = leftSlots.get(k) || 0;
+          leftSlots.set(k, n + 1);
+          marksUi.append(h('span', {
+            class: 'sym small', 'aria-hidden': 'true', style: { left: col.left - 22, top: first.top + first.height / 2 - 10 + n * 20 },
+          }, h('span', { class: 'g' }, levelSym(p))));
+        }
+        // The note glyph sits in the right margin level with the first line, and peeks first.
+        if (hasOrigNote(p)) {
+          marksUi.append(h('button', {
+            class: 'note-glyph', type: 'button', style: { left: col.right + 8, top: first.top + first.height / 2 - 12 },
+            'aria-label': 'Peek at my note', onclick: () => { ui.expanded = p.id; renderMarks(); },
+          }, icon('note', 18)));
+        }
       }
-      // The note glyph sits in the right margin level with the first line; the voice stamp by the last line.
-      const slot = (L) => { const k = Math.round(L.top / 4); const n = rightSlots.get(k) || 0; rightSlots.set(k, n + 1); return n; };
-      if (hasOrigNote(p)) {
-        const n = slot(first);
-        marksUi.append(h('button', {
-          class: 'note-glyph', type: 'button', style: { left: col.right + 8 + n * 36, top: first.top + first.height / 2 - 12 },
-          'aria-label': 'Peek at my note', onclick: () => { ui.expanded = p.id; renderMarks(); },
-        }, icon('note', 18)));
-      }
+      // The voice stamp sits just after the highlight's end and opens the player.
       if (p.voice) {
-        const n = slot(last);
+        const x = Math.min(last.left + last.width + 3, col.right + 4);
         marksUi.append(h('button', {
-          class: 'stamp-btn', type: 'button', style: { left: col.right + 6 + n * 36, top: last.top + last.height / 2 - 12 },
-          'aria-label': 'Peek at my voice note', onclick: () => { ui.expanded = p.id; renderMarks(); },
+          class: 'stamp-btn', type: 'button', style: { left: x, top: last.top + last.height / 2 - 12 },
+          'aria-label': 'Play my voice note', onclick: () => openVoiceSheet(p.id),
         }, stamp(p.voice)));
       }
     }
-    if (ui.expanded) {
+    if (ui.expanded && isPdf()) {
       const p = S.orig.find((q) => q.id === ui.expanded);
       if (p && p._lines && p._lines.length) {
         const card = peekCard(p);
@@ -1602,24 +1731,18 @@
     el.append(h('p', { class: 'xquote clamp2' }, '“' + quoteOf(p) + '”'));
     if (p.note && p.note.trim()) el.append(h('div', { class: 'body clamp6' }, p.note.trim()));
     else if (p.ink && p.ink.strokes && p.ink.strokes.length) el.append(inkThumb(p.ink, 120));
-    if (p.voice) {
-      el.append(playerRow(p.voice));
-      if (p.voice.transcript) el.append(h('div', { class: 'meta clamp2' }, p.voice.transcript));
-    }
-    el.append(h('button', { type: 'button', class: 'btn wide', onclick: () => { ui.expanded = null; openNoteSheet(p.id); } }, hasOrigNote(p) ? 'Open my note' : 'Add a note'));
+    el.append(h('button', { type: 'button', class: 'btn wide', onclick: () => { ui.expanded = null; openNoteSheet(p.id, noteTab(p)); } }, 'Open my note'));
     return el;
   }
 
   // LevelSwatch: a 34px square in the level's gray, with the symbol on a paper inset.
   function levelSwatch(level, opts) {
     const sym = opts.sym || LEVEL_SYMBOLS[level - 1];
-    const b = h('button', {
+    return h('button', {
       type: 'button', class: 'swatch' + (opts.selected ? ' on' : ''),
       'aria-label': `Gray level ${level}, ${LEVEL_PCT[level - 1]} percent, ${sym}`,
-      'aria-pressed': opts.pressed == null ? null : String(!!opts.pressed),
       onclick: opts.onTap,
     }, h('span', { class: 'sq', style: { '--band': `var(--band-${level})` } }, h('span', { class: 'in' }, h('span', { class: 'g' }, sym))));
-    return b;
   }
 
   function stripBtn(label, onTap, extra) {
@@ -1658,8 +1781,9 @@
 
   function notInPrototype() { toast('Define and Look up aren’t part of this prototype.'); }
 
-  function newOrig(level, style) {
-    const p = { id: uid(), start: sel.a, end: sel.b, level, style, symbol: null, note: '', ink: null, voice: null, created: Date.now() };
+  function newOrig(level, style, range) {
+    const [a, b] = range || [sel.a, sel.b];
+    const p = { id: uid(), start: a, end: b, level, style, symbol: null, note: '', ink: null, voice: null, created: Date.now() };
     S.orig.push(p);
     return p;
   }
@@ -1673,7 +1797,7 @@
     ui.more = false;
     save();
     renderMarks();
-    showFreshChip(p, before);
+    if (style === 'band') showFreshChip(p, before);
   }
 
   function stripNote() {
@@ -1682,7 +1806,7 @@
     clearSel();
     save();
     renderMarks();
-    openNoteSheet(p.id, 'type');
+    openNoteSheet(p.id, noteTab(p));
   }
 
   function stripCopy() {
@@ -1712,18 +1836,42 @@
     startRecording(p, recBarHost(p));
   }
 
-  // FreshMarkChip: "Note · Undo" next to a new highlight for 3 seconds.
+  // Pen side button + tap: highlight the sentence at once; a second side-button tap within 6s grows it.
+  let penQuick = null;
+  function penQuickHighlight(w) {
+    if (w < 0) return;
+    if (penQuick && now() - penQuick.at < GROW_WINDOW_MS) {
+      const p = S.orig.find((q) => q.id === penQuick.id);
+      if (p && w >= p.start && w <= p.end) {
+        const r = paragraphRange(w);
+        p.start = r[0];
+        p.end = r[1];
+        penQuick = null;
+        save();
+        renderMarks();
+        toast('Now the whole paragraph.');
+        return;
+      }
+    }
+    const before = snapshot();
+    const p = newOrig(S.settings.level, 'band', sentenceRange(w));
+    penQuick = { id: p.id, at: now() };
+    save();
+    renderMarks();
+    toast('Highlighted the sentence.', [{ label: 'Undo', run: () => restore(before) }]);
+  }
+
+  // FreshMarkChip: "Note · Undo" by a new highlight for 3 seconds.
   function showFreshChip(p, before) {
     hideChip();
     if (!p._lines || !p._lines.length) return;
     const chip = h('div', { class: 'popover fresh-chip', role: 'group', 'aria-label': 'New highlight' },
-      stripBtn('Note', () => { hideChip(); openNoteSheet(p.id, 'type'); }),
+      stripBtn('Note', () => { hideChip(); openNoteSheet(p.id, noteTab(p)); }),
       h('span', { class: 'vrule short', 'aria-hidden': 'true' }),
       stripBtn('Undo', () => { hideChip(); restore(before); }));
     quickUi.append(chip);
     ui.chip = chip;
-    const last = p._lines[p._lines.length - 1];
-    placeNear(chip, [last], 8);
+    placeNear(chip, p._lines, 8, true);
     ui.chipTimer = setTimeout(hideChip, 3000);
   }
 
@@ -1734,6 +1882,7 @@
 
   // MarkPopover: tap a highlight to change it. Changes apply at once; a tap outside closes it.
   function openMarkPopover(pid) {
+    shieldClicks();
     closeMarkPopover();
     closeQuick();
     hideChip();
@@ -1753,40 +1902,29 @@
     const restyle = (fn) => { fn(); save(); renderMarks(); renderMarkPopover(); };
     const el = h('div', { class: 'popover markpop', role: 'dialog', 'aria-label': isNote ? 'My note' : 'My highlight' });
     el.append(h('p', { class: 'quote1' }, '“' + quoteOf(p) + '”'));
-    el.append(h('button', { type: 'button', class: 'btn wide', onclick: () => openNoteSheet(p.id) }, hasOrigNote(p) ? 'Open my note' : 'Add a note'));
+    el.append(h('div', { class: 'strip-row' }, stripBtn(hasOrigNote(p) ? 'Open my note' : 'Add a note', () => openNoteSheet(p.id, noteTab(p)))));
     if (!isNote) {
       el.append(h('div', { class: 'style-row' },
         [1, 2, 3, 4].map((l) => levelSwatch(l, { selected: l === p.level, onTap: () => restyle(() => { p.level = l; }) })),
         h('span', { class: 'label' }, 'Symbol'),
         h('button', { type: 'button', class: 'symbox-hit', 'aria-label': 'Change the symbol', onclick: () => openPicker({
           current: levelSym(p),
-          choose: (sym) => restyle(() => { p.symbol = sym; }),
-          reset: { label: 'Use the level’s symbol', run: () => restyle(() => { p.symbol = null; }) },
+          choose: (sym) => { p.symbol = sym; save(); closeMarkPopover(); renderMarks(); },
+          reset: p.symbol ? { label: 'Use the level’s symbol', run: () => { p.symbol = null; save(); closeMarkPopover(); renderMarks(); } } : null,
         }) }, h('span', { class: 'symbox' }, h('span', { class: 'g' }, levelSym(p))))));
       el.append(h('div', { class: 'seg wide', role: 'group', 'aria-label': 'Look' },
         LOOKS.map(([id, label]) => h('button', { type: 'button', 'aria-pressed': String(p.style === id), onclick: () => restyle(() => { p.style = id; }) }, label))));
     }
-    if (p.voice) {
-      el.append(playerRow(p.voice, () => {
-        const before = snapshot();
-        p.voice = null;
-        save();
-        renderMarks();
-        renderMarkPopover();
-        toast('Voice note removed.', [{ label: 'Undo', run: () => restore(before) }]);
-      }));
-    } else {
-      const micRow = h('button', { type: 'button', class: 'mic-row' }, icon('mic', 24), h('span', null, 'Record a voice note'));
-      micRow.addEventListener('pointerdown', (e) => {
-        if (e.pointerType === 'mouse' && e.button !== 0) return;
-        e.preventDefault();
-        if (rec) return;
-        closeMarkPopover();
-        startRecording(p, recBarHost(p));
-      });
-      el.append(micRow);
-    }
-    el.append(h('div', { class: 'rule' }), h('button', { type: 'button', class: 'btn quiet', onclick: () => deleteOriginal(p) }, isNote ? 'Delete note' : 'Delete highlight'));
+    const micBtn = h('button', { type: 'button', class: 'strip-btn icon', 'aria-label': 'Record a voice note on my highlight', title: 'Record a voice note on my highlight' }, icon('mic', 24));
+    micBtn.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      e.preventDefault();
+      if (rec) return;
+      closeMarkPopover();
+      startRecording(p, recBarHost(p));
+    });
+    el.append(h('div', { class: 'strip-row' }, micBtn));
+    el.append(h('div', { class: 'rule' }), h('div', { class: 'strip-row' }, stripBtn(isNote ? 'Delete note' : 'Delete highlight', () => deleteOriginal(p))));
     quickUi.append(el);
     ui.markPop.el = el;
     if (p._lines && p._lines.length) placeNear(el, p._lines, 10);
@@ -1804,7 +1942,7 @@
     S.orig = S.orig.filter((q) => q.id !== p.id);
     save();
     closeMarkPopover();
-    if (ui.noteSheet) closeNoteSheet(true);
+    if (ui.noteSheet) closeNoteSheet();
     renderMarks();
     toast(p.style === 'note' ? 'Note removed.' : 'Highlight removed.', [{ label: 'Undo', run: () => restore(before) }]);
   }
@@ -1813,9 +1951,11 @@
   function openNoteSheet(pid, tab) {
     const p = S.orig.find((q) => q.id === pid);
     if (!p) return;
+    shieldClicks();
     closeMarkPopover();
     hideChip();
-    if (ui.noteSheet) closeNoteSheet(true);
+    hideToast();
+    if (ui.noteSheet) closeNoteSheet();
     ui.expanded = null;
     const mode = tab || (p.ink && p.ink.strokes && p.ink.strokes.length && !(p.note && p.note.trim()) ? 'write' : 'type');
     const el = h('div', { class: 'sheet', role: 'dialog', 'aria-label': 'My note' });
@@ -1823,7 +1963,11 @@
     ui.noteSheet = { el, pid, mode };
     $('#toast').classList.add('raised');
     renderNoteSheet();
-    const ro = new ResizeObserver(() => { if (ui.noteSheet) pageEl.style.paddingBottom = (el.offsetHeight + 48) + 'px'; });
+    const ro = new ResizeObserver(() => {
+      if (!ui.noteSheet) return;
+      pageEl.style.paddingBottom = (el.offsetHeight + 48) + 'px';
+      document.documentElement.style.setProperty('--sheet-h', el.offsetHeight + 'px');
+    });
     ro.observe(el);
     ui.noteSheet.ro = ro;
     renderMarks();
@@ -1846,7 +1990,7 @@
     quote.addEventListener('click', () => quote.classList.toggle('clamp2'));
     const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'How to write the note', style: { marginTop: '12px' } },
       [['type', 'Type it'], ['write', 'Write it']].map(([id, label]) => h('button', { type: 'button', 'aria-pressed': String(ns.mode === id), onclick: () => { ns.mode = id; renderNoteSheet(); } }, label)));
-    el.append(h('div', { class: 'sheet-head' }, h('h2', null, 'My note')), quote, seg);
+    el.append(quote, seg);
     if (ns.mode === 'type') {
       const ta = h('textarea', { class: 'note-area', id: 'orig-note', placeholder: 'Type a note', 'aria-label': 'My note', style: { minHeight: '96px' } });
       ta.value = p.note || '';
@@ -1856,20 +2000,19 @@
     } else {
       el.append(inkPad(p));
     }
+    const canDelete = hasOrigNote(p) || p.style === 'note';
     el.append(h('div', { class: 'sheet-foot' },
-      h('button', { type: 'button', class: 'btn quiet', onclick: () => {
-        const before = snapshot();
+      canDelete ? h('button', { type: 'button', class: 'btn quiet', onclick: () => {
         p.note = '';
         p.ink = null;
         if (p.style === 'note' && !p.voice) S.orig = S.orig.filter((q) => q.id !== p.id);
         save();
-        closeNoteSheet(true);
-        toast('Note removed.', [{ label: 'Undo', run: () => restore(before) }]);
-      } }, 'Delete note'),
+        closeNoteSheet();
+      } }, 'Delete note') : h('span'),
       h('button', { type: 'button', class: 'btn primary', onclick: () => closeNoteSheet() }, 'Done')));
   }
 
-  function closeNoteSheet(quiet) {
+  function closeNoteSheet() {
     const ns = ui.noteSheet;
     if (!ns) return;
     if (ns.ro) ns.ro.disconnect();
@@ -1877,16 +2020,16 @@
     ui.noteSheet = null;
     $('#toast').classList.remove('raised');
     pageEl.style.paddingBottom = '';
+    document.documentElement.style.setProperty('--sheet-h', '0px');
     const p = S.orig.find((q) => q.id === ns.pid);
     // A note anchor with nothing in it goes away, as an empty note does in the Reader.
     if (p && p.style === 'note' && !hasOrigNote(p) && !p.voice) S.orig = S.orig.filter((q) => q.id !== p.id);
     else if (p && p.note) p.note = p.note.replace(/\s+$/, '');
     save();
     renderMarks();
-    if (!quiet && p && hasOrigNote(p)) toast('Saved my note.');
   }
 
-  // "Write it": a simple handwriting pad for the pen or a finger.
+  // "Write it": a handwriting pad for the pen (a finger doesn't draw, as in the Reader).
   function inkPad(p) {
     const wrap = h('div', { class: 'inkpad' });
     const cv = h('canvas', { 'aria-label': 'Handwriting area' });
@@ -1895,7 +2038,7 @@
     wrap.append(cv);
     const undo = h('button', { type: 'button', class: 'btn small' }, 'Undo');
     const clear = h('button', { type: 'button', class: 'btn small' }, 'Clear');
-    wrap.append(h('div', { class: 'ink-tools' }, undo, clear, h('span', { class: 'meta', style: { alignSelf: 'center' } }, 'Write with the pen or a finger.')));
+    wrap.append(h('div', { class: 'ink-tools' }, undo, clear, h('span', { class: 'meta', style: { alignSelf: 'center' } }, 'Write with the pen.')));
     let ink = p.ink && p.ink.strokes ? p.ink : null;
     let cur = null;
     const redraw = () => drawInk(cv, ink);
@@ -1913,7 +2056,7 @@
       return [Math.round((e.clientX - r.left) * k * 10) / 10, Math.round((e.clientY - r.top) * k * 10) / 10];
     };
     cv.addEventListener('pointerdown', (e) => {
-      if (!ink) return;
+      if (!ink || e.pointerType === 'touch') return;
       e.preventDefault();
       try { cv.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
       cur = { id: e.pointerId, pts: [pt(e)] };
@@ -1974,15 +2117,59 @@
     return cv;
   }
 
+  // VoicePlayerSheet: the transcript's first words as the title, the player, speed chips, the transcript.
+  function openVoiceSheet(pid) {
+    const p = S.orig.find((q) => q.id === pid);
+    if (!p || !p.voice) return;
+    shieldClicks();
+    closeMarkPopover();
+    hideChip();
+    hideToast();
+    if (ui.noteSheet) closeNoteSheet();
+    const v = p.voice;
+    const words = (v.transcript || '').split(/\s+/).filter(Boolean);
+    const title = words.length ? words.slice(0, 8).join(' ') + (words.length > 8 ? '…' : '') : `Voice note, ${fmtTime(v.durationMs)}`;
+    const el = h('div', { class: 'sheet', role: 'dialog', 'aria-label': 'My voice note' });
+    const speeds = h('div', { class: 'seg', role: 'group', 'aria-label': 'Speed', style: { marginTop: '12px' } });
+    const drawSpeeds = () => {
+      speeds.textContent = '';
+      for (const sp of SPEEDS) speeds.append(h('button', { type: 'button', 'aria-pressed': String(playbackRate === sp), onclick: () => {
+        playbackRate = sp;
+        if (player) player.audio.playbackRate = sp;
+        drawSpeeds();
+      } }, sp + '×'));
+    };
+    drawSpeeds();
+    el.append(h('div', { class: 'sheet-head' }, h('h2', null, title)), playerRow(v), speeds);
+    if (v.transcript) el.append(h('p', { class: 'body', style: { margin: '12px 0 0', fontSize: '17px', lineHeight: '24px' } }, v.transcript));
+    el.append(h('div', { class: 'sheet-foot', style: { marginTop: '12px' } },
+      h('button', { type: 'button', class: 'btn quiet', onclick: () => {
+        const before = snapshot();
+        p.voice = null;
+        save();
+        closeNoteSheet();
+        renderMarks();
+        toast('Voice note removed.', [{ label: 'Undo', run: () => restore(before) }]);
+      } }, 'Remove this recording'),
+      h('button', { type: 'button', class: 'btn primary', onclick: () => closeNoteSheet() }, 'Done')));
+    overlayRoot.append(el);
+    // It shares the note sheet's slot, so Back, a tap outside and Done close it the same way.
+    ui.noteSheet = { el, pid, mode: 'voice' };
+    $('#toast').classList.add('raised');
+    pageEl.style.paddingBottom = (el.offsetHeight + 48) + 'px';
+    document.documentElement.style.setProperty('--sheet-h', el.offsetHeight + 'px');
+  }
+
   // VoiceRecorderBar: × · ● 0:07 · waveform · Stop, along the bottom while recording.
   function recBarHost(p) {
     return { render(problem) { renderRecBar(p, problem); } };
   }
 
   function renderRecBar(p, problem) {
+    if (rec && rec.pid !== p.id) return;   // another recording owns the bar
     if (ui.recbar) { ui.recbar.remove(); ui.recbar = null; }
     if (rec && rec.pid === p.id) {
-      const timerEl = h('span', { class: 'timer' }, fmtTime(Date.now() - rec.started));
+      const timerEl = h('span', { class: 'timer' }, rec.started ? fmtTime(Date.now() - rec.started) : '0:00');
       const waveEl = h('div', { class: 'wave' });
       for (let i = 0; i < 20; i++) waveEl.append(h('i'));
       rec.timerEl = timerEl;
@@ -2003,7 +2190,7 @@
       const bar = h('div', { class: 'recbar', role: 'alert' },
         h('div', { class: 'msg' }, 'I need the microphone to record a voice note.'),
         h('button', { type: 'button', class: 'btn small', onclick: () => startPretend(p, recBarHost(p)) }, 'Pretend to record'),
-        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Close', onclick: () => renderRecBar(p) }, icon('close', 18)));
+        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Close', onclick: () => { if (ui.recbar) { ui.recbar.remove(); ui.recbar = null; } } }, icon('close', 18)));
       overlayRoot.append(bar);
       ui.recbar = bar;
     }
@@ -2017,10 +2204,11 @@
     el.append(h('div', { class: 'panel-head' }, h('h2', null, 'Notes'),
       h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Close', onclick: closePanel }, icon('close', 22))));
     const filter = (id, label) => h('button', { type: 'button', class: 'chip', 'aria-pressed': String(f === id), onclick: () => { ui.panelFilterOrig = id; renderPanel(); } }, label);
+    const levels = [1, 2, 3, 4].filter((l) => list.some((p) => p.style !== 'note' && p.level === l));
     el.append(h('div', { class: 'filter-row' }, filter('all', `All ${list.length}`),
-      [1, 2, 3, 4].map((l) => filter('L' + l, [h('span', { class: 'mini-swatch', style: { '--band': `var(--band-${l})` } }, h('span', null, LEVEL_SYMBOLS[l - 1])), String(list.filter((p) => p.style !== 'note' && p.level === l).length)]))));
+      levels.map((l) => filter('L' + l, [h('span', { class: 'mini-swatch', style: { '--band': `var(--band-${l})` } }, h('span', null, LEVEL_SYMBOLS[l - 1])), String(list.filter((p) => p.style !== 'note' && p.level === l).length)]))));
     if (!shown.length) {
-      el.append(h('div', { class: 'empty' }, h('div', { class: 'label' }, 'Nothing marked yet.'), h('div', { class: 'meta' }, 'Long-press a word, then tap a gray.')));
+      el.append(h('div', { class: 'empty' }, h('div', { class: 'label' }, 'Nothing marked yet.'), h('div', { class: 'meta' }, 'Long-press a word, or draw over a line with the highlighter.')));
       return;
     }
     for (const p of shown) {
@@ -2029,7 +2217,8 @@
       else if (p.ink && p.ink.strokes && p.ink.strokes.length) meta.push('My handwritten note');
       if (p.voice) meta.push(`Voice note, ${fmtTime(p.voice.durationMs)}`);
       const look = p.style === 'band' ? 'highlight' : (p.style === 'note' ? 'dash' : p.style);
-      el.append(h('button', { type: 'button', class: 'prow', onclick: () => { closePanel(); revealPassage(p); openMarkPopover(p.id); } },
+      // Tapping a row jumps to the passage.
+      el.append(h('button', { type: 'button', class: 'prow', onclick: () => { closePanel(); revealPassage(p); } },
         h('span', { class: 'lead' }, p.style === 'note' ? icon('note', 20) : h('span', { class: 'mini-swatch', style: { '--band': `var(--band-${p.level})` } }, h('span', null, levelSym(p)))),
         h('span', null,
           h('span', { class: 'pquote look-' + look }, h('span', { class: 'look', style: { '--band': `var(--band-${p.level})` } }, quoteOf(p))),
@@ -2110,7 +2299,7 @@
       el.append(h('button', { type: 'button', class: 'prow', onclick: () => { closePanel(); revealPassage(p); openSheet(p.id, 'panel'); } },
         h('span', { class: 'psym' }, c.symbol),
         h('span', null,
-          h('span', { class: 'pquote' + (fmt ? ' look-' + fmt : '') }, h('span', { class: 'look', style: { '--band': `var(--band-${c.gray})` } }, quoteOf(p))),
+          h('span', { class: 'pquote' + (fmt ? ' look-' + fmt : '') }, h('span', { class: 'look', style: { '--band': `var(--band-${grayOf(p)})` } }, quoteOf(p))),
           meta.length ? h('div', { class: 'meta pnote' }, meta.join(' · ')) : null)));
     }
   }
@@ -2155,7 +2344,9 @@
       h('div', { class: 'rule' }),
       toggle('Long-press picks the sentence', 'sentence'),
       isOrig() ? null : toggle('Show hints', 'hints'),
+      isOrig() ? null : toggle('Preview formatting on categories', 'catPreview'),
       isOrig() ? null : seg('Symbol side', 'symbolSide', [['right', 'Right'], ['left', 'Left']]),
+      isOrig() ? seg('Page', 'pageType', [['book', 'Book'], ['pdf', 'PDF']]) : null,
       h('div', { class: 'mrow' }, h('span', null, 'Text size'),
         h('div', { class: 'seg', role: 'group', 'aria-label': 'Text size' },
           h('button', { type: 'button', 'aria-label': 'Smaller text', onclick: () => { st.textSize = clamp(st.textSize - 2, 16, 28); save(); applySettings(); renderMenu(); } }, 'A−'),
@@ -2171,6 +2362,7 @@
       }),
       confirmRow('Reset the demo', 'Tap again to reset', () => {
         const before = snapshot();
+        forgetAudio(S.passages.concat(S.orig));
         const fresh = seedState();
         S.categories = fresh.categories;
         S.passages = fresh.passages;
@@ -2182,7 +2374,7 @@
       }),
       h('div', { class: 'rule' }),
       h('div', { class: 'meta' }, (isOrig()
-        ? 'Original: today\u2019s Reader highlight menus, for comparison. Symbols are drawn as on PDF pages. '
+        ? 'Original: today\u2019s Reader highlight menus, for comparison. Book pages show no margin symbols, as in the Reader; PDF shows them as on fixed pages. '
         : 'Christine: the proposed Save passage menu. ') + 'Each design keeps its own highlights. ' + buildLabel()));
   }
 
@@ -2218,10 +2410,10 @@
     for (const a of actions || []) {
       t.append(h('button', { type: 'button', class: 'btn quiet', onclick: () => { hideToast(); a.run(); } }, a.label));
     }
-    t.classList.toggle('raised', !!(ui.sheet || ui.noteSheet));
+    t.classList.toggle('raised', !!(ui.sheet || ui.noteSheet || ui.recbar));
     t.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(hideToast, ms || ((actions && actions.length) ? 8000 : 4000));
+    toastTimer = setTimeout(hideToast, ms || ((actions && actions.length && !isOrig()) ? 8000 : 4000));
   }
   function hideToast() { clearTimeout(toastTimer); $('#toast').hidden = true; }
 
@@ -2282,6 +2474,7 @@
   // Close everything that belongs to one design before showing the other.
   function closeEverything() {
     if (rec) stopRecording(true);
+    if (ui.recbar) { ui.recbar.remove(); ui.recbar = null; }
     closePicker();
     if (ui.sheet) closeSheet();
     if (ui.noteSheet) closeNoteSheet();
@@ -2323,13 +2516,19 @@
       renderMarks();
       renderSelection();
       if (ui.quick && !sel.dragging) showQuick();
+      if (ui.markPop) renderMarkPopover();
+      hideChip();
     });
   }
 
   // Back (Android) and Escape close the top-most thing first. Returns true when something closed.
   window.protoHandleBack = () => {
     if (ui.picker) { closePicker(); return true; }
-    if (rec && ui.recbar) { stopRecording(true); return true; }
+    if (ui.recbar) {
+      if (rec) stopRecording(true);
+      else { ui.recbar.remove(); ui.recbar = null; }
+      return true;
+    }
     if (ui.sheet) { closeSheet(); return true; }
     if (ui.noteSheet) { closeNoteSheet(); return true; }
     if (ui.markPop) { closeMarkPopover(); return true; }
@@ -2342,11 +2541,20 @@
   };
 
   // Taps outside the menu or panel close them.
+  // The tap that closes them doesn't also act on what's underneath.
+  let lastPointerType = 'touch';
   document.addEventListener('pointerdown', (e) => {
     const t = e.target;
-    if (ui.menu && !ui.menu.contains(t) && !t.closest('#open-settings')) closeMenu();
-    if (ui.panel && !ui.panel.contains(t) && !t.closest('#open-panel') && !t.closest('.sheet') && !t.closest('.popover')) closePanel();
+    lastPointerType = e.pointerType || 'touch';
+    let closed = false;
+    if (ui.menu && !ui.menu.contains(t) && !t.closest('#open-settings')) { closeMenu(); closed = true; }
+    if (ui.panel && !ui.panel.contains(t) && !t.closest('#open-panel') && !t.closest('.sheet') && !t.closest('.popover')) { closePanel(); closed = true; }
+    if (closed && reader.contains(t)) { ui.swallowGesture = true; shieldClicks(); }
   }, true);
+
+  // Save typing right away if the app is put away.
+  document.addEventListener('visibilitychange', () => { if (document.hidden && saveTimer) save(); });
+  window.addEventListener('pagehide', () => { if (saveTimer) save(); });
 
   // ---------------------------------------------------------------- boot
 

@@ -26,9 +26,19 @@ window.PROTO_CONTENT = {
       note: 'Is all detail the problem, or only the detail we never chose?',
     },
     {
-      quote: 'To affect the quality of the day, that is the highest of arts.',
+      quote: 'Let us spend one day as deliberately as Nature, and not be thrown off the track by every nutshell and mosquito’s wing that falls on the rails.',
       category: 'star',
       note: '',
+    },
+    {
+      quote: 'Time is but the stream I go a-fishing in.',
+      category: 'star',
+      note: '',
+      // A sample voice note (no audio) so the transcript preview shows from the start.
+      voice: {
+        durationMs: 7400,
+        transcript: 'His best picture of attention. Time as something you visit and drink from, not something you spend.',
+      },
     },
   ],
 };

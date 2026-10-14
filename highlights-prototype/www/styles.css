@@ -547,6 +547,379 @@ body.peek .xnote { visibility: hidden; }
   * { scroll-behavior: auto !important; }
 }
 
+/* ==========================================================================
+   Christine mode's own look ("Marginalia", chosen by a design panel over two other directions).
+   The menus as book furniture and a careful reader's pencil: Garamond italic titles, small-caps labels,
+   hairline and double rules, index cards stacked with a crisp offset, category tiles framed like library
+   stamps, notes in the margin hand. Every rule is scoped to body.mode-christine; Original is untouched.
+   No blur, no motion over 150ms, everything legible in grayscale.
+   ========================================================================== */
+
+/* ---------- Tokens ---------- */
+body.mode-christine {
+  --mg-card: #FFFEFB;          /* index-card stock, a breath warmer than white */
+  --mg-tint: #EFEAE1;          /* pressed / chosen */
+  --mg-ruled: #DCD4C6;         /* ruled lines on note cards */
+  --mg-frame: #8E877C;         /* the inner line of a stamp frame (decorative) */
+  --mg-r: 7px;                 /* corner of cards and tiles */
+  --mg-stack: 4px;             /* offset of the card behind a card */
+  --mg-halo: #CFC8BB;          /* the soft halo round the chosen category, as in Christine's sketch */
+  /* The Reader's four gray levels, warmed to sit on paper; same luminance, so the DC-1 shows the same grays. */
+  --band-1: #E0DCD2;
+  --band-2: #BFBBB1;
+  --band-3: #9A968C;
+  --band-4: #7C786E;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) body.mode-christine {
+    --mg-card: #070707;
+    --mg-tint: #2A2825;
+    --mg-ruled: #3A3733;
+    --mg-frame: #6E6A63;
+    --mg-halo: #555249;
+    --band-1: #47443D; --band-2: #58554E; --band-3: #6A6760; --band-4: #79766F;
+  }
+}
+:root[data-theme="dark"] body.mode-christine {
+  --mg-card: #070707;
+  --mg-tint: #2A2825;
+  --mg-ruled: #3A3733;
+  --mg-frame: #6E6A63;
+  --mg-halo: #555249;
+  --band-1: #47443D; --band-2: #58554E; --band-3: #6A6760; --band-4: #79766F;
+}
+/* Lavender ink (colour screens) still wins over the warm grays. */
+:root[data-ink="lavender"] body.mode-christine { --band-1: #ECE5F8; --band-2: #DCCDF3; --band-3: #C9B3EC; --band-4: #B49AE3; --mg-halo: #CDB8F0; }
+@media (prefers-color-scheme: dark) {
+  :root[data-ink="lavender"]:not([data-theme="light"]) body.mode-christine { --band-1: #3A3150; --band-2: #463A63; --band-3: #554677; --band-4: #65538C; --mg-halo: #5A4A80; }
+}
+:root[data-ink="lavender"][data-theme="dark"] body.mode-christine { --band-1: #3A3150; --band-2: #463A63; --band-3: #554677; --band-4: #65538C; --mg-halo: #5A4A80; }
+
+/* ---------- Running head ---------- */
+body.mode-christine .topbar { border-bottom: 3px double var(--ink); }
+body.mode-christine .book-title {
+  font-family: var(--font-read); font-weight: 500; font-size: 19px; line-height: 21px;
+  font-variant-caps: all-small-caps; letter-spacing: 0.11em;
+}
+body.mode-christine .book-meta { font-family: var(--font-read); font-style: italic; font-size: 15px; line-height: 19px; }
+body.mode-christine .seg { border-width: 1px; border-radius: var(--mg-r); overflow: hidden; }
+body.mode-christine .seg button { min-height: 46px; background: var(--paper); }
+body.mode-christine .seg button + button { border-left-width: 1px; }
+body.mode-christine .seg button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+body.mode-christine .icon-btn { border-radius: 50%; }
+body.mode-christine .icon-btn[aria-expanded="true"] { background: var(--mg-tint); color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+
+/* ---------- The page ---------- */
+body.mode-christine .text .byline {
+  font-family: var(--font-read); font-size: 17px; line-height: 20px;
+  font-variant-caps: all-small-caps; letter-spacing: 0.12em;
+}
+
+/* Highlights: a soft marker stroke rather than a ruled box */
+body.mode-christine .band { border-radius: 2px; }
+body.mode-christine .band.first { border-top-left-radius: 7px 4px; border-bottom-left-radius: 4px 7px; }
+body.mode-christine .band.last { border-top-right-radius: 4px 7px; border-bottom-right-radius: 7px 4px; }
+
+/* The passage open in the sheet: a printer's double bracket in the margin */
+body.mode-christine .focus-bar { background: transparent; border-left: 1px solid var(--ink); border-right: 1px solid var(--ink); }
+
+/* Margin symbols, set like printer's marks */
+body.mode-christine .sym {
+  font-family: var(--font-read); font-weight: 600; font-size: 22px; color: var(--ink);
+  font-synthesis: none;
+  border-radius: 50%;
+}
+body.mode-christine .sym.current { box-shadow: 0 0 0 3px var(--mg-halo); }
+
+/* Selection knobs: an ink bead on a paper ring */
+body.mode-christine .handle-knob::after { width: 13px; height: 13px; box-shadow: 0 0 0 2px var(--paper); }
+body.mode-christine .handle-stem { width: 1px; }
+
+/* ---------- Shared controls ---------- */
+body.mode-christine .btn {
+  border-width: 1px; border-radius: var(--mg-r);
+  background: var(--mg-card);
+  font-family: var(--font-ui); font-weight: 500;
+}
+body.mode-christine .btn.small { min-height: 48px; padding: 0 16px; }
+body.mode-christine .btn.primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+body.mode-christine .btn:active, body.mode-christine .btn.pressed { background: var(--ink); color: var(--paper); }
+body.mode-christine .btn.quiet {
+  background: transparent; border-color: transparent;
+  font-family: var(--font-ui); font-style: normal; font-weight: 500; font-size: 16px;
+  text-decoration-thickness: 1px; text-underline-offset: 4px;
+}
+body.mode-christine .btn.quiet:active { background: var(--mg-tint); color: var(--ink); }
+
+/* Labels: small capitals, tracked */
+body.mode-christine .counter {
+  font-family: var(--font-read); font-weight: 500; font-size: 17px; line-height: 20px;
+  text-transform: none; font-variant-caps: all-small-caps; letter-spacing: 0.14em;
+  color: var(--ink-soft);
+}
+/* Help text: a footnote in italic */
+body.mode-christine .meta { font-family: var(--font-read); font-style: italic; font-size: 16px; line-height: 21px; color: var(--ink-soft); }
+body.mode-christine .rule { border-top-width: 1px; }
+
+/* ---------- Save passage: the index card ---------- */
+body.mode-christine .popover {
+  background: var(--mg-card);
+  border: 1px solid var(--ink);
+  border-radius: var(--mg-r);
+  padding: 10px 16px 14px;
+  box-shadow: var(--mg-stack) var(--mg-stack) 0 -1px var(--mg-card), var(--mg-stack) var(--mg-stack) 0 0 var(--ink);
+}
+body.mode-christine .popover h3 {
+  font-family: var(--font-read); font-style: italic; font-weight: 500;
+  font-size: 23px; line-height: 28px; letter-spacing: 0.005em;
+}
+body.mode-christine .popover .rule { border-top: 3px double var(--ink); margin: 8px -16px 14px; }
+body.mode-christine .popover .hint { margin-top: 10px; }
+body.mode-christine .cat-row { gap: 10px; }
+
+/* Category tiles, framed like a library stamp: an ink edge and a fine inner line */
+body.mode-christine .cat {
+  width: 58px; height: 58px;
+  border: 1.5px solid var(--ink);
+  border-radius: var(--mg-r);
+  background: var(--mg-card);
+  box-shadow: inset 0 0 0 3px var(--mg-card), inset 0 0 0 4px var(--mg-frame);
+}
+body.mode-christine .cat .glyph {
+  font-family: var(--font-read); font-weight: 600; font-size: 27px; line-height: 32px; font-synthesis: none;
+  padding: 0 6px; border-radius: 3px;
+}
+body.mode-christine .cat[aria-pressed="true"] {
+  background: var(--mg-card);
+  border-width: 2px;
+  box-shadow: 0 0 0 7px var(--mg-halo), inset 0 0 0 3px var(--mg-card), inset 0 0 0 4px var(--mg-frame);
+}
+body.mode-christine .sheet .cat-row { gap: 16px; padding: 7px; margin: -7px; }
+body.mode-christine .cat.pressed { background: var(--mg-tint); box-shadow: inset 0 0 0 3px var(--mg-tint), inset 0 0 0 5px var(--ink); }
+body.mode-christine .cat.held { background: var(--ink); box-shadow: inset 0 0 0 3px var(--ink), inset 0 0 0 4px var(--paper); }
+body.mode-christine .cat.ghost {
+  border: 1px dashed var(--ink-soft);
+  background: transparent; box-shadow: none;
+  color: var(--ink-soft);
+}
+body.mode-christine .cat.ghost svg { opacity: 1; }
+body.mode-christine .cat.ghost.pressed,
+body.mode-christine .cat.ghost:active { border-style: solid; border-color: var(--ink); background: var(--mg-tint); color: var(--ink); }
+
+/* ---------- Save passage: the sheet ---------- */
+body.mode-christine .sheet {
+  border-top: 1px solid var(--ink);
+  box-shadow: 0 -4px 0 0 var(--paper), 0 -5px 0 0 var(--ink);
+  padding-top: 16px;
+}
+body.mode-christine .sheet-head { min-height: 44px; margin-bottom: 4px; }
+body.mode-christine .sheet-head h2,
+body.mode-christine .panel-head h2 {
+  font-family: var(--font-read); font-style: italic; font-weight: 500;
+  font-size: 27px; line-height: 32px; letter-spacing: 0.005em;
+}
+body.mode-christine .sheet section { padding: 14px 0; }
+body.mode-christine .sheet section:first-of-type { padding-top: 10px; }
+body.mode-christine .sheet section + section { border-top: 1px solid var(--rule); }
+body.mode-christine .sheet .sheet-foot { border-top: 1px solid var(--rule); padding-top: 12px; }
+
+/* The category's name, written on a ruled line */
+body.mode-christine .name-row { margin-top: 14px; }
+body.mode-christine .name-field { border-bottom: 1px solid var(--ink); }
+body.mode-christine .name-field:focus-within { border-bottom-width: 2px; margin-bottom: -1px; }
+body.mode-christine .name-field input { font-family: var(--font-read); font-weight: 500; font-size: 25px; line-height: 30px; }
+body.mode-christine .name-field svg { color: var(--ink-soft); }
+
+/* Notes: a lined card, written in the pencil hand */
+body.mode-christine .note-buttons .btn[aria-pressed="true"] { background: var(--mg-tint); }
+body.mode-christine .note-area {
+  border: 1px solid var(--ink);
+  border-radius: var(--mg-r);
+  /* ruled like an index card: the lines sit just under each baseline, only inside the writing area */
+  background-color: transparent;
+  background-image:
+    linear-gradient(to bottom, transparent 27px, var(--mg-ruled) 27px, var(--mg-ruled) 28px),
+    linear-gradient(var(--mg-card), var(--mg-card));
+  background-size: 100% 28px, 100% 100%;
+  background-repeat: repeat-y, no-repeat;
+  background-origin: content-box, padding-box;
+  background-clip: content-box, padding-box;
+  background-position: 0 -4px, 0 0;
+  padding: 8px 14px 8px;
+  font-family: var(--font-read); font-style: normal; font-size: 19px; line-height: 28px;
+}
+body.mode-christine .note-area::placeholder { color: var(--ink-muted); font-style: italic; }
+body.mode-christine .note-area:focus { box-shadow: inset 0 0 0 1px var(--ink); }
+
+body.mode-christine .recorder,
+body.mode-christine .player {
+  border: 1px solid var(--ink);
+  border-radius: var(--mg-r);
+  background: var(--mg-card);
+}
+body.mode-christine .wave i { max-width: 3px; border-radius: 2px; }
+body.mode-christine .player > .icon-btn:first-child { width: 44px; height: 44px; margin-left: 6px; border-radius: 50%; background: var(--ink); color: var(--paper); }
+body.mode-christine .player > .icon-btn:first-child:active { background: var(--ink-soft); }
+body.mode-christine .timer { font-family: var(--font-read); font-weight: 500; font-size: 19px; font-variant-numeric: lining-nums tabular-nums; }
+body.mode-christine .field-label { margin-top: 14px; }
+
+/* Formatting: each chip is a type specimen of the mark it makes */
+body.mode-christine .checkbox .box { border-radius: 4px; }
+body.mode-christine .chips { gap: 10px; margin-top: 8px; }
+body.mode-christine .chip {
+  border-width: 1px; border-radius: var(--mg-r);
+  background: var(--mg-card);
+  padding: 0 16px;
+  font-family: var(--font-read); font-weight: 400; font-size: 20px;
+}
+body.mode-christine .chip .look { padding: 0 3px; border-radius: 3px; }
+body.mode-christine .chips .chip { display: inline-flex; align-items: center; gap: 6px; }
+body.mode-christine .chips .chip[aria-pressed="true"] { background: var(--mg-tint); box-shadow: inset 0 0 0 2px var(--ink); }
+body.mode-christine .chips .chip[aria-pressed="true"]::before {
+  content: ""; flex: none; width: 15px; height: 15px; background: var(--ink);
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4.5 12.5l5 5 10-11' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  -webkit-mask-size: contain; -webkit-mask-repeat: no-repeat;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4.5 12.5l5 5 10-11' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  mask-size: contain; mask-repeat: no-repeat;
+}
+
+/* Shades: four ink wells */
+body.mode-christine .shade-row { gap: 6px; margin-top: 12px; }
+body.mode-christine .shade-row .meta { margin-right: 6px; }
+body.mode-christine .shade {
+  width: 48px; height: 48px;
+  border: 5px solid transparent; border-radius: 50%;
+  background: var(--band); background-clip: padding-box;
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+body.mode-christine .shade[aria-pressed="true"] { border-color: var(--paper); box-shadow: inset 0 0 0 1px var(--ink), 0 0 0 1.5px var(--ink); }
+
+body.mode-christine .symbol-row { gap: 14px; }
+body.mode-christine .symbol-btn {
+  border: 1.5px solid var(--ink); border-radius: var(--mg-r);
+  background: var(--mg-card);
+  box-shadow: inset 0 0 0 3px var(--mg-card), inset 0 0 0 4px var(--mg-frame);
+  font-family: var(--font-read); font-size: 24px;
+}
+body.mode-christine .confirm { border-width: 1px; border-radius: var(--mg-r); background: var(--mg-card); padding: 12px 14px; }
+
+/* ---------- Symbol picker ---------- */
+body.mode-christine .picker-current {
+  width: 48px; height: 48px;
+  border: 1.5px solid var(--ink); border-radius: var(--mg-r);
+  box-shadow: inset 0 0 0 3px var(--mg-card), inset 0 0 0 4px var(--mg-frame);
+  background: var(--mg-card);
+  font-family: var(--font-read); font-size: 24px;
+}
+body.mode-christine .type-row input {
+  border-width: 1px; border-radius: var(--mg-r);
+  background: var(--mg-card);
+  font-family: var(--font-read); font-size: 19px;
+}
+body.mode-christine .type-row input::placeholder { font-style: italic; color: var(--ink-muted); }
+body.mode-christine .picker-section { display: flex; align-items: center; gap: 12px; margin: 18px 0 6px; }
+body.mode-christine .picker-section::after { content: ""; flex: 1; border-top: 1px solid var(--rule); }
+body.mode-christine .grid button { font-family: var(--font-read); font-weight: 500; font-size: 24px; font-synthesis: none; }
+body.mode-christine .grid button span { border-radius: var(--mg-r); }
+body.mode-christine .grid button[aria-pressed="true"] span { box-shadow: inset 0 0 0 1.5px var(--ink), inset 0 0 0 3px var(--mg-card), inset 0 0 0 4px var(--mg-frame); background: var(--mg-card); }
+
+/* ---------- Annotations: notes in the margin hand ---------- */
+body.mode-christine .xnote {
+  padding: 7px 12px 8px 13px;
+  background: var(--mg-card);
+  color: var(--ink);
+  border: 1px solid var(--ink);
+  border-radius: 5px;
+  font-family: var(--font-read); font-style: italic; font-size: 17px; line-height: 21px;
+}
+/* a fine tail toward the passage's margin mark */
+body.mode-christine .xnote[data-anchored="true"]:not(.expanded)::after {
+  content: "";
+  position: absolute; right: 18px; bottom: -5.5px;
+  width: 9px; height: 9px;
+  background: var(--mg-card);
+  border-right: 1px solid var(--ink); border-bottom: 1px solid var(--ink);
+  transform: rotate(45deg);
+}
+body.mode-christine .xnote .xvoice { color: var(--ink); font-weight: 400; }
+body.mode-christine .xnote.expanded {
+  padding: 12px 18px 12px;
+  font-style: normal; font-size: 18px; line-height: 25px; color: var(--ink);
+  border-radius: var(--mg-r);
+  box-shadow: var(--mg-stack) var(--mg-stack) 0 -1px var(--mg-card), var(--mg-stack) var(--mg-stack) 0 0 var(--ink);
+}
+body.mode-christine .xnote .xhead {
+  margin: 0 -18px 12px; padding: 0 18px 8px;
+  border-bottom: 3px double var(--ink);
+  font-family: var(--font-read); font-size: 17px; font-weight: 500; line-height: 22px;
+  font-variant-caps: all-small-caps; letter-spacing: 0.14em; color: var(--ink-soft);
+}
+body.mode-christine .xnote .chip-sym {
+  width: auto; height: auto; border: 0; background: transparent;
+  font-family: var(--font-read); font-size: 19px; color: var(--ink); letter-spacing: 0;
+}
+body.mode-christine .xnote .xquote {
+  margin: 0 0 12px; padding-left: 12px;
+  border-left: 1px solid var(--ink-soft);
+  font-family: var(--font-read); font-style: normal; font-size: 16px; line-height: 22px; color: var(--ink-soft);
+}
+body.mode-christine .xnote.expanded .xtext { font-style: italic; font-size: 19px; line-height: 26px; }
+body.mode-christine .xnote .player { margin-top: 12px; }
+body.mode-christine .xnote .xactions { margin-top: 12px; }
+
+/* ---------- Saved passages: a commonplace book ---------- */
+body.mode-christine .panel {
+  border-left: 1px solid var(--ink);
+  box-shadow: -4px 0 0 0 var(--paper), -5px 0 0 0 var(--ink);
+  padding-left: 24px;
+}
+body.mode-christine .panel .filter-row { gap: 8px; margin: 10px 0 8px; padding-bottom: 12px; border-bottom: 3px double var(--ink); }
+body.mode-christine .panel .filter-row .chip {
+  min-height: 48px; padding: 0 16px; border-radius: 24px;
+  font-family: var(--font-ui); font-size: 15px; font-weight: 500;
+}
+body.mode-christine .panel .filter-row .chip[aria-pressed="true"] { background: var(--ink); color: var(--paper); box-shadow: none; }
+body.mode-christine .prow { grid-template-columns: 30px 1fr; gap: 12px; padding: 14px 0 16px; border-bottom: 1px solid var(--rule); }
+body.mode-christine .prow .psym {
+  width: 30px; height: 26px; border: 0; background: transparent;
+  font-family: var(--font-read); font-weight: 600; font-size: 22px; color: var(--ink); font-synthesis: none;
+}
+body.mode-christine .prow .pquote { font-size: 19px; line-height: 27px; }
+body.mode-christine .prow .pquote .look { border-radius: 3px; }
+body.mode-christine .prow .pnote { margin-top: 6px; }
+/* a tailpiece at the end of the list */
+body.mode-christine .panel > .prow:last-child::after {
+  content: "*\2003*\2003*";
+  position: absolute; left: 0; right: 0; bottom: -44px;
+  text-align: center; font-family: var(--font-read); font-size: 22px; line-height: 24px; color: var(--ink-soft);
+}
+body.mode-christine .panel > .prow:last-child { position: relative; margin-bottom: 64px; }
+
+/* ---------- Settings, toast, first-run card ---------- */
+body.mode-christine .menu {
+  border-width: 1px; border-radius: var(--mg-r);
+  background: var(--mg-card);
+  box-shadow: var(--mg-stack) var(--mg-stack) 0 -1px var(--mg-card), var(--mg-stack) var(--mg-stack) 0 0 var(--ink);
+}
+body.mode-christine .menu .mrow { min-height: 52px; }
+body.mode-christine .menu .mrow .seg button { min-height: 46px; }
+body.mode-christine .toast {
+  background: var(--mg-card);
+  border-width: 1px; border-radius: var(--mg-r);
+  font-family: var(--font-read); font-style: italic; font-size: 18px; line-height: 23px;
+  padding-left: 18px;
+}
+body.mode-christine .intro {
+  background: var(--mg-card);
+  border-width: 1px; border-radius: var(--mg-r);
+  box-shadow: var(--mg-stack) var(--mg-stack) 0 -1px var(--mg-card), var(--mg-stack) var(--mg-stack) 0 0 var(--ink);
+  padding: 14px 18px 10px;
+}
+body.mode-christine .intro h2 {
+  margin: 0 -18px 12px; padding: 0 18px 8px; border-bottom: 3px double var(--ink);
+  font-family: var(--font-read); font-style: italic; font-weight: 500; font-size: 22px; line-height: 28px;
+}
+
 /* In the APK on the DC-1, the top band of the glass belongs to the system and the Taskbar covers the bottom. */
 :root.native { --native-top: 28px; --native-bottom: 24px; }
 
