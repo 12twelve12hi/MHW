@@ -2260,6 +2260,7 @@
     $('#mode-christine').setAttribute('aria-pressed', String(!isOrig()));
     $('#view-seg').hidden = isOrig();
     document.body.classList.toggle('mode-original', isOrig());
+    document.body.classList.toggle('mode-christine', !isOrig());
     $('#view-regular').setAttribute('aria-pressed', String(st.view === 'regular'));
     $('#view-annotations').setAttribute('aria-pressed', String(st.view === 'annotations'));
     document.body.classList.toggle('annotations', !isOrig() && st.view === 'annotations');
