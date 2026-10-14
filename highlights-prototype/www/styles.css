@@ -76,7 +76,12 @@ body {
   -webkit-tap-highlight-color: transparent;
   -webkit-text-size-adjust: 100%;
   overscroll-behavior: none;
+  /* A press-and-hold design: no stray native text selection or Copy/Share bar anywhere but in text fields. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
+input, textarea { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
 button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 :focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
@@ -168,8 +173,6 @@ button { cursor: pointer; }
   font-family: var(--font-ui);
   font-size: 15px;
   line-height: 22px;
-  -webkit-user-select: text;
-  user-select: text;
 }
 .intro h2 { margin: 0 0 8px; font-size: 17px; line-height: 24px; font-weight: 600; }
 .intro ul { margin: 0 0 8px; padding-left: 20px; display: grid; gap: 6px; }
@@ -921,7 +924,7 @@ body.mode-christine .intro h2 {
 }
 
 /* In the APK on the DC-1, the top band of the glass belongs to the system and the Taskbar covers the bottom. */
-:root.native { --native-top: 28px; --native-bottom: 24px; }
+:root.native { --native-top: 28px; --native-bottom: 0px; }
 
 /* ---------- Mode switch ---------- */
 .mode-seg button { min-width: 84px; }

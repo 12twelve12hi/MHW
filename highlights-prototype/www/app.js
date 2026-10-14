@@ -5,6 +5,7 @@
   'use strict';
 
   const C = window.PROTO_CONTENT;
+  const NATIVE = !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform());
 
   // Timings and sizes from the Reader (ViewerCore, SelectionStrip, DlPressed); see the research notes in README.md.
   const LONG_PRESS_MS = 400;      // Android 13's long-press timeout, which the Reader uses for selecting text
@@ -121,6 +122,8 @@
   // ---------------------------------------------------------------- state
 
   const STORE_KEY = 'hlproto:v1';
+  // Saved passages are word positions in this text; if a later build changes the text they are found again by quote.
+  const CONTENT_ID = (() => { let h = 0; for (const ch of C.paragraphs.join('\n')) h = (h * 31 + ch.codePointAt(0)) | 0; return String(h); })();
   const DEFAULT_SETTINGS = {
     mode: 'christine',      // 'original' is today's Reader, 'christine' is the proposal
     level: 2,               // Original mode: the gray level new highlights use (the Reader remembers the last one)
@@ -192,6 +195,18 @@
     try { raw = JSON.parse(localStorage.getItem(STORE_KEY) || 'null'); } catch (e) { raw = null; }
     if (!raw || !Array.isArray(raw.categories) || !raw.categories.length || !Array.isArray(raw.passages)) return seedState();
     raw.settings = Object.assign({}, DEFAULT_SETTINGS, raw.settings || {});
+    // Builds before 4 saved no content id; they had this same text.
+    if (raw.contentId && raw.contentId !== CONTENT_ID) {
+      const reanchor = (list) => list.filter((p) => {
+        const r = p && p.quote ? findQuote(p.quote) : null;
+        if (!r) return false;
+        p.start = r[0];
+        p.end = r[1];
+        return true;
+      });
+      raw.passages = reanchor(raw.passages);
+      raw.orig = Array.isArray(raw.orig) ? reanchor(raw.orig) : raw.orig;
+    }
     const ok = (p) => p && p.start >= 0 && p.end < W.length && p.start <= p.end;
     raw.passages = raw.passages.filter(ok);
     // Builds before 4 stored "follow the category" (ownFormat null) instead of each passage's own look.
@@ -213,7 +228,8 @@
     clearTimeout(saveTimer);
     saveTimer = null;
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ categories: S.categories, passages: S.passages, orig: S.orig, settings: S.settings, introSeen: S.introSeen }));
+      for (const p of S.passages.concat(S.orig)) if (!p.quote || p._q !== p.start + ':' + p.end) { p.quote = quoteOf(p); Object.defineProperty(p, '_q', { value: p.start + ':' + p.end, writable: true, configurable: true }); }
+      localStorage.setItem(STORE_KEY, JSON.stringify({ contentId: CONTENT_ID, categories: S.categories, passages: S.passages, orig: S.orig, settings: S.settings, introSeen: S.introSeen }, (k, v) => (k === '_lines' ? undefined : v)));
     } catch (e) { /* storage may be blocked; the prototype still works for this visit */ }
   }
   function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 400); }
@@ -683,7 +699,7 @@
 
   reader.addEventListener('scroll', () => hideChip(), { passive: true });
 
-  reader.addEventListener('contextmenu', (e) => {
+  document.addEventListener('contextmenu', (e) => {
     if (!(e.target.closest && e.target.closest('input, textarea'))) e.preventDefault();
   });
 
@@ -1391,7 +1407,8 @@
   // ---------------------------------------------------------------- voice notes
 
   let rec = null;
-  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  // Android's WebView exposes the Web Speech API without a recognition service behind it, so the APK doesn't use it.
+  const SpeechRec = NATIVE ? null : (window.SpeechRecognition || window.webkitSpeechRecognition);
 
   // Where a recording shows: the Christine sheet's voice area, or Original mode's recording bar.
   function sheetHost(r, p) {
@@ -1450,7 +1467,12 @@
           state.interim = inter;
           if (state.tEl) state.tEl.textContent = (state.transcript + inter).trim() || 'Listening\u2026';
         };
-        sr.onerror = () => { state.srFailed = true; };
+        // A pause ends recognition with 'no-speech'; keep listening. Anything else means it isn't available here.
+        sr.onerror = (e) => {
+          if (e.error === 'no-speech' || e.error === 'aborted') return;
+          state.srFailed = true;
+          if (state.tEl) state.tEl.textContent = 'Speech-to-text isn\u2019t available here; the recording still works.';
+        };
         sr.onend = () => { if (rec === state && !state.srFailed) { try { sr.start(); } catch (e) { /* ended */ } } };
         sr.start();
         state.sr = sr;
@@ -1519,6 +1541,7 @@
         transcript: ((state.transcript || '') + ' ' + (state.interim || '')).trim(),
         hasAudio: !!blob,
         simulated: state.simulated,
+        stt: !!(state.sr && !state.srFailed),
       };
       if (!p) return;
       const sameMode = state.mode === S.settings.mode;
@@ -1609,7 +1632,7 @@
     requestAnimationFrame(() => grow(ta));
     if (!v.transcript) {
       r.voiceArea.append(h('div', { class: 'meta', style: { marginTop: '6px' } },
-        (SpeechRec && !v.simulated && !v.sample) ? 'No words came through this time. Type what you said if you like.'
+        v.stt ? 'No words came through this time. Type what you said if you like.'
           : 'Speech-to-text isn\u2019t connected in this prototype, so type what you said to try the editable transcript.'));
     }
   }
@@ -2553,12 +2576,15 @@
   }, true);
 
   // Save typing right away if the app is put away.
-  document.addEventListener('visibilitychange', () => { if (document.hidden && saveTimer) save(); });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) return;
+    if (rec) stopRecording(true);   // the mic goes silent in the background
+    if (saveTimer) save();
+  });
   window.addEventListener('pagehide', () => { if (saveTimer) save(); });
 
   // ---------------------------------------------------------------- boot
 
-  const NATIVE = !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform());
   if (NATIVE) document.documentElement.classList.add('native');
 
   buildText();

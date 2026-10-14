@@ -11,13 +11,12 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pages: write
-  id-token: write
+  contents: read
 
+# Builds queue rather than cancel, so a release upload is never cut off half way.
 concurrency:
   group: highlights-prototype
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   RELEASE_TAG: highlights-prototype-latest
@@ -26,6 +25,8 @@ env:
 jobs:
   apk:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: highlights-prototype
@@ -58,8 +59,10 @@ jobs:
       - name: Build the APK
         working-directory: highlights-prototype/android
         env:
-          PROTO_VERSION_CODE: ${{ github.run_number }}
-        run: ./gradlew --no-daemon assembleDebug
+          PROTO_BUILD: ${{ github.run_number }}
+        run: |
+          export PROTO_VERSION_CODE=$((1000000 + PROTO_BUILD))
+          ./gradlew --no-daemon assembleDebug
 
       - name: Name the APK
         run: cp android/app/build/outputs/apk/debug/app-debug.apk "$APK_NAME"
@@ -78,19 +81,23 @@ jobs:
 
           On the tablet: download ${APK_NAME} below, open it, and allow installs from your browser if Android asks.
           Each new build installs over the previous one."
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" --prerelease --notes "$notes"
-          else
-            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --prerelease \
-              --title "Highlights prototype (latest build)" --notes "$notes"
+          # Point the tag at this commit, replace the APK, then update the notes.
+          git push -f origin "HEAD:refs/tags/$RELEASE_TAG"
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --prerelease --title "Highlights prototype (latest build)" --notes "$notes"
           fi
           gh release upload "$RELEASE_TAG" "$APK_NAME" --clobber
+          gh release edit "$RELEASE_TAG" --prerelease --notes "$notes"
 
   # Optional: serves the same web app at https://<owner>.github.io/<repo>/ once GitHub Pages is
   # switched on (Settings > Pages > Source: GitHub Actions). Until then this job fails quietly.
   pages:
     runs-on: ubuntu-latest
     continue-on-error: true
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
