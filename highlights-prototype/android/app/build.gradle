@@ -7,9 +7,9 @@ android {
         applicationId "com.daylight.highlightsproto"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        // CI passes 1000000 + its run number, so each CI build installs over the last one. A local build uses
-        // minutes since October 2026, which stays below every CI build for about two years.
-        versionCode((System.getenv("PROTO_VERSION_CODE") ?: String.valueOf((System.currentTimeMillis() / 60000L - 29846880L) as long)).toInteger())
+        // Minutes since October 2026, above the first CI builds (1000000 + run number): every build, from CI or a
+        // laptop, installs over any earlier one and keeps the tablet's highlights.
+        versionCode((2000000L + System.currentTimeMillis() / 60000L - 29846880L) as int)
         versionName "0.1." + (System.getenv("PROTO_BUILD") ?: "local")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {

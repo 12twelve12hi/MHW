@@ -60,9 +60,7 @@ jobs:
         working-directory: highlights-prototype/android
         env:
           PROTO_BUILD: ${{ github.run_number }}
-        run: |
-          export PROTO_VERSION_CODE=$((1000000 + PROTO_BUILD))
-          ./gradlew --no-daemon assembleDebug
+        run: ./gradlew --no-daemon assembleDebug
 
       - name: Name the APK
         run: cp android/app/build/outputs/apk/debug/app-debug.apk "$APK_NAME"
