@@ -56,6 +56,9 @@ jobs:
       - name: Build the APKs
         run: ./gradlew --no-daemon :app:assembleRelease :app:assembleDebug
 
+      - name: App tests (share parsing, Reader routing; Robolectric)
+        run: ./gradlew --no-daemon :app:testDebugUnitTest
+
       - name: Name the APKs
         run: |
           mkdir -p out
@@ -95,4 +98,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: daylight-share-test-reports
-          path: reader-experiment/android/share-core/build/reports/tests
+          path: |
+            reader-experiment/android/share-core/build/reports/tests
+            reader-experiment/android/app/build/reports/tests
