@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only received items are shared, and only with the Reader (or the app the user picks in "Open with"). -->
+<paths>
+    <files-path name="inbox" path="inbox/files/" />
+</paths>

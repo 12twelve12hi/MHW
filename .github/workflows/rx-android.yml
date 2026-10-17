@@ -1,0 +1,96 @@
+name: Reader experiment - Android (Daylight Share)
+
+# Builds reader-experiment/android (the Daylight Share APK): runs the protocol tests of :share-core against the shared
+# vectors and the mock ntfy relay, builds the release and debug APKs, publishes daylight-share.apk to the
+# "reader-experiment-latest" release, and tries a live round trip through https://ntfy.sh (allowed to fail).
+on:
+  push:
+    branches: [claude/sweet-goldberg-ej1nb0]
+    paths:
+      - 'reader-experiment/android/**'
+      - 'reader-experiment/share/**'
+      - '.github/workflows/rx-android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Builds queue rather than cancel, so a release upload is never cut off half way.
+concurrency:
+  group: rx-android
+  cancel-in-progress: false
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: reader-experiment/android
+    env:
+      DLS_BUILD: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Show the Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools" || true
+
+      - name: Protocol tests (vectors, mock relay, JS interop)
+        run: ./gradlew --no-daemon :share-core:test
+
+      - name: Build the APKs
+        run: ./gradlew --no-daemon :app:assembleRelease :app:assembleDebug
+
+      - name: Name the APKs
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/release/app-release.apk out/daylight-share.apk
+          cp app/build/outputs/apk/debug/app-debug.apk out/daylight-share-debug.apk
+          ls -la out
+          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs out/daylight-share.apk | head -5 || true
+          "$ANDROID_HOME"/build-tools/*/aapt2 dump badging out/daylight-share.apk | head -3 || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daylight-share-apk
+          path: reader-experiment/android/out/daylight-share.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daylight-share-debug-apk
+          path: reader-experiment/android/out/daylight-share-debug.apk
+
+      - name: Publish to the reader-experiment-latest release
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/scripts/rx-publish.sh reader-experiment/android/out/daylight-share.apk
+
+      - name: Live round trip through ntfy.sh (informational)
+        continue-on-error: true
+        env:
+          DLS_LIVE_RELAY: https://ntfy.sh
+        run: ./gradlew --no-daemon :share-core:test --tests 'com.daylight.share.core.LiveRelayTest' --rerun-tasks
+
+      - name: Test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daylight-share-test-reports
+          path: reader-experiment/android/share-core/build/reports/tests
