@@ -48,7 +48,8 @@ Links go as links (the Reader downloads the article). Files up to 64 MB go as th
 ## How items reach the Reader
 
 The Inbox receives items when you open it, every 15 minutes in the background, and within seconds while the Inbox
-is on screen or **Instant delivery** is on (a small permanent notification keeps a connection open). It stores
+is on screen or **Instant delivery** is on (a small permanent notification keeps a connection open; the Inbox then
+offers **Allow running in the background**, because with the screen off Android otherwise pauses that connection). It stores
 each item, acknowledges it (that is the sender's "Delivered ✓"), and hands it to the Daylight Reader:
 
 | Item | Hand-off | What you see |
@@ -81,6 +82,7 @@ Requirements: JDK 17 or 21. The protocol module needs nothing else; the APK need
 cd reader-experiment/android
 ./gradlew :share-core:test          # protocol tests: vectors, mock relay (needs node), JS interop
 ./gradlew :app:assembleRelease      # needs ANDROID_HOME or sdk.dir in local.properties
+./gradlew :app:testDebugUnitTest    # Robolectric: share parsing, Reader routing, every screen composes
 ```
 
 Without an Android SDK, Gradle builds only `:share-core`. `DLS_LIVE_RELAY=https://ntfy.sh ./gradlew :share-core:test
@@ -109,10 +111,15 @@ adb shell am start -a android.intent.action.VIEW \
 
 which makes the device the Inbox with that pairing secret and relay (`role=sender` pairs a sender instead;
 `instant=1` turns on Instant delivery, `auto=1` hands documents over in the background too). Debug builds also allow
-plain HTTP to `10.0.2.2`, `127.0.0.1` and `localhost`. Every hand-off is logged under the tag `DaylightShare`:
+plain HTTP to `10.0.2.2`, `127.0.0.1` and `localhost`. The setup link also skips the
+notification-permission prompt. Everything is logged under the tag `DaylightShare` (`adb logcat -s DaylightShare`):
 
 ```
+received <id> kind=<url|page|file> from=<sender> size=<bytes> stored
 received <id> kind=<url|page|file> -> handed to <package> via <save_page|send_link|view_link|send_file|send_file_octet|view_file|send_multiple> status=<saved|duplicate|queued|refused|sent|ok|no_answer>
+received <id> kind=<...> -> kept in inbox (no reader installed) status=no_reader
 ```
 
-(`adb logcat -s DaylightShare`). Release builds ignore setup links and only speak HTTPS.
+A refused `SAVE_PAGE` logs `status=refused` and then the `send_link` retry. Items reach the Reader at once while the
+Inbox is in front; for background hand-offs in a test, `adb shell appops set com.daylight.share SYSTEM_ALERT_WINDOW
+allow` and use `instant=1&auto=1`. Release builds ignore setup links and only speak HTTPS.

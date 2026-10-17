@@ -68,7 +68,7 @@ jobs:
           bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           "$bt/apksigner" verify --print-certs out/daylight-share.apk | head -3 || true
           "$bt/aapt2" dump badging out/daylight-share.apk | grep -E "^(package|sdkVersion|targetSdkVersion|uses-permission|launchable)" || true
-          "$bt/aapt2" dump xmltree --file AndroidManifest.xml out/daylight-share.apk | grep -E "E: (activity|service|receiver|provider|action|data|queries|package|intent)|A: android:(name|scheme|host|mimeType|exported|foregroundServiceType|authorities|taskAffinity|launchMode)" | head -150 || true
+          "$bt/aapt2" dump xmltree --file AndroidManifest.xml out/daylight-share.apk | grep -E "E: (activity|service|receiver|provider|queries)|android:(name|scheme|mimeType|exported|foregroundServiceType|authorities|taskAffinity|launchMode)\(" | grep -v "androidx\.\(work\|profileinstaller\|startup\)" | head -120 || true
 
       - uses: actions/upload-artifact@v4
         with:

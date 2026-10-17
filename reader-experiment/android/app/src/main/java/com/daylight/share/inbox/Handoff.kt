@@ -11,6 +11,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -205,7 +207,13 @@ object Handoff {
 
     fun canHandOffInBackground(context: Context): Boolean = Settings.canDrawOverlays(context)
 
+    /** Decides what happens to waiting items; runs on the main thread (workers and the live connection call it too). */
     fun dispatch(context: Context) {
+        if (Looper.myLooper() == Looper.getMainLooper()) dispatchNow(context)
+        else Handler(Looper.getMainLooper()).post { dispatchNow(context) }
+    }
+
+    private fun dispatchNow(context: Context) {
         val app = App.of(context)
         if (app.prefs.role != com.daylight.share.Role.INBOX) return
         val waiting = app.inbox.waiting()
