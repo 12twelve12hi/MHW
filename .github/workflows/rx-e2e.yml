@@ -7,6 +7,8 @@ on:
     branches: [claude/sweet-goldberg-ej1nb0]
     paths:
       - 'reader-experiment/e2e/**'
+      - 'reader-experiment/android/**'
+      - 'reader-experiment/share/**'
       - '.github/workflows/rx-e2e.yml'
   workflow_dispatch:
 
@@ -66,9 +68,31 @@ jobs:
           name: reader-snapshot-debug
           path: reader-apk/
 
+  share:
+    name: Build Daylight Share (debug)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reader-experiment/android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build the debug APK (it has the adb setup link and cleartext to the emulator's host)
+        run: |
+          ./gradlew --no-daemon :app:assembleDebug
+          mkdir -p ../../share-apk && cp app/build/outputs/apk/debug/app-debug.apk ../../share-apk/daylight-share-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daylight-share-debug-for-e2e
+          path: share-apk/
+
   emulator:
-    name: Reader on an emulator
-    needs: reader
+    name: Reader and Inbox on an emulator
+    needs: [reader, share]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -77,6 +101,10 @@ jobs:
         with:
           name: reader-snapshot-debug
           path: reader-apk
+      - uses: actions/download-artifact@v4
+        with:
+          name: daylight-share-debug-for-e2e
+          path: share-apk
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -85,7 +113,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Reader smoke test
+      - name: Reader smoke test, then the Inbox end to end
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -93,7 +121,9 @@ jobs:
           target: google_apis
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
-          script: bash reader-experiment/e2e/reader-smoke.sh reader-apk e2e-out
+          script: |
+            bash reader-experiment/e2e/reader-smoke.sh reader-apk e2e-out
+            bash reader-experiment/e2e/inbox-e2e.sh share-apk/daylight-share-debug.apk e2e-out
       - uses: actions/upload-artifact@v4
         if: always()
         with:

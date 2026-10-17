@@ -1,7 +1,7 @@
 // A small stand-in for an ntfy server, for tests and local demos. It implements the parts of ntfy the Daylight Share
 // protocol uses (PROTOCOL.md section 3) with ntfy's default limits, and lets tests shorten the retention times.
 //
-//   node mock-relay.mjs [--port 8787] [--host 127.0.0.1] [--message-ttl 43200] [--attachment-ttl 10800]
+//   node mock-relay.mjs [--port 8787] [--host 127.0.0.1] [--public-url http://10.0.2.2:8787] [--message-ttl 43200] [--attachment-ttl 10800]
 //
 // Endpoints: POST|PUT /<topic> (publish), GET /<topic>/json (poll=1 or stream), GET /<topic>/sse,
 // GET /file/<id>.bin (attachments), GET /v1/health. CORS is open, as on ntfy.sh.
@@ -12,7 +12,7 @@ import { randomBytes } from 'node:crypto';
 const TOPIC_RE = /^[-_A-Za-z0-9]{1,64}$/;
 
 export function startMockRelay({
-  port = 0, host = '127.0.0.1', messageTtlSec = 12 * 3600, attachmentTtlSec = 3 * 3600,
+  port = 0, host = '127.0.0.1', publicUrl = '', messageTtlSec = 12 * 3600, attachmentTtlSec = 3 * 3600,
   messageMaxBytes = 4096, attachmentMaxBytes = 15 * 1024 * 1024, keepaliveSec = 45, now = () => Date.now(),
 } = {}) {
   const topics = new Map(); // topic -> [message]
@@ -28,6 +28,13 @@ export function startMockRelay({
     const t = nowSec();
     for (const [topic, list] of topics) topics.set(topic, list.filter((m) => m.expires > t));
     for (const [id, f] of files) if (f.expires <= t) files.delete(id);
+  }
+
+  // Attachment URLs as the asking client can reach them: publicUrl if set, else that request's Host header.
+  function withBase(m, req) {
+    if (!m.attachment) return m;
+    const origin = publicUrl || (req.headers.host ? `http://${req.headers.host}` : base);
+    return { ...m, attachment: { ...m.attachment, url: origin + m.attachment.url } };
   }
 
   function cors(res) {
@@ -95,7 +102,7 @@ export function startMockRelay({
         const expires = t + Math.min(attachmentTtlSec, messageTtlSec);
         files.set(fid, { bytes: body, expires });
         msg.message = req.headers['message'] ?? req.headers['x-message'] ?? `You received a file: ${filename ?? 'attachment.bin'}`;
-        msg.attachment = { name: String(filename ?? 'attachment.bin'), type: 'application/octet-stream', size: body.length, expires, url: `${base}/file/${fid}.bin` };
+        msg.attachment = { name: String(filename ?? 'attachment.bin'), type: 'application/octet-stream', size: body.length, expires, url: `/file/${fid}.bin` };
       } else {
         msg.message = text;
       }
@@ -104,14 +111,14 @@ export function startMockRelay({
       topics.set(parts[0], list);
       state.published++;
       for (const fn of listeners.get(parts[0]) ?? []) fn(msg);
-      return send(res, 200, msg);
+      return send(res, 200, withBase(msg, req));
     }
 
     if (req.method === 'GET' && parts.length === 2 && TOPIC_RE.test(parts[0]) && (parts[1] === 'json' || parts[1] === 'sse')) {
       const topic = parts[0];
       const list = parseSince(url.searchParams.get('since') ?? (url.searchParams.has('poll') ? 'all' : 'none'), topics.get(topic) ?? []);
       const sse = parts[1] === 'sse';
-      const line = (m) => (sse ? `id: ${m.id}\nevent: ${m.event}\ndata: ${JSON.stringify(m)}\n\n` : JSON.stringify(m) + '\n');
+      const line = (m0) => { const m = withBase(m0, req); return sse ? `id: ${m.id}\nevent: ${m.event}\ndata: ${JSON.stringify(m)}\n\n` : JSON.stringify(m) + '\n'; };
       cors(res);
       if (url.searchParams.get('poll') === '1') {
         res.writeHead(200, { 'Content-Type': sse ? 'text/event-stream' : 'application/x-ndjson' });
@@ -147,7 +154,7 @@ export function startMockRelay({
 if (import.meta.url === `file://${process.argv[1]}`) {
   const arg = (name, def) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : def; };
   const relay = await startMockRelay({
-    port: Number(arg('port', 8787)), host: arg('host', '127.0.0.1'),
+    port: Number(arg('port', 8787)), host: arg('host', '127.0.0.1'), publicUrl: arg('public-url', ''),
     messageTtlSec: Number(arg('message-ttl', 43200)), attachmentTtlSec: Number(arg('attachment-ttl', 10800)),
   });
   console.log(`mock ntfy relay listening on ${relay.url}`);
