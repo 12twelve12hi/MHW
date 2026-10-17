@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f7f5f0" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#151514" media="(prefers-color-scheme: dark)">
+  <meta name="description" content="Send links, PDFs and documents to your Daylight DC-1. End-to-end encrypted, nothing to install.">
+  <meta name="referrer" content="no-referrer">
+  <title>Send to Daylight</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-title" content="To Daylight">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <main id="app" aria-busy="true">
+    <header class="top">
+      <img class="mark" src="icons/favicon-32.png" alt="" width="26" height="26">
+      <h1>Send to Daylight</h1>
+      <button id="open-settings" class="link-btn" type="button" hidden>Settings</button>
+    </header>
+
+    <noscript><p class="error">This page needs JavaScript to encrypt and send.</p></noscript>
+
+    <!-- Not paired yet -->
+    <section id="view-pair" hidden>
+      <p id="pending-share" class="notice" hidden></p>
+      <h2>Pair with your Daylight</h2>
+      <p class="hint">On your Daylight, open <b>Daylight Share</b>. Type the 28-character code it shows, or paste its pairing link.</p>
+      <form id="pair-form" novalidate>
+        <label for="code">Pairing code or link</label>
+        <textarea id="code" rows="2" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false"
+          placeholder="ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23"></textarea>
+        <label for="from">Name for this device <span class="opt">(optional)</span></label>
+        <input id="from" type="text" maxlength="60" autocomplete="off">
+        <details>
+          <summary>Advanced</summary>
+          <label for="relay">Relay URL</label>
+          <input id="relay" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://ntfy.sh">
+          <p class="hint small">Only if your Daylight uses its own ntfy server. A pairing link already includes it.</p>
+        </details>
+        <p id="pair-error" class="error" role="alert"></p>
+        <button id="pair-btn" class="btn primary" type="submit">Pair</button>
+      </form>
+      <p class="hint small fine">Everything you send is end-to-end encrypted with a key from the pairing code, which stays in this browser.</p>
+    </section>
+
+    <!-- Paired -->
+    <section id="view-send" hidden>
+      <p class="target">Sending to <strong id="daylight-name">your Daylight</strong></p>
+
+      <form id="url-form" novalidate>
+        <label for="url">Link</label>
+        <input id="url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://…">
+        <label for="title">Title <span class="opt">(optional)</span></label>
+        <input id="title" type="text" autocomplete="off" maxlength="300">
+        <button id="send-url" class="btn primary big" type="submit">Send link</button>
+      </form>
+
+      <div class="divider" role="separator"><span>or</span></div>
+
+      <label id="drop" class="drop" for="file">
+        <span class="drop-title">Choose a file</span>
+        <span class="drop-hint">PDF, EPUB, Word, Markdown, text or HTML, up to 64 MB</span>
+        <input id="file" type="file" multiple
+          accept=".pdf,.epub,.docx,.doc,.odt,.rtf,.md,.markdown,.txt,.html,.htm,application/pdf,application/epub+zip,text/plain,text/markdown,text/html">
+      </label>
+
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+
+      <h2 id="recent-h" class="recent-h" hidden>Recent</h2>
+      <ol id="history" class="history" aria-labelledby="recent-h"></ol>
+    </section>
+
+    <!-- Settings -->
+    <section id="view-settings" hidden>
+      <button id="close-settings" class="back" type="button">‹ Back</button>
+      <h2>Settings</h2>
+      <dl class="facts">
+        <dt>Daylight</dt><dd id="set-daylight"></dd>
+        <dt>Relay</dt><dd id="set-relay"></dd>
+      </dl>
+      <form id="name-form">
+        <label for="set-from">Name for this device</label>
+        <div class="row">
+          <input id="set-from" type="text" maxlength="60" autocomplete="off">
+          <button class="btn secondary" type="submit">Save</button>
+        </div>
+        <p id="name-saved" class="hint small" role="status"></p>
+      </form>
+
+      <h3>iPhone Shortcut</h3>
+      <p class="hint small">To send from the iPhone share sheet, make a Shortcut that opens this link with the shared address added at the end. It includes your pairing, so it keeps working even if Safari clears this site’s data. Keep it private.</p>
+      <div class="copy-box">
+        <code id="shortcut-link"></code>
+        <button id="copy-shortcut" class="btn secondary" type="button">Copy</button>
+      </div>
+      <p class="hint small"><a href="https://github.com/12twelve12hi/MHW/blob/claude/sweet-goldberg-ej1nb0/reader-experiment/web/SHORTCUT.md" target="_blank" rel="noopener">Step-by-step Shortcut instructions</a></p>
+
+      <button id="unpair" class="btn danger" type="button">Unpair this device</button>
+      <p class="hint small fine">Everything you send is end-to-end encrypted with a key from the pairing code. The relay (<span id="set-relay-2"></span>) only sees scrambled data.</p>
+    </section>
+  </main>
+</body>
+</html>

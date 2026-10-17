@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Send to Daylight</title>
+  <link rel="stylesheet" href="popup.css">
+  <script type="module" src="popup.js"></script>
+</head>
+<body>
+  <main id="app" aria-busy="true">
+    <header class="top">
+      <img class="mark" src="icons/icon-32.png" alt="" width="22" height="22">
+      <h1>Send to Daylight</h1>
+      <button id="open-settings" class="icon-btn" type="button" aria-label="Settings" title="Settings" hidden>
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+      </button>
+    </header>
+
+    <!-- Not paired yet -->
+    <section id="view-pair" hidden>
+      <h2>Pair with your Daylight</h2>
+      <p class="hint">On your Daylight, open <b>Daylight Share</b>. Type the 28-character code it shows, or paste its pairing link.</p>
+      <form id="pair-form" novalidate>
+        <label for="code">Pairing code or link</label>
+        <textarea id="code" rows="2" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false"
+          placeholder="ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23" required></textarea>
+        <label for="from">Name for this browser <span class="opt">(optional)</span></label>
+        <input id="from" type="text" maxlength="60" autocomplete="off" placeholder="Chrome on Mac">
+        <details id="advanced">
+          <summary>Advanced</summary>
+          <label for="relay">Relay URL</label>
+          <input id="relay" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://ntfy.sh">
+          <p class="hint small">Only if your Daylight uses its own ntfy server. A pairing link already includes it.</p>
+        </details>
+        <p id="pair-error" class="error" role="alert"></p>
+        <button id="pair-btn" class="btn primary" type="submit">Pair</button>
+      </form>
+    </section>
+
+    <!-- Paired -->
+    <section id="view-send" hidden>
+      <p class="target">Sending to <strong id="daylight-name">your Daylight</strong></p>
+      <div id="page-card" class="page-card">
+        <div id="page-title" class="page-title"></div>
+        <div id="page-host" class="page-host"></div>
+      </div>
+      <button id="send-page" class="btn primary big" type="button">Send this page</button>
+      <button id="send-link" class="btn secondary" type="button">Send link only</button>
+      <div id="permission" class="permission" hidden>
+        <p>To send this PDF itself, allow Send to Daylight to download it from <b id="perm-host"></b>.</p>
+        <div class="row">
+          <button id="perm-allow" class="btn primary" type="button">Allow and send</button>
+          <button id="perm-link" class="btn secondary" type="button">Send the link</button>
+        </div>
+      </div>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+
+      <h2 class="recent-h" id="recent-h" hidden>Recent</h2>
+      <ol id="history" class="history" aria-labelledby="recent-h"></ol>
+    </section>
+
+    <!-- Settings -->
+    <section id="view-settings" hidden>
+      <button id="close-settings" class="back" type="button">‹ Back</button>
+      <h2>Settings</h2>
+      <dl class="facts">
+        <dt>Daylight</dt><dd id="set-daylight"></dd>
+        <dt>Relay</dt><dd id="set-relay"></dd>
+        <dt id="set-shortcut-dt">Shortcut</dt><dd id="set-shortcut"></dd>
+      </dl>
+      <form id="name-form">
+        <label for="set-from">Name for this browser</label>
+        <div class="row">
+          <input id="set-from" type="text" maxlength="60" autocomplete="off">
+          <button class="btn secondary" type="submit">Save</button>
+        </div>
+        <p id="name-saved" class="hint small" role="status"></p>
+      </form>
+      <p class="hint small">Everything you send is end-to-end encrypted with a key from the pairing code. The relay only sees scrambled data.</p>
+      <button id="unpair" class="btn danger" type="button">Unpair this browser</button>
+      <p id="version" class="hint small version"></p>
+    </section>
+  </main>
+</body>
+</html>

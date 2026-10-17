@@ -1,0 +1,98 @@
+// Service worker for the web sender: the app works offline (its files are cached; sends wait in the outbox), and the
+// installed app on Android receives links and files from the share sheet (Web Share Target, POST to ./share-target).
+// build.mjs replaces __BUILD__ with a hash of the site, so each release installs fresh files.
+
+const BUILD = '__BUILD__';
+const CACHE = `send-to-daylight-${BUILD}`;
+const SHELL = [
+  './', 'app.js', 'styles.css', 'daylight-share.js', 'logic.js', 'web-logic.js', 'web-storage.js', 'manifest.webmanifest',
+  'icons/icon.svg', 'icons/favicon-32.png', 'icons/icon-192.png', 'icons/apple-touch-icon.png',
+];
+
+self.addEventListener('install', (event) => {
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    await cache.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })));
+    await self.skipWaiting();
+  })());
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil((async () => {
+    for (const k of await caches.keys()) if (k.startsWith('send-to-daylight-') && k !== CACHE) await caches.delete(k);
+    await self.clients.claim();
+  })());
+});
+
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin || !url.href.startsWith(self.registration.scope)) return; // the relay etc.
+  if (req.method === 'POST' && url.pathname.endsWith('/share-target')) {
+    event.respondWith(receiveShare(req));
+    return;
+  }
+  if (req.method !== 'GET') return;
+  if (req.mode === 'navigate') {
+    event.respondWith(page(req));
+    return;
+  }
+  event.respondWith(caches.match(req, { ignoreSearch: true }).then((hit) => hit ?? fetch(req)));
+});
+
+/** Pages: the network first (so updates show), the cached app when offline or the network hangs. */
+async function page(req) {
+  const cached = () => caches.match('./', { ignoreSearch: true });
+  try {
+    const res = await Promise.race([
+      fetch(req),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('slow')), 5000)),
+    ]);
+    if (res.ok && new URL(req.url).pathname === new URL(self.registration.scope).pathname) {
+      const copy = res.clone();
+      caches.open(CACHE).then((c) => c.put('./', copy)).catch(() => {});
+    }
+    return res;
+  } catch {
+    return (await cached()) ?? Response.error();
+  }
+}
+
+// The same database web-storage.js opens (keep the two in step).
+function openDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('send-to-daylight', 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+      if (!db.objectStoreNames.contains('shared')) db.createObjectStore('shared');
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/** A share from the Android share sheet: keep it (files too) for the page, then open the page to send it. */
+async function receiveShare(req) {
+  const scope = self.registration.scope;
+  try {
+    const form = await req.formData();
+    const files = form.getAll('files').filter((f) => f && typeof f === 'object' && typeof f.size === 'number');
+    const entry = {
+      title: String(form.get('title') ?? ''), text: String(form.get('text') ?? ''), url: String(form.get('url') ?? ''),
+      files: files.map((f) => ({ name: f.name || 'document', type: f.type || '', blob: f })), at: Date.now(),
+    };
+    const id = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('');
+    const db = await openDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('shared', 'readwrite');
+      tx.objectStore('shared').put(entry, id);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+    return Response.redirect(new URL(`./?share=${id}&autosend=1`, scope).href, 303);
+  } catch {
+    return Response.redirect(new URL('./', scope).href, 303);
+  }
+}

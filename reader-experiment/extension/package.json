@@ -1,0 +1,16 @@
+{
+  "name": "send-to-daylight-extension",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Send to Daylight: build and tests for the Chrome/Safari extension and the web sender page",
+  "scripts": {
+    "build": "node build.mjs && node ../web/build.mjs",
+    "test": "node --test test/unit/*.test.mjs",
+    "e2e": "node --test --test-concurrency=1 test/e2e/*.e2e.mjs",
+    "icons": "node scripts/make-icons.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}
