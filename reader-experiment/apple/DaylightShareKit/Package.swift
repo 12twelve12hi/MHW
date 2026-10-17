@@ -19,6 +19,6 @@ let package = Package(
         .target(name: "DaylightShareUI", dependencies: ["DaylightShareKit"]),
         // zlib, used only by the tests to check independently that Apple's Compression output is raw DEFLATE.
         .systemLibrary(name: "CZlib", path: "Sources/CZlib"),
-        .testTarget(name: "DaylightShareKitTests", dependencies: ["DaylightShareKit", "CZlib"]),
+        .testTarget(name: "DaylightShareKitTests", dependencies: ["DaylightShareKit", "DaylightShareUI", "CZlib"]),
     ]
 )

@@ -22,10 +22,11 @@ jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 75
-    # A newer push cancels an older build; publishing is a separate job that is never cancelled half way.
+    # Builds queue (one running, the newest one waiting) rather than cancel: several agents push to this branch, and
+    # cancelling would starve the macOS build. Publishing is a separate job that is never cancelled half way.
     concurrency:
       group: rx-apple-build
-      cancel-in-progress: true
+      cancel-in-progress: false
     defaults:
       run:
         working-directory: reader-experiment/apple
@@ -57,7 +58,7 @@ jobs:
       - name: Build the Safari web extension (when its build script exists)
         run: |
           if [ -f ../extension/build.mjs ]; then
-            (cd ../extension && node build.mjs) || echo "::warning::the web extension build failed; the Safari extension gets the placeholder"
+            (cd ../extension && node build.mjs --target safari --no-zip) || echo "::warning::the web extension build failed; the Safari extension gets the placeholder"
           fi
           if [ -f ../extension/dist/safari/manifest.json ]; then ls -R ../extension/dist/safari | head -40
           else echo "::warning::no reader-experiment/extension/dist/safari yet; the Safari extension gets the placeholder"; fi
@@ -240,7 +241,7 @@ jobs:
       - name: Generate the project
         run: |
           brew install xcodegen
-          if [ -f ../extension/build.mjs ]; then (cd ../extension && node build.mjs) || true; fi
+          if [ -f ../extension/build.mjs ]; then (cd ../extension && node build.mjs --target safari --no-zip) || true; fi
           xcodegen generate
       - name: Archive and upload to TestFlight
         run: |

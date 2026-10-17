@@ -225,6 +225,7 @@ struct MacSettingsView: View {
             } header: {
                 Text("This Mac")
             }
+            ExtensionsSection()
             Section {
                 Button("Clear Delivered and Expired") { model.clearFinished() }
                 LabeledContent("Shared with the extensions", value: model.store.isShared ? "Yes" : "No (pair them separately)")
