@@ -1,0 +1,17 @@
+// Settings shared by every target. To build for your own iPhone or Mac, copy Signing.local.xcconfig.example to
+// Signing.local.xcconfig (git-ignored) and set your team there, then run `xcodegen` again or just build.
+
+MARKETING_VERSION = 1.0.0
+CURRENT_PROJECT_VERSION = 1
+
+// Your Apple developer team (Xcode > Settings > Accounts). Empty = unsigned builds (CI, sideloading).
+DEVELOPMENT_TEAM =
+
+// Bundle identifiers are derived from this: <id>, <id>.ShareExtension, <id>.SafariExtension (iPhone) and
+// <id>.mac, <id>.mac.ShareExtension, <id>.mac.SafariExtension (Mac). Change it if the id is taken in your account.
+DAYLIGHT_BUNDLE_ID = com.daylight.share
+
+// The App Group the apps and their extensions share (pairing, settings, outbox). Must be registered in your team.
+DAYLIGHT_APP_GROUP = group.com.daylight.share
+
+#include? "Signing.local.xcconfig"

@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "Send to Daylight",
+  "version": "1.0.0",
+  "description": "Placeholder. Build reader-experiment/extension (npm run build) to put the real extension here.",
+  "action": { "default_title": "Send to Daylight", "default_popup": "popup.html" },
+  "permissions": ["nativeMessaging"]
+}

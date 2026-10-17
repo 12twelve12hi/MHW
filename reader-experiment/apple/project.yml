@@ -1,0 +1,185 @@
+# Send to Daylight for iPhone and Mac. Generate the Xcode project with:  brew install xcodegen && xcodegen
+# (from reader-experiment/apple). Signing: Config/Base.xcconfig and Config/Signing.local.xcconfig.
+name: SendToDaylight
+options:
+  bundleIdPrefix: com.daylight
+  deploymentTarget:
+    iOS: "16.0"
+    macOS: "13.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    CODE_SIGN_STYLE: Automatic
+    GENERATE_INFOPLIST_FILE: NO
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    DEAD_CODE_STRIPPING: YES
+packages:
+  DaylightShareKit:
+    path: DaylightShareKit
+
+targets:
+  # ------------------------------------------------------------------------------------------------------- iPhone
+  SendToDaylight-iOS:
+    productName: Send to Daylight
+    type: application
+    platform: iOS
+    sources:
+      - path: iOS/App
+        excludes: ["Info.plist", "*.entitlements"]
+    settings:
+      base:
+        PRODUCT_NAME: Send to Daylight
+        PRODUCT_MODULE_NAME: SendToDaylight
+        PRODUCT_BUNDLE_IDENTIFIER: "$(DAYLIGHT_BUNDLE_ID)"
+        INFOPLIST_FILE: iOS/App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: iOS/App/SendToDaylight.entitlements
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SUPPORTS_MACCATALYST: NO
+    dependencies:
+      - package: DaylightShareKit
+        product: DaylightShareKit
+      - package: DaylightShareKit
+        product: DaylightShareUI
+      - target: ShareExtension-iOS
+      - target: SafariExtension-iOS
+
+  ShareExtension-iOS:
+    productName: ShareExtension
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: iOS/ShareExtension
+        excludes: ["Info.plist", "*.entitlements"]
+      - path: Shared/ShareExtension/GetPage.js
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_NAME: ShareExtension
+        PRODUCT_BUNDLE_IDENTIFIER: "$(DAYLIGHT_BUNDLE_ID).ShareExtension"
+        INFOPLIST_FILE: iOS/ShareExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: iOS/ShareExtension/ShareExtension.entitlements
+        TARGETED_DEVICE_FAMILY: "1,2"
+        APPLICATION_EXTENSION_API_ONLY: YES
+    dependencies:
+      - package: DaylightShareKit
+        product: DaylightShareKit
+      - package: DaylightShareKit
+        product: DaylightShareUI
+
+  SafariExtension-iOS:
+    productName: SafariExtension
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Shared/SafariExtension
+    preBuildScripts:
+      - name: Copy the web extension
+        script: '"${SRCROOT}/scripts/copy-web-extension.sh"'
+        basedOnDependencyAnalysis: false
+    settings:
+      base:
+        PRODUCT_NAME: SafariExtension
+        PRODUCT_BUNDLE_IDENTIFIER: "$(DAYLIGHT_BUNDLE_ID).SafariExtension"
+        INFOPLIST_FILE: iOS/SafariExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: iOS/SafariExtension/SafariExtension.entitlements
+        TARGETED_DEVICE_FAMILY: "1,2"
+        APPLICATION_EXTENSION_API_ONLY: YES
+    dependencies:
+      - package: DaylightShareKit
+        product: DaylightShareKit
+
+  # ---------------------------------------------------------------------------------------------------------- Mac
+  SendToDaylight-macOS:
+    productName: Send to Daylight
+    type: application
+    platform: macOS
+    sources:
+      - path: macOS/App
+        excludes: ["Info.plist", "*.entitlements"]
+    settings:
+      base:
+        PRODUCT_NAME: Send to Daylight
+        PRODUCT_MODULE_NAME: SendToDaylightMac
+        PRODUCT_BUNDLE_IDENTIFIER: "$(DAYLIGHT_BUNDLE_ID).mac"
+        INFOPLIST_FILE: macOS/App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: macOS/App/SendToDaylight.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_HARDENED_RUNTIME: YES
+        COMBINE_HIDPI_IMAGES: YES
+    dependencies:
+      - package: DaylightShareKit
+        product: DaylightShareKit
+      - package: DaylightShareKit
+        product: DaylightShareUI
+      - target: ShareExtension-macOS
+      - target: SafariExtension-macOS
+
+  ShareExtension-macOS:
+    productName: ShareExtension
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: macOS/ShareExtension
+        excludes: ["Info.plist", "*.entitlements"]
+      - path: Shared/ShareExtension/GetPage.js
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_NAME: ShareExtension
+        PRODUCT_BUNDLE_IDENTIFIER: "$(DAYLIGHT_BUNDLE_ID).mac.ShareExtension"
+        INFOPLIST_FILE: macOS/ShareExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: macOS/ShareExtension/ShareExtension.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+    dependencies:
+      - package: DaylightShareKit
+        product: DaylightShareKit
+      - package: DaylightShareKit
+        product: DaylightShareUI
+
+  SafariExtension-macOS:
+    productName: SafariExtension
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Shared/SafariExtension
+    preBuildScripts:
+      - name: Copy the web extension
+        script: '"${SRCROOT}/scripts/copy-web-extension.sh"'
+        basedOnDependencyAnalysis: false
+    settings:
+      base:
+        PRODUCT_NAME: SafariExtension
+        PRODUCT_BUNDLE_IDENTIFIER: "$(DAYLIGHT_BUNDLE_ID).mac.SafariExtension"
+        INFOPLIST_FILE: macOS/SafariExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: macOS/SafariExtension/SafariExtension.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+    dependencies:
+      - package: DaylightShareKit
+        product: DaylightShareKit
+
+schemes:
+  SendToDaylight-iOS:
+    build:
+      targets:
+        SendToDaylight-iOS: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  SendToDaylight-macOS:
+    build:
+      targets:
+        SendToDaylight-macOS: all
+    run:
+      config: Debug
+    archive:
+      config: Release
