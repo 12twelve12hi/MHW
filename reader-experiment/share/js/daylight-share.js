@@ -124,7 +124,8 @@ export function fromBase32(s) {
 
 export function randomBytes(n) {
   const b = new Uint8Array(n);
-  globalThis.crypto.getRandomValues(b);
+  // getRandomValues fills at most 65,536 bytes per call.
+  for (let o = 0; o < n; o += 65536) globalThis.crypto.getRandomValues(b.subarray(o, Math.min(n, o + 65536)));
   return b;
 }
 
