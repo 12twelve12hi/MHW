@@ -1,0 +1,268 @@
+name: Reader experiment – Apple apps
+
+# Builds Send to Daylight for iPhone and Mac (reader-experiment/apple): runs the Swift protocol tests (cross-platform
+# vectors, a fake relay, and an end-to-end run against the mock ntfy relay and the JavaScript receiver), builds the
+# iOS app for the simulator and for devices (unsigned .ipa for sideloading) and the Mac app (ad-hoc signed .zip), and
+# publishes both to the "reader-experiment-latest" release. With App Store Connect secrets it also uploads to
+# TestFlight (see reader-experiment/apple/README.md).
+on:
+  push:
+    branches: [claude/sweet-goldberg-ej1nb0]
+    paths:
+      - 'reader-experiment/apple/**'
+      - 'reader-experiment/share/**'
+      - 'reader-experiment/extension/**'
+      - '.github/workflows/rx-apple.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 75
+    # A newer push cancels an older build; publishing is a separate job that is never cancelled half way.
+    concurrency:
+      group: rx-apple-build
+      cancel-in-progress: true
+    defaults:
+      run:
+        working-directory: reader-experiment/apple
+    env:
+      RELAY_PORT: 8787
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Select the newest Xcode that has its iOS platform installed
+        run: bash scripts/select-xcode.sh
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Swift package tests (vectors, relay, outbox, end-to-end with the JS reference)
+        working-directory: reader-experiment/apple/DaylightShareKit
+        run: |
+          set -o pipefail
+          node ../../share/js/mock-relay.mjs --port "$RELAY_PORT" > "$RUNNER_TEMP/mock-relay.log" 2>&1 &
+          for i in 1 2 3 4 5 6 7 8 9 10; do curl -fsS "http://127.0.0.1:$RELAY_PORT/v1/health" && break; sleep 1; done
+          DLS_E2E_RELAY="http://127.0.0.1:$RELAY_PORT" swift test 2>&1 | tee "$RUNNER_TEMP/swift-test.log"
+          grep -E "Executed [0-9]+ tests" "$RUNNER_TEMP/swift-test.log" | tail -1
+          if grep -q "EndToEndTests.*skipped" "$RUNNER_TEMP/swift-test.log"; then echo "::error::the end-to-end test was skipped"; exit 1; fi
+
+      - name: Build the Safari web extension (when its build script exists)
+        run: |
+          if [ -f ../extension/build.mjs ]; then
+            (cd ../extension && node build.mjs) || echo "::warning::the web extension build failed; the Safari extension gets the placeholder"
+          fi
+          if [ -f ../extension/dist/safari/manifest.json ]; then ls -R ../extension/dist/safari | head -40
+          else echo "::warning::no reader-experiment/extension/dist/safari yet; the Safari extension gets the placeholder"; fi
+
+      - name: Generate the Xcode project
+        run: xcodegen generate
+
+      - name: Build for the iOS Simulator
+        run: |
+          set -o pipefail
+          xcodebuild -project SendToDaylight.xcodeproj -scheme SendToDaylight-iOS -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath build/dd-sim \
+            CODE_SIGNING_ALLOWED=NO build -quiet
+
+      - name: Build for iPhone (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild -project SendToDaylight.xcodeproj -scheme SendToDaylight-iOS -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath build/dd-ios \
+            CODE_SIGNING_ALLOWED=NO CURRENT_PROJECT_VERSION=${{ github.run_number }} build -quiet
+
+      - name: Build for Mac
+        run: |
+          set -o pipefail
+          xcodebuild -project SendToDaylight.xcodeproj -scheme SendToDaylight-macOS -configuration Release \
+            -destination 'generic/platform=macOS' -derivedDataPath build/dd-mac \
+            CODE_SIGNING_ALLOWED=NO CURRENT_PROJECT_VERSION=${{ github.run_number }} build -quiet
+
+      - name: Package the iPhone app (.ipa for AltStore / Sideloadly)
+        run: |
+          GROUP=$(sed -n 's/^DAYLIGHT_APP_GROUP = //p' Config/Base.xcconfig)
+          mkdir -p build/ent
+          for f in iOS/App/SendToDaylight iOS/ShareExtension/ShareExtension iOS/SafariExtension/SafariExtension \
+                   macOS/App/SendToDaylight macOS/ShareExtension/ShareExtension macOS/SafariExtension/SafariExtension; do
+            sed "s/\$(DAYLIGHT_APP_GROUP)/$GROUP/g" "$f.entitlements" > "build/ent/$(echo "$f" | tr '/' '-').plist"
+          done
+          APP="build/dd-ios/Build/Products/Release-iphoneos/Send to Daylight.app"
+          ls "$APP" "$APP/PlugIns" "$APP/PlugIns/SafariExtension.appex"
+          plutil -lint "$APP/Info.plist" "$APP/PlugIns/ShareExtension.appex/Info.plist" "$APP/PlugIns/SafariExtension.appex/Info.plist"
+          # Not a real signature: an ad-hoc one that carries the entitlements, so sideloading tools see the App Group
+          # and register it when they re-sign with your Apple ID.
+          codesign --force --sign - --timestamp=none --entitlements build/ent/iOS-ShareExtension-ShareExtension.plist "$APP/PlugIns/ShareExtension.appex"
+          codesign --force --sign - --timestamp=none --entitlements build/ent/iOS-SafariExtension-SafariExtension.plist "$APP/PlugIns/SafariExtension.appex"
+          codesign --force --sign - --timestamp=none --entitlements build/ent/iOS-App-SendToDaylight.plist "$APP"
+          codesign -d --entitlements - "$APP/PlugIns/ShareExtension.appex"
+          rm -rf build/ipa && mkdir -p build/ipa/Payload
+          cp -R "$APP" build/ipa/Payload/
+          (cd build/ipa && zip -qry ../../Send-to-Daylight-unsigned.ipa Payload)
+          ls -l Send-to-Daylight-unsigned.ipa
+
+      - name: Sign the Mac app ad hoc and zip it
+        run: |
+          APP="build/dd-mac/Build/Products/Release/Send to Daylight.app"
+          ls "$APP/Contents/PlugIns" "$APP/Contents/PlugIns/SafariExtension.appex/Contents/Resources"
+          plutil -lint "$APP/Contents/Info.plist" "$APP/Contents/PlugIns/ShareExtension.appex/Contents/Info.plist" \
+            "$APP/Contents/PlugIns/SafariExtension.appex/Contents/Info.plist"
+          # Inner code first, each with its own entitlements (extensions must be sandboxed), then the app.
+          codesign --force --sign - --timestamp=none --entitlements build/ent/macOS-ShareExtension-ShareExtension.plist "$APP/Contents/PlugIns/ShareExtension.appex"
+          codesign --force --sign - --timestamp=none --entitlements build/ent/macOS-SafariExtension-SafariExtension.plist "$APP/Contents/PlugIns/SafariExtension.appex"
+          codesign --force --sign - --timestamp=none --entitlements build/ent/macOS-App-SendToDaylight.plist "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -d --entitlements - "$APP"
+          rm -f Send-to-Daylight-mac.zip
+          ditto -c -k --keepParent "$APP" Send-to-Daylight-mac.zip
+          ls -l Send-to-Daylight-mac.zip
+
+      - name: Smoke test the iPhone app in the Simulator
+        continue-on-error: true
+        run: |
+          DEVICE=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          d = json.load(sys.stdin)["devices"]
+          ids = [x["udid"] for k, v in d.items() if "iOS" in k for x in v if x["name"].startswith("iPhone")]
+          print(ids[-1] if ids else "")')
+          if [ -z "$DEVICE" ]; then echo "::warning::no iPhone simulator available"; exit 0; fi
+          xcrun simctl boot "$DEVICE" || true
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl install "$DEVICE" "build/dd-sim/Build/Products/Debug-iphonesimulator/Send to Daylight.app"
+          xcrun simctl launch "$DEVICE" com.daylight.share
+          sleep 10
+          shot() { xcrun simctl io "$DEVICE" screenshot "build/$1.png" && sips -Z 480 -s format jpeg -s formatOptions 55 "build/$1.png" --out "build/$1.jpg" >/dev/null && echo "=====BEGIN $1=====" && base64 -i "build/$1.jpg" && echo "=====END $1====="; }
+          shot ios-unpaired
+          # Pair through the URL scheme, as scanning the Daylight's QR code with the Camera does.
+          LINK=$(node --input-type=module -e "
+            import { pairingLink, generateSecret } from '../share/js/daylight-share.js';
+            console.log(await pairingLink({ secret: generateSecret(), relay: 'http://127.0.0.1:$RELAY_PORT', name: 'CI Daylight' }));")
+          echo "$LINK"
+          xcrun simctl openurl "$DEVICE" "$LINK"
+          sleep 8
+          shot ios-paired
+          xcrun simctl spawn "$DEVICE" launchctl list | grep -i daylight || { echo "::error::the app is not running"; exit 1; }
+
+      - name: Smoke test the Mac app
+        continue-on-error: true
+        run: |
+          rm -rf "$RUNNER_TEMP/smoke" && mkdir -p "$RUNNER_TEMP/smoke"
+          ditto -x -k Send-to-Daylight-mac.zip "$RUNNER_TEMP/smoke"
+          APP="$RUNNER_TEMP/smoke/Send to Daylight.app"
+          open "$APP"
+          sleep 10
+          pgrep -fl "Send to Daylight" || { echo "::error::the Mac app is not running"; exit 1; }
+          pluginkit -m -A -D -v 2>/dev/null | grep -i daylight || echo "::warning::pluginkit does not list the extensions yet"
+          screencapture -x build/mac.png && sips -Z 640 -s format jpeg -s formatOptions 55 build/mac.png --out build/mac.jpg >/dev/null \
+            && echo "=====BEGIN mac=====" && base64 -i build/mac.jpg && echo "=====END mac=====" || true
+          pkill -f "Send to Daylight" || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: send-to-daylight-apple
+          path: |
+            reader-experiment/apple/Send-to-Daylight-unsigned.ipa
+            reader-experiment/apple/Send-to-Daylight-mac.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: rx-apple-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: send-to-daylight-apple
+          path: out
+      - name: Publish to the reader-experiment-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/scripts/rx-publish.sh out/Send-to-Daylight-unsigned.ipa out/Send-to-Daylight-mac.zip
+
+  # TestFlight upload, only when the App Store Connect secrets exist (see reader-experiment/apple/README.md).
+  check-signing:
+    runs-on: ubuntu-latest
+    outputs:
+      testflight: ${{ steps.check.outputs.testflight }}
+    steps:
+      - id: check
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          if [ -n "$APPLE_TEAM_ID" ] && [ -n "$ASC_KEY_ID" ] && [ -n "$ASC_ISSUER_ID" ] && [ -n "$ASC_KEY_P8" ]; then
+            echo "testflight=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "testflight=false" >> "$GITHUB_OUTPUT"
+            echo "No App Store Connect secrets: skipping TestFlight."
+          fi
+
+  testflight:
+    needs: [build, check-signing]
+    if: needs.check-signing.outputs.testflight == 'true'
+    runs-on: macos-15
+    timeout-minutes: 60
+    concurrency:
+      group: rx-apple-testflight
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: reader-experiment/apple
+    env:
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      BUNDLE_ID: ${{ vars.DAYLIGHT_BUNDLE_ID || 'com.daylight.share' }}
+      APP_GROUP: ${{ vars.DAYLIGHT_APP_GROUP || 'group.com.daylight.share' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Select the newest Xcode that has its iOS platform installed
+        run: bash scripts/select-xcode.sh
+      - name: Generate the project
+        run: |
+          brew install xcodegen
+          if [ -f ../extension/build.mjs ]; then (cd ../extension && node build.mjs) || true; fi
+          xcodegen generate
+      - name: Archive and upload to TestFlight
+        run: |
+          set -o pipefail
+          KEY="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
+          printf '%s' "$ASC_KEY_P8" > "$KEY"
+          AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$KEY" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+          xcodebuild archive -project SendToDaylight.xcodeproj -scheme SendToDaylight-iOS -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath build/SendToDaylight.xcarchive "${AUTH[@]}" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" DAYLIGHT_BUNDLE_ID="$BUNDLE_ID" DAYLIGHT_APP_GROUP="$APP_GROUP" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} -quiet
+          cat > build/ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$APPLE_TEAM_ID</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          EOF
+          xcodebuild -exportArchive -archivePath build/SendToDaylight.xcarchive -exportOptionsPlist build/ExportOptions.plist \
+            -exportPath build/export "${AUTH[@]}"
+          rm -f "$KEY"
