@@ -56,9 +56,14 @@ before(async () => {
     headless: !process.env.HEADED,
     args: [`--disable-extensions-except=${b.dir}`, `--load-extension=${b.dir}`],
   });
-  [sw] = ctx.serviceWorkers();
-  if (!sw) sw = await ctx.waitForEvent('serviceworker');
+  const ours = (w) => w.url().startsWith('chrome-extension://') && w.url().endsWith('/background.js');
+  sw = ctx.serviceWorkers().find(ours) ?? await ctx.waitForEvent('serviceworker', { predicate: ours, timeout: 30000 });
   extId = new URL(sw.url()).host;
+  // The worker can be reported before its extension APIs are bound: wait until the background has started.
+  for (let i = 0; i < 100; i++) {
+    if (await sw.evaluate(() => !!globalThis.chrome?.runtime?.id && !!globalThis.sendToDaylight).catch(() => false)) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
   secret = ds.generateSecret();
   receiver = new ds.Receiver({ pairing: { secret, relay: relay.url }, storage: new ds.MemoryStorage() });
 });
@@ -192,7 +197,10 @@ test('the popup shows Delivered ✓ once the Daylight acknowledges', { timeout: 
 test('the alarm and context menus are registered', { timeout: 30000 }, async () => {
   const alarm = await sw.evaluate(() => chrome.alarms.get('dls-tick'));
   assert.equal(alarm?.periodInMinutes, 15);
-  // Creating a menu with an existing id fails: proves start() created them.
-  const err = await sw.evaluate(() => new Promise((r) => chrome.contextMenus.create({ id: 'dls-page', title: 'x' }, () => r(chrome.runtime.lastError?.message ?? ''))));
-  assert.match(err, /duplicate id/i);
+  // Creating a menu with an existing id fails: proves start() created all three (an invalid PDF-link pattern would
+  // have made Chrome refuse that one).
+  for (const id of ['dls-page', 'dls-link', 'dls-pdf-link']) {
+    const err = await sw.evaluate((i) => new Promise((r) => chrome.contextMenus.create({ id: i, title: 'x' }, () => r(chrome.runtime.lastError?.message ?? ''))), id);
+    assert.match(err, /duplicate id/i, id);
+  }
 });
