@@ -125,7 +125,7 @@ public final class RelayClient {
 
     private func perform(_ request: URLRequest, body: Data?) async throws -> (Data, HTTPURLResponse) {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<(Data, HTTPURLResponse), Error>) in
-            let done: (Data?, URLResponse?, Error?) -> Void = { data, response, error in
+            let done: @Sendable (Data?, URLResponse?, Error?) -> Void = { data, response, error in
                 if let error {
                     cont.resume(throwing: error)
                 } else if let http = response as? HTTPURLResponse {

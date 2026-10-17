@@ -23,7 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         MainWindow.shared.show()
         AppModel.shared.startAutoRefresh()
-        Task { await AppModel.shared.refresh() }
+        Task {
+            await AppModel.shared.handleLaunchArguments()
+            await AppModel.shared.refresh()
+        }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

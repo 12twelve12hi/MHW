@@ -5,7 +5,7 @@ import SwiftUI
 
 @main
 struct SendToDaylightApp: App {
-    static let refreshTask = "com.daylight.share.refresh"
+    nonisolated static let refreshTask = "com.daylight.share.refresh"
 
     @StateObject private var model = AppModel.shared
     @Environment(\.scenePhase) private var scenePhase
@@ -15,6 +15,7 @@ struct SendToDaylightApp: App {
             RootView()
                 .environmentObject(model)
                 .onOpenURL { url in Task { await model.handleOpen([url]) } }
+                .task { await model.handleLaunchArguments() }
         }
         .onChange(of: scenePhase) { phase in
             switch phase {

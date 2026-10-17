@@ -125,9 +125,14 @@ jobs:
           ditto -c -k --keepParent "$APP" Send-to-Daylight-mac.zip
           ls -l Send-to-Daylight-mac.zip
 
+      # The smoke tests drive the real apps: pair with a fresh pairing on the mock relay (launch arguments, as a
+      # QR code scan would), send a link, check with the JavaScript receiver that it arrived intact (which acks it),
+      # and check that the app then shows it delivered. Screenshots go into the log as base64 JPEGs.
       - name: Smoke test the iPhone app in the Simulator
         continue-on-error: true
         run: |
+          set -o pipefail
+          shot() { xcrun simctl io "$DEVICE" screenshot "build/$1.png" >/dev/null 2>&1 && sips -Z 480 -s format jpeg -s formatOptions 55 "build/$1.png" --out "build/$1.jpg" >/dev/null && echo "=====BEGIN $1=====" && base64 -i "build/$1.jpg" && echo "=====END $1====="; }
           DEVICE=$(xcrun simctl list devices available -j | python3 -c '
           import json, sys
           d = json.load(sys.stdin)["devices"]
@@ -135,35 +140,48 @@ jobs:
           print(ids[-1] if ids else "")')
           if [ -z "$DEVICE" ]; then echo "::warning::no iPhone simulator available"; exit 0; fi
           xcrun simctl boot "$DEVICE" || true
-          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl bootstatus "$DEVICE" -b > /dev/null
           xcrun simctl install "$DEVICE" "build/dd-sim/Build/Products/Debug-iphonesimulator/Send to Daylight.app"
+          curl -fsS "http://127.0.0.1:$RELAY_PORT/v1/health" >/dev/null 2>&1 || { node ../share/js/mock-relay.mjs --port "$RELAY_PORT" > "$RUNNER_TEMP/mock-relay-2.log" 2>&1 & sleep 2; }
+          LINK=$(node scripts/ci-pairing-link.mjs "http://127.0.0.1:$RELAY_PORT" "CI Daylight")
+          CODE=$(echo "$LINK" | sed -E 's/.*[?&]c=([A-Z2-7]+).*/\1/')
+          xcrun simctl launch "$DEVICE" com.daylight.share -DLSPairLink "$LINK" -DLSSendLink "https://example.com/from-the-iphone-app"
+          sleep 15
+          shot ios-sent
+          node scripts/e2e-receiver.mjs "http://127.0.0.1:$RELAY_PORT" "$CODE" | tee build/ios-received.json
+          grep -q '"url":"https://example.com/from-the-iphone-app"' build/ios-received.json \
+            || { echo "::error::the link sent by the iPhone app did not reach the JS receiver"; exit 1; }
+          # Relaunch: the app reads the ack when it becomes active.
+          xcrun simctl terminate "$DEVICE" com.daylight.share || true
+          sleep 2
           xcrun simctl launch "$DEVICE" com.daylight.share
-          sleep 10
-          shot() { xcrun simctl io "$DEVICE" screenshot "build/$1.png" && sips -Z 480 -s format jpeg -s formatOptions 55 "build/$1.png" --out "build/$1.jpg" >/dev/null && echo "=====BEGIN $1=====" && base64 -i "build/$1.jpg" && echo "=====END $1====="; }
-          shot ios-unpaired
-          # Pair through the URL scheme, as scanning the Daylight's QR code with the Camera does.
-          LINK=$(node --input-type=module -e "
-            import { pairingLink, generateSecret } from '../share/js/daylight-share.js';
-            console.log(await pairingLink({ secret: generateSecret(), relay: 'http://127.0.0.1:$RELAY_PORT', name: 'CI Daylight' }));")
-          echo "$LINK"
-          xcrun simctl openurl "$DEVICE" "$LINK"
-          sleep 8
-          shot ios-paired
-          xcrun simctl spawn "$DEVICE" launchctl list | grep -i daylight || { echo "::error::the app is not running"; exit 1; }
+          sleep 12
+          shot ios-delivered
+          xcrun simctl spawn "$DEVICE" launchctl list | grep -i com.daylight.share || { echo "::error::the iPhone app is not running"; exit 1; }
 
       - name: Smoke test the Mac app
         continue-on-error: true
         run: |
+          set -o pipefail
+          shot() { screencapture -x "build/$1.png" && sips -Z 720 -s format jpeg -s formatOptions 55 "build/$1.png" --out "build/$1.jpg" >/dev/null && echo "=====BEGIN $1=====" && base64 -i "build/$1.jpg" && echo "=====END $1====="; }
           rm -rf "$RUNNER_TEMP/smoke" && mkdir -p "$RUNNER_TEMP/smoke"
           ditto -x -k Send-to-Daylight-mac.zip "$RUNNER_TEMP/smoke"
           APP="$RUNNER_TEMP/smoke/Send to Daylight.app"
-          open "$APP"
-          sleep 10
-          pgrep -fl "Send to Daylight" || { echo "::error::the Mac app is not running"; exit 1; }
-          pluginkit -m -A -D -v 2>/dev/null | grep -i daylight || echo "::warning::pluginkit does not list the extensions yet"
-          screencapture -x build/mac.png && sips -Z 640 -s format jpeg -s formatOptions 55 build/mac.png --out build/mac.jpg >/dev/null \
-            && echo "=====BEGIN mac=====" && base64 -i build/mac.jpg && echo "=====END mac=====" || true
-          pkill -f "Send to Daylight" || true
+          curl -fsS "http://127.0.0.1:$RELAY_PORT/v1/health" >/dev/null 2>&1 || { node ../share/js/mock-relay.mjs --port "$RELAY_PORT" > "$RUNNER_TEMP/mock-relay-2.log" 2>&1 & sleep 2; }
+          LINK=$(node scripts/ci-pairing-link.mjs "http://127.0.0.1:$RELAY_PORT" "CI Mac Daylight")
+          CODE=$(echo "$LINK" | sed -E 's/.*[?&]c=([A-Z2-7]+).*/\1/')
+          open -n "$APP" --args -DLSPairLink "$LINK" -DLSSendLink "https://example.com/from-the-mac-app"
+          sleep 15
+          pgrep -fl "smoke/Send to Daylight" || { echo "::error::the Mac app is not running"; exit 1; }
+          pluginkit -m -A -D -v 2>/dev/null | grep -i daylight || echo "::warning::pluginkit does not list the extensions"
+          shot mac-sent || true
+          node scripts/e2e-receiver.mjs "http://127.0.0.1:$RELAY_PORT" "$CODE" | tee build/mac-received.json
+          grep -q '"url":"https://example.com/from-the-mac-app"' build/mac-received.json \
+            || { echo "::error::the link sent by the Mac app did not reach the JS receiver"; exit 1; }
+          # The app checks for the ack again ~30 s after sending.
+          sleep 35
+          shot mac-delivered || true
+          pkill -f "smoke/Send to Daylight" || true
 
       - uses: actions/upload-artifact@v4
         with:

@@ -220,6 +220,21 @@ public final class AppModel: ObservableObject {
         reload()
     }
 
+    private var launchArgumentsHandled = false
+
+    /// Hooks for the CI smoke tests (and handy for debugging): `-DLSPairLink <daylightshare://…>` pairs and
+    /// `-DLSSendLink <url>` sends a link, once per launch. Only someone who starts the app can pass them.
+    public func handleLaunchArguments(_ args: [String] = ProcessInfo.processInfo.arguments) async {
+        guard !launchArgumentsHandled else { return }
+        launchArgumentsHandled = true
+        func value(_ flag: String) -> String? {
+            guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
+            return args[i + 1]
+        }
+        if let link = value("-DLSPairLink"), let error = pair(link) { show(error, error: true) }
+        if let url = value("-DLSSendLink") { await sendLink(url) }
+    }
+
     // MARK: Maintenance (PROTOCOL 3.3)
 
     /// Reads acks and re-sends what is due.

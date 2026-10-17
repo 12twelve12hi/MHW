@@ -17,6 +17,7 @@ struct PairView: View {
                         .foregroundColor(.accentColor)
                         .frame(maxWidth: .infinity)
                         .padding(.top, 8)
+                    Text("Pair with your Daylight").font(.title2.weight(.semibold))
                     Text("Send articles, web pages and PDFs from this iPhone to your Daylight.")
                         .font(.title3)
                         .fixedSize(horizontal: false, vertical: true)
@@ -42,7 +43,8 @@ struct PairView: View {
                 }
                 .padding()
             }
-            .navigationTitle("Pair with your Daylight")
+            .navigationTitle("Send to Daylight")
+            .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $scanning) {
                 ScannerSheet { value in
                     scanning = false

@@ -121,9 +121,10 @@ public enum SharePayloadReader {
 
     /// The provider's file representation, copied out before the system deletes it.
     static func loadFile(_ provider: NSItemProvider, _ type: String) async -> URL? {
-        await withCheckedContinuation { (cont: CheckedContinuation<URL?, Never>) in
+        let suggested = provider.suggestedName
+        return await withCheckedContinuation { (cont: CheckedContinuation<URL?, Never>) in
             _ = provider.loadFileRepresentation(forTypeIdentifier: type) { url, _ in
-                var name = provider.suggestedName
+                var name = suggested
                 if let n = name, (n as NSString).pathExtension.isEmpty,
                    let ext = UTType(type)?.preferredFilenameExtension { name = "\(n).\(ext)" }
                 cont.resume(returning: url.flatMap { copyToTemporary($0, suggestedName: name) })
