@@ -26,13 +26,17 @@ object Work {
     private const val NOW = "dls-now"
     private val online = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
+    /** WorkManager, or null where it is not set up (never in the app, whose startup provider initialises it; JVM tests). */
+    private fun wm(context: Context): WorkManager? =
+        if (WorkManager.isInitialized()) WorkManager.getInstance(context) else null.also { logw("WorkManager not initialised") }
+
     fun schedulePeriodic(context: Context) {
         val req = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES).setConstraints(online).build()
-        WorkManager.getInstance(context).enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.KEEP, req)
+        wm(context)?.enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.KEEP, req)
     }
 
     fun cancelPeriodic(context: Context) {
-        WorkManager.getInstance(context).cancelUniqueWork(PERIODIC)
+        wm(context)?.cancelUniqueWork(PERIODIC)
     }
 
     /** Runs a sync as soon as possible (expedited where the quota allows), after any sync already running. */
@@ -41,7 +45,7 @@ object Work {
             .setConstraints(online)
             .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .build()
-        WorkManager.getInstance(context).enqueueUniqueWork(NOW, ExistingWorkPolicy.APPEND_OR_REPLACE, req)
+        wm(context)?.enqueueUniqueWork(NOW, ExistingWorkPolicy.APPEND_OR_REPLACE, req)
     }
 
     /** A later check (a sender reads acks again ~30 s and a few minutes after sending). */
@@ -50,7 +54,7 @@ object Work {
             .setConstraints(online)
             .setInitialDelay(delaySeconds, TimeUnit.SECONDS)
             .build()
-        WorkManager.getInstance(context).enqueueUniqueWork("dls-later-$delaySeconds", ExistingWorkPolicy.REPLACE, req)
+        wm(context)?.enqueueUniqueWork("dls-later-$delaySeconds", ExistingWorkPolicy.REPLACE, req)
     }
 }
 

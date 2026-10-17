@@ -213,6 +213,10 @@ class InboxRepo(private val app: App) {
 
     fun get(id: String): InboxItem? = _items.value.firstOrNull { it.id == id }
 
+    /** Adds or replaces a row (tests; received items come through the Receiver). */
+    @androidx.annotation.VisibleForTesting
+    internal fun put(item: InboxItem) = update { list -> listOf(item) + list.filter { it.id != item.id } }
+
     fun waiting(): List<InboxItem> = _items.value.filter { it.state == InboxItem.WAITING }.sortedBy { it.received }
 
     fun fileOf(item: InboxItem): File? = item.file?.let { File(filesRoot, it) }?.takeIf { it.isFile }
