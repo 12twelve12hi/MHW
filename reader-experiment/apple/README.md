@@ -32,10 +32,11 @@ isn't picked up), each part stores its own pairing: the Share extension then ask
    into the app.
 5. **Share menu:** System Settings › General › Login Items & Extensions › Sharing (macOS 15; on 13–14: Privacy &
    Security › Extensions › Sharing) › turn on **Daylight**.
-6. **Safari extension:** Safari › Settings › Advanced › *Show features for web developers*; then Develop ›
-   **Allow Unsigned Extensions** (Safari forgets this when it quits, so do it again after restarting Safari);
-   then Safari › Settings › Extensions › turn on **Send to Daylight**. With a signed build (below) the Develop step is
-   not needed.
+6. **Safari extension:** Safari › Settings › Advanced › turn on *Show features for web developers*; then Safari ›
+   Settings › **Developer** › *Allow unsigned extensions* (older Safari: Develop menu › Allow Unsigned Extensions).
+   Safari forgets this when it quits, so do it again after restarting Safari. Then Safari › Settings › Extensions ›
+   turn on **Send to Daylight**. With a signed build (below) the unsigned-extensions step is not needed. The app's
+   Settings show whether the extension is on and open the right panes.
 
 ## Install on an iPhone
 

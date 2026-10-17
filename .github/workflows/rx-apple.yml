@@ -181,6 +181,9 @@ jobs:
           # The app checks for the ack again ~30 s after sending.
           sleep 35
           shot mac-delivered || true
+          GC="$HOME/Library/Group Containers/group.com.daylight.share/Library/Application Support/DaylightShare/outbox.json"
+          if [ -f "$GC" ]; then echo "The Mac app keeps its outbox in the App Group container (shared with its extensions)."
+          else echo "::warning::the ad-hoc signed Mac app fell back to its own storage (no App Group container)"; fi
           pkill -f "smoke/Send to Daylight" || true
 
       - uses: actions/upload-artifact@v4
