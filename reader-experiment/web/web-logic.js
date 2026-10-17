@@ -14,8 +14,22 @@ export function readParams(search = '', hash = '') {
     const p = new URLSearchParams(src);
     for (const k of KEYS) if (p.has(k)) out[k] = p.get(k);
   }
+  const tail = trailingUrl(hash.replace(/^#/, ''));
+  if (tail) out.url = tail;
   out.autosend = /^(1|true|yes)$/i.test(out.autosend ?? '');
   return out;
+}
+
+/**
+ * The Shortcut link ends in "&url=" and the shared address is appended, encoded or not (a raw "&" or "+" would
+ * break URLSearchParams). When url= is the last parameter, everything after it is the address.
+ */
+function trailingUrl(fragment) {
+  const m = /(?:^|&)url=([^]*)$/.exec(fragment);
+  if (!m || /&(title|text|pair|autosend|share)=/.test(m[1])) return null;
+  let decoded = null;
+  try { decoded = decodeURIComponent(m[1]); } catch { /* not encoded */ }
+  return webUrl(decoded) ?? webUrl(m[1]);
 }
 
 export const hasShareParams = (p) => !!(p.pair || p.url || p.text || p.title || p.share || p.autosend);

@@ -1,0 +1,160 @@
+name: Reader experiment - extension and web sender
+
+# Builds and tests the Send to Daylight browser extension (Chrome and Safari) and the web sender page, then publishes
+# send-to-daylight-chrome.zip and send-to-daylight-web.zip to the "reader-experiment-latest" release and, once GitHub
+# Pages is switched on (Settings > Pages > Source: GitHub Actions), serves the web sender at <pages URL>/send/.
+on:
+  push:
+    branches: [claude/sweet-goldberg-ej1nb0]
+    paths:
+      - 'reader-experiment/extension/**'
+      - 'reader-experiment/web/**'
+      - 'reader-experiment/share/**'
+      - '.github/workflows/rx-extension.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Runs queue rather than cancel, so a release upload is never cut off half way.
+concurrency:
+  group: rx-extension
+  cancel-in-progress: false
+
+jobs:
+  build-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reader-experiment/extension
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: reader-experiment/extension/package-lock.json
+
+      - name: Install Playwright
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Build the extension (Chrome, Safari, test build) and the web sender
+        run: |
+          node build.mjs
+          node ../web/build.mjs
+
+      - name: Unit tests
+        run: node --test test/unit/*.test.mjs
+
+      - name: End-to-end tests in Chromium (extension and web sender against the mock relay)
+        run: node --test --test-concurrency=1 test/e2e/*.e2e.mjs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: send-to-daylight-chrome
+          path: reader-experiment/extension/dist/send-to-daylight-chrome.zip
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: send-to-daylight-safari
+          path: reader-experiment/extension/dist/safari
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: send-to-daylight-web
+          path: reader-experiment/web/dist/send-to-daylight-web.zip
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: send-to-daylight-web-site
+          path: reader-experiment/web/dist/site
+          if-no-files-found: error
+
+      - name: Keep screenshots and test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rx-extension-test-results
+          path: reader-experiment/extension/test-results
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish to the release
+    needs: build-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: send-to-daylight-chrome
+          path: out
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: send-to-daylight-web
+          path: out
+
+      - name: Upload send-to-daylight-chrome.zip and send-to-daylight-web.zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/scripts/rx-publish.sh out/send-to-daylight-chrome.zip out/send-to-daylight-web.zip
+
+  # Optional: deploys the web sender to GitHub Pages at <pages URL>/send/. Pages also serves the highlights prototype
+  # (highlights-prototype.yml) at the root, so this job deploys both together instead of replacing it. Until Pages is
+  # switched on, and this branch may deploy to the github-pages environment, the job fails without failing the run.
+  pages:
+    name: Deploy to GitHub Pages (optional)
+    needs: build-test
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}send/
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get the latest highlights prototype
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          ref: claude/highlights-menu-ux-9i3p5j
+          path: highlights-branch
+          sparse-checkout: highlights-prototype/www
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: send-to-daylight-web-site
+          path: web-site
+
+      - name: Assemble the site (highlights prototype at the root, web sender under /send/)
+        run: |
+          src=highlights-prototype/www
+          if [ -f highlights-branch/highlights-prototype/www/index.html ]; then src=highlights-branch/highlights-prototype/www; fi
+          mkdir -p _site/send
+          cp -R "$src"/. _site/
+          cp -R web-site/. _site/send/
+          ls -la _site _site/send
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        continue-on-error: true
+        uses: actions/deploy-pages@v4

@@ -16,6 +16,17 @@ test('readParams merges the query and the fragment (fragment wins)', () => {
   assert.equal(W.readParams('?autosend=true').autosend, true);
 });
 
+test('a Shortcut link survives an address that was appended without encoding', () => {
+  const pre = '#autosend=1&pair=ABCD&url=';
+  assert.equal(W.readParams('', pre + encodeURIComponent('https://a.org/x?b=1&c=a+b')).url, 'https://a.org/x?b=1&c=a+b');
+  assert.equal(W.readParams('', pre + 'https://a.org/x?b=1&c=a+b').url, 'https://a.org/x?b=1&c=a+b');
+  assert.equal(W.readParams('', pre + 'https://a.org/x?q=%26').url, 'https://a.org/x?q=&', 'decoded once when it decodes');
+  assert.equal(W.readParams('', pre + 'https://a.org/a%20b').url, 'https://a.org/a%20b', 'kept raw when decoding breaks it');
+  assert.equal(W.readParams('', pre + 'https://a.org/x#frag').url, 'https://a.org/x#frag');
+  const later = W.readParams('', `#url=${encodeURIComponent('https://a.org/x?y=1')}&title=Hi&autosend=1`);
+  assert.deepEqual([later.url, later.title, later.autosend], ['https://a.org/x?y=1', 'Hi', true]);
+});
+
 test('sharedLink finds the address and a title in shared text', () => {
   assert.deepEqual(W.sharedLink({ url: 'https://a.org/x' }), { url: 'https://a.org/x', title: '' });
   assert.deepEqual(W.sharedLink({ text: 'Great read https://a.org/story?id=2. ' }), { url: 'https://a.org/story?id=2', title: 'Great read' });
