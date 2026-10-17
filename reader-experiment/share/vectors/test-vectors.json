@@ -1,0 +1,412 @@
+{
+  "protocol": "Daylight Share v1 (reader-experiment/share/PROTOCOL.md)",
+  "generatedBy": "reader-experiment/share/vectors/generate.mjs",
+  "notes": [
+    "All hex is lowercase. Strings are UTF-8.",
+    "pairing: derive code, link and topics/key from secretHex; also parse code and link back to the secret.",
+    "codeParsing: parse input; expect secretHex, or an error (\"checksum\" = well-formed but the check byte is wrong, \"format\" = wrong length or characters; implementations may word errors differently). For links also check relay and nameExpected.",
+    "seal: with key from secretHex, seal headerJson bytes exactly as given + body with nonceHex, AAD from purpose; must equal frameHex. Also open frameHex back to headerJson/body.",
+    "items: open each frame (purpose inbox), feed headers/bodies to the reassembler in the given order; the completed item must match expect.header (minus part/parts) and the content.",
+    "invalidFrames: opening must fail. badHeaders: the frame would decrypt, but header validation must refuse it.",
+    "fileNames: the receiver-side safe file name for an untrusted name."
+  ],
+  "pairing": [
+    {
+      "label": "vector-secret-1",
+      "secretHex": "27018efa6c00e0fec24d663e1119f9a1",
+      "code": "E4AY-56TM-ADQP-5QSN-MY7B-CGPZ-UFRA",
+      "codeCompact": "E4AY56TMADQP5QSNMY7BCGPZUFRA",
+      "link": "daylightshare://pair?c=E4AY56TMADQP5QSNMY7BCGPZUFRA",
+      "linkWithRelayAndName": "daylightshare://pair?c=E4AY56TMADQP5QSNMY7BCGPZUFRA&r=https%3A%2F%2Frelay.example.org%2Fntfy&n=Anjan%E2%80%99s%20Daylight%20%26%20co",
+      "keyHex": "9ea534420d49b506c29ac3f68f921f07d4bc4907b4cb7ab650ad2f368c616b59",
+      "inboxTopic": "dls-51707414fa47d4ee7bd190b6b7a4ec28",
+      "ackTopic": "dls-a630a0b3ff092e65d50af554a8063ad2"
+    },
+    {
+      "label": "vector-secret-2",
+      "secretHex": "9db6efee81ae4cd05c2652ea561b83b6",
+      "code": "TW3O-73UB-VZGN-AXBG-KLVF-MG4D-WZVQ",
+      "codeCompact": "TW3O73UBVZGNAXBGKLVFMG4DWZVQ",
+      "link": "daylightshare://pair?c=TW3O73UBVZGNAXBGKLVFMG4DWZVQ",
+      "linkWithRelayAndName": "daylightshare://pair?c=TW3O73UBVZGNAXBGKLVFMG4DWZVQ&r=https%3A%2F%2Frelay.example.org%2Fntfy&n=Anjan%E2%80%99s%20Daylight%20%26%20co",
+      "keyHex": "fa5778f3761ca8f8ff30becd46a806a187dde407bd785301b9c8f80a1a7a3bce",
+      "inboxTopic": "dls-eac81d63305bb75ca052e3f3d86fa19e",
+      "ackTopic": "dls-1c76d4babcbe5468dccf5a4f7f757905"
+    },
+    {
+      "label": "all-zero",
+      "secretHex": "00000000000000000000000000000000",
+      "code": "AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AA3Q",
+      "codeCompact": "AAAAAAAAAAAAAAAAAAAAAAAAAA3Q",
+      "link": "daylightshare://pair?c=AAAAAAAAAAAAAAAAAAAAAAAAAA3Q",
+      "linkWithRelayAndName": "daylightshare://pair?c=AAAAAAAAAAAAAAAAAAAAAAAAAA3Q&r=https%3A%2F%2Frelay.example.org%2Fntfy&n=Anjan%E2%80%99s%20Daylight%20%26%20co",
+      "keyHex": "ad2a266f625d6a38d8f16be1704501e7e523fdaa76cf7147297f3fa9d4538cfb",
+      "inboxTopic": "dls-8e3a7c68e132cf3bcd88fbc013a4b4e7",
+      "ackTopic": "dls-4a6c5e8bd01722ae577078323eada0b4"
+    },
+    {
+      "label": "all-ff",
+      "secretHex": "ffffffffffffffffffffffffffffffff",
+      "code": "7777-7777-7777-7777-7777-7777-75NA",
+      "codeCompact": "77777777777777777777777775NA",
+      "link": "daylightshare://pair?c=77777777777777777777777775NA",
+      "linkWithRelayAndName": "daylightshare://pair?c=77777777777777777777777775NA&r=https%3A%2F%2Frelay.example.org%2Fntfy&n=Anjan%E2%80%99s%20Daylight%20%26%20co",
+      "keyHex": "ea5b31da1eb5618af2b1ea3f46cdb5654b34a9746c66d52685f762b8d7ec7e88",
+      "inboxTopic": "dls-d93c1b9a34d81563a887be7bdc0b725c",
+      "ackTopic": "dls-17e1365cca0b336de51ea3ac790afd13"
+    }
+  ],
+  "codeParsing": [
+    {
+      "name": "canonical with dashes",
+      "input": "E4AY-56TM-ADQP-5QSN-MY7B-CGPZ-UFRA",
+      "secretHex": "27018efa6c00e0fec24d663e1119f9a1"
+    },
+    {
+      "name": "compact",
+      "input": "E4AY56TMADQP5QSNMY7BCGPZUFRA",
+      "secretHex": "27018efa6c00e0fec24d663e1119f9a1"
+    },
+    {
+      "name": "lowercase with spaces",
+      "input": "e4ay 56tm adqp 5qsn my7b cgpz ufra",
+      "secretHex": "27018efa6c00e0fec24d663e1119f9a1"
+    },
+    {
+      "name": "look-alike digits 0 1 8",
+      "input": "E4AY56TMADQP5QSNMY78CGPZUFRA",
+      "secretHex": "27018efa6c00e0fec24d663e1119f9a1"
+    },
+    {
+      "name": "underscores and dots",
+      "input": "E4AY.56TM_ADQP_5QSN_MY7B_CGPZ_UFRA",
+      "secretHex": "27018efa6c00e0fec24d663e1119f9a1"
+    },
+    {
+      "name": "pairing link",
+      "input": "daylightshare://pair?c=E4AY56TMADQP5QSNMY7BCGPZUFRA",
+      "secretHex": "27018efa6c00e0fec24d663e1119f9a1",
+      "relay": "https://ntfy.sh",
+      "nameExpected": ""
+    },
+    {
+      "name": "pairing link with relay and name",
+      "input": "daylightshare://pair?c=E4AY56TMADQP5QSNMY7BCGPZUFRA&r=https%3A%2F%2Frelay.example.org%2Fntfy&n=Anjan%E2%80%99s%20Daylight%20%26%20co",
+      "secretHex": "27018efa6c00e0fec24d663e1119f9a1",
+      "relay": "https://relay.example.org/ntfy",
+      "nameExpected": "Anjan’s Daylight & co"
+    },
+    {
+      "name": "one character changed (checksum)",
+      "input": "E4AY5ATMADQP5QSNMY7BCGPZUFRA",
+      "error": "checksum"
+    },
+    {
+      "name": "too short",
+      "input": "E4AY56TMADQP5QSNMY7BCGPZUFR",
+      "error": "format"
+    },
+    {
+      "name": "too long",
+      "input": "E4AY56TMADQP5QSNMY7BCGPZUFRAA",
+      "error": "format"
+    },
+    {
+      "name": "bad character",
+      "input": "E4AY56TMADQP5QSNMY7BCGPZUFR9",
+      "error": "format"
+    },
+    {
+      "name": "empty",
+      "input": "",
+      "error": "format"
+    }
+  ],
+  "seal": [
+    {
+      "name": "url item",
+      "purpose": "inbox",
+      "secretHex": "27018efa6c00e0fec24d663e1119f9a1",
+      "nonceHex": "b0e6529125cd4b10ed08f1fb",
+      "headerJson": "{\"v\":1,\"id\":\"00112233445566778899aabbccddeeff\",\"kind\":\"url\",\"url\":\"https://example.com/articles/42?ref=share#top\",\"title\":\"An article — with “quotes” and ünïcödé\",\"sent\":\"2026-10-17T22:00:00.000Z\",\"from\":\"iPhone\",\"app\":\"ios/1.0.0\"}",
+      "bodyHex": "",
+      "frameHex": "444c5331b0e6529125cd4b10ed08f1fb062702e5081d38b7ae28c75501116b3134cdd629c06056e23c9b4514ab21ab36f974b8a30452fc8282974033c048865ca66408c91ef3cbe9a9ed7fcbd7ef19b3f08986c9520998690e8b48e2e255c85937a82fb1c874d4340e490a0acdaceb06c75b45bcde65a8e1211769beea651cdb5296cabe352e37a1c11c5cd1ee016bbe26e12f9d55e39f3abba543e2fcc246c79554456181e3fb36a8b4c2c44f241ea0beb5bcf06d8b6f5db0f7c5e464d7efc19a55643e548fcb478f60057208dff50f911b50f925ab2c200878758bf0038a38d2488431c48b8f319f9552f249f316a8e71f5d4074b69654ca9a016fb5c45afffd4ead403970d64be7536c8908f876ec36f3e9084c",
+      "frameBase64": "RExTMbDmUpElzUsQ7Qjx+wYnAuUIHTi3rijHVQERazE0zdYpwGBW4jybRRSrIas2+XS4owRS/IKCl0AzwEiGXKZkCMke88vpqe1/y9fvGbPwiYbJUgmYaQ6LSOLiVchZN6gvsch01DQOSQoKzazrBsdbRbzeZajhIRdpvuplHNtSlsq+NS43ocEcXNHuAWu+JuEvnVXjnzq7pUPi/MJGx5VURWGB4/s2qLTCxE8kHqC+tbzwbYtvXbD3xeRk1+/BmlVkPlSPy0ePYAVyCN/1D5EbUPklqywgCHh1i/ADijjSSIQxxIuPMZ+VUvJJ8xao5x9dQHS2llTKmgFvtcRa//1OrUA5cNZL51NsiQj4duw28+kITA=="
+    },
+    {
+      "name": "ack",
+      "purpose": "ack",
+      "secretHex": "27018efa6c00e0fec24d663e1119f9a1",
+      "nonceHex": "80dac330a31cb125ac448067",
+      "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"00112233445566778899aabbccddeeff\",\"ffeeddccbbaa99887766554433221100\"],\"sent\":\"2026-10-17T22:01:00.000Z\",\"from\":\"Daylight\"}",
+      "bodyHex": "",
+      "frameHex": "444c533180dac330a31cb125ac448067720ab04a58c6453deaad20ca42c4ddff09c06f148d2728b59c7ac93cf0502d4e723562f567f1971995ce6e09c3f2065aa1bc37e84df78b6a9ca2b94004d81cdee0e78b29d58cb4c2c3460eae97312db998b1bf557d0ff5853110fac4a5ec1f56e50d0e93c1784dc769a198db0d1f7eb995935c36b689e151c981bac6bc5136694964a65f41c94c2b79497037e6208f73039dcbc8bf6489e9242d8b3fdb614ca33c1d9c2bf8153671a829",
+      "frameBase64": "RExTMYDawzCjHLElrESAZ3IKsEpYxkU96q0gykLE3f8JwG8UjScotZx6yTzwUC1OcjVi9WfxlxmVzm4Jw/IGWqG8N+hN94tqnKK5QATYHN7g54sp1Yy0wsNGDq6XMS25mLG/VX0P9YUxEPrEpewfVuUNDpPBeE3HaaGY2w0ffrmVk1w2tonhUcmBusa8UTZpSWSmX0HJTCt5SXA35iCPcwOdy8i/ZInpJC2LP9thTKM8HZwr+BU2cagp"
+    },
+    {
+      "name": "file item, identity body",
+      "purpose": "inbox",
+      "secretHex": "27018efa6c00e0fec24d663e1119f9a1",
+      "nonceHex": "18a8abc6986ce6fb5d1d0b9c",
+      "headerJson": "{\"v\":1,\"id\":\"0123456789abcdef0123456789abcdef\",\"kind\":\"file\",\"name\":\"note.md\",\"mime\":\"text/markdown\",\"size\":27,\"sha256\":\"3cb458ab1dd95e9b05ade8e5ef67df423b3d872723dd4e8b4a41786b74e3fb96\",\"sent\":\"2026-10-17T22:02:00.000Z\",\"from\":\"Mac\"}",
+      "bodyHex": "232048656c6c6f0a0a46726f6d2074686520766563746f72732e0a",
+      "frameHex": "444c533118a8abc6986ce6fb5d1d0b9c1dacad5a6dd60a34981d22a7f9831f4aeae860647b6657147ab9246ed67b45abbc20923e934a34a3a1cfe8bb1b85c3c94c1743db87fbb0bf603f842bbc335933032cca4363fdf8b4ba1df9c37631a73af62edd8971a85df02aea38861c8d30afedd3485d6e8c28c74a813c3e84462f23b2fe494e3576d1d1389ed6e5966495dc8f4168d954004c1e236873dd618133a2f93997c33fec8baacafd96df8c3a6caaf3697042908063b068a120f61db7010737612e99420baaa61fa2ecc703b865e54c64ffe576b3f6ac7ce5c0026160ff67eb1696c10f8eb95b75b119c5df2b173db2790497699234770348a29375e170b0e2f6b1cb20314500766e384a65d3f7912c22c05f39d3d5240287d2c2099cb0a0a97aaa2603977da409",
+      "frameBase64": "RExTMRioq8aYbOb7XR0LnB2srVpt1go0mB0ip/mDH0rq6GBke2ZXFHq5JG7We0WrvCCSPpNKNKOhz+i7G4XDyUwXQ9uH+7C/YD+EK7wzWTMDLMpDY/34tLod+cN2Mac69i7diXGoXfAq6jiGHI0wr+3TSF1ujCjHSoE8PoRGLyOy/klONXbR0Tie1uWWZJXcj0Fo2VQATB4jaHPdYYEzovk5l8M/7Iuqyv2W34w6bKrzaXBCkIBjsGihIPYdtwEHN2EumUILqqYfouzHA7hl5Uxk/+V2s/asfOXAAmFg/2frFpbBD465W3WxGcXfKxc9snkEl2mSNHcDSKKTdeFwsOL2scsgMUUAdm44SmXT95EsIsBfOdPVJAKH0sIJnLCgqXqqJgOXfaQJ"
+    },
+    {
+      "name": "empty-object header with v only (receivers reject as an item, but it decrypts)",
+      "purpose": "inbox",
+      "secretHex": "27018efa6c00e0fec24d663e1119f9a1",
+      "nonceHex": "ba2865b75c7130529dff3f55",
+      "headerJson": "{\"v\":1}",
+      "bodyHex": "010203",
+      "frameHex": "444c5331ba2865b75c7130529dff3f55192c86b3a2e06867f63992feca5acd9a74491c86297bba9d31a5729c35ac",
+      "frameBase64": "RExTMbooZbdccTBSnf8/VRkshrOi4Ghn9jmS/spazZp0SRyGKXu6nTGlcpw1rA=="
+    }
+  ],
+  "items": [
+    {
+      "name": "page, deflate-raw, one frame",
+      "framesHex": [
+        "444c53317ebf62dbbe629381d76e31fb404f131b4dba5a05f83133d77930b247cf8c586ff4a5480b8662b01024af85f7a401acf9674830fd59621366ac9b0238dadb543e8ded5e01fea24e113f27b81e05d1c6e1b57d24606e0c0d7b4c667dfe03ac1d56877c93200ec334f3b6c371e9fe9a5c145b7ae1a2e75bdeb2798def118c4228295c24d37235a31c9281a586d7ede52c22ff78f37c2f649e33945924c98a7f1314d457e36b8ec391e0aafaf3fcacd553827d48005163943f42597fbc605075c0e0b233b5b6cb83d4b71e0cbbd5be8fcbd4b9e4aed4c38d09319c30a0345e6c33845b77359331bff4425392b172d56285c2e5650fcdb250a33fb7c2bcc3f4cd2b634a51736f01f9e4b44bcd252a93731af4c8bea2eb9fdbc47a870bb3119450a0927f4eb2f79d5f650cdcf3bf325315bb90656cb932e1e1537f430e06f1cff1c3d7261cad521660c2134a43b3a732fde5006c6beb7bd3548db7f28e5da8d1daaf5b861329e4acd73aca7d1c79cd435c26d78574d5fb8e2044393d47151da76d552b870aa8334c63bd6a20ae672149d685b03b5d5ffa9053393b57bed1223421b8f35bf3175a60d3d9bbf57a0be20e29c9db6d5bcf9e46672ace51c8887311f93152aab4d0204ae3d0feae8f10b511072bc60d81616413d1cf88e1c16a7cb955cc7d990bf65c04b2d444e8032fc028910b63ea155652d8ad0a2f203ce8a8fc2d60727ed226331f9374e5d515cbed42"
+      ],
+      "expect": {
+        "header": {
+          "v": 1,
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": "page",
+          "url": "https://example.com/walden",
+          "title": "Walden",
+          "mime": "text/html",
+          "size": 4436,
+          "sha256": "6aa2b566cd9d19304927c1fc6eb3ba2f6461120a8fd3378c2658de8278e0d4eb",
+          "enc": "deflate-raw",
+          "sent": "2026-10-17T22:03:00.000Z",
+          "from": "Chrome",
+          "app": "chrome/1.0.0"
+        },
+        "contentUtf8": "<!doctype html><html><head><title>Walden</title></head><body><article><h1>Where I Lived</h1><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p><p>I went to the woods because I wished to live deliberately, to front only the essential facts of life.</p></article></body></html>"
+      }
+    },
+    {
+      "name": "pdf file, identity, 3 parts (chunk 400)",
+      "framesHex": [
+        "444c53310fb703831689422adf0d75ac344388bca2f27778f05895ca21b8ccc8ae2832e2973791d19d3dd3165aba15db7c26f99836c5013c82b7463bc22399ba037fd75486bc3cda949d387f91937f6476beddbb8aa2602df7d4fafd260be886b8ebfb9d3f37e54d2b61e1b591cfafc63a35644135a4ff3e3499788b000c37f55826aebc1b70a3b8edd0bae22136e6b95fedbc26e69a34a4a3e8cc1a7f2ec9203d501d9bd695fe04e4b0bb72d2061ec1dcfee15f238b14c3423bbdda98de6b81a94297ed9ec302e982feac5e581bd48f7f1716ef85728d8dbdc3a6160ee1597ddca56e516f0bb180ef0e603156c8474d3fd94ba56053697e2f03080009bd152fb81fa138626383b65117101d144728ce38ffa4eb447e0fd6a143f84c8e843be01b7bb9a9d7a0e8843185ba55a32f90873fef7fbf5ad4c6a5e82ea74e17bd0d29164175becc15062159043bf44c21bef40a299aee8c842d5293fc591eca7b1deda08c4668e5f3a5b5bc619f2ba0fd2c299c09e2ef5a505088f1ff5c41e3c1d512d590648b316a4331b9c8618aad8c35d013ceb9e272ce7b14e097ed65386cf0fa8794d0585cb1116e2625202c5ff6d6c4c0c63bc16484cafbe5f3012242ff6a315ded29fae349f43e6574246f19cb769d9227f2993d612915b9890d800c6f2593e563eee3e1e27b49d081ac9f104f1ea1ef88062d074f4c764eca46b08055c5b008c1defb63fa39db25c3f7cecb852fe5d05642c4e33154bedd14802fcff6d4cc8bed36c6534a3d6d08bab9f63ce7746a70e717ebedf690843fc7b1d26b38847ae0e3c547b7c372392e2359f0e9360530919ab155b747167e8c409b29cda0f28d6b054a5fbf8113e0ace814af5d9a888871071de63d4192db0a4c8240ed9171860a88952605c6952cb16350ebf4317361a6d7d9d35d5cdaae6992b116efffb7190081cabf46870410602b5b7fdc8b596e5f8abaccbb4aaaacd2231c0f4ec953a4a2505992a08abe2889fece97b0",
+        "444c533191cd908bf5751c3ae3e760c4f9f950fcbdfc361fa9d9250055ba6d03211a34a290944fcb924917d9ad4f87e054992aa588b4a67973996b6e83cd3be959aa990192a4846fb5c2ce9730147dd7cdad2ebc21985e17dafaf6e6d31cd872c4de92460094a283045ea9c0fab5d754394d0f9f988c924384f7890a4acb5e231c1abd63d992f32b73c80e46cb234caccbefeab438d223903c0938240df19925877acc5d17b3c695a60519896e6308f7e50bfff992bccf93536106dd6ffecc4a8e1477a77f72300bd870dc74cd2b5683201f4aa1c7113172b6b0cebcf3cf11ba0b22923cb8a9ca63530de53633b0386f6b841317ab3d55422709a6982e1df0adc07aeb20c185160c6ca9367c265f157030a08c0b245fbd291edf436d159a4a01e85277aedb06c39a4997f9ad8bb9473ce50a55aae133da7c62d15a0f78a9408aa61a646e038e2867aaa735c481d60c1ab7d6b2c5832eed42e1f6c936aae60cdf2e1597ea65fff55afa5209285851972bfce935476183fe7b4d34858357d14f964804458ec18196876c801f31cea425a20b92cab0cae7014c0b9a4694a925e5ee1e169b022b8b746a9b136ecb200e8e65573d0498ec7347ed60a97707d71921daad44ebb8145e5247a3812019398ee813ca0b55eaf674d04edeb63109bc8c357371e0e9f2c3222caa3a1dca86218475b98b8656e399281845884e7c766f5279808a428c948898d0b4cff49568675cc988a6e14c96ac170595f02b9ec03eeaead77abe8f5421f71f2935e8001cff914c7f7e683f8f982a15ba27bc4a41410a8fef4337326bfbfe85715a56af8086f8db2286e2b4680d94ba38fd9934ee2a9d20c9e7c0a1a5de1e5a7186c98601fa8e3e898d48627268af3abf74ae21a02c265943196113669ce30ba2c6a775799d0e7080e3793608b5f5f3702b941ad802ea27400610ee3140139d967f1db7c065d1b88d1cc654c29acbc9cc6430a5d5fa576e59b72ad79d8efd4919eace9b51d6",
+        "444c5331ec2af2eaf3c764e6e4482cb0e391602132d408f8646cba1181c3f209533e1aefa04bf10644b0a4233f8a0cd02e559c52d55c1ba9033f6625013e24f30b3c0b6cf33c1987dc036c907c1edeca5fe7c25787497d045154edaaeb9d629c1c3e8e167aae392ba4757f97cb074f61f0ca6d8c430eb7ef51fdee7a0aff2520e751b627ef5257a64f3234888e3d60afa2dacb169d33b93006e0c773a2a4c5e1742a4798ed0202dab95cb49109100325d906f0de24682ea8bb65846f0c2897dd1875ca7b78fea6f8336065bf1d76bd38c462e1b114f164fe0b7133feb49bba1ff6eef8f58f79671d3b761bd9256741ad5ed6b6f8cd30c5a783e61cf82ba8c70469f511d0ffdbe34f4b4e7235fcc21a208d2fe7d95cad31d0107e4613ddac0d91c3f11943a935db273e049d29f8633d05740f0bfaf683d903c6c424e4adeac9949644149e9ad34d372053736aa035201fcfb48bc5883bb94ed05ff464c17c3fb90aad1a87d8eb7c2b5d4dd45a0412ad6815145d60b1d4ac45af0477c16e56037a21b1521661cd83befcfba7f1ef1e167060cb83ba8bb90174c35f7391ac3838fe349cd0cd0c9bfeb47020d110281b29d5510ccdab36db09846f16c4698e22990edfbdd3c941f4ffe89563c8c4898897490315fda09529418e802dfaf23d7a049be33f21d10292151556858c33282d69e2f9dd1d5feeba3f134009c6a32591d25761587846a7"
+      ],
+      "expect": {
+        "header": {
+          "v": 1,
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "kind": "file",
+          "title": "A paper",
+          "name": "paper.pdf",
+          "mime": "application/pdf",
+          "size": 1000,
+          "sha256": "57799de80e3dd6e2ac4d40c41a150d1662f7f87d0d994776a2fdc37c39b0ea4e",
+          "sent": "2026-10-17T22:04:00.000Z",
+          "from": "Android"
+        },
+        "contentHex": "0b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6fb20456a8fb4d9fe23486d92b7dc01264b7095badf04294e7398bde2072c51769bc0e50a2f54799ec3e80d32577ca1c6eb10355a7fa4c9ee13385d82a7ccf1163b6085aacff4193e6388add2f71c41668bb0d5fa1f44698eb3d8fd22476c91b6db00254a6f94b9de03284d7297bce1062b50759abfe4092e53789dc2e70c31567ba0c5ea0f34597ea3c8ed12375c81a6cbf0153a5f84a9cef3183d6287acd1f61b40658aafd4f91e43688db2d7fc21466b90b5daff24496e93b8dd02274c7196bbe0052a4f7499bee3082d52779cc1e60b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6fb20456a8fb4d9fe23486d92b7dc01264b7095badf04294e7398bde2072c51769bc0e50a2f54799ec3e80d32577ca1c6eb10355a7fa4c9ee13385d82a7ccf1163b6085aacff4193e6388add2f71c41668bb0d5fa1f44698eb3d8fd22476c91b6db00254a6f94b9de03284d7297bce1062b50759abfe4092e53789dc2e70c31567ba0c5ea0f34597ea3c8ed12375c81a6cbf0153a5f84a9cef3183d6287acd1f61b40658aafd4f91e43688db2d7fc21466b90b5daff24496e93b8dd02274c7196bbe0052a4f7499bee3082d52779cc1e60b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6fb20456a8fb4d9fe23486d92b7dc01264b7095badf04294e7398bde2072c51769bc0e50a2f54799ec3e80d32577ca1c6eb10355a7fa4c9ee13385d82a7ccf1163b6085aacff4193e6388add2f71c41668bb0d5fa1f44698eb3d8fd22476c91b6db00254a6f94b9de03284d7297bce1062b50759abfe4092e53789dc2e70c31567ba0c5ea0f34597ea3c8ed12375c81a6cbf0153a5f84a9cef3183d6287acd1f61b40658aafd4f91e43688db2d7fc21466b90b5daff24496e93b8dd02274c7196bbe0052a4f7499bee3082d52779cc1e60b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6fb20456a8fb4d9fe23486d92b7dc01264b7095badf04294e7398bde2072c51769bc0e50a2f54799ec3e80d32577ca1c6eb10355a7fa4c9ee13385d82a7ccf1163b6085aacff4193e6388add2f71c41668bb0d5fa1f44698eb3d8fd22476c91b6db00254a6f94b9de03284d7297bce1062b50759abfe4092e53789dc2e70c31567ba0c5ea0f34597ea3c8ed12375c81a6cbf0153a5f84a9cef3183d6287acd1f61b40658aafd4f91e43688db2d7fc21466b90b5daff24496e"
+      }
+    },
+    {
+      "name": "text file, deflate-raw, chunked (chunk 300)",
+      "framesHex": [
+        "444c53312ee0a4a48cc98918b79324a878ce9c54b046f16eb7e17da1a71f0ed56770a788ea9137451b31ad6492ab1412543c1f2862f264d8f9ba2767e8128c4bca691b9e1c8f03375a2b54240847a150ff627a7f2c0fe9bf0c50353dc52c5f1c61a76cbff7faf89876434b4f04137fb37143eadbe3a957a440e927adc7c96a57a0594ab78fa81f24cf086040980bc07e1bda04cc638842d3b41d69b79334fd100d512fd163d41120b6a703ddafa0f641a999106068c5eb318fd9e602709eebae6b574904f53ae2bade0815f7632f78ec665d747145da7ad91eebe09e00c78e3bffab24e0d2f0fb7360d83410a391c450382696d427198994bbd7ff76751ac601ac55c15444864185c70206f53e8150c3e8c61999f691188572f1fba4f1ca731d17a3959d3c006e63b44519b45af91ea0602e02560e23b302e8890b4d6ef27e15e7"
+      ],
+      "expect": {
+        "header": {
+          "v": 1,
+          "id": "cccccccccccccccccccccccccccccccc",
+          "kind": "file",
+          "name": "notes.txt",
+          "mime": "text/plain",
+          "size": 5500,
+          "sha256": "0e2ccaa3f9b544ddd8ead223e83b977cfed2d100daa1929c36a76830aa318a82",
+          "enc": "deflate-raw",
+          "sent": "2026-10-17T22:05:00.000Z"
+        },
+        "contentUtf8": "plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text plain text "
+      }
+    },
+    {
+      "name": "url",
+      "framesHex": [
+        "444c533157992a876c2b63de07c976c211bab4903c89d7acf527004c172ec0069af63af1c1fb86b2496c432e67044bfa70ed0e5951603986cc61ed4787f714b91381d37f0bda4f8a5a03eee062f605bc297fd1a83cba93117781c4ea33e311a37de4a8997df0a8dfc805bbda3ea64336ce1ab89a0a5a6f978bbee3732c705b24ba76224654d62899d669b88aed28b4da102e1c8bcd7e78fe96aead56f304ea419ce33b8097d65a22836cb443fc88f10d0a4625a25e26ab1d6473787164522f3e769fdc30da7622278b7495ea55bfbc27408e"
+      ],
+      "expect": {
+        "header": {
+          "v": 1,
+          "id": "dddddddddddddddddddddddddddddddd",
+          "kind": "url",
+          "url": "https://www.newyorker.com/magazine/2026/10/19/example",
+          "title": "Example",
+          "sent": "2026-10-17T22:06:00.000Z"
+        },
+        "contentHex": ""
+      }
+    },
+    {
+      "name": "pdf file, parts delivered out of order",
+      "framesHex": [
+        "444c5331ec2af2eaf3c764e6e4482cb0e391602132d408f8646cba1181c3f209533e1aefa04bf10644b0a4233f8a0cd02e559c52d55c1ba9033f6625013e24f30b3c0b6cf33c1987dc036c907c1edeca5fe7c25787497d045154edaaeb9d629c1c3e8e167aae392ba4757f97cb074f61f0ca6d8c430eb7ef51fdee7a0aff2520e751b627ef5257a64f3234888e3d60afa2dacb169d33b93006e0c773a2a4c5e1742a4798ed0202dab95cb49109100325d906f0de24682ea8bb65846f0c2897dd1875ca7b78fea6f8336065bf1d76bd38c462e1b114f164fe0b7133feb49bba1ff6eef8f58f79671d3b761bd9256741ad5ed6b6f8cd30c5a783e61cf82ba8c70469f511d0ffdbe34f4b4e7235fcc21a208d2fe7d95cad31d0107e4613ddac0d91c3f11943a935db273e049d29f8633d05740f0bfaf683d903c6c424e4adeac9949644149e9ad34d372053736aa035201fcfb48bc5883bb94ed05ff464c17c3fb90aad1a87d8eb7c2b5d4dd45a0412ad6815145d60b1d4ac45af0477c16e56037a21b1521661cd83befcfba7f1ef1e167060cb83ba8bb90174c35f7391ac3838fe349cd0cd0c9bfeb47020d110281b29d5510ccdab36db09846f16c4698e22990edfbdd3c941f4ffe89563c8c4898897490315fda09529418e802dfaf23d7a049be33f21d10292151556858c33282d69e2f9dd1d5feeba3f134009c6a32591d25761587846a7",
+        "444c53310fb703831689422adf0d75ac344388bca2f27778f05895ca21b8ccc8ae2832e2973791d19d3dd3165aba15db7c26f99836c5013c82b7463bc22399ba037fd75486bc3cda949d387f91937f6476beddbb8aa2602df7d4fafd260be886b8ebfb9d3f37e54d2b61e1b591cfafc63a35644135a4ff3e3499788b000c37f55826aebc1b70a3b8edd0bae22136e6b95fedbc26e69a34a4a3e8cc1a7f2ec9203d501d9bd695fe04e4b0bb72d2061ec1dcfee15f238b14c3423bbdda98de6b81a94297ed9ec302e982feac5e581bd48f7f1716ef85728d8dbdc3a6160ee1597ddca56e516f0bb180ef0e603156c8474d3fd94ba56053697e2f03080009bd152fb81fa138626383b65117101d144728ce38ffa4eb447e0fd6a143f84c8e843be01b7bb9a9d7a0e8843185ba55a32f90873fef7fbf5ad4c6a5e82ea74e17bd0d29164175becc15062159043bf44c21bef40a299aee8c842d5293fc591eca7b1deda08c4668e5f3a5b5bc619f2ba0fd2c299c09e2ef5a505088f1ff5c41e3c1d512d590648b316a4331b9c8618aad8c35d013ceb9e272ce7b14e097ed65386cf0fa8794d0585cb1116e2625202c5ff6d6c4c0c63bc16484cafbe5f3012242ff6a315ded29fae349f43e6574246f19cb769d9227f2993d612915b9890d800c6f2593e563eee3e1e27b49d081ac9f104f1ea1ef88062d074f4c764eca46b08055c5b008c1defb63fa39db25c3f7cecb852fe5d05642c4e33154bedd14802fcff6d4cc8bed36c6534a3d6d08bab9f63ce7746a70e717ebedf690843fc7b1d26b38847ae0e3c547b7c372392e2359f0e9360530919ab155b747167e8c409b29cda0f28d6b054a5fbf8113e0ace814af5d9a888871071de63d4192db0a4c8240ed9171860a88952605c6952cb16350ebf4317361a6d7d9d35d5cdaae6992b116efffb7190081cabf46870410602b5b7fdc8b596e5f8abaccbb4aaaacd2231c0f4ec953a4a2505992a08abe2889fece97b0",
+        "444c533191cd908bf5751c3ae3e760c4f9f950fcbdfc361fa9d9250055ba6d03211a34a290944fcb924917d9ad4f87e054992aa588b4a67973996b6e83cd3be959aa990192a4846fb5c2ce9730147dd7cdad2ebc21985e17dafaf6e6d31cd872c4de92460094a283045ea9c0fab5d754394d0f9f988c924384f7890a4acb5e231c1abd63d992f32b73c80e46cb234caccbefeab438d223903c0938240df19925877acc5d17b3c695a60519896e6308f7e50bfff992bccf93536106dd6ffecc4a8e1477a77f72300bd870dc74cd2b5683201f4aa1c7113172b6b0cebcf3cf11ba0b22923cb8a9ca63530de53633b0386f6b841317ab3d55422709a6982e1df0adc07aeb20c185160c6ca9367c265f157030a08c0b245fbd291edf436d159a4a01e85277aedb06c39a4997f9ad8bb9473ce50a55aae133da7c62d15a0f78a9408aa61a646e038e2867aaa735c481d60c1ab7d6b2c5832eed42e1f6c936aae60cdf2e1597ea65fff55afa5209285851972bfce935476183fe7b4d34858357d14f964804458ec18196876c801f31cea425a20b92cab0cae7014c0b9a4694a925e5ee1e169b022b8b746a9b136ecb200e8e65573d0498ec7347ed60a97707d71921daad44ebb8145e5247a3812019398ee813ca0b55eaf674d04edeb63109bc8c357371e0e9f2c3222caa3a1dca86218475b98b8656e399281845884e7c766f5279808a428c948898d0b4cff49568675cc988a6e14c96ac170595f02b9ec03eeaead77abe8f5421f71f2935e8001cff914c7f7e683f8f982a15ba27bc4a41410a8fef4337326bfbfe85715a56af8086f8db2286e2b4680d94ba38fd9934ee2a9d20c9e7c0a1a5de1e5a7186c98601fa8e3e898d48627268af3abf74ae21a02c265943196113669ce30ba2c6a775799d0e7080e3793608b5f5f3702b941ad802ea27400610ee3140139d967f1db7c065d1b88d1cc654c29acbc9cc6430a5d5fa576e59b72ad79d8efd4919eace9b51d6"
+      ],
+      "expect": {
+        "header": {
+          "v": 1,
+          "id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "kind": "file",
+          "title": "A paper",
+          "name": "paper.pdf",
+          "mime": "application/pdf",
+          "size": 1000,
+          "sha256": "57799de80e3dd6e2ac4d40c41a150d1662f7f87d0d994776a2fdc37c39b0ea4e",
+          "sent": "2026-10-17T22:04:00.000Z",
+          "from": "Android"
+        },
+        "contentHex": "0b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6fb20456a8fb4d9fe23486d92b7dc01264b7095badf04294e7398bde2072c51769bc0e50a2f54799ec3e80d32577ca1c6eb10355a7fa4c9ee13385d82a7ccf1163b6085aacff4193e6388add2f71c41668bb0d5fa1f44698eb3d8fd22476c91b6db00254a6f94b9de03284d7297bce1062b50759abfe4092e53789dc2e70c31567ba0c5ea0f34597ea3c8ed12375c81a6cbf0153a5f84a9cef3183d6287acd1f61b40658aafd4f91e43688db2d7fc21466b90b5daff24496e93b8dd02274c7196bbe0052a4f7499bee3082d52779cc1e60b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6fb20456a8fb4d9fe23486d92b7dc01264b7095badf04294e7398bde2072c51769bc0e50a2f54799ec3e80d32577ca1c6eb10355a7fa4c9ee13385d82a7ccf1163b6085aacff4193e6388add2f71c41668bb0d5fa1f44698eb3d8fd22476c91b6db00254a6f94b9de03284d7297bce1062b50759abfe4092e53789dc2e70c31567ba0c5ea0f34597ea3c8ed12375c81a6cbf0153a5f84a9cef3183d6287acd1f61b40658aafd4f91e43688db2d7fc21466b90b5daff24496e93b8dd02274c7196bbe0052a4f7499bee3082d52779cc1e60b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6fb20456a8fb4d9fe23486d92b7dc01264b7095badf04294e7398bde2072c51769bc0e50a2f54799ec3e80d32577ca1c6eb10355a7fa4c9ee13385d82a7ccf1163b6085aacff4193e6388add2f71c41668bb0d5fa1f44698eb3d8fd22476c91b6db00254a6f94b9de03284d7297bce1062b50759abfe4092e53789dc2e70c31567ba0c5ea0f34597ea3c8ed12375c81a6cbf0153a5f84a9cef3183d6287acd1f61b40658aafd4f91e43688db2d7fc21466b90b5daff24496e93b8dd02274c7196bbe0052a4f7499bee3082d52779cc1e60b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186abd0f51a3f6489aed3f81d42678cb1d6fb20456a8fb4d9fe23486d92b7dc01264b7095badf04294e7398bde2072c51769bc0e50a2f54799ec3e80d32577ca1c6eb10355a7fa4c9ee13385d82a7ccf1163b6085aacff4193e6388add2f71c41668bb0d5fa1f44698eb3d8fd22476c91b6db00254a6f94b9de03284d7297bce1062b50759abfe4092e53789dc2e70c31567ba0c5ea0f34597ea3c8ed12375c81a6cbf0153a5f84a9cef3183d6287acd1f61b40658aafd4f91e43688db2d7fc21466b90b5daff24496e"
+      }
+    }
+  ],
+  "invalidFrames": [
+    {
+      "name": "one ciphertext bit flipped",
+      "purpose": "inbox",
+      "frameHex": "444c5331b0e6529125cd4b10ed08f1fb062702e5081d38b7ae28c75501116b3134cdd629c06056e23c9b4514ab21ab36f974b8a30452fc8282974033c048865ca66408c91ef3cbe9a9ed7fcbd7ef19b3f08986c9520998690e8b48e2e255c85937a82fb1c874d4340e490a0acdaceb06c75b45bcde65a8e1211769beea651cdb5296cabe352e37a1c11c5cd1ee016bbe26e12f9d55e39f3abba543e2fcc246c79554456181e3fb36a8b4c2c44f241ea0beb5bcf06d8b6f5db0f7c5e464d7efc19a55643e548fcb478f60057208dff50f911b50f925ab2c200878758bf0038a38d2488431c48b8f319f9552f249f316a8e71f5d4074b69654ca9a016fb5c45afffd4fad403970d64be7536c8908f876ec36f3e9084c"
+    },
+    {
+      "name": "bad magic",
+      "purpose": "inbox",
+      "frameHex": "444c5332b0e6529125cd4b10ed08f1fb062702e5081d38b7ae28c75501116b3134cdd629c06056e23c9b4514ab21ab36f974b8a30452fc8282974033c048865ca66408c91ef3cbe9a9ed7fcbd7ef19b3f08986c9520998690e8b48e2e255c85937a82fb1c874d4340e490a0acdaceb06c75b45bcde65a8e1211769beea651cdb5296cabe352e37a1c11c5cd1ee016bbe26e12f9d55e39f3abba543e2fcc246c79554456181e3fb36a8b4c2c44f241ea0beb5bcf06d8b6f5db0f7c5e464d7efc19a55643e548fcb478f60057208dff50f911b50f925ab2c200878758bf0038a38d2488431c48b8f319f9552f249f316a8e71f5d4074b69654ca9a016fb5c45afffd4ead403970d64be7536c8908f876ec36f3e9084c"
+    },
+    {
+      "name": "ack frame read as an inbox frame (aad differs)",
+      "purpose": "inbox",
+      "frameHex": "444c5331e06159fcb44cd928a125dee7e25af28bf2d514b0534ffe5daa70bf0b539a06f4817a6cc443d29b0e3a2996485cd84d7ea5c591522673944731333cfde12052e9e76691f0c65046da44674a6b83ae1a4f8ffb8256e490b106813dbc0fbffdf9c9f17ec6e1380c91599320847fb88329f9386c64b5bad852f924e7691622fb84488d9d05e9b9b03ac475387755c06efc0f970acc"
+    },
+    {
+      "name": "inbox frame read as an ack frame",
+      "purpose": "ack",
+      "frameHex": "444c5331b0e6529125cd4b10ed08f1fb062702e5081d38b7ae28c75501116b3134cdd629c06056e23c9b4514ab21ab36f974b8a30452fc8282974033c048865ca66408c91ef3cbe9a9ed7fcbd7ef19b3f08986c9520998690e8b48e2e255c85937a82fb1c874d4340e490a0acdaceb06c75b45bcde65a8e1211769beea651cdb5296cabe352e37a1c11c5cd1ee016bbe26e12f9d55e39f3abba543e2fcc246c79554456181e3fb36a8b4c2c44f241ea0beb5bcf06d8b6f5db0f7c5e464d7efc19a55643e548fcb478f60057208dff50f911b50f925ab2c200878758bf0038a38d2488431c48b8f319f9552f249f316a8e71f5d4074b69654ca9a016fb5c45afffd4ead403970d64be7536c8908f876ec36f3e9084c"
+    },
+    {
+      "name": "sealed with another pairing",
+      "purpose": "inbox",
+      "frameHex": "444c533190d9f9739bf023b3389adffc2084568274b350e3ae1deb2481ede12362724f59fedad972fbcc748351086bebb73dc35d02ac6533b83ae66c9dd0054c2a99418cc8922ab098f9827a0ceed85d7bbf1f4fe50c7ed5f599a1b3b486459805a6b8033dddb8efbf0c142d5e9bfc40fabfe7fddafeb770b42a379d659534f45dd45e2bf5e796adc7c0149296053b9a5a5c7ce7b8edb66a6cf22fca69b672636853fc691ac061e3d4ea5b140d7597bda280e373b71875214e1bcc6190c25b16c14dfe2559615fd0c3456382c0b99af0ae3a757c658dd1a0b4b6bdd44bf6a05b32133379be37fcb3c30debe0190785938dfe9e17342c413ba37400c58059667079d6cb8f563218fab473366c20727ad4e571c5e82e"
+    },
+    {
+      "name": "truncated",
+      "purpose": "inbox",
+      "frameHex": "444c5331b0e6529125cd4b10ed08f1fb062702e5081d38b7ae28c7550111"
+    }
+  ],
+  "badHeaders": [
+    {
+      "name": "javascript url",
+      "header": {
+        "v": 1,
+        "id": "00112233445566778899aabbccddeeff",
+        "kind": "url",
+        "url": "javascript:alert(1)",
+        "sent": ""
+      }
+    },
+    {
+      "name": "file url scheme",
+      "header": {
+        "v": 1,
+        "id": "00112233445566778899aabbccddeeff",
+        "kind": "url",
+        "url": "file:///etc/passwd",
+        "sent": ""
+      }
+    },
+    {
+      "name": "short id",
+      "header": {
+        "v": 1,
+        "id": "0011",
+        "kind": "url",
+        "url": "https://example.com",
+        "sent": ""
+      }
+    },
+    {
+      "name": "unknown kind",
+      "header": {
+        "v": 1,
+        "id": "00112233445566778899aabbccddeeff",
+        "kind": "exe",
+        "url": "https://example.com",
+        "sent": ""
+      }
+    },
+    {
+      "name": "file without sha256",
+      "header": {
+        "v": 1,
+        "id": "00112233445566778899aabbccddeeff",
+        "kind": "file",
+        "name": "a.pdf",
+        "mime": "application/pdf",
+        "size": 3,
+        "sent": ""
+      }
+    },
+    {
+      "name": "part out of range",
+      "header": {
+        "v": 1,
+        "id": "00112233445566778899aabbccddeeff",
+        "kind": "file",
+        "name": "a.pdf",
+        "mime": "application/pdf",
+        "size": 3,
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "part": 3,
+        "parts": 3,
+        "sent": ""
+      }
+    },
+    {
+      "name": "unknown enc",
+      "header": {
+        "v": 1,
+        "id": "00112233445566778899aabbccddeeff",
+        "kind": "file",
+        "name": "a.pdf",
+        "mime": "application/pdf",
+        "size": 3,
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "enc": "gzip",
+        "sent": ""
+      }
+    }
+  ],
+  "fileNames": [
+    {
+      "input": "../../etc/passwd",
+      "expect": "etc passwd"
+    },
+    {
+      "input": "C:\\Users\\me\\report.pdf",
+      "expect": "C Users me report.pdf"
+    },
+    {
+      "input": "  .hidden.pdf ",
+      "expect": "hidden.pdf"
+    },
+    {
+      "input": "",
+      "expect": "document"
+    },
+    {
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.pdf",
+      "expect": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.pdf"
+    }
+  ]
+}

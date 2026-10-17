@@ -1,0 +1,43 @@
+name: Reader experiment - share protocol
+
+# Tests the Daylight Share protocol's JavaScript reference implementation and its vectors, then does a live round
+# trip through https://ntfy.sh to prove the relay behaves as the protocol assumes.
+on:
+  push:
+    branches: [claude/sweet-goldberg-ej1nb0]
+    paths:
+      - 'reader-experiment/share/**'
+      - '.github/workflows/rx-share.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '17 9 * * *'   # daily: catch relay behaviour changes
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reader-experiment/share
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Vectors are up to date
+        run: |
+          cp vectors/test-vectors.json /tmp/committed.json
+          node vectors/generate.mjs
+          # deflate output can differ between zlib builds, so compare everything except the frames that hold it
+          node -e '
+            const a = require("/tmp/committed.json"), b = require("./vectors/test-vectors.json");
+            const strip = (v) => ({ ...v, items: v.items.map((i) => ({ name: i.name, expect: i.expect })) });
+            if (JSON.stringify(strip(a)) !== JSON.stringify(strip(b))) { console.error("test-vectors.json is stale: run node vectors/generate.mjs"); process.exit(1); }
+          '
+          cp /tmp/committed.json vectors/test-vectors.json
+      - name: Unit and mock-relay tests
+        run: node --test js/test/*.test.mjs
+      - name: Live round trip through ntfy.sh
+        run: node js/live-ntfy.mjs https://ntfy.sh
