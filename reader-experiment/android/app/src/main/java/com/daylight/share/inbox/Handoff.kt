@@ -213,15 +213,18 @@ object Handoff {
             cancelNotification(context)
             return
         }
-        if (HandoffActivity.running) return
+        // One hand-off at a time: it picks up whatever arrives while it runs.
+        if (HandoffActivity.running || System.currentTimeMillis() - HandoffActivity.requestedAt < 5_000) return
         val front: Activity? = app.front
         when {
             app.inForeground && front != null -> {
+                HandoffActivity.requestedAt = System.currentTimeMillis()
                 front.startActivity(HandoffActivity.intent(context, HandoffActivity.MODE_ALL))
             }
             canHandOffInBackground(context) -> {
                 val auto = waiting.filter { it.kind != Kind.FILE || app.prefs.autoDocuments }
                 if (auto.isNotEmpty()) {
+                    HandoffActivity.requestedAt = System.currentTimeMillis()
                     try {
                         context.startActivity(HandoffActivity.intent(context, HandoffActivity.MODE_AUTO).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                     } catch (e: Exception) {

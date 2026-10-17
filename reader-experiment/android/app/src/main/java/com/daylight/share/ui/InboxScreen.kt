@@ -54,7 +54,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
     val app = App.of(activity)
-    val items by app.inbox.items.collectAsStateWithLifecycle()
+    val received by app.inbox.items.collectAsStateWithLifecycle()
     val pairing by app.inbox.pairingFlow.collectAsStateWithLifecycle()
     val sync by app.inbox.sync.collectAsStateWithLifecycle()
     val live by Live.state.collectAsStateWithLifecycle()
@@ -78,7 +78,7 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
-    val pairingOpen = showPairing ?: items.isEmpty()
+    val pairingOpen = showPairing ?: received.isEmpty()
 
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -128,7 +128,7 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         SecondaryButton("Reset pairing") { confirmReset = true }
-                        if (items.isNotEmpty()) SecondaryButton("Hide") { showPairing = false }
+                        if (received.isNotEmpty()) SecondaryButton("Hide") { showPairing = false }
                     }
                 }
             }
@@ -195,10 +195,10 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
                 }
             }
         }
-        if (items.isEmpty()) item {
+        if (received.isEmpty()) item {
             Text("Nothing yet. Share a link or a file from a paired phone with “Send to Daylight”.", style = MaterialTheme.typography.bodyMedium)
         }
-        items(items, key = { it.id }) { item -> ItemRow(activity, item, readers.isNotEmpty()) }
+        items(received, key = { it.id }) { item -> ItemRow(activity, item, readers.isNotEmpty()) }
     }
 
     if (confirmReset) {

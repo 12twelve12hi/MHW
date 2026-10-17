@@ -62,8 +62,10 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk out/daylight-share.apk
           cp app/build/outputs/apk/debug/app-debug.apk out/daylight-share-debug.apk
           ls -la out
-          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs out/daylight-share.apk | head -5 || true
-          "$ANDROID_HOME"/build-tools/*/aapt2 dump badging out/daylight-share.apk | head -3 || true
+          bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$bt/apksigner" verify --print-certs out/daylight-share.apk | head -3 || true
+          "$bt/aapt2" dump badging out/daylight-share.apk | grep -E "^(package|sdkVersion|targetSdkVersion|uses-permission|launchable)" || true
+          "$bt/aapt2" dump xmltree --file AndroidManifest.xml out/daylight-share.apk | grep -E "E: (activity|service|receiver|provider|action|data|queries|package|intent)|A: android:(name|scheme|host|mimeType|exported|foregroundServiceType|authorities|taskAffinity|launchMode)" | head -150 || true
 
       - uses: actions/upload-artifact@v4
         with:

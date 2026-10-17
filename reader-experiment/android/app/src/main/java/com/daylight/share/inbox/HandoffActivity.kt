@@ -41,6 +41,7 @@ class HandoffActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         running = true
+        requestedAt = 0L
         mode = intent?.getStringExtra(EXTRA_MODE) ?: MODE_ALL
         setContent { DaylightTheme { StatusCard(message.value) } }
         lifecycleScope.launch {
@@ -210,6 +211,10 @@ class HandoffActivity : ComponentActivity() {
 
         @Volatile
         var running = false
+
+        /** When a hand-off was last asked for (it takes a moment to start). */
+        @Volatile
+        var requestedAt = 0L
 
         fun intent(context: Context, mode: String): Intent =
             Intent(context, HandoffActivity::class.java).putExtra(EXTRA_MODE, mode)

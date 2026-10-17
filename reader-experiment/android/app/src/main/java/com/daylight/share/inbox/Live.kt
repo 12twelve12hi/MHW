@@ -55,12 +55,12 @@ object Live {
         app.scope.launch {
             combine(holders, app.role, app.inbox.pairingFlow) { h, role, pairing -> Triple(h.isNotEmpty(), role, pairing) }
                 .collectLatest { (wanted, role, pairing) ->
-                    if (wanted && role == Role.INBOX && pairing != null) run(app) else _state.value = State.OFF
+                    if (wanted && role == Role.INBOX && pairing != null) { connect(app) } else { _state.value = State.OFF }
                 }
         }
     }
 
-    private suspend fun run(app: App) {
+    private suspend fun connect(app: App) {
         var backoff = 2_000L
         try {
             while (true) {

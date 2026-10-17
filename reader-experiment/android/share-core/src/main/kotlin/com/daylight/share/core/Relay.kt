@@ -7,7 +7,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
-import java.net.URL
+import java.net.URI
 import java.net.URLEncoder
 
 /** The HTTP the relay client needs. [UrlConnectionHttp] is the default; tests or the Reader may plug in another. */
@@ -32,7 +32,7 @@ interface Http {
 open class UrlConnectionHttp(private val userAgent: String = "DaylightShare/1") : Http {
     var connectTimeoutMs = 15_000
 
-    protected open fun open(url: String): HttpURLConnection = URL(url).openConnection() as HttpURLConnection
+    protected open fun open(url: String): HttpURLConnection = URI(url).toURL().openConnection() as HttpURLConnection
 
     override fun send(method: String, url: String, headers: Map<String, String>, body: ByteArray?, maxResponseBytes: Long, readTimeoutMs: Int): Http.Response {
         val c = open(url)

@@ -89,7 +89,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleLink(intent: Intent?) {
         val data = intent?.data ?: return
-        if (intent.action != Intent.ACTION_VIEW || data.scheme != Pairing.SCHEME) return
+        if (data.scheme != Pairing.SCHEME || (intent.action != null && intent.action != Intent.ACTION_VIEW)) return
         when (data.host) {
             "pair" -> {
                 val p = try {
@@ -127,6 +127,8 @@ class MainActivity : ComponentActivity() {
             return
         }
         q["n"]?.takeIf { it.isNotBlank() }?.let { app.prefs.deviceName = it }
+        // No permission prompt over the Inbox in automated runs (grant POST_NOTIFICATIONS with adb if needed).
+        app.prefs.askedNotifications = true
         q["instant"]?.let { app.prefs.instantDelivery = it == "1" || it == "true" }
         q["auto"]?.let { app.prefs.autoDocuments = it == "1" || it == "true" }
         when (q["role"]) {

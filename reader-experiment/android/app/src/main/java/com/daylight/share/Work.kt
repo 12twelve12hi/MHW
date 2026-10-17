@@ -2,8 +2,6 @@ package com.daylight.share
 
 import android.app.Notification
 import android.content.Context
-import android.content.pm.ServiceInfo
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -79,7 +77,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setSilent(true)
             .build()
-        return if (Build.VERSION.SDK_INT >= 29) ForegroundInfo(4711, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE)
-        else ForegroundInfo(4711, n)
+        // No service type: this only runs on Android 11 and older, where types are not enforced.
+        return ForegroundInfo(4711, n)
     }
 }
