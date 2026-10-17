@@ -49,7 +49,7 @@ sleep 3; shot "$OUT/11-after-page.png"
 
 # 2. A plain link: the Reader fetches it itself (needs the emulator's internet; reported, not required).
 n="$(reader_library_count)"
-url1="$(node "$here/sender.mjs" send-url https://example.com/)"; echo "sent link $url1"
+url1="$(node "$here/sender.mjs" send-url https://example.org/)"; echo "sent link $url1"
 wait_handoff "$url1" 120
 if wait_library_at_least $((n + 1)) 60; then echo "link saved"; else echo "link handed over but not saved (no internet on the emulator?)"; fi
 
