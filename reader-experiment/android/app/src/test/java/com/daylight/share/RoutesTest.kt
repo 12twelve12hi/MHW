@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import androidx.core.content.FileProvider
 import androidx.test.core.app.ApplicationProvider
 import com.daylight.share.core.Kind
 import com.daylight.share.inbox.InboxItem
@@ -14,6 +15,7 @@ import com.daylight.share.inbox.Routes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -27,6 +29,17 @@ import java.io.File
 class RoutesTest {
     private val ctx: Context = ApplicationProvider.getApplicationContext()
     private val main = ReaderApps.MAIN
+
+    /** FileProvider caches its roots in a static map; every Robolectric test has a new files folder. */
+    @Before
+    fun clearFileProviderCache() {
+        FileProvider::class.java.declaredFields
+            .filter { java.lang.reflect.Modifier.isStatic(it.modifiers) && Map::class.java.isAssignableFrom(it.type) }
+            .forEach { f ->
+                f.isAccessible = true
+                (f.get(null) as? MutableMap<*, *>)?.clear()
+            }
+    }
 
     private fun install(pkg: String, savePage: Boolean, send: Boolean) {
         val pm = shadowOf(ctx.packageManager)

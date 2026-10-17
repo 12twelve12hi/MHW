@@ -43,7 +43,8 @@ class HandoffActivity : ComponentActivity() {
         running = true
         requestedAt = 0L
         mode = intent?.getStringExtra(EXTRA_MODE) ?: MODE_ALL
-        setContent { DaylightTheme { StatusCard(message.value) } }
+        // Our card shows only until the Reader's own card is up (two stacked cards look messy on e-paper).
+        setContent { DaylightTheme { if (message.value.isNotEmpty()) StatusCard(message.value) } }
         lifecycleScope.launch {
             try {
                 val handed = runQueue()
@@ -160,6 +161,7 @@ class HandoffActivity : ComponentActivity() {
      * routes without an answer), or null when the intent could not be started.
      */
     private suspend fun start(route: Route, item: InboxItem?): String? {
+        message.value = ""
         if (route.path.expectsResult) {
             val d = CompletableDeferred<ActivityResult>()
             pending = d

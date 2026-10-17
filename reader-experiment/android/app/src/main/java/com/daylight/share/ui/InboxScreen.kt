@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -61,6 +62,9 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
     val resumes = activity.resumes.intValue
     val readers = remember(resumes) { ReaderApps.installed(activity) }
     val overlay = remember(resumes) { Settings.canDrawOverlays(activity) }
+    val unrestricted = remember(resumes) {
+        activity.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(activity.packageName) == true
+    }
     val notifOk = remember(resumes) {
         Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     }
@@ -153,6 +157,16 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
                         },
                         colors = SwitchDefaults.colors(checkedTrackColor = Ink, checkedThumbColor = Paper, uncheckedBorderColor = Ink, uncheckedThumbColor = Ink),
                     )
+                }
+                if (instant && !unrestricted) {
+                    Text("With the screen off, Android pauses connections to save battery. Let Daylight Share run unrestricted to keep Instant delivery instant.", style = MaterialTheme.typography.bodySmall)
+                    SecondaryButton("Allow running in the background") {
+                        try {
+                            activity.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${activity.packageName}")))
+                        } catch (e: ActivityNotFoundException) {
+                            activity.notice.value = "Open Settings › Apps › Daylight Share › Battery and choose Unrestricted."
+                        }
+                    }
                 }
                 HorizontalDivider(color = Ink)
                 // Android blocks apps from opening other apps from the background, unless "Display over other apps" is on.

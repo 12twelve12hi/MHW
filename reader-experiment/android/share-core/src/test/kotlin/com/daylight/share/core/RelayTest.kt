@@ -177,6 +177,29 @@ class RelayTest {
     }
 
     @Test
+    fun anItemThatCannotBeStoredIsNotAckedAndComesBack() {
+        val p = pairing()
+        val out = outbox(p)
+        val row = out.add(OutgoingItem(Kind.URL, url = "https://example.com/disk-full"), null)
+        out.publish(row.id)
+        var full = true
+        val got = ArrayList<String>()
+        val dir = createTempDirectory("dls-full").toFile()
+        val receiver = Receiver(p, FileReceiverStore(File(dir, "state.json")), Reassembler(), from = "T") { done ->
+            if (full) throw java.io.IOException("disk full")
+            got += done.header.id
+        }
+        val first = receiver.pollOnce()
+        assertTrue(first.items.isEmpty())
+        assertTrue(first.ackIds.isEmpty())
+        assertEquals(0, out.checkAcks())
+        full = false
+        assertEquals(listOf(row.id), receiver.pollOnce().items.map { it.id })
+        assertEquals(listOf(row.id), got)
+        assertEquals(1, out.checkAcks())
+    }
+
+    @Test
     fun junkOnTheTopicIsIgnored() {
         val p = pairing()
         val http = UrlConnectionHttp()

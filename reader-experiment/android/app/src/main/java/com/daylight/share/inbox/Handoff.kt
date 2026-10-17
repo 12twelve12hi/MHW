@@ -92,6 +92,14 @@ object Routes {
 
     fun uriFor(context: Context, file: File): Uri = FileProvider.getUriForFile(context, context.packageName + AUTHORITY_SUFFIX, file)
 
+    /** [uriFor], or null (logged) when the file cannot be shared: the item then stays in the Inbox. */
+    private fun uriOrNull(context: Context, file: File): Uri? = try {
+        uriFor(context, file)
+    } catch (e: IllegalArgumentException) {
+        com.daylight.share.logw("cannot share ${file.name}: ${e.message}")
+        null
+    }
+
     private fun resolves(context: Context, intent: Intent): Boolean =
         runCatching { context.packageManager.queryIntentActivities(intent, 0).isNotEmpty() }.getOrDefault(false)
 
@@ -104,7 +112,7 @@ object Routes {
             for (pkg in pkgs) sendLink(context, pkg, url, item.title)?.let { out += it }
             for (pkg in pkgs) viewLink(context, pkg, url)?.let { out += it }
         } else if (file != null) {
-            val uri = uriFor(context, file)
+            val uri = uriOrNull(context, file) ?: return out
             val mime = item.mime?.takeIf { it.contains('/') } ?: "application/octet-stream"
             for (pkg in pkgs) {
                 sendFile(pkg, uri, mime, item, Path.SEND_FILE).takeIf { resolves(context, it) }?.let { out += Route(pkg, Path.SEND_FILE, it) }
@@ -125,8 +133,8 @@ object Routes {
         val url = item.url ?: return null
         val i = Intent(ReaderApps.ACTION_SAVE_PAGE).setPackage(pkg).putExtra(Intent.EXTRA_TEXT, url)
         item.title?.let { i.putExtra(ReaderApps.EXTRA_TITLE, it) }
-        if (item.kind == Kind.PAGE && file != null && file.length() <= Limits.MAX_PAGE_HTML) {
-            val uri = uriFor(context, file)
+        val uri = if (item.kind == Kind.PAGE && file != null && file.length() <= Limits.MAX_PAGE_HTML) uriOrNull(context, file) else null
+        if (uri != null) {
             i.clipData = ClipData(ClipDescription(item.title ?: "page", arrayOf("text/html")), ClipData.Item(uri))
             i.putExtra(ReaderApps.EXTRA_HTML_CHARSET, "utf-8")
             i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -156,7 +164,7 @@ object Routes {
     /** Several documents at once to one Reader (it adds them to the library instead of opening each). */
     fun sendMultiple(context: Context, pkg: String, items: List<Pair<InboxItem, File>>): Route? {
         if (items.size < 2) return null
-        val uris = ArrayList(items.map { uriFor(context, it.second) })
+        val uris = ArrayList(items.map { uriOrNull(context, it.second) ?: return null })
         val mimes = items.map { it.first.mime?.takeIf { m -> m.contains('/') } ?: "application/octet-stream" }
         val type = when {
             mimes.distinct().size == 1 -> mimes[0]
@@ -175,7 +183,7 @@ object Routes {
     /** "Open with…": any app, through the system chooser. */
     fun openWith(context: Context, item: InboxItem, file: File?): Intent? {
         val view = when {
-            file != null -> Intent(Intent.ACTION_VIEW).setDataAndType(uriFor(context, file), item.mime ?: "application/octet-stream")
+            file != null -> Intent(Intent.ACTION_VIEW).setDataAndType(uriOrNull(context, file) ?: return null, item.mime ?: "application/octet-stream")
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             item.url != null -> Intent(Intent.ACTION_VIEW, Uri.parse(item.url))
             else -> return null

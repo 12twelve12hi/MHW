@@ -130,7 +130,7 @@ class ShareActivity : ComponentActivity() {
             val url = Text.findUrl(raw)
             if (url != null) {
                 // "Title https://..." from apps that put both in the text.
-                val rest = raw.replace(url, " ").replace(Regex("\\s+"), " ").trim().trim('-', '—', ':', '|').trim()
+                val rest = raw.replace(Regex(Regex.escape(url) + "[),.;!?]*"), " ").replace(Regex("\\s+"), " ").trim().trim('-', '—', ':', '|').trim()
                 val title = subject ?: rest.takeIf { it.isNotEmpty() && it.length <= 300 && !it.contains("http") }
                 return listOf(Shared.Link(url, title))
             }
