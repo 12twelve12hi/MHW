@@ -37,14 +37,10 @@ import com.daylight.share.Prefs
 import com.daylight.share.Role
 import com.daylight.share.core.Limits
 import com.daylight.share.core.Relay
-import com.daylight.share.core.RelayProbe
 import com.daylight.share.core.ShareException
-import com.daylight.share.core.UrlConnectionHttp
 import com.daylight.share.inbox.InstantDeliveryService
 import com.daylight.share.inbox.ReaderApps
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /** First launch: which device is this? */
 @Composable
@@ -131,43 +127,31 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
             if (checking) Text("Checking the relay: sending a 2 MB test file through it…", style = MaterialTheme.typography.bodyMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 SecondaryButton("Save relay", enabled = !checking) {
-                    val r = try {
-                        Relay.normalize(relay)
-                    } catch (e: ShareException) {
-                        relayError = e.message
-                        return@SecondaryButton
-                    }
                     if (role != Role.INBOX) {
-                        // Same secret, another relay: the outbox stays and pending items go through the new relay.
-                        app.sender.setRelay(r)
-                        relay = r
-                        saved = "Relay saved."
+                        try {
+                            val r = Relay.normalize(relay)
+                            // Same secret, another relay: the outbox stays and pending items go through the new relay.
+                            app.sender.setRelay(r)
+                            relay = r
+                            saved = "Relay saved."
+                        } catch (e: ShareException) {
+                            relayError = e.message
+                        }
                         return@SecondaryButton
                     }
-                    if (r == app.prefs.inboxRelay) {
-                        relay = r
-                        saved = "Relay saved."
-                        return@SecondaryButton
-                    }
+                    val before = app.prefs.inboxRelay
                     checking = true
                     relayError = null
                     scope.launch {
                         // A relay other than ntfy.sh must take the largest frame a sender makes and give it back.
-                        val failure = if (r == Limits.DEFAULT_RELAY) null else withContext(Dispatchers.IO) {
-                            runCatching { RelayProbe.check(r, UrlConnectionHttp("DaylightShare/${BuildConfig.VERSION_NAME} (inbox)")) }
-                                .getOrElse { e -> e as? ShareException ?: ShareException("relay", RelayProbe.UNREACHABLE, RelayProbe.REASON_NETWORK) }
-                        }
+                        val failure = app.inbox.saveRelay(relay)
                         checking = false
                         if (failure != null) {
-                            relayError = failure.message // the relay is not saved
+                            relayError = failure // the relay in use stays
                             return@launch
                         }
-                        app.prefs.inboxRelay = r
-                        app.prefs.inboxRelayChecked = r
-                        app.prefs.inboxRelayWarning = null
-                        app.inbox.refreshPairing()
-                        relay = r
-                        saved = "Relay saved. Scan the code again on your phones: it now carries the new relay."
+                        relay = app.prefs.inboxRelay
+                        saved = if (relay == before) "Relay saved." else "Relay saved. Scan the code again on your phones: it now carries the new relay."
                     }
                 }
                 SecondaryButton("Use ntfy.sh", enabled = !checking) { relay = Limits.DEFAULT_RELAY }

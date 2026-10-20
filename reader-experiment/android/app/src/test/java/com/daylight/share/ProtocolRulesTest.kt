@@ -11,6 +11,7 @@ import com.daylight.share.core.Kind
 import com.daylight.share.core.OutboxRow
 import com.daylight.share.core.Reassembler
 import com.daylight.share.core.RelayException
+import com.daylight.share.core.RelayProbe
 import com.daylight.share.core.ShareException
 import com.daylight.share.core.Status
 import com.daylight.share.inbox.InboxItem
@@ -21,9 +22,11 @@ import com.daylight.share.sender.ShareActivity
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import kotlinx.coroutines.runBlocking
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -130,6 +133,25 @@ class ProtocolRulesTest {
         assertEquals("The relay isn’t working right now (error 502). It will keep trying.", InboxText.forFailure(RelayException("relay", "x", 502)))
         assertEquals(InboxText.OFFLINE, InboxText.forFailure(IOException("x")))
         assertEquals("Your Daylight is out of space, so new items can’t be saved. Free some space.", InboxText.OUT_OF_SPACE)
+    }
+
+    @Test
+    fun aRelayThatFailsTheCheckIsNotSaved() = runBlocking {
+        val before = app.prefs.inboxRelay
+        assertEquals(RelayProbe.UNREACHABLE, app.inbox.saveRelay("http://127.0.0.1:9"))
+        assertEquals(before, app.prefs.inboxRelay)
+        val tooSmall = ShareException("relay", RelayProbe.TOO_SMALL, "status", status = 413)
+        assertEquals(RelayProbe.TOO_SMALL, app.inbox.saveRelay("https://relay.example.org", probe = { tooSmall }))
+        assertEquals("The relay must be an http(s) address.", app.inbox.saveRelay("ftp://relay.example.org"))
+        assertEquals(before, app.prefs.inboxRelay)
+        // A relay that passes is saved, and the pairing link carries it.
+        assertNull(app.inbox.saveRelay("https://Relay.Example.org/ntfy/", probe = { null }))
+        assertEquals("https://relay.example.org/ntfy", app.prefs.inboxRelay)
+        assertEquals("https://relay.example.org/ntfy", app.inbox.ensurePairing().relay)
+        assertNull(app.prefs.inboxRelayWarning)
+        // ntfy.sh needs no check.
+        assertNull(app.inbox.saveRelay("", probe = { fail("checked ntfy.sh"); null }))
+        assertEquals("https://ntfy.sh", app.prefs.inboxRelay)
     }
 
     // --------------------------------------------------------------------------------------------- the sender

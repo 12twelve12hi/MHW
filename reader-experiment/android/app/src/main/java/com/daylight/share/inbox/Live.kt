@@ -96,7 +96,8 @@ object Live {
                     throw e
                 } catch (e: Exception) {
                     logw("live: ${e.message ?: e.javaClass.simpleName}")
-                    app.inbox.sync.value = app.inbox.sync.value.copy(live = false, error = e.message)
+                    // The Inbox shows one of its sentences (CHANGES-v1.1 2.5), not the technical message.
+                    app.inbox.sync.value = app.inbox.sync.value.copy(live = false, error = InboxText.forFailure(e))
                 }
                 app.inbox.sync.value = app.inbox.sync.value.copy(live = false)
                 if (System.currentTimeMillis() - opened > 60_000) backoff = 2_000L

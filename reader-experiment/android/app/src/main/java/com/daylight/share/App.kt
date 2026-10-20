@@ -14,9 +14,7 @@ import com.daylight.share.core.Limits
 import com.daylight.share.core.Pairing
 import com.daylight.share.core.Relay
 import com.daylight.share.core.RelayProbe
-import com.daylight.share.core.ShareException
 import com.daylight.share.core.Text
-import com.daylight.share.core.UrlConnectionHttp
 import com.daylight.share.inbox.DocumentMode
 import com.daylight.share.inbox.InboxRepo
 import com.daylight.share.inbox.InstantDeliveryService
@@ -74,8 +72,7 @@ class App : Application() {
         val relay = prefs.inboxRelay
         if (relay == Limits.DEFAULT_RELAY || prefs.inboxRelayChecked == relay) return
         scope.launch(Dispatchers.IO) {
-            val failure = runCatching { RelayProbe.check(relay, UrlConnectionHttp("DaylightShare/${BuildConfig.VERSION_NAME} (inbox)")) }
-                .getOrElse { e -> e as? ShareException ?: ShareException("relay", RelayProbe.UNREACHABLE, RelayProbe.REASON_NETWORK) }
+            val failure = inbox.checkRelay(relay)
             if (prefs.inboxRelay != relay) return@launch // changed meanwhile: Save checked it
             if (failure?.reason == RelayProbe.REASON_NETWORK) {
                 logi("relay check of $relay: not reachable now; trying again at the next start")

@@ -9,11 +9,14 @@ import com.daylight.share.core.FileReceiverStore
 import com.daylight.share.core.ItemHeader
 import com.daylight.share.core.JsonFiles
 import com.daylight.share.core.Kind
+import com.daylight.share.core.Limits
 import com.daylight.share.core.Pairing
 import com.daylight.share.core.Reassembler
 import com.daylight.share.core.Receiver
+import com.daylight.share.core.Relay
 import com.daylight.share.core.RelayClient
 import com.daylight.share.core.RelayMessage
+import com.daylight.share.core.RelayProbe
 import com.daylight.share.core.ShareException
 import com.daylight.share.core.UrlConnectionHttp
 import com.daylight.share.logi
@@ -181,6 +184,38 @@ class InboxRepo(private val app: App) {
         app.prefs.inboxRelay = p.relay
         receiver = null
         _pairing.value = Pairing(p.secret, p.relay, app.prefs.deviceName)
+    }
+
+    /** The relay check (PROTOCOL 3.4) of [relay]: null when it passes, else the failure with its sentence. */
+    fun checkRelay(relay: String): ShareException? =
+        runCatching { RelayProbe.check(relay, UrlConnectionHttp("DaylightShare/${BuildConfig.VERSION_NAME} (inbox)")) }
+            .getOrElse { e -> e as? ShareException ?: ShareException("relay", RelayProbe.UNREACHABLE, RelayProbe.REASON_NETWORK) }
+
+    /**
+     * Settings › Relay › Save on the Inbox: a relay other than ntfy.sh is saved only when it passes the relay check
+     * (it takes the largest frame a sender makes and gives it back). Returns null when saved, else the sentence to show;
+     * the relay in use then stays.
+     */
+    suspend fun saveRelay(input: String, probe: (String) -> ShareException? = ::checkRelay): String? = withContext(Dispatchers.IO) {
+        val r = try {
+            Relay.normalize(input)
+        } catch (e: ShareException) {
+            return@withContext e.message ?: "That relay address isn’t valid."
+        }
+        if (r == app.prefs.inboxRelay) return@withContext null
+        if (r != Limits.DEFAULT_RELAY) {
+            val failure = runCatching { probe(r) }.getOrElse { e -> e as? ShareException ?: ShareException("relay", RelayProbe.UNREACHABLE, RelayProbe.REASON_NETWORK) }
+            if (failure != null) {
+                logi("inbox: relay $r not saved: ${failure.message}")
+                return@withContext failure.message ?: RelayProbe.UNREACHABLE
+            }
+        }
+        app.prefs.inboxRelay = r
+        app.prefs.inboxRelayChecked = r
+        app.prefs.inboxRelayWarning = null
+        refreshPairing()
+        logi("inbox: relay saved: $r")
+        null
     }
 
     /** Re-reads the relay and the name from the settings. */
