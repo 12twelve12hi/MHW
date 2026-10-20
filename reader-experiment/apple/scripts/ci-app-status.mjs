@@ -1,7 +1,8 @@
 // CI: checks a Send to Daylight app through the status file it writes when launched with -DLSStatusDump
 // (AppModel.noteRendered: written on the first render, after every change, and once a second as a heartbeat).
 //
-//   node ci-app-status.mjs render  <status.json> <seconds>                  renders within <seconds>, then stays responsive
+//   node ci-app-status.mjs render  <status.json> <seconds> [start ms]       renders within <seconds> of [start] (default:
+//                                                                           now), then stays responsive
 //   node ci-app-status.mjs storage <status.json> private|shared             where it keeps the pairing and history
 //   node ci-app-status.mjs row     <status.json> <url> <status,…> <seconds>  the history row for <url> reaches a status
 //
@@ -25,8 +26,7 @@ function fail(message, status = read()) {
   process.exit(1);
 }
 
-async function waitFor(what, seconds, test) {
-  const start = Date.now();
+async function waitFor(what, seconds, test, start = Date.now()) {
   for (;;) {
     const status = read();
     if (status && test(status)) return { status, ms: Date.now() - start };
@@ -37,8 +37,10 @@ async function waitFor(what, seconds, test) {
 
 if (command === 'render') {
   const seconds = Number(args[0] ?? 10);
-  const { status, ms } = await waitFor('the app shows its window', seconds, (s) => s.firstRenderAt);
-  console.log(`First render ${ms} ms after launch (model created → rendered: ${status.firstRenderAt - status.modelCreatedAt} ms).`);
+  const launched = Number(args[1]) || Date.now();
+  const { status } = await waitFor('the app shows its window', seconds, (s) => s.firstRenderAt, launched);
+  console.log(`First render ${status.firstRenderAt - launched} ms after \`open\` (app model created → rendered: ` +
+    `${status.firstRenderAt - status.modelCreatedAt} ms).`);
   console.log(`Storage: ${status.storage}`);
   // Responsive: the heartbeat (a main-thread timer, once a second) keeps advancing.
   await sleep(3500);
