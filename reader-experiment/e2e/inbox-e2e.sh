@@ -191,7 +191,7 @@ wait_log "received $big kind=file from=E2E phone size=$big_size stored" 120 || f
 wait_handoff "$big" 120 || failed "no hand-off for the 5 MB PDF $big"
 wait_library_at_least $((n + 1)) 120 || failed "the 5 MB PDF $big did not reach the library"
 sleep 5; shot "$OUT/14-after-5mb-pdf.png"
-sleep 15 # the Reader's import of the 5 MB PDF is done, and the next import hand-off need not wait out the Inbox's gap
+sleep 20 # the Reader's import of the 5 MB PDF is done, and the first PDF below need not wait out the Inbox's gap
 
 # 6. Two PDFs about 20 s apart while the Reader is in front: both must land (the Reader race the Inbox works around).
 echo "== 6. two PDFs 20 s apart, Reader in front"
@@ -242,7 +242,8 @@ else
 fi
 if inbox_log | grep "received $pdfC .*handed to" >/dev/null; then failed "$pdfC was handed over without a tap (Documents = Ask)"; fi
 sleep 2
-echo "card window: $(adb shell dumpsys window windows 2>/dev/null | tr -d '\r' | grep -m1 -E 'Window\{[0-9a-f]+ u0 Daylight Share\}' || echo none)"
+card="$(adb shell dumpsys window windows 2>/dev/null | tr -d '\r' | grep -E 'Window\{[0-9a-f]+ u0 Daylight Share\}' || true)"
+echo "card window: $(echo "${card:-none}" | head -1 | tr -s ' ')"
 shot "$OUT/30-card-over-reader.png"
 tap_card_add || { echo "the card's Add to Reader was not found"; root_tap "$pdfC"; }
 cp "$OUT/ui-last.xml" "$OUT/30-card-ui.xml" 2>/dev/null || true
@@ -317,6 +318,14 @@ for id in "${sent[@]}"; do
 done
 grep -q "handed to com.daylightcomputer.readerexperiment" "$OUT/inbox-log.txt" && failed "something went to the side-by-side copy"
 echo "relay: $(curl -s "$RELAY_LOCAL/__mock/state" || true)"
+
+# The Inbox's list (reported): "In your Reader ✓" where the Reader confirmed the save (pages, links), "Handed to the
+# Reader" where it cannot (documents).
+adb shell "am start -n $SHARE_PKG/.ui.MainActivity" >/dev/null 2>&1 || true; sleep 4
+shot "$OUT/41-inbox-items.png"
+if timeout 45 adb shell uiautomator dump /sdcard/e2e-ui.xml >/dev/null 2>&1 && adb exec-out cat /sdcard/e2e-ui.xml > "$OUT/41-inbox-items.xml" 2>/dev/null; then
+  echo "the Inbox shows, on screen: $(grep -o 'In your Reader ✓' "$OUT/41-inbox-items.xml" | wc -l) x In your Reader ✓, $(grep -o 'Handed to the Reader' "$OUT/41-inbox-items.xml" | wc -l) x Handed to the Reader"
+fi
 adb shell monkey -p "$READER_PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true; sleep 5
 shot "$OUT/40-reader-library.png"
 echo "library after: $(reader_count_line) (before: $before)"
