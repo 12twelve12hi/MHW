@@ -140,10 +140,10 @@ final class StorageResolutionTests: XCTestCase {
         try await waitFor("the model to see settled storage") { model.isStorageReady }
         XCTAssertEqual(model.storageSummary, "No (pair them separately)")
 
-        // Fully usable: pairing is saved at once, in the app's own storage.
+        // Fully usable: pairing is saved (in the background), in the app's own storage.
         let pairing = try Pairing.generate(relay: "https://relay.test")
         XCTAssertNil(model.pair(pairing.link))
-        XCTAssertTrue(model.isPaired)
+        try await waitFor("the pairing") { model.isPaired }
         XCTAssertNotNil(own.data(forKey: "dls.pairing"))
 
         // The late answer from the container check is ignored.
@@ -266,6 +266,70 @@ final class StorageResolutionTests: XCTestCase {
         XCTAssertTrue(SharedStore.shared.isReady)
         XCTAssertNil(SharedStore.shared.appGroup)
         #endif
+    }
+
+    /// The 1.1 fix review: no storage read or write (own container or App Group) on the main thread, at startup or
+    /// when pairing, renaming, removing or refusing a file. (Sending is covered by the Mac smoke test's status dump.)
+    @MainActor
+    func testTheAppModelNeverTouchesStorageOnTheMainThread() async throws {
+        let own = makeDefaults()
+        let ownDir = root.appendingPathComponent("own")
+        // Earlier runs left a pairing and a history row (written here, off the main thread).
+        let first = try Pairing.generate(relay: "https://relay.test", name: "Desk Daylight")
+        let header = ItemHeader(id: "00112233445566778899aabbccddeeff", kind: .url, url: "https://e.com", sent: "")
+        await Task.detached {
+            let earlier = SharedStore(defaults: own, directory: ownDir)
+            earlier.pair(first)
+            OutboxStore(store: earlier).save(OutboxRow(id: header.id, kind: .url, url: "https://e.com", header: header,
+                                                       created: Date(), status: .delivered))
+        }.value
+
+        StorageAudit.reset()
+        let store = SharedStore(resolver: resolver(declared: [], delay: 0, probe: Probe(), groupDefaults: makeDefaults()),
+                                privateDefaults: own, privateDirectory: ownDir)
+        let model = AppModel(store: store)
+        XCTAssertFalse(model.isLoaded, "the model does not read storage while it is created")
+        try await waitFor("the first read") { model.isLoaded }
+        XCTAssertEqual(model.pairing, first)
+        XCTAssertEqual(model.rows.map(\.id), [header.id])
+
+        // A link from outside with another secret asks first and changes nothing until confirmed.
+        let second = try Pairing.generate(relay: "https://relay.test", name: "Kitchen Daylight")
+        await model.handleOpen([URL(string: second.link)!])
+        try await waitFor("the question") { model.pendingPairing != nil }
+        XCTAssertEqual(model.pendingPairing?.confirmation.button, "Switch")
+        XCTAssertEqual(model.pendingPairing?.confirmation.title, "Pair with Kitchen Daylight?")
+        XCTAssertEqual(model.pairing, first)
+        model.cancelPairing()
+        XCTAssertNil(model.pendingPairing)
+
+        // The same secret applies without asking and keeps the history.
+        await model.handleOpen([URL(string: try Pairing(secret: first.secret, relay: "https://relay2.test", name: "Desk").link)!])
+        try await waitFor("the new relay") { model.pairing?.relay == "https://relay2.test" }
+        XCTAssertNil(model.pendingPairing)
+        XCTAssertEqual(model.rows.count, 1)
+        XCTAssertEqual(model.banner?.text, "Pairing updated: now sending through relay2.test.")
+
+        // Switching after confirming deletes the old Daylight's history.
+        await model.handleOpen([URL(string: second.link)!])
+        try await waitFor("the question") { model.pendingPairing != nil }
+        model.confirmPairing()
+        try await waitFor("the switch") { model.pairing?.secret == second.secret }
+        try await waitFor("the history to empty") { model.rows.isEmpty }
+
+        model.setDeviceName("Studio Mac")
+        try await waitFor("the device name") { model.deviceName == "Studio Mac" }
+        let big = root.appendingPathComponent("big.pdf")
+        FileManager.default.createFile(atPath: big.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: big)
+        try handle.truncate(atOffset: 9_500_000)
+        try handle.close()
+        await model.sendFile(big)
+        XCTAssertEqual(model.banner?.text, "Too big to send. Files can be up to 9 MB; this one is 9.5 MB.")
+        model.reload()
+        await model.reloadNow()
+
+        XCTAssertEqual(StorageAudit.mainThreadAccesses, [], "storage was touched on the main thread")
     }
 }
 #endif

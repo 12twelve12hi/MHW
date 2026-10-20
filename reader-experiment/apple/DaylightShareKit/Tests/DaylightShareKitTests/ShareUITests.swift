@@ -68,5 +68,51 @@ final class ShareUITests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: copy), Data("%PDF".utf8))
         try? FileManager.default.removeItem(at: copy.deletingLastPathComponent())
     }
+
+    @MainActor
+    func testPairingLinksAndBigFilesInTheShareSheet() throws {
+        XCTAssertEqual(SharePayloadReader.textPayload("daylightshare://pair?c=E4AY56TMADQP5QSNMY7BCGPZUFRA", title: nil),
+                       .pairing("daylightshare://pair?c=E4AY56TMADQP5QSNMY7BCGPZUFRA"))
+        XCTAssertEqual(SharePayloadReader.best([.link(url: "https://e.com", title: nil), .pairing("daylightshare://pair?c=X")]),
+                       [.pairing("daylightshare://pair?c=X")])
+        // A file over 9 MB is refused from its size, before it is read or copied.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("dls-ui-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let big = dir.appendingPathComponent("big.pdf")
+        FileManager.default.createFile(atPath: big.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: big)
+        try handle.truncate(atOffset: 9_000_001)
+        try handle.close()
+        XCTAssertEqual(SharePayloadReader.filePayload(big, suggestedName: nil), .tooLarge(name: "big.pdf", size: 9_000_001))
+        XCTAssertThrowsError(try ShareExtensionModel.input(for: .tooLarge(name: "big.pdf", size: 9_000_001))) { e in
+            XCTAssertEqual((e as? ShareError)?.message, "Too big to send. Files can be up to 9 MB; this one is 9.1 MB.")
+        }
+        XCTAssertThrowsError(try ShareExtensionModel.input(for: .file(url: big, name: "big.pdf"))) { e in
+            XCTAssertEqual((e as? ShareError)?.code, "too-large")
+        }
+        guard case let .refused(message) = AppModel.readFile(big) else { return XCTFail("the app reads a 9 MB+ file") }
+        XCTAssertEqual(message, "Too big to send. Files can be up to 9 MB; this one is 9.1 MB.")
+        let small = dir.appendingPathComponent("small.pdf")
+        try Data("%PDF".utf8).write(to: small)
+        guard case .file = SharePayloadReader.filePayload(small, suggestedName: nil) else { return XCTFail("small file") }
+    }
+
+    @MainActor
+    func testTheHistoryUsesTheSharedCopy() {
+        let h = ItemHeader(id: "00112233445566778899aabbccddeeff", kind: .url, url: "https://e.com", sent: "")
+        let now = Date()
+        var row = OutboxRow(id: h.id, kind: .url, url: "https://e.com", header: h, created: now, status: .failed,
+                            errorCode: "network")
+        XCTAssertEqual(StatusLabel.text(row), "Waiting to send")
+        XCTAssertEqual(RowText(row: row, now: now).buttonTitle, "Retry now")
+        XCTAssertEqual(RowText(row: row, now: now).message, "Waiting to send. Couldn’t send right now. It will try again by itself.")
+        row.status = .delivered
+        XCTAssertEqual(StatusLabel.text(row), "Delivered ✓")
+        XCTAssertEqual(RowText(row: row, now: now).message, "Delivered ✓ Saved on your Daylight.")
+        XCTAssertNil(RowText(row: row, now: now).buttonTitle)
+        row.status = .sent
+        XCTAssertEqual(RowText(row: row, now: now).message, "Sent · waiting for your Daylight")
+    }
 }
 #endif

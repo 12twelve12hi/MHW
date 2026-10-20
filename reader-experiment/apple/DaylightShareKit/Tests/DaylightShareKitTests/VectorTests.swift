@@ -204,4 +204,182 @@ final class VectorTests: XCTestCase {
             XCTAssertEqual(done?.header.id, prepared.id)
         }
     }
+
+    // MARK: Revision 1.1 groups
+
+    func testRelays() {
+        for r in list("relays") {
+            let input = r["input"] as? String ?? ""
+            if let expected = r["expect"] as? String {
+                XCTAssertEqual(try ShareText.normalizeRelay(input), expected, input)
+            } else {
+                XCTAssertThrowsError(try ShareText.normalizeRelay(input), input) { e in
+                    XCTAssertEqual((e as? ShareError)?.code, r["error"] as? String, input)
+                }
+            }
+        }
+        XCTAssertEqual(try ShareText.relayHost("https://Relay.Example.org:8443/ntfy/"), "relay.example.org:8443")
+        XCTAssertEqual(try ShareText.relayHost("http://[::1]:8080/"), "[::1]:8080")
+        XCTAssertEqual(try ShareText.relayHost(""), "ntfy.sh")
+    }
+
+    func testSizing() throws {
+        let sizing = try XCTUnwrap(Self.vectors["sizing"] as? [String: Any])
+        XCTAssertEqual(JSONRead.integer(sizing["chunk"]), DLS.chunk)
+        XCTAssertEqual(JSONRead.integer(sizing["maxItem"]), DLS.maxItem)
+        XCTAssertEqual(JSONRead.integer(sizing["maxHeader"]), DLS.maxHeaderBytes)
+        XCTAssertEqual(JSONRead.integer(sizing["largestFrame"]), DLS.chunk + DLS.maxHeaderBytes + 36)
+        let cases = try XCTUnwrap(sizing["cases"] as? [[String: Any]])
+        XCTAssertFalse(cases.isEmpty)
+        for c in cases {
+            let size = try XCTUnwrap(JSONRead.integer(c["size"]))
+            // Content that does not compress (a PDF is never compressed).
+            let input = ItemInput.file(Data(count: size), name: "big.pdf", mime: "application/pdf")
+            if let parts = JSONRead.integer(c["parts"]) {
+                let prepared = try ItemBuilder.prepare(input)
+                XCTAssertEqual(prepared.partCount(), parts, "size \(size)")
+            } else {
+                XCTAssertThrowsError(try ItemBuilder.prepare(input), "size \(size)") { e in
+                    XCTAssertEqual((e as? ShareError)?.code, c["error"] as? String)
+                    XCTAssertEqual((e as? ShareError)?.message, ShareText.tooBigMessage(size))
+                }
+            }
+        }
+    }
+
+    func testURLs() {
+        for u in list("urls") {
+            let input = u["input"] as? String ?? ""
+            XCTAssertEqual(ShareText.webURL(input), u["expect"] as? String, input.count > 80 ? "\(input.utf16.count)-unit URL" : input)
+        }
+    }
+
+    func testInvalidItemsFailWithIntegrity() throws {
+        let keys = keys1
+        for it in list("invalidItems") {
+            let name = it["name"] as? String ?? "?"
+            let r = Reassembler()
+            var thrown: Error?
+            for fh in it["framesHex"] as? [String] ?? [] {
+                let opened = try Frame.open(keys: keys, purpose: .inbox, frame: Hex.decode(fh)!)
+                do {
+                    _ = try r.add(header: opened.header, body: opened.body)
+                } catch {
+                    thrown = error
+                }
+            }
+            XCTAssertEqual((thrown as? ShareError)?.code, it["error"] as? String, name)
+        }
+    }
+
+    func testTheInflateBoundStopsEarly() throws {
+        #if canImport(Compression)
+        // 1 MiB of zeros, limited to 10 bytes: refused, without inflating it all.
+        let bomb = try RawDeflate.compress(Data(count: 1 << 20))
+        XCTAssertThrowsError(try RawDeflate.decompress(bomb, limit: 10)) { e in
+            XCTAssertEqual((e as? ShareError)?.code, "integrity")
+        }
+        XCTAssertEqual(try RawDeflate.decompress(bomb, limit: 1 << 20).count, 1 << 20)
+        #endif
+    }
+
+    func testHeaderSizeLimits() throws {
+        let keys = keys1
+        let pad = { (n: Int) -> Data in
+            let base = "{\"v\":1,\"x-pad\":\"\"}"
+            return Data(("{\"v\":1,\"x-pad\":\"" + String(repeating: "a", count: n - base.utf8.count) + "\"}").utf8)
+        }
+        XCTAssertEqual(pad(65_536).count, 65_536)
+        let frame = try Frame.seal(keys: keys, purpose: .inbox, headerJSON: pad(65_536))
+        XCTAssertEqual(try Frame.open(keys: keys, purpose: .inbox, frame: frame).headerJSON.count, 65_536)
+        XCTAssertThrowsError(try Frame.seal(keys: keys, purpose: .inbox, headerJSON: pad(65_537))) { e in
+            XCTAssertEqual((e as? ShareError)?.code, "header")
+        }
+    }
+
+    func testAcks() throws {
+        for a in list("acks") {
+            let name = a["name"] as? String ?? "?"
+            let labels = a["idLabels"] as? [String] ?? []
+            let ids = labels.map { String(DLSCrypto.sha256(Data($0.utf8)).hexString.prefix(32)) }
+            let sent = a["sent"] as? String ?? ""
+            let from = a["from"] as? String ?? ""
+            // The serialisation of exactly these ids (72 is more than a sender's AckHeader takes).
+            let json = JSONOut.object([("v", .int(1)), ("kind", .string("ack")), ("ids", .array(ids.map { .string($0) })),
+                                       ("sent", .string(sent)), ("from", .string(from))])
+            XCTAssertEqual(json.serialized, a["headerJson"] as? String, name)
+            let frameLength = json.data.count + 36
+            XCTAssertEqual(frameLength, JSONRead.integer(a["frameLength"]), name)
+            XCTAssertEqual(Frame.isSmall(frameLength), a["small"] as? Bool, name)
+            let ack = AckHeader(ids: ids, sent: sent, from: from)
+            XCTAssertEqual(ack.ids.count, min(ids.count, DLS.maxAckIDs), name)
+            if ids.count <= DLS.maxAckIDs {
+                XCTAssertEqual(ack.json.serialized, a["headerJson"] as? String, name)
+                let sealed = try Frame.seal(keys: keys1, purpose: .ack, header: ack.json)
+                XCTAssertEqual(sealed.count, frameLength, name)
+                XCTAssertTrue(Frame.isSmall(sealed.count), "\(name): an ack of at most 70 ids is a message")
+            }
+        }
+    }
+
+    func testStatusText() throws {
+        for t in list("statusText") {
+            let name = t["name"] as? String ?? "?"
+            let row = try XCTUnwrap(t["row"] as? [String: Any])
+            let status = try XCTUnwrap(OutboxRow.Status(rawValue: row["status"] as? String ?? ""), name)
+            let created = Date(timeIntervalSince1970: Double(JSONRead.integer(row["created"]) ?? 0) / 1000)
+            let now = Date(timeIntervalSince1970: Double(JSONRead.integer(t["now"]) ?? 0) / 1000)
+            let text = RowText(status: status, errorCode: row["errorCode"] as? String ?? "",
+                               size: JSONRead.integer(row["size"]) ?? 0, created: created, now: now)
+            XCTAssertEqual(text.label, t["label"] as? String, name)
+            XCTAssertEqual(text.sentence, t["sentence"] as? String, name)
+            XCTAssertEqual(text.action?.rawValue, t["action"] as? String, name)
+            // The same through a stored row (a row saved by 1.0 has no errorCode).
+            var json = row
+            json["id"] = "00112233445566778899aabbccddeeff"
+            let header: [String: Any] = ["id": "00112233445566778899aabbccddeeff", "kind": row["kind"] as? String ?? "url",
+                                         "sent": "2026-10-17T22:00:00.000Z"]
+            json["header"] = header
+            let decoded = try JSONDecoder.outbox.decode(OutboxRow.self, from: JSONSerialization.data(withJSONObject: json))
+            XCTAssertEqual(RowText(row: decoded, now: now), text, name)
+        }
+    }
+
+    func testFormatMB() {
+        for f in list("formatMB") {
+            let bytes = JSONRead.integer(f["bytes"]) ?? -1
+            XCTAssertEqual(ShareText.formatMB(bytes), f["expect"] as? String, "\(bytes)")
+        }
+        XCTAssertEqual(ShareText.tooBigMessage(14_200_000), "Too big to send. Files can be up to 9 MB; this one is 14.2 MB.")
+    }
+
+    func testPairingConfirmation() throws {
+        func pairing(_ any: Any?) throws -> Pairing? {
+            guard let p = any as? [String: Any] else { return nil }
+            return try Pairing(secret: hex(p["secretHex"]), relay: p["relay"] as? String ?? "", name: p["name"] as? String ?? "")
+        }
+        for v in list("pairingConfirmation") {
+            let name = v["name"] as? String ?? "?"
+            let source = try XCTUnwrap(PairingConfirmation.Source(rawValue: v["source"] as? String ?? ""), name)
+            let next = try XCTUnwrap(try pairing(v["next"]), name)
+            let c = PairingConfirmation(current: try pairing(v["current"]), next: next, source: source)
+            let e = try XCTUnwrap(v["expect"] as? [String: Any], name)
+            XCTAssertEqual(c.ask, e["ask"] as? Bool, name)
+            XCTAssertEqual(c.title, e["title"] as? String, name)
+            XCTAssertEqual(c.lines, e["lines"] as? [String] ?? [], name)
+            XCTAssertEqual(c.button, e["button"] as? String, name)
+            XCTAssertEqual(c.notice, e["notice"] as? String, name)
+        }
+    }
+
+    /// The largest item a sender makes: 5 frames, each within 1,966,116 bytes (under ntfy.sh's 2 MB).
+    func testTheLargestItemFitsTheRelay() throws {
+        let prepared = try ItemBuilder.prepare(.file(Data(count: DLS.maxItem), name: "big.pdf")) // PDFs are not compressed
+        XCTAssertNil(prepared.header.enc)
+        let frames = try prepared.frames(keys: keys1)
+        XCTAssertEqual(frames.count, 5)
+        for f in frames { XCTAssertLessThanOrEqual(f.count, DLS.chunk + DLS.maxHeaderBytes + 36) }
+        XCTAssertTrue(prepared.hasAttachment())
+        XCTAssertFalse(try ItemBuilder.prepare(.link("https://example.com/")).hasAttachment())
+    }
 }

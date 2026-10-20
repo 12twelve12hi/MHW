@@ -37,7 +37,7 @@ struct PairView: View {
                         Text("Or type the code").font(.headline)
                         PairingForm { model.pair($0) }
                     }
-                    Text("Opening a daylightshare:// pairing link on this iPhone also pairs it.")
+                    Text("Opening a daylightshare:// pairing link on this iPhone also pairs it, once you confirm.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }

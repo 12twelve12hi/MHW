@@ -11,9 +11,10 @@ struct MacRootView: View {
         ZStack(alignment: .bottom) {
             if model.isPaired {
                 MacHomeView()
-            } else if !model.isStorageReady {
+            } else if !model.isStorageReady || !model.isLoaded {
                 // At most SharedStore.resolutionTimeout (2 s), usually a few milliseconds: rather than flash the
-                // pairing screen while the App Group is being found, show nothing much.
+                // pairing screen while the App Group is being found and storage is read (off the main thread), show
+                // nothing much.
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 MacPairView()
@@ -24,6 +25,7 @@ struct MacRootView: View {
         }
         .frame(minWidth: 440, minHeight: 480)
         .animation(.default, value: model.banner)
+        .pairingConfirmation(model)
         .onAppear { model.noteRendered() }
     }
 }

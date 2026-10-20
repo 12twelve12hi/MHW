@@ -52,7 +52,8 @@ public struct PairingForm: View {
     }
 }
 
-/// "Sent", "Delivered ✓", "Not delivered", …
+/// A row's label from the shared copy ("Sending…", "Sent · waiting for your Daylight", "Delivered ✓", "Waiting to
+/// send", "Not delivered"; CHANGES-v1.1 2.5).
 public struct StatusLabel: View {
     let row: OutboxRow
 
@@ -64,15 +65,7 @@ public struct StatusLabel: View {
         Text(Self.text(row)).font(.caption.weight(.medium)).foregroundColor(Self.color(row))
     }
 
-    public static func text(_ row: OutboxRow) -> String {
-        switch row.status {
-        case .sending: return "Sending…"
-        case .sent: return "Sent"
-        case .delivered: return "Delivered ✓"
-        case .failed: return "Not sent yet"
-        case .expired: return "Not delivered"
-        }
-    }
+    public static func text(_ row: OutboxRow) -> String { RowText(row: row).label }
 
     public static func color(_ row: OutboxRow) -> Color {
         switch row.status {
@@ -91,7 +84,8 @@ public struct StatusLabel: View {
     }
 }
 
-/// One history row with its status and, when it was not delivered, a Retry button.
+/// One history row: its label, its sentence when it has one, and the one button the shared copy offers for it
+/// ("Retry now" or "Try again"); removing is in the row's menu or swipe actions.
 public struct HistoryRowView: View {
     let row: OutboxRow
     let onRetry: () -> Void
@@ -102,6 +96,7 @@ public struct HistoryRowView: View {
     }
 
     public var body: some View {
+        let text = RowText(row: row)
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: StatusLabel.symbol(row))
                 .foregroundColor(.secondary)
@@ -112,19 +107,72 @@ public struct HistoryRowView: View {
                 HStack(spacing: 6) {
                     StatusLabel(row: row)
                     Text(row.created, style: .relative).font(.caption2).foregroundColor(.secondary)
-                    if row.status == .failed, !row.error.isEmpty {
-                        Text(row.error).font(.caption2).foregroundColor(.secondary).lineLimit(1)
-                    }
+                }
+                if let sentence = text.sentence {
+                    Text(sentence).font(.caption2).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 4)
-            if row.canRetry {
-                Button(row.status == .expired ? "Try again" : "Retry", action: onRetry)
+            if let title = text.buttonTitle {
+                Button(title, action: onRetry)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// The question before a pairing takes effect (PROTOCOL 1.3): "Pair with Anjan’s Daylight?", "Code starts E4AY. …",
+/// the relay when it is not ntfy.sh, and "This replaces …" when it replaces another Daylight; "Pair" or "Switch",
+/// and "Cancel".
+public struct PairingConfirmationView: View {
+    let confirmation: PairingConfirmation
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    public init(confirmation: PairingConfirmation, onConfirm: @escaping () -> Void, onCancel: @escaping () -> Void) {
+        self.confirmation = confirmation
+        self.onConfirm = onConfirm
+        self.onCancel = onCancel
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(confirmation.title ?? "Pair with a Daylight?").font(.title3.weight(.semibold))
+            ForEach(confirmation.lines, id: \.self) { line in
+                Text(line).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel, action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button(confirmation.button ?? "Pair", action: onConfirm)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: 420)
+    }
+}
+
+/// Shows the app model's pending pairing question as a sheet (dismissing it cancels).
+struct PairingConfirmationSheet: ViewModifier {
+    @ObservedObject var model: AppModel
+
+    func body(content: Content) -> some View {
+        content.sheet(item: $model.pendingPairing) { pending in
+            PairingConfirmationView(confirmation: pending.confirmation, onConfirm: { model.confirmPairing() },
+                                    onCancel: { model.cancelPairing() })
+        }
+    }
+}
+
+extension View {
+    /// Asks before a pairing takes effect, whenever `model.pendingPairing` is set (PROTOCOL 1.3).
+    public func pairingConfirmation(_ model: AppModel) -> some View {
+        modifier(PairingConfirmationSheet(model: model))
     }
 }
 

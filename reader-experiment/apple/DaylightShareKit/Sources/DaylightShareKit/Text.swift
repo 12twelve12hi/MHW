@@ -88,17 +88,21 @@ public enum ShareText {
     /// A device or Daylight name (at most 60 code points), or "".
     public static func cleanName(_ s: String?) -> String { clean(s, max: DLS.maxName) }
 
-    /// A safe file name (PROTOCOL 5): split on `/` and `\`; in each segment control characters and `: * ? " < > |`
-    /// become spaces, whitespace collapses, trim, drop leading dots; drop empty segments; join with a space;
-    /// empty -> `fallback`; over 120 characters -> cut, keeping an extension of up to 10 characters.
+    /// A safe file name (PROTOCOL 5; vectors > fileNames): split on runs of `/` and `\`; in each segment turn each run
+    /// of control characters and `: * ? " < > |` into one space and each run of whitespace into one space, drop leading
+    /// dots and whitespace, trim; drop empty segments; join with one space; empty -> `fallback`. Over 120 UTF-16 units
+    /// or 200 UTF-8 bytes: keep the extension (from the last `.`, if that is not the first character and 1-10 units
+    /// follow it) and remove whole code points from the end of the rest until both limits hold. (Swift strings cannot
+    /// hold lone surrogates, which the rule removes first.)
     public static func safeFileName(_ name: String?, fallback: String = "document") -> String {
         var segments: [String] = []
         var current = String.UnicodeScalarView()
         func flush() {
             var seg = replaceRuns(String(current), { isControl($0) || ":*?\"<>|".unicodeScalars.contains($0) })
-            seg = jsTrim(replaceRuns(seg, isJSWhitespace))
-            while seg.unicodeScalars.first == "." { seg.unicodeScalars.removeFirst() }
-            seg = jsTrim(seg)
+            seg = replaceRuns(seg, isJSWhitespace)
+            var v = seg.unicodeScalars[...]
+            while let first = v.first, first == "." || isJSWhitespace(first) { v = v.dropFirst() }
+            seg = jsTrim(String(String.UnicodeScalarView(v)))
             if !seg.isEmpty { segments.append(seg) }
             current = String.UnicodeScalarView()
         }
@@ -106,51 +110,114 @@ public enum ShareText {
             if u == "/" || u == "\\" { flush() } else { current.append(u) }
         }
         flush()
-        var s = segments.joined(separator: " ")
-        if s.isEmpty { s = fallback }
-        let units = Array(s.utf16)
-        if units.count > 120 {
-            var ext = ""
-            if let dot = units.lastIndex(of: 0x2E), dot > 0, units.count - dot <= 10 {
-                ext = String(decoding: units[dot...], as: UTF16.self)
-            }
-            s = utf16Prefix(s, 120 - ext.utf16.count) + ext
+        let s = segments.isEmpty ? fallback : segments.joined(separator: " ")
+        if s.utf16.count <= 120 && s.utf8.count <= 200 { return s }
+        let scalars = Array(s.unicodeScalars)
+        var extStart = scalars.count
+        if let dot = scalars.lastIndex(of: "."), dot > 0 {
+            let after = scalars[(dot + 1)...].reduce(0) { $0 + utf16Width($1) }
+            if after >= 1 && after <= 10 { extStart = dot }
         }
-        return s
+        let ext = Array(scalars[extStart...])
+        var base = Array(scalars[..<extStart])
+        var units = (base + ext).reduce(0) { $0 + utf16Width($1) }
+        var bytes = (base + ext).reduce(0) { $0 + utf8Width($1) }
+        while let last = base.last, units > 120 || bytes > 200 {
+            base.removeLast()
+            units -= utf16Width(last)
+            bytes -= utf8Width(last)
+        }
+        var out = String.UnicodeScalarView()
+        out.append(contentsOf: base)
+        out.append(contentsOf: ext)
+        return String(out)
+    }
+
+    static func utf16Width(_ u: Unicode.Scalar) -> Int { u.value > 0xFFFF ? 2 : 1 }
+
+    static func utf8Width(_ u: Unicode.Scalar) -> Int {
+        switch u.value {
+        case 0..<0x80: return 1
+        case 0x80..<0x800: return 2
+        case 0x800..<0x10000: return 3
+        default: return 4
+        }
+    }
+
+    // MARK: Sizes for people
+
+    /// ceil(bytes / 100,000) / 10 without a trailing ".0": 9,000,001 -> "9.1", 12,000,000 -> "12" (vectors > formatMB).
+    public static func formatMB(_ bytes: Int) -> String {
+        let tenths = (max(0, bytes) + 99_999) / 100_000
+        return tenths % 10 == 0 ? "\(tenths / 10)" : "\(tenths / 10).\(tenths % 10)"
+    }
+
+    /// The sentence for content over `DLS.maxItem`, at share time and on an expired / too-large row.
+    public static func tooBigMessage(_ size: Int) -> String {
+        "Too big to send. Files can be up to 9 MB; this one is \(formatMB(size)) MB."
     }
 
     // MARK: URLs
 
-    /// An absolute http(s) URL with a host, at most 4096 characters, without whitespace or control characters;
-    /// returns the trimmed input, or nil.
+    typealias Scalars = ArraySlice<Unicode.Scalar>
+
+    static func string(_ s: Scalars) -> String {
+        var v = String.UnicodeScalarView()
+        v.append(contentsOf: s)
+        return String(v)
+    }
+
+    static func isDigit(_ u: Unicode.Scalar) -> Bool { u.value >= 0x30 && u.value <= 0x39 }
+    static func isASCIILetter(_ u: Unicode.Scalar) -> Bool { (u.value | 0x20) >= 0x61 && (u.value | 0x20) <= 0x7A }
+    static func lowerASCII(_ u: Unicode.Scalar) -> Unicode.Scalar {
+        u.value >= 0x41 && u.value <= 0x5A ? Unicode.Scalar(u.value + 0x20)! : u
+    }
+
+    /// `rest` starts with `prefix`, comparing ASCII letters case-insensitively.
+    static func hasPrefixIgnoringCase(_ rest: Scalars, _ prefix: String) -> Bool {
+        let p = Array(prefix.unicodeScalars)
+        return rest.count >= p.count && zip(rest, p).allSatisfy { lowerASCII($0) == $1 }
+    }
+
+    /// Splits `[user@]host[:port]` (the authority without user info is what follows the last `@`) into the host and,
+    /// when there is a `:` after it, the port text. Bracketed IPv6 hosts run to the first `]`. nil when a bracket is
+    /// not closed or something other than `:port` follows it.
+    static func hostAndPort(_ authority: Scalars) -> (host: Scalars, port: Scalars?)? {
+        let hostPort = authority.lastIndex(of: "@").map { authority[($0 + 1)...] } ?? authority
+        if hostPort.first == "[" {
+            guard let close = hostPort.firstIndex(of: "]") else { return nil }
+            let after = hostPort[(close + 1)...]
+            if after.isEmpty { return (hostPort[...close], nil) }
+            guard after.first == ":" else { return nil }
+            return (hostPort[...close], after.dropFirst())
+        }
+        guard let colon = hostPort.firstIndex(of: ":") else { return (hostPort, nil) }
+        return (hostPort[..<colon], hostPort[(colon + 1)...])
+    }
+
+    /// The web URL rule (PROTOCOL 4 "Web URL"; vectors > urls): the trimmed input unchanged, or nil. Textual, so every
+    /// language decides the same way: no whitespace or control characters, at most 4096 UTF-16 units, `http://` or
+    /// `https://` (any case), a non-empty host that does not start with `.` and has none of `< > ^ | \`, and a port of
+    /// ASCII digits only (after the first `:` of a host that is not bracketed).
     public static func webURL(_ raw: String?) -> String? {
         let s = jsTrim(raw ?? "")
         guard !s.isEmpty, s.utf16.count <= DLS.maxURL else { return nil }
-        if s.unicodeScalars.contains(where: isSpaceOrControl) { return nil }
-        let lower = s.lowercased()
-        let rest: Substring
-        if lower.hasPrefix("https://") {
-            rest = s.dropFirst(8)
-        } else if lower.hasPrefix("http://") {
-            rest = s.dropFirst(7)
+        let u = Array(s.unicodeScalars)[...]
+        if u.contains(where: isSpaceOrControl) { return nil }
+        let rest: Scalars
+        if hasPrefixIgnoringCase(u, "https://") {
+            rest = u.dropFirst(8)
+        } else if hasPrefixIgnoringCase(u, "http://") {
+            rest = u.dropFirst(7)
         } else {
             return nil
         }
-        // Authority: up to the first / ? or #; drop user info and port; the host must be non-empty.
         let authority = rest.prefix(while: { $0 != "/" && $0 != "?" && $0 != "#" })
-        var hostPort = authority
-        if let at = authority.lastIndex(of: "@") { hostPort = authority[authority.index(after: at)...] }
-        var host = hostPort
-        if hostPort.hasPrefix("[") {
-            guard let close = hostPort.firstIndex(of: "]") else { return nil }
-            host = hostPort[hostPort.startIndex...close]
-            let after = hostPort[hostPort.index(after: close)...]
-            if !after.isEmpty && !(after.hasPrefix(":") && after.dropFirst().allSatisfy(\.isASCIIDigit)) { return nil }
-        } else if let colon = hostPort.lastIndex(of: ":") {
-            host = hostPort[..<colon]
-            guard hostPort[hostPort.index(after: colon)...].allSatisfy(\.isASCIIDigit) else { return nil }
+        guard let (host, port) = hostAndPort(authority) else { return nil }
+        if let port, !port.allSatisfy(isDigit) { return nil }
+        guard let first = host.first, first != ".", !host.contains(where: { "<>^|\\".unicodeScalars.contains($0) }) else {
+            return nil
         }
-        guard !host.isEmpty, !host.contains(where: { "<>^|\\".contains($0) }) else { return nil }
         return s
     }
 
@@ -165,29 +232,60 @@ public enum ShareText {
         return webURL(m)
     }
 
-    /// A relay base URL: `https://` added when no scheme is given, origin + path, no trailing slash, no query or
-    /// fragment. Empty -> the default relay.
+    /// The relay URL rule (PROTOCOL 1.3; vectors > relays). Textual, the same in every language: trim; empty ->
+    /// `https://ntfy.sh`; whitespace or a control character left inside is an error; a scheme other than http(s) is an
+    /// error (never turned into `https://…`), no scheme -> `https://`; drop the query, fragment and user info; the host
+    /// is required and lowercased: ASCII letters, digits, `-` and `.` starting with a letter or digit, or a bracketed
+    /// IPv6 address of hex digits, `:` and `.` only (no zone id); a port is digits, dropped when it is the text "443"
+    /// (https) or "80" (http), so ":0443" stays; no `.` or `..` path segments; trailing slashes removed.
+    /// Throws ShareError("relay").
     public static func normalizeRelay(_ relay: String?) throws -> String {
-        var r = jsTrim(relay ?? "")
-        if r.isEmpty { return DLS.defaultRelay }
-        let lower = r.lowercased()
-        if !(lower.hasPrefix("http://") || lower.hasPrefix("https://")) {
-            // Stricter than the JS on purpose: "ftp://x" is refused rather than turned into "https://ftp//x".
-            if lower.range(of: "^[a-z][a-z0-9+.-]*://", options: .regularExpression) != nil {
-                throw ShareError("relay", "The relay must be http(s).")
+        func bad(_ message: String = "That relay address isn’t valid.") -> ShareError { ShareError("relay", message) }
+        let trimmed = jsTrim(relay ?? "")
+        if trimmed.isEmpty { return DLS.defaultRelay }
+        var s = Array(trimmed.unicodeScalars)[...]
+        if s.contains(where: isSpaceOrControl) { throw bad() }
+        // A scheme: ^[A-Za-z][A-Za-z0-9+.-]*://
+        var scheme = "https"
+        if let first = s.first, isASCIILetter(first) {
+            let name = s.prefix(while: { isASCIILetter($0) || isDigit($0) || $0 == "+" || $0 == "." || $0 == "-" })
+            let after = s[name.endIndex...]
+            if hasPrefixIgnoringCase(after, "://") {
+                scheme = string(name).lowercased()
+                guard scheme == "http" || scheme == "https" else { throw bad("The relay must be an http(s) address.") }
+                s = after.dropFirst(3)
             }
-            r = "https://" + r
         }
-        guard let c = URLComponents(string: r), let scheme = c.scheme?.lowercased(), let host = c.host, !host.isEmpty
-        else { throw ShareError("relay", "That relay address isn’t a valid URL.") }
-        guard scheme == "https" || scheme == "http" else { throw ShareError("relay", "The relay must be http(s).") }
-        var origin = scheme + "://" + (host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host.lowercased())
-        if let port = c.port, !(scheme == "https" && port == 443), !(scheme == "http" && port == 80) {
-            origin += ":\(port)"
+        let authority = s.prefix(while: { $0 != "/" && $0 != "?" && $0 != "#" })
+        var path = s[authority.endIndex...].prefix(while: { $0 != "?" && $0 != "#" })
+        guard let (hostScalars, portScalars) = hostAndPort(authority) else { throw bad() }
+        let host = string(hostScalars).lowercased()
+        let port = portScalars.map(string) ?? ""
+        guard port.unicodeScalars.allSatisfy(isDigit) else { throw bad() }
+        let hs = Array(host.unicodeScalars)
+        if hs.first == "[" {
+            let inner = hs.dropFirst().dropLast()
+            guard hs.count >= 3, hs.last == "]",
+                  inner.allSatisfy({ isDigit($0) || ($0.value >= 0x61 && $0.value <= 0x66) || $0 == ":" || $0 == "." })
+            else { throw bad() }
+        } else {
+            guard let first = hs.first, isDigit(first) || (first.value >= 0x61 && first.value <= 0x7A),
+                  hs.allSatisfy({ isDigit($0) || ($0.value >= 0x61 && $0.value <= 0x7A) || $0 == "." || $0 == "-" })
+            else { throw bad() }
         }
-        var path = c.percentEncodedPath
-        while path.hasSuffix("/") { path.removeLast() }
-        return origin + path
+        let shownPort = (scheme == "https" && port == "443") || (scheme == "http" && port == "80") ? "" : port
+        let segments = path.split(separator: "/", omittingEmptySubsequences: false)
+        if segments.contains(where: { Array($0) == ["."] || Array($0) == [".", "."] }) { throw bad() }
+        while path.last == "/" { path = path.dropLast() }
+        return scheme + "://" + host + (shownPort.isEmpty ? "" : ":" + shownPort) + string(path)
+    }
+
+    /// The relay as people see it: the normalised relay's host and port, as text ("relay.example.org",
+    /// "relay.example.org:8443", "[::1]:8080"). Not `URL.host`, which drops the port. Throws like `normalizeRelay`.
+    public static func relayHost(_ relay: String?) throws -> String {
+        let r = try normalizeRelay(relay)
+        guard let sep = r.range(of: "://") else { return r }
+        return String(r[sep.upperBound...].prefix(while: { $0 != "/" }))
     }
 
     // MARK: Time, MIME types
@@ -260,8 +358,4 @@ public enum ShareText {
         #endif
         return nil
     }
-}
-
-extension Character {
-    var isASCIIDigit: Bool { isASCII && isNumber }
 }

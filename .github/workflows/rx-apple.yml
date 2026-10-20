@@ -1,8 +1,9 @@
 name: Reader experiment – Apple apps
 
-# Builds Send to Daylight for iPhone and Mac (reader-experiment/apple): runs the Swift protocol tests (cross-platform
-# vectors, a fake relay, an end-to-end run against the mock ntfy relay and the JavaScript receiver, and the check that
-# storage resolution never blocks the main thread), builds the iOS app for the simulator and for devices (unsigned
+# Builds Send to Daylight for iPhone and Mac (reader-experiment/apple): runs the Swift protocol tests (the protocol 1.1
+# cross-platform vectors, a fake relay, an end-to-end run against the mock ntfy relay and the JavaScript receiver, and
+# the checks that storage resolution never blocks the main thread and that the app model never reads storage on it),
+# builds the iOS app for the simulator and for devices (unsigned
 # .ipa for sideloading) and the Mac app (ad-hoc signed .zip, no App Group), smoke-tests the Mac app (launches
 # responsive, pairs, sends, shows Delivered), and publishes both to the "reader-experiment-latest" release. With App
 # Store Connect secrets it also uploads to TestFlight (see reader-experiment/apple/README.md).
@@ -138,6 +139,10 @@ jobs:
           ls "$APP/Contents/PlugIns" "$APP/Contents/PlugIns/SafariExtension.appex/Contents/Resources"
           plutil -lint "$APP/Contents/Info.plist" "$APP/Contents/PlugIns/ShareExtension.appex/Contents/Info.plist" \
             "$APP/Contents/PlugIns/SafariExtension.appex/Contents/Info.plist"
+          VERSION=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")
+          WANT=$(sed -n 's/^MARKETING_VERSION = //p' Config/Base.xcconfig)
+          echo "Mac app version $VERSION (build ${{ github.run_number }})"
+          [ "$VERSION" = "$WANT" ] || { echo "::error::the Mac app is version $VERSION, Config/Base.xcconfig says $WANT"; exit 1; }
           # Each target's entitlements as Xcode would sign it (this build has no team: the files without an App Group).
           mkdir -p build/ent
           entitlements() {  # <target> <out.plist>
@@ -205,10 +210,11 @@ jobs:
           xcrun simctl spawn "$DEVICE" launchctl list | grep -i com.daylight.share || { echo "::error::the iPhone app is not running"; exit 1; }
 
       # The Mac app must show its window and keep its main thread running within seconds (the 1.0 build hung at launch
-      # on macOS 15, its main thread waiting behind the App Group privacy prompt), then pair, send, and show the item
-      # Delivered once the JS receiver acks it. It reports its state through -DLSStatusDump (AppModel.noteRendered):
-      # a JSON file in its sandbox container with its storage, its history rows (with the label the history shows) and
-      # a once-a-second heartbeat from the main thread. This step gates the release.
+      # on macOS 15, its main thread waiting behind the App Group privacy prompt), never touch storage on its main
+      # thread, then pair, send, and show the item Delivered once the JS receiver acks it. It reports its state through
+      # -DLSStatusDump (AppModel.noteRendered): a JSON file in its sandbox container with its storage, its history rows
+      # (with the label the history shows), the storage accesses made on its main thread (StorageAudit) and a
+      # once-a-second heartbeat from the main thread. This step gates the release.
       - name: Smoke test the Mac app (launch, responsive, pair, send, Delivered)
         run: |
           set -o pipefail
@@ -228,8 +234,10 @@ jobs:
           open -n "$APP" --args -DLSStatusDump -DLSPairLink "$LINK" -DLSSendLink "$SENT_URL"
           # 1. Window within 10 s of launch, then a main thread that keeps running.
           node scripts/ci-app-status.mjs render "$STATUS" 10 "$LAUNCHED" || hung
-          # 2. Ad-hoc signed: its own storage, no App Group (and so no privacy prompt).
+          # 2. Ad-hoc signed: its own storage, no App Group (and so no privacy prompt); and no storage read on the main
+          #    thread at startup (the app model reads UserDefaults and the outbox on a background queue).
           node scripts/ci-app-status.mjs storage "$STATUS" private
+          node scripts/ci-app-status.mjs main-thread "$STATUS"
           pgrep -fl "smoke/Send to Daylight" || { echo "::error::the Mac app is not running"; exit 1; }
           pluginkit -m -A -D -v 2>/dev/null | grep -i daylight || echo "::warning::pluginkit does not list the extensions"
           # 3. Paired and sent (the relay has it).
@@ -242,6 +250,8 @@ jobs:
           #    every minute while something waits).
           node scripts/ci-app-status.mjs row "$STATUS" "$SENT_URL" delivered 120
           shot mac-delivered || true
+          # 5. Pairing, sending and reading the ack never touched storage on the main thread either.
+          node scripts/ci-app-status.mjs main-thread "$STATUS"
           if [ -e "$HOME/Library/Group Containers/group.com.daylight.share" ]; then
             echo "::warning::~/Library/Group Containers/group.com.daylight.share exists (not created by this build, which has no App Group)"
           fi

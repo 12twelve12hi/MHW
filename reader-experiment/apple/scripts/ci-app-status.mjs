@@ -5,6 +5,9 @@
 //                                                                           now), then stays responsive
 //   node ci-app-status.mjs storage <status.json> private|shared             where it keeps the pairing and history
 //   node ci-app-status.mjs row     <status.json> <url> <status,…> <seconds>  the history row for <url> reaches a status
+//   node ci-app-status.mjs main-thread <status.json>                        no storage read or write (UserDefaults, the
+//                                                                           outbox, own container or App Group) ran on
+//                                                                           the main thread so far (StorageAudit)
 //
 // Exits 1 with a GitHub error annotation (and the last status) when a check fails.
 import { readFileSync } from 'node:fs';
@@ -63,7 +66,14 @@ if (command === 'render') {
   const row = status.rows.find((r) => r.url === url);
   console.log(`History row after ${ms} ms: ${row.status} ("${row.label}") · ${row.title}`);
   if (row.status === 'delivered' && row.label !== 'Delivered ✓') fail(`the history shows "${row.label}" for a delivered row`, status);
+} else if (command === 'main-thread') {
+  const { status } = await waitFor('the app reports its main-thread storage access after its first read', 10,
+    (s) => s.loaded === true && Array.isArray(s.mainThreadStorage));
+  if (status.mainThreadStorage.length > 0) {
+    fail(`storage was touched on the main thread: ${status.mainThreadStorage.join(', ')}`, status);
+  }
+  console.log(`No storage access on the main thread (storage: ${status.storage}, ${(status.rows ?? []).length} history rows).`);
 } else {
-  console.error('usage: node ci-app-status.mjs render|storage|row <status.json> …');
+  console.error('usage: node ci-app-status.mjs render|storage|row|main-thread <status.json> …');
   process.exit(2);
 }

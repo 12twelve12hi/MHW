@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Files, links and `daylightshare://` links (which ask in the main window before they pair).
     func application(_ application: NSApplication, open urls: [URL]) {
         MainWindow.shared.show()
         Task { await AppModel.shared.handleOpen(urls) }
@@ -84,8 +85,10 @@ struct MenuBarContent: View {
             if !model.rows.isEmpty {
                 Divider()
                 ForEach(model.rows.prefix(6)) { row in
-                    Button("\(StatusLabel.text(row)) · \(String(row.displayTitle.prefix(48)))") {
-                        if row.canRetry { Task { await model.retry(row) } } else { MainWindow.shared.show() }
+                    let text = RowText(row: row)
+                    Button("\(text.label) · \(String(row.displayTitle.prefix(48)))") {
+                        // A row whose shared copy offers "Retry now" or "Try again" does that; any other opens the window.
+                        if text.action != nil { Task { await model.retry(row) } } else { MainWindow.shared.show() }
                     }
                 }
             }

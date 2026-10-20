@@ -3,7 +3,12 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// The sender side of PROTOCOL 3.3: publish, read acks, re-send, expire. Mirrors the JS reference's `Sender`.
+/// The sender side of PROTOCOL 3.3, exactly the pseudo-code of CHANGES-v1.1 2.4: publish, read acks, re-send, expire.
+/// Mirrors the JS reference's `Sender`.
+///
+/// Every public method runs under a lock shared by every `ShareSender` on the same outbox directory in this process,
+/// so a share, a maintenance pass and a tap on "Retry now" take turns. Across processes (the app and its share
+/// extension) the outbox file is coordinated row by row, and a `sending` row is only taken over once it is stale.
 public final class ShareSender {
     public let pairing: Pairing
     public let keys: ShareKeys
@@ -24,76 +29,179 @@ public final class ShareSender {
         relay = try RelayClient(relay: pairing.relay, session: session)
     }
 
-    /// Shares one item now and returns its outbox row. Throws ShareError for bad input (not a web address, too
-    /// large, …); relay failures do not throw: they leave the row `failed`, to be retried.
+    // MARK: Share
+
+    /// Shares one item now and returns its outbox row. Throws ShareError for bad input, with nothing stored: not a web
+    /// address, over 9 MB ("Too big to send. Files can be up to 9 MB; …"), or no room to keep its copy ("This device
+    /// is out of space, …"). Relay failures do not throw: they leave the row `failed` with its `errorCode`.
     @discardableResult
     public func send(_ item: ItemInput, compress: Bool? = nil) async throws -> OutboxRow {
+        try await locked { try await self.sendUnlocked(item, compress: compress) }
+    }
+
+    private func sendUnlocked(_ item: ItemInput, compress: Bool?) async throws -> OutboxRow {
         var input = item
         if input.from == nil { input.from = from }
         if input.app == nil { input.app = app }
         let prepared = try ItemBuilder.prepare(input, compress: compress)
         let h = prepared.header
+        let t = now()
         let row = OutboxRow(id: h.id, kind: h.kind, title: h.title ?? "", url: h.url ?? "", name: h.name ?? "",
-                            mime: h.mime ?? "", size: h.size ?? 0, header: h, created: now(), status: .sending,
-                            lastPublish: nil, attachment: false, attempts: 0, error: "", delivered: nil,
-                            hasBody: !prepared.encoded.isEmpty, attemptStarted: now())
-        if row.hasBody { try outbox.writeBody(row.id, prepared.encoded) }
+                            mime: h.mime ?? "", size: h.size ?? 0, header: h, created: t, status: .sending,
+                            attachment: prepared.hasAttachment(chunkSize: chunkSize), hasBody: h.kind != .url,
+                            attemptStarted: t)
+        if row.hasBody {
+            do {
+                try outbox.writeBody(row.id, prepared.encoded)
+            } catch {
+                throw ShareError.outOfSpace
+            }
+        }
         outbox.save(row)
-        return await publish(row, prepared)
+        return await attempt(row, prepared).row
     }
 
-    /// Publishes every part of a prepared item (sealing one part at a time) and records the outcome.
-    private func publish(_ start: OutboxRow, _ prepared: PreparedItem) async -> OutboxRow {
-        var attachment = false
-        var failure: String?
+    // MARK: One attempt
+
+    /// Publishes the frames in part order and records the outcome (CHANGES-v1.1 2.4 `attempt`).
+    private func attempt(_ start: OutboxRow, _ prepared: PreparedItem) async -> (row: OutboxRow, error: ShareError?) {
+        var row = start
+        row.status = .sending
+        row.attemptStarted = now()
+        row = persist(row)
+        if row.status == .delivered { return (row, nil) }
+        var failure: ShareError?
         do {
             let n = prepared.partCount(chunkSize: chunkSize)
             for i in 0..<n {
                 let frame = try prepared.frame(part: i, keys: keys, chunkSize: chunkSize)
-                if try await relay.publish(topic: keys.inboxTopic, frame: frame) { attachment = true }
+                try await relay.publish(topic: keys.inboxTopic, frame: frame)
+                row.attemptStarted = now() // progress: `sending` is stale 15 minutes after this
+                row = persist(row)
             }
+        } catch let e as ShareError {
+            failure = e
         } catch {
-            failure = (error as? ShareError)?.message ?? error.localizedDescription
+            failure = ShareError("network", error.localizedDescription)
         }
-        let when = now()
-        return outbox.update { state -> OutboxRow in
-            var row = state.rows.first { $0.id == start.id } ?? start
-            if row.status == .delivered { return row } // acked meanwhile (another process)
-            row.status = failure == nil ? .sent : .failed
-            row.error = failure ?? ""
-            row.attachment = attachment || (failure != nil && row.attachment)
-            row.lastPublish = when
+        if let failure {
+            let code = ["network", "full", "refused"].contains(failure.code) ? failure.code : "network"
+            row.status = .failed
+            row.errorCode = code
             row.attempts += 1
+            row.slowFails = (code == "full" || code == "refused") ? row.slowFails + 1 : 0
+            if row.slowFails >= DLS.slowFailLimit { row.status = .expired }
+            row.error = failure.message
+        } else {
+            row.status = .sent
+            row.errorCode = ""
+            row.attempts = 0
+            row.slowFails = 0
+            row.error = ""
+        }
+        row.lastPublish = now()
+        return (persist(row), failure)
+    }
+
+    /// Saves a row, unless the stored one was delivered meanwhile (an ack read by another process): that one wins.
+    private func persist(_ row: OutboxRow) -> OutboxRow {
+        outbox.update { state -> OutboxRow in
+            if let stored = state.rows.first(where: { $0.id == row.id }), stored.status == .delivered { return stored }
             state.rows.removeAll { $0.id == row.id }
             state.rows.append(row)
             return row
         }
     }
 
-    /// Reads the ack topic and marks acknowledged rows delivered. Returns how many rows became delivered.
+    /// Ends a row without publishing: `expired` with `errorCode`, optionally dropping its stored content.
+    private func end(_ start: OutboxRow, _ errorCode: String, dropContent: Bool) -> OutboxRow {
+        var row = start
+        row.status = .expired
+        row.errorCode = errorCode
+        if dropContent { row.hasBody = false }
+        row = persist(row)
+        if dropContent { outbox.removeBodyFile(row.id) }
+        return row
+    }
+
+    /// Re-sends a row from its stored content, or ends it (no content: `gone`; over 9 MB, a row saved by 1.0:
+    /// `too-large`, and its content is dropped).
+    private func attemptStored(_ start: OutboxRow) async -> (row: OutboxRow, error: ShareError?, attempted: Bool) {
+        var row = start
+        var encoded = Data()
+        if row.kind != .url {
+            guard row.hasBody, let body = outbox.readBody(row.id) else { return (end(row, "gone", dropContent: false), nil, false) }
+            encoded = body
+        }
+        if row.size > DLS.maxItem { return (end(row, "too-large", dropContent: true), nil, false) }
+        let prepared = PreparedItem(header: row.header, encoded: encoded)
+        row.attachment = prepared.hasAttachment(chunkSize: chunkSize)
+        let r = await attempt(row, prepared)
+        return (r.row, r.error, true)
+    }
+
+    /// Whether a row's next try is due at `t` (CHANGES-v1.1 2.4 "due when"). Every wait counts from `lastPublish`.
+    func isDue(_ row: OutboxRow, at t: Date) -> Bool {
+        switch row.status {
+        case .sending:
+            return t.timeIntervalSince(row.attemptStarted ?? row.lastPublish ?? row.created) >= DLS.sendingStale
+        case .sent:
+            guard let last = row.lastPublish else { return true }
+            if !row.attachment { return t.timeIntervalSince(last) >= DLS.resendMessage }
+            let fast = last.timeIntervalSince(row.created) < DLS.resendFastWindow
+            return t.timeIntervalSince(last) >= (fast ? DLS.attachmentWait : DLS.resendSlow)
+        case .failed:
+            guard let last = row.lastPublish else { return true }
+            if row.errorCode == "full" || row.errorCode == "refused" {
+                return t.timeIntervalSince(last) >= DLS.attachmentWait
+            }
+            return t.timeIntervalSince(last) >= 60 * min(60, pow(2, Double(min(row.attempts, 30))))
+        case .delivered, .expired:
+            return false
+        }
+    }
+
+    // MARK: Acks
+
+    /// Reads the ack topic and marks acknowledged rows delivered (their content is dropped). Returns how many rows
+    /// became delivered. Throws when the poll fails.
     @discardableResult
     public func checkAcks() async throws -> Int {
+        try await locked { try await self.checkAcksUnlocked() }
+    }
+
+    private func checkAcksUnlocked() async throws -> Int {
         let state = outbox.load()
-        let since = state.ackTopic == keys.ackTopic ? (state.ackSince.map { String($0) } ?? "all") : "all"
-        let messages = try await relay.poll(topic: keys.ackTopic, since: since, maxAttachment: 1024 * 1024)
+        let previous = state.ackTopic == keys.ackTopic ? state.ackSince : nil
+        let entries = try await relay.poll(topic: keys.ackTopic, since: previous.map { String($0) } ?? "all")
         var acked = Set<String>()
-        var maxTime = 0
-        for m in messages {
-            maxTime = max(maxTime, m.time)
-            guard let frame = m.frame, let opened = try? Frame.open(keys: keys, purpose: .ack, frame: frame),
+        var newest = 0
+        var held = Int.max
+        for m in entries {
+            newest = max(newest, m.time)
+            if m.outcome == .retry { held = min(held, m.time) }
+            guard m.outcome == .frame, let frame = m.frame, let opened = try? Frame.open(keys: keys, purpose: .ack, frame: frame),
                   let ids = AckHeader.ids(in: opened.header) else { continue }
             acked.formUnion(ids)
         }
         let when = now()
         let delivered: [String] = outbox.update { state in
-            if maxTime > 0 {
-                state.ackSince = max(0, maxTime - 5)
+            if !entries.isEmpty {
+                // PROTOCOL 3.2: 30 minutes before the newest time, or before the earliest download to retry; a cursor
+                // never moves backwards when nothing is held.
+                let c = max(0, min(newest, held) - DLS.cursorOverlap)
+                if held == Int.max, let previous, previous > c {
+                    state.ackSince = previous
+                } else {
+                    state.ackSince = c
+                }
                 state.ackTopic = keys.ackTopic
             }
             var ids: [String] = []
             for i in state.rows.indices where state.rows[i].status != .delivered && acked.contains(state.rows[i].id) {
                 state.rows[i].status = .delivered
                 state.rows[i].delivered = when
+                state.rows[i].errorCode = ""
                 state.rows[i].error = ""
                 state.rows[i].hasBody = false
                 ids.append(state.rows[i].id)
@@ -104,84 +212,138 @@ public final class ShareSender {
         return delivered.count
     }
 
-    /// Re-sends undelivered items whose relay copy is about to expire (or whose publish failed, with backoff) and
-    /// expires week-old ones. Returns the rows it published again.
+    // MARK: Re-sends
+
+    /// One re-send pass, oldest row first (PROTOCOL 3.3 steps 3-4): expires week-old rows, drops expired rows' content
+    /// 14 days after the share, re-sends rows that are due. After a 429 it publishes nothing more; after a 413 no
+    /// item with an attachment frame. Returns the rows it attempted.
     @discardableResult
     public func resendDue() async -> [OutboxRow] {
-        let t = now()
-        var due: [String] = []
-        var expired: [String] = []
-        var purge: [String] = []
-        for row in outbox.load().rows {
-            if row.status == .expired && row.hasBody && t.timeIntervalSince(row.created) > 30 * 24 * 3600 {
-                purge.append(row.id)
+        await locked { await self.resendDueUnlocked() }
+    }
+
+    private func resendDueUnlocked() async -> [OutboxRow] {
+        var stopAll = false
+        var stopAttachments = false
+        var out: [OutboxRow] = []
+        let ids = outbox.load().rows.sorted { $0.created < $1.created }.map(\.id)
+        for id in ids {
+            guard var row = outbox.row(id) else { continue }
+            let t = now()
+            switch row.status {
+            case .delivered:
+                continue
+            case .expired:
+                if row.hasBody && t.timeIntervalSince(row.created) > DLS.contentKeep {
+                    row.hasBody = false
+                    _ = persist(row)
+                    outbox.removeBodyFile(row.id)
+                }
+                continue
+            default:
+                break
             }
-            guard row.status != .delivered && row.status != .expired else { continue }
             if t.timeIntervalSince(row.created) > DLS.outboxExpiry {
-                expired.append(row.id)
+                row.status = .expired
+                row.errorCode = ""
+                _ = persist(row)
                 continue
             }
-            let isDue: Bool
-            switch row.status {
-            case .sending:
-                // Another process may be publishing it right now; take over only when that looks abandoned.
-                isDue = t.timeIntervalSince(row.attemptStarted ?? row.lastPublish ?? .distantPast) >= 15 * 60
-            case .failed:
-                isDue = t.timeIntervalSince(row.lastPublish ?? .distantPast) >= 60 * min(60, pow(2, Double(row.attempts)))
-            default:
-                isDue = t.timeIntervalSince(row.lastPublish ?? .distantPast)
-                    >= (row.attachment ? DLS.resendAttachment : DLS.resendMessage)
+            if !isDue(row, at: t) { continue }
+            if stopAll || (stopAttachments && row.attachment) { continue }
+            let r = await attemptStored(row)
+            if r.attempted { out.append(r.row) }
+            if r.error?.status == 429 {
+                stopAll = true
+            } else if r.error?.code == "full" {
+                stopAttachments = true
             }
-            if isDue { due.append(row.id) }
-        }
-        if !expired.isEmpty || !purge.isEmpty {
-            outbox.update { state in
-                for i in state.rows.indices {
-                    if expired.contains(state.rows[i].id) { state.rows[i].status = .expired }
-                    if purge.contains(state.rows[i].id) { state.rows[i].hasBody = false }
-                }
-            }
-            purge.forEach(outbox.removeBodyFile)
-        }
-        var out: [OutboxRow] = []
-        for id in due {
-            if let r = await retry(id) { out.append(r) }
         }
         return out
     }
 
-    /// Publishes an outbox item again: same id and header, fresh nonces. "Try again" on an expired item restarts
-    /// its 7 days (bodies of expired items are kept for 30 days, so a file can still go).
+    /// "Retry now" (a failed row) and "Try again" (an expired row with errorCode "", "full" or "refused"): publishes
+    /// it again with the same id and header (`sent` included); "Try again" starts its 7 days over. Any other row is
+    /// left as it is (a sending, sent or delivered row is never uploaded again by a tap). Returns the row, or nil.
     @discardableResult
     public func retry(_ id: String) async -> OutboxRow? {
-        guard var row = outbox.row(id) else { return nil }
-        var encoded = Data()
-        if row.kind != .url {
-            guard let body = outbox.readBody(id) else {
-                row.status = .expired
-                row.error = "The content is no longer stored; share it again."
-                outbox.save(row)
-                return row
-            }
-            encoded = body
-        }
-        if row.status == .expired { row.created = now() }
-        row.status = .sending
-        row.attemptStarted = now()
-        outbox.save(row)
-        return await publish(row, PreparedItem(header: row.header, encoded: encoded))
+        await locked { await self.retryUnlocked(id) }
     }
 
-    /// One maintenance pass: acks, then re-sends. Call on launch, after a share, from timers and background refresh.
+    private func retryUnlocked(_ id: String) async -> OutboxRow? {
+        guard var row = outbox.row(id) else { return nil }
+        if row.status == .failed { return await attemptStored(row).row }
+        if row.status == .expired && ["", "full", "refused"].contains(row.errorCode) {
+            row.created = now()
+            row.attempts = 0
+            row.slowFails = 0
+            row.errorCode = ""
+            return await attemptStored(row).row
+        }
+        return row
+    }
+
+    /// One maintenance pass: acks (errors ignored: offline still re-sends), then re-sends. Call on launch, after a
+    /// share, from timers and background refresh.
     @discardableResult
     public func tick() async -> (delivered: Int, resent: Int) {
-        let delivered = (try? await checkAcks()) ?? 0
-        let resent = await resendDue()
-        return (delivered, resent.count)
+        await locked {
+            let delivered = (try? await self.checkAcksUnlocked()) ?? 0
+            let resent = await self.resendDueUnlocked()
+            return (delivered, resent.count)
+        }
     }
 
-    /// Whether any row still waits for publishing or an ack (worth polling for).
-    public var hasPending: Bool {
-        outbox.load().rows.contains { $0.status == .sending || $0.status == .sent || $0.status == .failed }
+    /// Whether any row still waits for publishing or an ack (worth polling for). Reads the outbox.
+    public var hasPending: Bool { outbox.load().rows.contains(where: \.isPending) }
+
+    // MARK: Lock
+
+    private func locked<T>(_ body: () async throws -> T) async rethrows -> T {
+        let lock = OutboxLock.lock(for: outbox.directory)
+        await lock.acquire()
+        do {
+            let value = try await body()
+            await lock.release()
+            return value
+        } catch {
+            await lock.release()
+            throw error
+        }
+    }
+}
+
+/// One async lock per outbox directory in this process (CHANGES-v1.1 note a: the library serialises).
+actor OutboxLock {
+    private static let registry = NSLock()
+    private static var locks: [String: OutboxLock] = [:]
+
+    static func lock(for directory: URL) -> OutboxLock {
+        registry.lock()
+        defer { registry.unlock() }
+        let key = directory.standardizedFileURL.path
+        if let l = locks[key] { return l }
+        let l = OutboxLock()
+        locks[key] = l
+        return l
+    }
+
+    private var held = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !held {
+            held = true
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            held = false
+        } else {
+            waiters.removeFirst().resume()
+        }
     }
 }

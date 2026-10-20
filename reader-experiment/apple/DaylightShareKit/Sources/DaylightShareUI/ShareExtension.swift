@@ -11,6 +11,10 @@ public enum SharePayload: Equatable {
     /// A file copied to a temporary location.
     case file(url: URL, name: String)
     case text(String)
+    /// A file over 9 MB: refused before it is read or copied (CHANGES-v1.1 2.2).
+    case tooLarge(name: String, size: Int)
+    /// A `daylightshare://` pairing link (shared from the camera, Messages, …): it pairs, after the user confirms.
+    case pairing(String)
 }
 
 /// Reads NSExtensionItems (iOS and macOS share extensions) into payloads.
@@ -29,10 +33,16 @@ public enum SharePayloadReader {
         return best(out)
     }
 
-    /// Prefers the page (it carries the link too), then links, then files, then text; drops duplicates.
+    /// Prefers a pairing link, then the page (it carries the link too), then files, then links, then text.
     static func best(_ all: [SharePayload]) -> [SharePayload] {
+        if let pairing = all.first(where: { if case .pairing = $0 { return true } else { return false } }) { return [pairing] }
         if let page = all.first(where: { if case .page = $0 { return true } else { return false } }) { return [page] }
-        let files = all.filter { if case .file = $0 { return true } else { return false } }
+        let files = all.filter {
+            switch $0 {
+            case .file, .tooLarge: return true
+            default: return false
+            }
+        }
         if !files.isEmpty { return Array(files.prefix(20)) }
         if let link = all.first(where: { if case .link = $0 { return true } else { return false } }) {
             // A shared text with a title and a link (common from apps) is just the link.
@@ -55,18 +65,17 @@ public enum SharePayloadReader {
             }
             if let url { return .link(url: url, title: title) }
         }
-        // 2. Files.
+        // 2. Files (their size is checked before they are copied).
         if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier),
            let url = await loadURL(provider, UTType.fileURL.identifier), url.isFileURL,
-           let copy = copyToTemporary(url, suggestedName: provider.suggestedName) {
-            return .file(url: copy, name: copy.lastPathComponent)
+           let file = filePayload(url, suggestedName: provider.suggestedName) {
+            return file
         }
-        // 3. Web links.
+        // 3. Web links (and pairing links).
         if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier),
            let url = await loadURL(provider, UTType.url.identifier) {
-            if url.isFileURL, let copy = copyToTemporary(url, suggestedName: provider.suggestedName) {
-                return .file(url: copy, name: copy.lastPathComponent)
-            }
+            if url.isFileURL, let file = filePayload(url, suggestedName: provider.suggestedName) { return file }
+            if url.scheme?.lowercased() == "daylightshare" { return .pairing(url.absoluteString) }
             if let link = ShareText.webURL(url.absoluteString) { return .link(url: link, title: itemTitle) }
         }
         // 4. Documents given as data (Files, Mail, Books, …), by their most specific type.
@@ -75,24 +84,25 @@ public enum SharePayloadReader {
             return !t.conforms(to: .url) && (t.conforms(to: .data) || t.conforms(to: .content))
                 && !(t.conforms(to: .plainText) && types.contains(UTType.url.identifier))
         }
-        if let docType, let file = await loadFile(provider, docType) { return .file(url: file, name: file.lastPathComponent) }
+        if let docType, let file = await loadFile(provider, docType) { return file }
         // 5. Plain text.
         if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
             let value = await loadItem(provider, UTType.plainText.identifier)
             if let s = value as? String { return textPayload(s, title: itemTitle) }
             if let a = value as? NSAttributedString { return textPayload(a.string, title: itemTitle) }
             if let d = value as? Data, let s = String(data: d, encoding: .utf8) { return textPayload(s, title: itemTitle) }
-            if let u = value as? URL, u.isFileURL, let copy = copyToTemporary(u, suggestedName: provider.suggestedName) {
-                return .file(url: copy, name: copy.lastPathComponent)
+            if let u = value as? URL, u.isFileURL, let file = filePayload(u, suggestedName: provider.suggestedName) {
+                return file
             }
         }
         return nil
     }
 
-    /// Short text that holds a link is the link; anything else is sent as a text file.
+    /// A pairing link is a pairing; short text that holds a link is the link; anything else is sent as a text file.
     static func textPayload(_ s: String, title: String?) -> SharePayload? {
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return nil }
+        if t.lowercased().hasPrefix("daylightshare:"), !t.contains(where: \.isWhitespace) { return .pairing(t) }
         if let url = ShareText.findURL(t), t.count <= url.count + 300 {
             let rest = t.replacingOccurrences(of: url, with: "").trimmingCharacters(in: .whitespacesAndNewlines)
             return .link(url: url, title: rest.isEmpty ? title : rest)
@@ -119,17 +129,35 @@ public enum SharePayloadReader {
         return nil
     }
 
-    /// The provider's file representation, copied out before the system deletes it.
-    static func loadFile(_ provider: NSItemProvider, _ type: String) async -> URL? {
+    /// The provider's file representation, copied out before the system deletes it (unless it is over 9 MB).
+    static func loadFile(_ provider: NSItemProvider, _ type: String) async -> SharePayload? {
         let suggested = provider.suggestedName
-        return await withCheckedContinuation { (cont: CheckedContinuation<URL?, Never>) in
+        return await withCheckedContinuation { (cont: CheckedContinuation<SharePayload?, Never>) in
             _ = provider.loadFileRepresentation(forTypeIdentifier: type) { url, _ in
                 var name = suggested
                 if let n = name, (n as NSString).pathExtension.isEmpty,
                    let ext = UTType(type)?.preferredFilenameExtension { name = "\(n).\(ext)" }
-                cont.resume(returning: url.flatMap { copyToTemporary($0, suggestedName: name) })
+                cont.resume(returning: url.flatMap { filePayload($0, suggestedName: name) })
             }
         }
+    }
+
+    /// The size of a file, read from its metadata (nil when unknown).
+    static func fileSize(_ url: URL) -> Int? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        return (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+    }
+
+    /// A file to send: refused up front when it is over `DLS.maxItem` (nothing is read or copied), else copied to a
+    /// temporary location.
+    static func filePayload(_ url: URL, suggestedName: String?) -> SharePayload? {
+        if let size = fileSize(url), size > DLS.maxItem {
+            let name = url.lastPathComponent.isEmpty ? (suggestedName ?? "") : url.lastPathComponent
+            return .tooLarge(name: ShareText.safeFileName(name), size: size)
+        }
+        guard let copy = copyToTemporary(url, suggestedName: suggestedName) else { return nil }
+        return .file(url: copy, name: copy.lastPathComponent)
     }
 
     static func copyToTemporary(_ url: URL, suggestedName: String?) -> URL? {
@@ -153,20 +181,30 @@ public enum SharePayloadReader {
     }
 }
 
-/// The share extensions' logic: read the input, pair if needed, send, report, finish.
+/// The share extensions' logic: read the input, pair if needed (asking first when the pairing comes from a link or
+/// replaces another Daylight), send, report with the shared copy (CHANGES-v1.1 2.5), finish.
+///
+/// Storage (the pairing and the outbox) is read and written off the main thread, like the app does.
 @MainActor
 public final class ShareExtensionModel: ObservableObject {
     public enum Phase: Equatable {
         case reading
         case needsPairing
+        /// A pairing waits for "Pair"/"Switch" or "Cancel" (PROTOCOL 1.3).
+        case confirmPairing(PairingConfirmation)
+        /// Paired from a shared link: the notice ("Paired with …", "Pairing updated: …").
+        case paired(String)
         case sending
         case sent
-        case failed(String)
+        /// Not everything went now: a title (the row's label, or "Not sent") and what to know (the row's sentence,
+        /// or why it was refused).
+        case result(title: String, message: String)
         case nothing
     }
 
     @Published public private(set) var phase: Phase = .reading
     @Published public private(set) var summary = ""
+    @Published public private(set) var daylightName = "your Daylight"
     /// False when this extension keeps its own pairing (no App Group in this build: ad-hoc and unsigned Mac builds),
     /// so the pairing screen explains that the code is needed here once.
     @Published public private(set) var sharesPairingWithApp = true
@@ -178,12 +216,12 @@ public final class ShareExtensionModel: ObservableObject {
     let store: SharedStore
     private var payloads: [SharePayload] = []
     private var started = false
+    /// The pairing the confirmation is about, and whether the shared items are sent once it is applied.
+    private var pending: (pairing: Pairing, thenSend: Bool)?
 
     public init(store: SharedStore = .shared) {
         self.store = store
     }
-
-    public var daylightName: String { store.pairing?.displayName ?? "your Daylight" }
 
     public func start(inputItems: [Any]) {
         guard !started else { return }
@@ -194,9 +232,18 @@ public final class ShareExtensionModel: ObservableObject {
             // The App Group is resolved in the background (never on this thread); wait for it before reading the pairing.
             await store.ready()
             sharesPairingWithApp = store.isShared
-            if payloads.isEmpty {
+            let store = self.store
+            let current = await AppModel.onStorage { store.pairing }
+            daylightName = current?.displayName ?? "your Daylight"
+            if case let .pairing(link)? = payloads.first {
+                do {
+                    try await offer(Pairing.parse(link), source: .link, thenSend: false)
+                } catch {
+                    phase = .result(title: "Not paired", message: (error as? ShareError)?.message ?? error.localizedDescription)
+                }
+            } else if payloads.isEmpty {
                 phase = .nothing
-            } else if store.pairing == nil {
+            } else if current == nil {
                 phase = .needsPairing
             } else {
                 await send()
@@ -204,46 +251,87 @@ public final class ShareExtensionModel: ObservableObject {
         }
     }
 
-    /// From the pairing form: returns an error message or nil.
+    /// From the pairing form (typed or pasted here): returns an error message or nil.
     public func pair(_ input: String) -> String? {
         do {
             let p = try Pairing.parse(input)
-            Task {
-                await store.ready()
-                store.pair(p)
-                await send()
-            }
+            Task { await offer(p, source: .app, thenSend: true) }
             return nil
         } catch {
             return (error as? ShareError)?.message ?? error.localizedDescription
         }
     }
 
+    func offer(_ p: Pairing, source: PairingConfirmation.Source, thenSend: Bool) async {
+        await store.ready()
+        let store = self.store
+        let current = await AppModel.onStorage { store.pairing }
+        let c = PairingConfirmation(current: current, next: p, source: source)
+        if c.ask {
+            pending = (p, thenSend)
+            phase = .confirmPairing(c)
+        } else {
+            await apply(p, notice: c.notice, thenSend: thenSend)
+        }
+    }
+
+    /// "Pair" or "Switch".
+    public func confirmPairing() {
+        guard let pending else { return }
+        self.pending = nil
+        Task { await apply(pending.pairing, notice: nil, thenSend: pending.thenSend) }
+    }
+
+    /// "Cancel" on the question: back to the pairing form, or closed when the pairing came as a shared link.
+    public func cancelPairing() {
+        let wasForm = pending?.thenSend ?? false
+        pending = nil
+        if wasForm { phase = .needsPairing } else { cancel() }
+    }
+
+    private func apply(_ p: Pairing, notice: String?, thenSend: Bool) async {
+        let store = self.store
+        await AppModel.onStorage { store.pair(p) }
+        daylightName = p.displayName
+        if thenSend {
+            await send()
+        } else {
+            phase = .paired(notice ?? "Paired with \(p.displayName).")
+        }
+    }
+
     func send() async {
         await store.ready()
-        guard let sender = try? DaylightShare.sender(store: store) else {
+        let store = self.store
+        guard let sender = await AppModel.onStorage({ try? DaylightShare.sender(store: store) }) else {
             phase = .needsPairing
             return
         }
         phase = .sending
-        var failures: [String] = []
+        var problems: [(title: String, message: String)] = []
         for payload in payloads {
             do {
-                let row = try await sender.send(Self.input(for: payload))
-                if row.status == .failed { failures.append(row.error) }
+                let input = try await AppModel.onStorage { Result { try Self.input(for: payload) } }.get()
+                let row = try await sender.send(input)
+                if row.status != .sent && row.status != .delivered {
+                    let text = RowText(row: row)
+                    problems.append((text.label, text.sentence ?? ""))
+                }
             } catch {
-                failures.append((error as? ShareError)?.message ?? error.localizedDescription)
+                problems.append(("Not sent", (error as? ShareError)?.message ?? error.localizedDescription))
             }
         }
         cleanUpTemporaryFiles()
-        if failures.isEmpty {
+        if problems.isEmpty {
             phase = .sent
             // PROTOCOL 3.3: check for acks right after sending (the Daylight may be online and quick).
             _ = try? await sender.checkAcks()
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             onFinish()
         } else {
-            phase = .failed(failures.joined(separator: " "))
+            let titles = Set(problems.map { $0.title })
+            let title = titles.count == 1 ? problems[0].title : "Not everything was sent"
+            phase = .result(title: title, message: problems.map { $0.message }.filter { !$0.isEmpty }.joined(separator: " "))
         }
     }
 
@@ -261,7 +349,9 @@ public final class ShareExtensionModel: ObservableObject {
         for case let .file(url, _) in payloads { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     }
 
-    static func input(for payload: SharePayload) throws -> ItemInput {
+    /// What one payload sends. Reads the file: call off the main thread. Throws the shared too-big sentence for a
+    /// file over 9 MB.
+    nonisolated static func input(for payload: SharePayload) throws -> ItemInput {
         switch payload {
         case let .page(html, url, title):
             // Larger pages than the Reader takes go as a link (PROTOCOL 2.2).
@@ -271,11 +361,16 @@ public final class ShareExtensionModel: ObservableObject {
             return .link(url, title: title)
         case let .file(url, name):
             if let link = AppModel.linkInShortcutFile(url) { return .link(link, title: (name as NSString).deletingPathExtension) }
+            if let size = SharePayloadReader.fileSize(url), size > DLS.maxItem { throw ShareError.tooLarge(size) }
             return .file(try Data(contentsOf: url, options: .alwaysMapped), name: name)
         case let .text(text):
             let firstLine = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? "Text"
             let name = ShareText.safeFileName(String(firstLine.prefix(40)), fallback: "Text") + ".txt"
             return .file(Data(text.utf8), name: name, mime: "text/plain", title: String(firstLine.prefix(120)))
+        case let .tooLarge(_, size):
+            throw ShareError.tooLarge(size)
+        case .pairing:
+            throw ShareError("pairing", "A pairing link isn’t something to send.")
         }
     }
 
@@ -287,11 +382,14 @@ public final class ShareExtensionModel: ObservableObject {
         case let .link(url, title): return title ?? url
         case let .file(_, name): return name
         case let .text(t): return String(t.prefix(80))
+        case let .tooLarge(name, _): return name
+        case .pairing: return ""
         }
     }
 }
 
-/// The share extensions' small UI: "Sending to <Daylight>… → Sent ✓", or the pairing form when not paired yet.
+/// The share extensions' small UI: "Sending to <Daylight>… → Sent ✓", the row's label and sentence when it did not
+/// go now, the pairing form when not paired yet, or the question before a pairing takes effect.
 public struct ShareExtensionView: View {
     @ObservedObject var model: ShareExtensionModel
 
@@ -310,12 +408,20 @@ public struct ShareExtensionView: View {
                 Image(systemName: "checkmark.circle.fill").font(.system(size: 44)).foregroundColor(.green)
                 Text("Sent ✓").font(.headline)
                 summaryText
-            case let .failed(message):
+            case let .result(title, message):
                 Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 40)).foregroundColor(.orange)
-                Text("Not sent yet").font(.headline)
-                Text(message).font(.callout).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-                Text("Send to Daylight will retry it when you open the app.").font(.footnote).foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
+                Text(title).font(.headline).multilineTextAlignment(.center)
+                summaryText
+                if !message.isEmpty {
+                    Text(message).font(.callout).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                }
+                Button("Done") { model.done() }.buttonStyle(.borderedProminent)
+            case let .confirmPairing(confirmation):
+                PairingConfirmationView(confirmation: confirmation, onConfirm: { model.confirmPairing() },
+                                        onCancel: { model.cancelPairing() })
+            case let .paired(notice):
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 44)).foregroundColor(.green)
+                Text(notice).font(.headline).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                 Button("Done") { model.done() }.buttonStyle(.borderedProminent)
             case .nothing:
                 Image(systemName: "questionmark.circle").font(.system(size: 40)).foregroundColor(.secondary)

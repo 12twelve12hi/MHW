@@ -86,7 +86,9 @@ public struct ItemHeader: Codable, Equatable {
         let title = ShareText.cleanTitle(JSONRead.isNull(h["title"]) ? "" : JSONRead.coerceString(h["title"]))
         if !title.isEmpty { out.title = title }
         if kind != .url {
-            guard let size = JSONRead.integer(h["size"]), size >= 0, size <= DLS.maxEncoded * 4 else { throw bad("size") }
+            // A page is at most the Reader's 8 MiB; a file at most 256 MiB (v1.1 senders send at most 9 MB).
+            let maxSize = kind == .page ? DLS.maxPageHTML : DLS.maxDecoded
+            guard let size = JSONRead.integer(h["size"]), size >= 0, size <= maxSize else { throw bad("size") }
             guard let sha = h["sha256"] as? String, Hex.isLowerHex(sha, count: 64) else { throw bad("sha256") }
             out.size = size
             out.sha256 = sha
@@ -114,7 +116,7 @@ public struct ItemHeader: Codable, Equatable {
     }
 }
 
-/// An ack header (PROTOCOL 2.4).
+/// An ack header (PROTOCOL 2.4): at most `DLS.maxAckIDs` (70) ids, so the frame is always a message.
 public struct AckHeader: Equatable {
     public var ids: [String]
     public var sent: String

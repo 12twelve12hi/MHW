@@ -1,17 +1,17 @@
 import Foundation
 
-/// One shared item in the outbox / history (PROTOCOL 3.3).
+/// One shared item in the outbox / history (PROTOCOL 3.3; the row fields of CHANGES-v1.1 2.4).
 public struct OutboxRow: Codable, Identifiable, Equatable {
     public enum Status: String, Codable {
-        /// Being published (or the app was stopped while publishing; it is published again).
+        /// Being published (or the app was stopped while publishing: taken over 15 minutes after its last progress).
         case sending
         /// The relay has it; waiting for the Daylight's ack.
         case sent
         /// The Daylight acknowledged it.
         case delivered
-        /// Publishing failed; retried with backoff.
+        /// The last attempt failed (`errorCode` says how); it is tried again by itself.
         case failed
-        /// Not delivered within 7 days; "Try again" publishes it once more.
+        /// Not delivered within 7 days, or given up (`errorCode`); "Try again" starts over where `RowText` offers it.
         case expired
     }
 
@@ -27,16 +27,80 @@ public struct OutboxRow: Codable, Identifiable, Equatable {
     /// When it was first shared (or "Try again" pressed); expiry counts from here.
     public var created: Date
     public var status: Status
+    /// When the last attempt ended; every wait counts from here.
     public var lastPublish: Date?
-    /// Whether any frame went as an attachment (re-send after 150 min rather than 11 h).
+    /// Whether a frame goes as an attachment (re-sent on the attachment schedule; skipped in a pass after a 413).
     public var attachment: Bool
+    /// Failed attempts since the last success (the network backoff).
     public var attempts: Int
+    /// Technical detail for logs ("HTTP 503"); never shown. Show `RowText` instead.
     public var error: String
     public var delivered: Date?
-    /// The encoded body is kept in the outbox directory until delivered (or 30 days after an expiry).
+    /// The encoded body is kept in the outbox directory until delivered, removed, evicted, or 14 days after `created`.
     public var hasBody: Bool
-    /// When the current publish attempt started (a row stays `sending` if the process was stopped mid-way).
+    /// When the current attempt started or last made progress (a frame accepted).
     public var attemptStarted: Date?
+    /// For `failed` and `expired`: "" | "network" | "full" | "refused" | "too-large" | "gone".
+    public var errorCode: String
+    /// `full`/`refused` failures in a row; the third ends the row as `expired`.
+    public var slowFails: Int
+
+    public init(id: String, kind: ItemKind, title: String = "", url: String = "", name: String = "", mime: String = "",
+                size: Int = 0, header: ItemHeader, created: Date, status: Status, lastPublish: Date? = nil,
+                attachment: Bool = false, attempts: Int = 0, error: String = "", delivered: Date? = nil,
+                hasBody: Bool = false, attemptStarted: Date? = nil, errorCode: String = "", slowFails: Int = 0) {
+        self.id = id
+        self.kind = kind
+        self.title = title
+        self.url = url
+        self.name = name
+        self.mime = mime
+        self.size = size
+        self.header = header
+        self.created = created
+        self.status = status
+        self.lastPublish = lastPublish
+        self.attachment = attachment
+        self.attempts = attempts
+        self.error = error
+        self.delivered = delivered
+        self.hasBody = hasBody
+        self.attemptStarted = attemptStarted
+        self.errorCode = errorCode
+        self.slowFails = slowFails
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, title, url, name, mime, size, header, created, status, lastPublish, attachment, attempts, error,
+             delivered, hasBody, attemptStarted, errorCode, slowFails
+    }
+
+    /// Rows saved by 1.0 have no `errorCode` or `slowFails`: they read as "" and 0.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        kind = try c.decode(ItemKind.self, forKey: .kind)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        url = try c.decodeIfPresent(String.self, forKey: .url) ?? ""
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        mime = try c.decodeIfPresent(String.self, forKey: .mime) ?? ""
+        size = try c.decodeIfPresent(Int.self, forKey: .size) ?? 0
+        header = try c.decode(ItemHeader.self, forKey: .header)
+        created = try c.decode(Date.self, forKey: .created)
+        status = try c.decode(Status.self, forKey: .status)
+        lastPublish = try c.decodeIfPresent(Date.self, forKey: .lastPublish)
+        attachment = try c.decodeIfPresent(Bool.self, forKey: .attachment) ?? false
+        attempts = try c.decodeIfPresent(Int.self, forKey: .attempts) ?? 0
+        error = try c.decodeIfPresent(String.self, forKey: .error) ?? ""
+        delivered = try c.decodeIfPresent(Date.self, forKey: .delivered)
+        hasBody = try c.decodeIfPresent(Bool.self, forKey: .hasBody) ?? false
+        attemptStarted = try c.decodeIfPresent(Date.self, forKey: .attemptStarted)
+        errorCode = try c.decodeIfPresent(String.self, forKey: .errorCode) ?? ""
+        slowFails = try c.decodeIfPresent(Int.self, forKey: .slowFails) ?? 0
+    }
+
+    /// `sending`, `sent` or `failed`: the outbox keeps it whatever its age, and the app polls for it.
+    public var isPending: Bool { status == .sending || status == .sent || status == .failed }
 
     /// What the history shows.
     public var displayTitle: String {
@@ -54,34 +118,34 @@ public struct OutboxRow: Codable, Identifiable, Equatable {
             .filter { !$0.isEmpty }.joined(separator: " · ")
         }
     }
-
-    /// Whether "Retry" / "Try again" makes sense.
-    public var canRetry: Bool { status == .failed || status == .expired }
 }
 
 /// The outbox file (`outbox.json`) and bodies (`outbox/<id>.bin`) in the shared directory. Every change is a
-/// coordinated read-modify-write, so the app and its extensions can use it at the same time.
+/// coordinated read-modify-write, so the app and its extensions can use it at the same time. Every method touches
+/// storage: call them off the main thread (the apps do; `StorageAudit` records any call made on it).
 public final class OutboxStore {
     public struct State: Codable {
         public var rows: [OutboxRow] = []
-        /// Ack topic cursor: Unix seconds (newest ack message time minus 5); nil = "all".
+        /// Ack topic cursor: Unix seconds (PROTOCOL 3.2: 30 minutes before the newest or the earliest held time);
+        /// nil = "all".
         public var ackSince: Int?
         /// The ack topic the cursor belongs to (a new pairing starts from "all").
         public var ackTopic: String?
     }
 
-    public static let maxRows = 200
+    /// Finished rows kept (pending rows are never dropped).
+    public static let maxRows = DLS.outboxMaxRows
 
     public let directory: URL
     let fileURL: URL
     let bodiesURL: URL
     private let lock = NSLock()
 
+    /// Creates nothing yet: the directories are made on the first write, so creating a store never touches storage.
     public init(directory: URL) {
         self.directory = directory
         fileURL = directory.appendingPathComponent("outbox.json")
         bodiesURL = directory.appendingPathComponent("outbox", isDirectory: true)
-        try? FileManager.default.createDirectory(at: bodiesURL, withIntermediateDirectories: true)
     }
 
     public convenience init(store: SharedStore = .shared) {
@@ -91,6 +155,7 @@ public final class OutboxStore {
     // MARK: State
 
     public func load() -> State {
+        StorageAudit.note("outbox read")
         lock.lock()
         defer { lock.unlock() }
         var state = State()
@@ -102,19 +167,32 @@ public final class OutboxStore {
 
     public func row(_ id: String) -> OutboxRow? { load().rows.first { $0.id == id } }
 
-    /// Read-modify-write under a file coordinator (across processes) and a lock (within this one).
+    /// Read-modify-write under a file coordinator (across processes) and a lock (within this one). Every write keeps
+    /// every `sending`, `sent` and `failed` row, fills the room up to 200 with the newest `delivered` and `expired`
+    /// rows, and drops the stored body of every row left out (CHANGES-v1.1 2.4, finding 16).
     @discardableResult
     public func update<T>(_ change: (inout State) -> T) -> T {
+        StorageAudit.note("outbox write")
         lock.lock()
         var result: T?
         coordinate(write: true) { url in
             var state = Self.read(url)
             result = change(&state)
             state.rows.sort { $0.created > $1.created }
-            if state.rows.count > Self.maxRows {
-                for r in state.rows[Self.maxRows...] { removeBodyFile(r.id) }
-                state.rows.removeLast(state.rows.count - Self.maxRows)
+            var room = max(0, Self.maxRows - state.rows.filter(\.isPending).count)
+            var kept: [OutboxRow] = []
+            for row in state.rows {
+                if row.isPending {
+                    kept.append(row)
+                } else if room > 0 {
+                    kept.append(row)
+                    room -= 1
+                } else {
+                    removeBodyFile(row.id)
+                }
             }
+            state.rows = kept
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             if let data = try? JSONEncoder.outbox.encode(state) { try? data.write(to: url, options: .atomic) }
         }
         lock.unlock()
@@ -145,7 +223,7 @@ public final class OutboxStore {
         gone.forEach(removeBodyFile)
     }
 
-    /// Removes everything (unpairing).
+    /// Removes every row, every stored body and the ack cursor (unpairing, or pairing with another secret).
     public func removeAll() {
         update { state in state = State() }
         try? FileManager.default.removeItem(at: bodiesURL)
@@ -157,13 +235,15 @@ public final class OutboxStore {
     func bodyURL(_ id: String) -> URL { bodiesURL.appendingPathComponent("\(id).bin") }
 
     public func writeBody(_ id: String, _ data: Data) throws {
+        StorageAudit.note("outbox body write")
         try FileManager.default.createDirectory(at: bodiesURL, withIntermediateDirectories: true)
         try data.write(to: bodyURL(id), options: .atomic)
     }
 
-    /// The stored encoded body, memory-mapped.
+    /// The stored encoded body (memory-mapped when that is safe), or nil when there is none.
     public func readBody(_ id: String) -> Data? {
-        try? Data(contentsOf: bodyURL(id), options: .alwaysMapped)
+        StorageAudit.note("outbox body read")
+        return try? Data(contentsOf: bodyURL(id), options: .mappedIfSafe)
     }
 
     public func removeBodyFile(_ id: String) {

@@ -12,9 +12,33 @@ final class FakeRelay: URLProtocol {
         var requests: [String] = []
         /// Status codes to answer the next publishes with (then 200 again).
         var failNext: [Int] = []
+        /// Status codes to answer attachment downloads with, by message id (until removed).
+        var downloadStatus: [String: Int] = [:]
         var time = 1_800_000_000
         var nextID = 0
         var messageMaxBytes = 4096
+        /// ntfy.sh's per-file limit as CHANGES-v1.1 reads it: a larger PUT gets 413.
+        var attachmentMaxBytes = 2_000_000
+    }
+
+    /// Adds a message to a topic as the relay would list it: the frame as message text, or (`attachment`) as an
+    /// attachment to download. Returns its id.
+    @discardableResult
+    static func inject(topic: String, frame: Data, time: Int, attachment: Bool) -> String {
+        with { s in
+            s.nextID += 1
+            let id = "m\(s.nextID)"
+            var m: [String: Any] = ["id": id, "time": time, "event": "message", "topic": topic]
+            if attachment {
+                s.files[id] = frame
+                m["message"] = "dls1"
+                m["attachment"] = ["name": "dls1.bin", "size": frame.count, "url": "https://relay.test/file/\(id).bin"]
+            } else {
+                m["message"] = Base64.encode(frame)
+            }
+            s.topics[topic, default: []].append(m)
+            return id
+        }
     }
 
     private static let lock = NSLock()
@@ -48,12 +72,16 @@ final class FakeRelay: URLProtocol {
 
         if method == "GET", parts.count == 2, parts[0] == "file" {
             let id = String(parts[1].dropLast(4))
+            if let status = Self.with({ $0.downloadStatus[id] }) { return respond(status, Data("{}".utf8)) }
             if let data = Self.with({ $0.files[id] }) { return respond(200, data) }
             return respond(404, Data("{\"error\":\"not found\"}".utf8))
         }
         if (method == "POST" || method == "PUT"), parts.count == 1 {
             if let status = Self.with({ s -> Int? in s.failNext.isEmpty ? nil : s.failNext.removeFirst() }) {
                 return respond(status, Data("{}".utf8), headers: status == 429 ? ["Retry-After": "1"] : [:])
+            }
+            if method == "PUT", body.count > Self.with({ $0.attachmentMaxBytes }) {
+                return respond(413, Data("{\"code\":41301,\"http\":413,\"error\":\"attachment too large, or bandwidth limit reached\"}".utf8))
             }
             let filename = request.value(forHTTPHeaderField: "Filename")
             let msg: [String: Any] = Self.with { s in
@@ -122,7 +150,7 @@ struct TestReceiver {
         var items: [Reassembler.Item] = []
         var seen = Set<String>()
         for m in try await relay.poll(topic: keys.inboxTopic) {
-            guard let f = m.frame, let o = try? Frame.open(keys: keys, purpose: .inbox, frame: f) else { continue }
+            guard m.outcome == .frame, let f = m.frame, let o = try? Frame.open(keys: keys, purpose: .inbox, frame: f) else { continue }
             if let item = try r.add(header: o.header, body: o.body), seen.insert(item.header.id).inserted { items.append(item) }
         }
         if !items.isEmpty {

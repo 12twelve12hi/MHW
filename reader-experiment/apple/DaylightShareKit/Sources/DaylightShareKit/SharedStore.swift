@@ -72,7 +72,7 @@ public final class SharedStore {
         let own = Storage(defaults: privateDefaults, directory: privateDirectory, appGroup: nil)
         privateStorage = own
         current = own
-        try? FileManager.default.createDirectory(at: privateDirectory, withIntermediateDirectories: true)
+        // Nothing here touches storage (the outbox makes its directory on its first write, off the main thread).
         let declared = resolver.declaredGroups()
         guard !declared.isEmpty else {
             currentState = .appPrivate(reason: "this build has no App Group")
@@ -96,10 +96,10 @@ public final class SharedStore {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
-    /// This process's own storage directory: Application Support/DaylightShare (inside the sandbox container).
+    /// This process's own storage directory: Application Support/DaylightShare (inside the sandbox container). Only
+    /// computes the path: it is created on the first write.
     public static func privateDirectory() -> URL {
-        let base = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                 appropriateFor: nil, create: true))
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         return base.appendingPathComponent("DaylightShare", isDirectory: true)
     }
@@ -217,12 +217,15 @@ public final class SharedStore {
         static let deviceName = "dls.deviceName"
     }
 
+    /// The stored pairing. Reads and writes UserDefaults: off the main thread (see `StorageAudit`).
     public var pairing: Pairing? {
         get {
+            StorageAudit.note("pairing read")
             guard let data = defaults.data(forKey: Key.pairing) else { return nil }
             return try? JSONDecoder().decode(Pairing.self, from: data)
         }
         set {
+            StorageAudit.note("pairing write")
             if let newValue, let data = try? JSONEncoder().encode(newValue) {
                 defaults.set(data, forKey: Key.pairing)
             } else {
@@ -234,8 +237,12 @@ public final class SharedStore {
 
     /// The name this device sends as `from` ("" = the default for the platform).
     public var deviceName: String {
-        get { defaults.string(forKey: Key.deviceName) ?? "" }
+        get {
+            StorageAudit.note("device name read")
+            return defaults.string(forKey: Key.deviceName) ?? ""
+        }
         set {
+            StorageAudit.note("device name write")
             defaults.set(ShareText.cleanName(newValue), forKey: Key.deviceName)
             SharedStore.postChange()
         }

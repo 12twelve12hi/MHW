@@ -26,7 +26,7 @@ final class EndToEndTests: XCTestCase {
             + "</body></html>"
         let pdf = DLSCrypto.randomBytes(250_000)
         let markdown = Data(String(repeating: "# Heading\n\nSome *markdown* text.\n\n", count: 500).utf8)
-        let inputs: [ItemInput] = [
+        var inputs: [ItemInput] = [
             .link("https://example.com/articles/42?ref=share#top", title: "An article"),
             .page(html: html, url: "https://example.com/walden", title: "Walden"),
             .file(pdf, name: "paper.pdf", title: "A paper"),
@@ -41,6 +41,16 @@ final class EndToEndTests: XCTestCase {
         XCTAssertEqual(rows[1].header.enc, "deflate-raw")
         XCTAssertEqual(rows[3].header.enc, "deflate-raw")
         XCTAssertTrue(rows[2].attachment)
+
+        // A 5 MB file with the real chunk size: 3 frames, each under the relay's 2,000,000-byte attachment limit.
+        let bigSender = try ShareSender(pairing: pairing, outbox: OutboxStore(directory: dir.appendingPathComponent("big")),
+                                        from: "CI Mac", app: "macos/e2e")
+        let big = ItemInput.file(DLSCrypto.randomBytes(5_000_000), name: "five-megabytes.pdf", title: "Five megabytes")
+        let bigRow = try await bigSender.send(big)
+        XCTAssertEqual(bigRow.status, .sent, bigRow.error)
+        XCTAssertEqual(PreparedItem(header: bigRow.header, encoded: big.content ?? Data()).partCount(), 3)
+        inputs.append(big)
+        rows.append(bigRow)
 
         let output = try runNode(script: Self.scriptURL, arguments: [relay, pairing.compactCode])
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any], output)
@@ -65,8 +75,11 @@ final class EndToEndTests: XCTestCase {
 
         // The JS receiver acked everything it received.
         let delivered = try await sender.checkAcks()
-        XCTAssertEqual(delivered, inputs.count)
+        XCTAssertEqual(delivered, inputs.count - 1)
         XCTAssertTrue(sender.outbox.rows.allSatisfy { $0.status == .delivered })
+        XCTAssertEqual(try await bigSender.checkAcks(), 1)
+        XCTAssertEqual(bigSender.outbox.row(bigRow.id)?.status, .delivered)
+        XCTAssertEqual(RowText(row: try XCTUnwrap(bigSender.outbox.row(bigRow.id))).label, "Delivered ✓")
     }
 
     static var scriptURL: URL {

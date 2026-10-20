@@ -24,6 +24,9 @@ public enum Frame {
                             nonce: Data? = nil) throws -> Data {
         let n = nonce ?? DLSCrypto.randomBytes(12)
         guard n.count == 12 else { throw ShareError("nonce", "nonce must be 12 bytes") }
+        guard headerJSON.count <= DLS.maxHeaderBytes else {
+            throw ShareError("header", "header of \(headerJSON.count) bytes (at most \(DLS.maxHeaderBytes))")
+        }
         let len = UInt32(headerJSON.count)
         var plain = Data(capacity: 4 + headerJSON.count + body.count)
         plain.append(contentsOf: [UInt8(len >> 24), UInt8((len >> 16) & 0xff), UInt8((len >> 8) & 0xff), UInt8(len & 0xff)])
@@ -92,6 +95,16 @@ public struct PreparedItem {
         return try Frame.seal(keys: keys, purpose: .inbox, header: header.forPart(i, of: n).json, body: chunk, nonce: nonce)
     }
 
+    /// Whether any frame at `chunkSize` is too large for a message (it goes as an attachment): such an item is re-sent
+    /// on the attachment schedule, and a pass that got a 413 skips it (CHANGES-v1.1 2.4).
+    public func hasAttachment(chunkSize: Int = DLS.chunk) -> Bool {
+        let n = partCount(chunkSize: chunkSize)
+        return (0..<n).contains { i in
+            let chunk = min(chunkSize, encoded.count - i * chunkSize)
+            return !Frame.isSmall(4 + 12 + 4 + header.forPart(i, of: n).jsonData.count + max(0, chunk) + 16)
+        }
+    }
+
     /// All frames (small items; large ones are sealed one part at a time while publishing).
     public func frames(keys: ShareKeys, chunkSize: Int = DLS.chunk, nonces: [Data]? = nil) throws -> [Data] {
         try (0..<partCount(chunkSize: chunkSize)).map { i in
@@ -146,6 +159,8 @@ public enum ItemBuilder {
 
     /// Validates, hashes and encodes an item (the JS `buildItemFrames` without the sealing).
     /// `compress`: nil = pages and text types only (the default), true/false to force.
+    /// Throws ShareError("too-large", "Too big to send. Files can be up to 9 MB; …") for content over `DLS.maxItem`
+    /// bytes before compression (a page over 8 MiB gets the page message: send its link instead).
     public static func prepare(_ item: ItemInput, compress: Bool? = nil) throws -> PreparedItem {
         let kind = item.kind
         let id = item.id ?? newID()
@@ -166,7 +181,10 @@ public enum ItemBuilder {
                 if content.count > DLS.maxPageHTML {
                     throw ShareError("too-large", "The page is too large; send the link instead.")
                 }
-            } else {
+            }
+            // The one limit users see: 9 MB of content before compression, for every relay (PROTOCOL 2.3).
+            if content.count > DLS.maxItem { throw ShareError.tooLarge(content.count) }
+            if kind == .file {
                 header.name = ShareText.safeFileName(item.name)
                 let m = (item.mime ?? "").isEmpty ? "application/octet-stream" : item.mime!
                 header.mime = ShareText.utf16Prefix(m.lowercased(), 100)
@@ -186,16 +204,13 @@ public enum ItemBuilder {
             }
         }
         #endif
-        if encoded.count > DLS.maxEncoded { throw ShareError("too-large", "That file is larger than 64 MB.") }
 
         header.sent = item.sent ?? ShareText.isoTimestamp()
         let from = ShareText.cleanName(item.from)
         if !from.isEmpty { header.from = from }
         if let app = item.app, !app.isEmpty { header.app = ShareText.utf16Prefix(app, 60) }
 
-        let prepared = PreparedItem(header: header, encoded: encoded)
-        if prepared.partCount() > DLS.maxParts { throw ShareError("too-large", "That file is too large to send.") }
-        return prepared
+        return PreparedItem(header: header, encoded: encoded)
     }
 }
 
@@ -245,7 +260,14 @@ public final class Reassembler {
         let content: Data
         if p.header.isDeflated {
             #if canImport(Compression) || DLS_ZLIB
-            content = try RawDeflate.decompress(encoded, limit: size)
+            // Bounded: stops as soon as the output passes `size` (a decompression bomb never gets held).
+            do {
+                content = try RawDeflate.decompress(encoded, limit: size)
+            } catch let e as ShareError {
+                throw e
+            } catch {
+                throw ShareError("integrity", "bad deflate data")
+            }
             #else
             throw ShareError("integrity", "deflate-raw is not available on this platform")
             #endif
