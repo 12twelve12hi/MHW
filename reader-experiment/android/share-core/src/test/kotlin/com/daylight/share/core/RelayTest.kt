@@ -626,6 +626,94 @@ class RelayTest {
         assertEquals(1, out.checkAcks())
     }
 
+    /**
+     * A part or the decoded content that cannot be written to the spool (a nearly full disk) is a failed accept too
+     * (CHANGES-v1.1 2.6): the poll goes on, the other items are stored and acked, the failed item's messages are handled
+     * (not downloaded again) and it comes back with the sender's re-send. Before, the IOException escaped the poll: no
+     * state was saved, nothing was acked and every poll downloaded everything again.
+     */
+    @Test
+    fun aStoreFailureWhileReassemblingIsAFailedAccept() {
+        MockRelay.start("--control").use { m ->
+            val p = pairing(m.url)
+            val now = AtomicLong(System.currentTimeMillis())
+            val out = outbox(p, clock = { now.get() }, chunk = 4000)
+            val link = out.publish(out.add(OutgoingItem(Kind.URL, url = "https://example.com/disk-nearly-full"), null).id)!!
+            val whole = out.publish(out.addFile(3000).id)!! // one part: its decoded content cannot be written
+            val split = out.publish(out.addFile(10_000).id)!! // three parts: the first cannot be written
+            assertEquals(Status.SENT, whole.status)
+            assertEquals(Status.SENT, split.status)
+            val inbox = Inbox(p, clock = { now.get() })
+            val spool = File(inbox.dir, "spool")
+            // "No space left": a folder where the content goes, a file where the item's parts folder goes.
+            File(spool, "${whole.id}.content.tmp/keep").apply { parentFile!!.mkdirs(); writeText("x") }
+            File(spool, "parts").mkdirs()
+            File(spool, "parts/${split.id}").writeText("x")
+
+            val r1 = inbox.receiver.pollOnce()
+            assertEquals(listOf(link.id), r1.items.map { it.id })
+            assertEquals(listOf(link.id), r1.ackIds)
+            assertNotNull(r1.storeError)
+            assertTrue(inbox.state().incomplete.isEmpty())
+            assertTrue(inbox.state().partMsgs.isEmpty())
+            assertFalse(inbox.state().seenItems.containsKey(whole.id))
+            assertFalse(inbox.state().seenItems.containsKey(split.id))
+            assertFalse(File(spool, "parts/${split.id}").exists())
+            assertEquals(1, out.checkAcks())
+            assertEquals(Status.DELIVERED, out.row(link.id)!!.status)
+            val downloads = (m.state()["downloads"] as Double).toInt()
+            assertTrue(downloads >= 2)
+
+            // Handled: the next poll downloads nothing again and reports no failure.
+            File(spool, "${whole.id}.content.tmp").deleteRecursively()
+            val r2 = inbox.receiver.pollOnce()
+            assertTrue(r2.items.isEmpty())
+            assertNull(r2.storeError)
+            assertEquals(downloads, (m.state()["downloads"] as Double).toInt())
+
+            // Both come back with the sender's re-send, 185 minutes later.
+            now.addAndGet(Limits.ATTACHMENT_WAIT_MS)
+            assertEquals(setOf(whole.id, split.id), out.resendDue().map { it.id }.toSet())
+            val r3 = inbox.receiver.pollOnce()
+            assertEquals(setOf(whole.id, split.id), r3.items.map { it.id }.toSet())
+            assertNull(r3.storeError)
+            assertEquals(2, out.checkAcks())
+            assertEquals(3, inbox.received.size)
+        }
+    }
+
+    /** On the live stream a 429 pauses attachment downloads for a minute: those that follow are retries, not requests. */
+    @Test
+    fun aLive429PausesDownloads() {
+        val requested = ArrayList<String>()
+        val t = AtomicLong(1_000_000)
+        fun line(id: String) = "{\"id\":\"$id\",\"time\":100,\"event\":\"message\",\"attachment\":{\"url\":\"https://relay.test/file/$id.bin\"}}"
+        val lines = ArrayDeque(listOf(line("a"), line("b"), line("c"), line("d")))
+        val http = object : Http {
+            override fun send(method: String, url: String, headers: Map<String, String>, body: ByteArray?, maxResponseBytes: Long, readTimeoutMs: Int): Http.Response {
+                requested += url.substringAfterLast('/')
+                return Http.Response(if (url.endsWith("a.bin")) 429 else 503, emptyMap(), ByteArray(0))
+            }
+
+            override fun stream(url: String, headers: Map<String, String>, readTimeoutMs: Int) = object : Http.LineStream {
+                override val status = 200
+                override fun readLine(): String? = lines.removeFirstOrNull()?.also { if (it.contains("\"d\"")) t.addAndGet(RelayClient.LIVE_LIMIT_PAUSE_MS) }
+                override fun close() = Unit
+            }
+        }
+        val s = RelayClient("https://relay.test", http, clock = { t.get() }).openStream("topic", "all")
+        val a = s.next()!!
+        assertEquals(Outcome.RETRY to 429, a.outcome to a.status)
+        val b = s.next()!!
+        assertEquals(Outcome.RETRY to 0, b.outcome to b.status)
+        assertEquals(Outcome.RETRY, s.next()!!.outcome)
+        assertEquals(listOf("a.bin"), requested)
+        // A minute later downloads resume.
+        assertEquals(Outcome.RETRY to 503, s.next()!!.let { it.outcome to it.status })
+        assertEquals(listOf("a.bin", "d.bin"), requested)
+        assertNull(s.next())
+    }
+
     @Test
     fun ackFailureTriggersDigestAtNextPoll() {
         MockRelay.start("--control").use { m ->

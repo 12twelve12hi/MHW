@@ -76,7 +76,8 @@ class MemoryReceiverStore(private var state: ReceiverState = ReceiverState()) : 
  * The Daylight side (PROTOCOL 3.4, steps 1-4; the rules of CHANGES-v1.1 2.6): reads the inbox topic, decodes and
  * reassembles items, hands each new complete item to [accept] (which must store it durably, or throw: then the item's
  * messages are handled, but its id is not remembered and it is not acked, so it comes back with the sender's next
- * re-send), acknowledges everything it has, and re-publishes a digest of recent ids every 11 hours and after any
+ * re-send; a part or decoded content that cannot be written to the spool is handled the same way, and both set
+ * [Result.storeError]), acknowledges everything it has, and re-publishes a digest of recent ids every 11 hours and after any
  * failed ack. Handing items to the Reader (step 5) is the app's job. Every method runs under the state's lock.
  */
 class Receiver(
@@ -93,8 +94,8 @@ class Receiver(
 
     /**
      * [items]: new items, stored. [ackIds]: this poll's ids whose ack was published. [digestIds]: older ids the digest
-     * re-published. [ackError]: why an ack could not be published (null when all went out). [storeError]: why [accept]
-     * failed for an item (null when every item was stored). [limited]: a download answered 429 or 413 (the relay is
+     * re-published. [ackError]: why an ack could not be published (null when all went out). [storeError]: why an item
+     * could not be stored ([accept] threw, or a part or its content could not be written; null when all were stored). [limited]: a download answered 429 or 413 (the relay is
      * limiting this network; what it held back arrives later).
      */
     class Result(
@@ -179,6 +180,16 @@ class Receiver(
             ids.forEach { state.partMsgs.remove(it) }
             return ids
         }
+        /** Items whose part or content could not be written in this call: their later parts here are handled too. */
+        val failed = HashSet<String>()
+        /** A store failure (disk full?): like a failed accept, the item's messages are handled and its parts dropped. */
+        fun storeFailed(item: String, msgId: String, e: Exception) {
+            storeError = e.message ?: e.javaClass.simpleName
+            handled(listOf(msgId) + partsOf(item))
+            reassembler.drop(item)
+            state.incomplete.remove(item)
+            failed += item
+        }
         var limited = false
         for (m in msgs) {
             newest = maxOf(newest, m.time)
@@ -209,6 +220,10 @@ class Receiver(
                 ack += rawId
                 continue
             }
+            if (rawId != null && rawId in failed) {
+                handled(listOf(m.id))
+                continue
+            }
             val done = try {
                 reassembler.add(opened.header, opened.body)
             } catch (e: ShareException) {
@@ -219,6 +234,12 @@ class Receiver(
                     state.incomplete.remove(rawId)
                 }
                 continue
+            } catch (e: Exception) {
+                // Writing a part or the decoded content failed (disk full?). The header passed its check, so rawId is
+                // the item's id. Handled as a failed accept (CHANGES-v1.1 2.6): not remembered, not acked, and not
+                // downloaded again; it comes back with the sender's next re-send.
+                storeFailed(rawId ?: m.id, m.id, e)
+                continue
             }
             if (done == null) {
                 if (rawId != null) {
@@ -228,16 +249,16 @@ class Receiver(
                 continue
             }
             val id = done.header.id
-            handled(listOf(m.id) + partsOf(id))
-            state.incomplete.remove(id)
             try {
                 accept(done)
             } catch (e: Exception) {
                 // Could not store it (disk full?): not remembered, not acked; it comes back with the next re-send.
-                storeError = e.message ?: e.javaClass.simpleName
                 (done.content as? FileBody)?.file?.delete()
+                storeFailed(id, m.id, e)
                 continue
             }
+            handled(listOf(m.id) + partsOf(id))
+            state.incomplete.remove(id)
             state.seenItems[id] = now
             ack += id
             items += done.header

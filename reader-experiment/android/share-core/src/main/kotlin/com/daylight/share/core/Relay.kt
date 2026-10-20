@@ -187,6 +187,7 @@ class RelayClient(
     relay: String = Limits.DEFAULT_RELAY,
     private val http: Http = UrlConnectionHttp(),
     private val retryDelaysMs: List<Long> = listOf(1_000L, 2_000L, 4_000L),
+    private val clock: () -> Long = System::currentTimeMillis,
     private val sleeper: (Long) -> Unit = { Thread.sleep(it) },
 ) {
     val relay: String = Relay.normalize(relay)
@@ -359,6 +360,14 @@ class RelayClient(
     }
 
     inner class LiveStream internal constructor(private val lines: Http.LineStream, private val skip: (String) -> Boolean) : Closeable {
+        /** Until when attachments are not requested ([clock] ms), after a download answered 429. */
+        @Volatile private var pausedUntil = 0L
+
+        /**
+         * The next message. After a download answers 429, attachments that follow within [LIVE_LIMIT_PAUSE_MS] are
+         * [Outcome.RETRY] without a request (they hold the cursor; the next poll gets them): the live counterpart of a
+         * poll's "every later attachment entry in this answer is retry".
+         */
         fun next(): RelayMessage? {
             while (true) {
                 val line = try {
@@ -366,7 +375,9 @@ class RelayClient(
                 } catch (e: IOException) {
                     return null
                 } ?: return null
-                parseLine(line, skip)?.let { return it }
+                val m = parseLine(line, skip, noDownloads = clock() < pausedUntil) ?: continue
+                if (m.status == 429) pausedUntil = clock() + LIVE_LIMIT_PAUSE_MS
+                return m
             }
         }
 
@@ -374,6 +385,9 @@ class RelayClient(
     }
 
     companion object {
+        /** How long the live stream requests no attachment after a download answered 429. */
+        const val LIVE_LIMIT_PAUSE_MS = 60_000L
+
         /** Attachment downloads: v1.0 senders' 12 MiB chunks + 128 KiB (a literal, not derived from [Limits.CHUNK]). */
         const val MAX_ATTACHMENT = Limits.MAX_ATTACHMENT
 
