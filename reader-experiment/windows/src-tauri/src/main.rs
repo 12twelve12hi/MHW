@@ -39,8 +39,9 @@ const EV_WAKE: &str = "dls://wake";
 const EV_TICK: &str = "dls://tick";
 const EV_AUTOSTART: &str = "dls://autostart";
 const TICK_EVERY: Duration = Duration::from_secs(15 * 60);
-/// Never read more than this into memory for the page (the page asks for less: the protocol's own limit).
-const MAX_FILE: u64 = 64 * 1024 * 1024;
+/// Never read more than this into memory for the page: the protocol's largest item (MAX_ITEM, 9,000,000 bytes, in
+/// revision 1.1). The page asks for the same limit.
+const MAX_FILE: u64 = 9_000_000;
 /// Start at login as the user set it in this app: a file in the data folder that exists while it is on. An update
 /// that runs the old uninstaller loses this user's Run entry; the installer (windows/installer-hooks.nsh, which names
 /// this file too) and the app's next start put it back.
@@ -201,10 +202,19 @@ async fn read_file(app: AppHandle, path: String, max: Option<u64>) -> Result<tau
         if meta.is_dir() {
             return Err("Folders can’t be sent; send the files inside.".into());
         }
-        if meta.len() > max.unwrap_or(MAX_FILE).min(MAX_FILE) {
+        let limit = max.unwrap_or(MAX_FILE).min(MAX_FILE);
+        if meta.len() > limit {
             return Err(format!("too-large:{}", meta.len()));
         }
-        std::fs::read(&p).map_err(|e| format!("Couldn’t read it ({e})."))
+        // Read at most one byte past the limit, in case the file grew since it was measured.
+        use std::io::Read as _;
+        let file = std::fs::File::open(&p).map_err(|e| format!("Couldn’t read it ({e})."))?;
+        let mut bytes = Vec::with_capacity(meta.len() as usize);
+        file.take(limit + 1).read_to_end(&mut bytes).map_err(|e| format!("Couldn’t read it ({e})."))?;
+        if bytes.len() as u64 > limit {
+            return Err(format!("too-large:{}", std::fs::metadata(&p).map(|m| m.len()).unwrap_or(bytes.len() as u64)));
+        }
+        Ok(bytes)
     })
     .await
     .map_err(|e| e.to_string())??;

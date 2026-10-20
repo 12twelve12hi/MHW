@@ -136,6 +136,28 @@ export function relativeTime(ms, now = Date.now()) {
 export const isPending = (row) => !!row && (row.status === 'sending' || row.status === 'sent' || row.status === 'failed');
 
 /**
+ * How long after a share (`created`) an ack can still arrive: the outbox's 7 days of re-sends, then the 8 days the
+ * Daylight keeps listing ids it received in its acks (DIGEST_WINDOW, CHANGES-v1.1 2.1). An expired row can still be
+ * delivered in that time: the Daylight may come online and pick up the last re-send still on the relay.
+ */
+export const ACK_WINDOW_MS = ds.OUTBOX_EXPIRY_MS + 8 * 86400000;
+
+/** True while an ack is worth reading: some row isn't delivered and was shared less than ACK_WINDOW_MS ago. */
+export const wantsAcks = (rows, now = Date.now()) =>
+  (rows ?? []).some((r) => !!r && r.status !== 'delivered' && now - (r.created ?? 0) < ACK_WINDOW_MS);
+
+/**
+ * The outbox's acks and re-sends (PROTOCOL 3.3; CHANGES-v1.1 2.4 tick). The library's resendDue always runs: it makes
+ * no request unless something is due, and it ends week-old rows and drops expired rows' content after 14 days
+ * (CONTENT_KEEP). The ack topic is read only while wantsAcks(), so an idle outbox stays off the relay.
+ * sender: a daylight-share Sender; call it under the app's own outbox lock. -> {delivered, resent}
+ */
+export async function maintain(sender, now = Date.now()) {
+  if (wantsAcks(await sender.list(), now)) return sender.tick();
+  return { delivered: 0, resent: (await sender.resendDue()).length };
+}
+
+/**
  * The notification after sending: {title, body, bad}. results: [{row} | {name, error}] in the order sent. bad: one of
  * them isn't sent and won't be by itself (an error, or Not delivered).
  * One item: its name, then the row's label and sentence (CHANGES-v1.1 2.5), or "Couldn’t send <name>" and why. Several:

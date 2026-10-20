@@ -78,7 +78,10 @@ the protocol library (Daylight Share protocol 1.1, `describeRow`), so every Send
 While the app runs (in the notification area is enough) it checks for the Daylight's confirmations when it starts,
 right after each send and again about 30 seconds later, every 15 minutes, and when you open the window; and it
 re-sends anything not yet confirmed before the relay forgets it (ntfy.sh keeps messages 12 hours and files 3 hours),
-for up to a week. The history and the copies kept for re-sending survive restarts. Each is written so that a crash or
+for up to a week. An item still undelivered then shows *Not delivered* with **Try again**; its copy is kept for that
+until two weeks after the share, and a confirmation that arrives within about two weeks (the Daylight picked up the
+last re-send late) still makes it *Delivered ✓*. With nothing waiting or still to be confirmed, the app doesn't contact
+the relay. The history and the copies kept for re-sending survive restarts. Each is written so that a crash or
 a power cut leaves the old version or the new one; if a file is damaged all the same, the app sets it aside (renamed
 to `….json.bad`), says so in the window, and carries on.
 

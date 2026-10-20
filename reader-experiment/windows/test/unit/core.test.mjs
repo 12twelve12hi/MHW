@@ -350,13 +350,85 @@ test('timers: tick on start, every 15 minutes, right after a send and ~30 s late
   assert.equal(timers.intervals.length, 0);
 });
 
-test('tick skips the relay when nothing is waiting', async () => {
+test('tick stays off the relay with nothing to wait for; the local pass still drops an expired item’s copy after 14 days', async () => {
+  let clock = Date.now();
   const d = await daylight();
-  const { app } = newApp();
+  const { app, storage } = newApp({ extra: { now: () => clock } });
   await app.pair(d.link);
-  const before = relay.state.requests.length;
+  let before = relay.state.requests.length;
   assert.deepEqual(await app.tick(), { delivered: 0, resent: 0 });
+  assert.equal(relay.state.requests.length, before, 'an empty outbox makes no request');
+
+  // A file the Daylight never picks up: Not delivered after a week, its copy kept for Try again until day 14
+  // (CHANGES-v1.1 2.4, CONTENT_KEEP), whether or not anything else is waiting.
+  const t0 = clock;
+  const row = await app.sendFile({ name: 'never.txt', bytes: ds.utf8('never picked up') });
+  await app.tick(); // after the ticks a send starts, at the time of the send
+  clock = t0 + 7 * 86400000 + 60000;
+  await app.tick();
+  const expired = (await app.rows())[0];
+  assert.deepEqual([expired.status, expired.errorCode], ['expired', '']);
+  assert.ok(await storage.get(`outbox/${row.id}`), 'kept for Try again');
+  clock = t0 + 10 * 86400000;
+  await app.tick();
+  assert.ok(await storage.get(`outbox/${row.id}`), 'still kept on day 10');
+  clock = t0 + 37 * 86400000;
+  before = relay.state.requests.length;
+  assert.deepEqual(await app.tick(), { delivered: 0, resent: 0 });
+  assert.equal(await storage.get(`outbox/${row.id}`), undefined, 'dropped: more than 14 days after the share');
+  assert.equal(relay.state.requests.length, before, 'past the ack window (15 days) nothing reads the relay');
+  assert.equal((await app.rows())[0].status, 'expired');
+
+  // A delivered row alone never reads the relay either.
+  const { app: app2 } = newApp({ extra: { now: () => clock } });
+  await app2.pair(d.link);
+  await app2.sendLink('https://example.com/delivered-only');
+  await d.receiver.pollOnce();
+  assert.equal((await app2.tick()).delivered, 1);
+  before = relay.state.requests.length;
+  await app2.tick();
   assert.equal(relay.state.requests.length, before);
+});
+
+test('an expired link is marked delivered when the Daylight comes back and acks the last re-send', async () => {
+  let clock = Date.now();
+  const timed = await startMockRelay({ now: () => clock });
+  try {
+    const d = await daylight('Late', timed.url);
+    const { app } = newApp({ extra: { now: () => clock } });
+    await app.pair(d.link);
+    const t0 = clock;
+    const row = await app.sendLink('https://example.com/late', 'Late');
+    await app.tick(); // after the ticks a send starts, at the time of the send
+    clock = t0 + 7 * 86400000 - 30 * 60000;
+    assert.equal((await app.tick()).resent, 1, 'the last re-send, half an hour before the week is up');
+    clock = t0 + 7 * 86400000 + 60000;
+    await app.tick();
+    assert.equal((await app.rows())[0].status, 'expired');
+    assert.equal(L.rowView((await app.rows())[0], clock).retryLabel, 'Try again');
+    // The Daylight comes online, finds the re-send still on the relay and acks it.
+    clock += 3600000;
+    const got = (await d.receiver.pollOnce()).items;
+    assert.deepEqual(got.map((i) => i.header.id), [row.id]);
+    assert.equal((await app.tick()).delivered, 1);
+    const done = (await app.rows())[0];
+    assert.equal(done.status, 'delivered');
+    assert.deepEqual([L.rowView(done, clock).label, L.rowView(done, clock).action], ['Delivered ✓', null]);
+  } finally {
+    await timed.close();
+  }
+});
+
+test('wantsAcks: a row that isn’t delivered and was shared less than 15 days ago', () => {
+  const now = Date.now();
+  const day = 86400000;
+  assert.equal(L.ACK_WINDOW_MS, 15 * day);
+  assert.equal(L.wantsAcks([], now), false);
+  assert.equal(L.wantsAcks([{ status: 'delivered', created: now }], now), false);
+  assert.equal(L.wantsAcks([{ status: 'sent', created: now - day }], now), true);
+  assert.equal(L.wantsAcks([{ status: 'expired', created: now - 14 * day }], now), true);
+  assert.equal(L.wantsAcks([{ status: 'expired', created: now - 15 * day }], now), false);
+  assert.equal(L.wantsAcks([{ status: 'failed', created: now - 16 * day }, { status: 'expired', created: now - 2 * day }], now), true);
 });
 
 test('a relay that can’t be reached: Waiting to send with Retry now, in the module’s words; Retry now sends the same item', async () => {

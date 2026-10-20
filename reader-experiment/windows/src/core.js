@@ -3,7 +3,7 @@
 
 import * as ds from './daylight-share.js';
 import {
-  fileNameFor, mimeFor, titleFromName, nameFromPath, isInternetShortcut, urlFromInternetShortcut, isPending,
+  fileNameFor, mimeFor, titleFromName, nameFromPath, isInternetShortcut, urlFromInternetShortcut, maintain,
   sendSummary, hostOf, rowView,
 } from './logic.js';
 
@@ -259,14 +259,16 @@ export function createApp({
 
   // --- acks and re-sends ----------------------------------------------------------------------------------------------
 
-  /** Acks and re-sends (PROTOCOL 3.3). Skips the relay entirely when nothing is waiting. */
+  /**
+   * Acks and re-sends (PROTOCOL 3.3, logic.maintain): the local re-send pass always runs (it ends week-old rows and
+   * drops expired rows' content after 14 days); the ack topic is read only while a row could still be acked.
+   */
   async function tick() {
     const s = await getSender();
     if (!s) return { delivered: 0, resent: 0 };
     lastTick = now();
     return run(async () => {
-      if (!(await s.list()).some(isPending)) return { delivered: 0, resent: 0 };
-      try { return await s.tick(); } catch (e) { log.warn?.('Send to Daylight: tick failed', e); return { delivered: 0, resent: 0 }; }
+      try { return await maintain(s, now()); } catch (e) { log.warn?.('Send to Daylight: tick failed', e); return { delivered: 0, resent: 0 }; }
     });
   }
 
