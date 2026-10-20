@@ -1,15 +1,16 @@
 //! The webview's storage (the pairing, the settings and the outbox of daylight-share.js): one JSON file per key in
-//! `%APPDATA%\com.daylight.share.windows\store`, written atomically. Values arrive as JSON text and are not parsed.
+//! `%APPDATA%\com.daylight.share.windows\store`, written atomically and durably (atomic.rs). Values arrive as JSON
+//! text and are not parsed here: the page checks what it reads and has a damaged file set aside (kv_set_aside).
 
 use std::{
     fs,
     io::ErrorKind,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
 };
 
 use tauri::{AppHandle, Manager};
+
+pub use crate::atomic::write_atomic;
 
 pub fn dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map(|d| d.join("store")).map_err(|e| format!("no data folder: {e}"))
@@ -27,36 +28,12 @@ fn file_for(dir: &Path, key: &str) -> Result<PathBuf, String> {
     Ok(dir.join(format!("{}.json", key.replace('/', "~"))))
 }
 
-/// Writes through a temporary file and a rename, retrying briefly when another program (a virus scanner, say)
-/// holds the file.
-pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    static N: AtomicU64 = AtomicU64::new(0);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension(format!("tmp{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
-    fs::write(&tmp, bytes)?;
-    let mut attempt = 0;
-    loop {
-        match fs::rename(&tmp, path) {
-            Ok(()) => return Ok(()),
-            Err(e) if attempt < 6 && e.kind() != ErrorKind::NotFound => {
-                attempt += 1;
-                std::thread::sleep(Duration::from_millis(15 * attempt));
-            }
-            Err(e) => {
-                let _ = fs::remove_file(&tmp);
-                return Err(e);
-            }
-        }
-    }
-}
-
 #[tauri::command]
 pub async fn kv_get(app: AppHandle, key: String) -> Result<Option<String>, String> {
     let path = file_for(&dir(&app)?, &key)?;
-    match fs::read_to_string(&path) {
-        Ok(s) => Ok(Some(s)),
+    match fs::read(&path) {
+        // Damage that isn't valid UTF-8 still reaches the page as text, which then sets the file aside.
+        Ok(b) => Ok(Some(String::from_utf8(b).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))),
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
         Err(e) => Err(format!("couldn't read {key}: {e}")),
     }
@@ -76,4 +53,11 @@ pub async fn kv_remove(app: AppHandle, key: String) -> Result<(), String> {
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
         Err(e) => Err(format!("couldn't remove {key}: {e}")),
     }
+}
+
+/// A file the page couldn't read as what its key holds: renamed to `<file>.bad`, so the key reads as missing.
+#[tauri::command]
+pub async fn kv_set_aside(app: AppHandle, key: String) -> Result<(), String> {
+    let path = file_for(&dir(&app)?, &key)?;
+    crate::atomic::set_aside(&path).map_err(|e| format!("couldn't set {key} aside: {e}"))
 }

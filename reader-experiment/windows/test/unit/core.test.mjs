@@ -66,13 +66,14 @@ test('pairs from a link, sends Send To files and a clipboard link; the Daylight 
   const changes = [];
   app.onChange((k) => changes.push(k));
 
-  assert.deepEqual(await app.state(), { paired: false, name: '', relay: '', defaultRelay: true });
+  assert.deepEqual(await app.state(), { paired: false, name: '', relay: '', defaultRelay: true, codeStart: '' });
   const r = await app.pair(d.link);
   assert.deepEqual(r, { name: 'Desk Daylight', relay: relay.url });
   assert.ok(changes.includes('pairing'));
   const s = await app.state();
   assert.equal(s.paired, true);
   assert.equal(s.defaultRelay, false);
+  assert.equal(s.codeStart, d.code.slice(0, 4));
 
   const files = await app.handleAction({ type: 'files', paths: ['C:\\Docs\\Quiet paper – draft.pdf', 'C:\\Docs\\notes.txt'] });
   assert.equal(files.length, 2);
@@ -189,26 +190,139 @@ test('before pairing, Send To and the hotkey wait, open the window, and go out o
   assert.deepEqual(items.map((i) => i.header.name ?? i.header.url).sort(), ['a.txt', 'https://example.com/later']);
 });
 
-test('checkLink: pair, same, or ask before switching; switching discards the old outbox', async () => {
-  const d1 = await daylight('First');
-  const d2 = await daylight('Second');
-  const { app, storage } = newApp();
-  assert.equal((await app.checkLink(d1.link)).action, 'pair');
-  await app.pair(d1.link);
-  assert.deepEqual(await app.checkLink(d1.link), { action: 'same', name: 'First', current: 'First' });
-  assert.deepEqual(await app.checkLink(d2.link), { action: 'switch', name: 'Second', current: 'First' });
-  await assert.rejects(app.checkLink('daylightshare://pair?c=NOPE'), (e) => e.code === 'code');
+test('a pairing link asks first, in the module’s words; nothing is saved or sent until the answer', async () => {
+  const d = await daylight('My Daylight');
+  const { app, bridge, storage } = newApp({ bridge: fakeBridge({ 'C:\\a.txt': ds.utf8('queued before pairing') }) });
+  assert.equal(await app.handleAction({ type: 'files', paths: ['C:\\a.txt'] }), null, 'waits for pairing');
+  const pre = await app.preparePairing(d.link, { source: 'link' });
+  assert.equal(pre.current, null);
+  assert.deepEqual(pre.confirm, ds.pairingConfirmation(null, await ds.parsePairing(d.link), { source: 'link' }));
+  assert.equal(pre.confirm.ask, true);
+  assert.equal(pre.confirm.title, 'Pair with My Daylight?');
+  assert.equal(pre.confirm.lines[0], `Code starts ${d.code.slice(0, 4)}. Check it matches the code on your Daylight.`);
+  assert.equal(pre.confirm.button, 'Pair');
+  assert.equal(await storage.get('pairing'), undefined, 'asking saves nothing');
+  assert.equal((await app.snapshot()).waiting, 1, 'and sends nothing');
+  assert.equal(bridge.reads.length, 0);
 
+  const r = await app.applyPairing(pre.next, { expect: '' });
+  assert.deepEqual(r, { name: 'My Daylight', relay: relay.url });
+  for (let i = 0; i < 40 && (await app.rows()).length < 1; i++) await settle();
+  assert.equal((await d.receiver.pollOnce()).items[0].header.name, 'a.txt', 'what waited goes out once the user said Pair');
+});
+
+test('a typed code pairs without asking when nothing is paired; one that replaces another Daylight asks', async () => {
+  const d1 = await daylight('First');
+  const d2 = await daylight('');
+  const { app } = newApp();
+  const typed = await app.preparePairing(d1.code, { source: 'app', relay: relay.url });
+  assert.deepEqual(typed.confirm, { ask: false, title: null, lines: [], button: null, notice: null });
+  assert.equal(typed.next.relay, relay.url, 'the Advanced relay');
+  await app.applyPairing(typed.next, { expect: '' });
+  const replace = await app.preparePairing(d2.code, { source: 'app', relay: relay.url });
+  assert.equal(replace.confirm.ask, true);
+  assert.equal(replace.confirm.button, 'Switch');
+  // A typed code carries no name.
+  assert.equal(replace.confirm.lines.at(-1), 'This replaces your current Daylight. Items not yet delivered to it will not be sent.');
+});
+
+test('a link for another Daylight says it replaces this one; Switch deletes the old outbox, its content and cursor', async () => {
+  const d1 = await daylight('First');
+  const d2 = await daylight('First'); // a look-alike name: only the code tells them apart
+  const { app, storage } = newApp();
+  await app.pair(d1.link);
   const row = await app.sendFile({ name: 'x.txt', bytes: ds.utf8('for the first Daylight') });
-  assert.ok(await storage.get(`outbox/${row.id}`));
-  await app.pair(d2.link);
+  await storage.set('ackSince', 123);
+  const pre = await app.preparePairing(d2.link, { source: 'link' });
+  assert.equal(pre.confirm.ask, true);
+  assert.equal(pre.confirm.button, 'Switch');
+  assert.equal(pre.confirm.lines[0], `Code starts ${d2.code.slice(0, 4)}. Check it matches the code on your Daylight.`);
+  assert.ok(pre.confirm.lines.includes('This replaces First. Items not yet delivered to it will not be sent.'));
+  assert.equal((await app.rows()).length, 1, 'nothing changes before the answer');
+
+  await app.applyPairing(pre.next, { expect: pre.current.code });
   assert.deepEqual(await app.rows(), []);
   assert.equal(await storage.get(`outbox/${row.id}`), undefined);
-  assert.equal((await app.state()).name, 'Second');
+  assert.equal(await storage.get('ackSince'), undefined);
+  assert.equal((await app.state()).codeStart, d2.code.slice(0, 4));
 
   await app.unpair();
   assert.equal((await app.state()).paired, false);
   await assert.rejects(app.sendLink('https://example.com/'), (e) => e.code === 'pairing');
+  await assert.rejects(app.preparePairing('daylightshare://pair?c=NOPE'), (e) => e.code === 'code');
+});
+
+test('the same Daylight on another relay applies without asking and keeps the outbox: pending items go through the new relay', async () => {
+  const relay2 = await startMockRelay();
+  try {
+    let clock = Date.now();
+    const d = await daylight('Desk');
+    const { app, storage } = newApp({ extra: { now: () => clock } });
+    await app.pair(d.link);
+    const delivered = await app.sendLink('https://example.com/delivered');
+    await d.receiver.pollOnce();
+    await app.tick();
+    const pending = await app.sendFile({ name: 'pending.txt', bytes: ds.utf8('not picked up yet') });
+    assert.equal(pending.status, 'sent');
+    const cursor = await storage.get('ackSince');
+
+    const moved = await ds.pairingLink({ secret: d.secret, relay: relay2.url, name: 'Desk, upstairs' });
+    const pre = await app.preparePairing(moved, { source: 'link' });
+    assert.deepEqual(pre.confirm, {
+      ask: false, title: null, lines: [], button: null, notice: `Pairing updated: now sending through ${ds.relayHost(relay2.url)}.`,
+    });
+    const r = await app.applyPairing(pre.next, { expect: pre.current.code });
+    assert.deepEqual(r, { name: 'Desk, upstairs', relay: relay2.url });
+    const st = await app.state();
+    assert.equal(st.name, 'Desk, upstairs', 'a new name is saved');
+    assert.equal(st.relay, relay2.url);
+    assert.deepEqual((await app.rows()).map((x) => [x.id, x.status]), [[pending.id, 'sent'], [delivered.id, 'delivered']]);
+    assert.ok(await storage.get(`outbox/${pending.id}`), 'the re-send copy stays');
+    assert.equal(await storage.get('ackSince'), cursor);
+
+    // The Daylight now listens on the new relay; the pending item is re-sent there when it comes due, and acked there.
+    const r2 = new ds.Receiver({ pairing: { secret: d.secret, relay: relay2.url }, storage: new ds.MemoryStorage() });
+    clock += 12 * 3600000;
+    await app.tick();
+    const got = (await r2.pollOnce()).items;
+    assert.deepEqual(got.map((i) => i.header.id), [pending.id]);
+    await app.tick();
+    assert.equal((await app.rows()).find((x) => x.id === pending.id).status, 'delivered');
+
+    // The same link without a name (or the code typed again) keeps the name.
+    const bare = await ds.pairingLink({ secret: d.secret, relay: relay2.url });
+    const again = await app.preparePairing(bare, { source: 'link' });
+    assert.deepEqual(again.confirm.notice, 'Pairing updated.');
+    assert.equal((await app.applyPairing(again.next)).name, 'Desk, upstairs');
+  } finally {
+    await relay2.close();
+  }
+});
+
+test('applyPairing refuses when the pairing changed after the user was asked', async () => {
+  const d1 = await daylight('One');
+  const d2 = await daylight('Two');
+  const { app } = newApp();
+  const asked = await app.preparePairing(d1.link, { source: 'link' });
+  await app.pair(d2.code); // paired some other way meanwhile
+  await assert.rejects(app.applyPairing(asked.next, { expect: '' }), (e) => e.code === 'pairing');
+  assert.equal((await app.state()).codeStart, d2.code.slice(0, 4));
+});
+
+test('vectors > pairingConfirmation: the app asks exactly as the protocol says, for links and typed codes', async () => {
+  const fs = await import('node:fs');
+  const V = JSON.parse(fs.readFileSync(new URL('../../../share/vectors/test-vectors.json', import.meta.url), 'utf8'));
+  assert.ok(V.pairingConfirmation.length >= 10);
+  for (const c of V.pairingConfirmation) {
+    const { app, storage } = newApp();
+    if (c.current) await ds.savePairing(storage, { secret: ds.fromHex(c.current.secretHex), relay: c.current.relay, name: c.current.name });
+    const secret = ds.fromHex(c.next.secretHex);
+    const input = c.source === 'link'
+      ? await ds.pairingLink({ secret, relay: c.next.relay, name: c.next.name })
+      : await ds.formatCode(secret);
+    const pre = await app.preparePairing(input, { source: c.source, relay: c.source === 'app' ? c.next.relay : undefined });
+    assert.deepEqual(pre.confirm, c.expect, c.name);
+  }
 });
 
 test('timers: tick on start, every 15 minutes, right after a send and ~30 s later', async () => {

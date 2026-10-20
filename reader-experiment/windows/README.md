@@ -29,14 +29,19 @@ On the Daylight, open **Daylight Share** and choose **This is my Daylight**. It 
 pairing code. Then either:
 
 - **type the code** into the app's window and click **Pair** (dashes, spaces and lower case are fine), or
-- **open the pairing link** on the PC: a `daylightshare://pair?…` link opens Send to Daylight and pairs it. (When the
-  browser asks, allow it to open *Send to Daylight*.)
+- **open the pairing link** on the PC: a `daylightshare://pair?…` link opens Send to Daylight (when the browser asks,
+  allow it to open *Send to Daylight*), which asks first: *Pair with &lt;name&gt;? Code starts E4AY. Check it matches
+  the code on your Daylight.*, plus the relay when it isn't ntfy.sh. Check that the first four characters match the
+  code on your Daylight's screen, then click **Pair**. A link can come from anywhere, and its name proves nothing, so
+  nothing is paired until you do.
 
 The window then says *Sending to &lt;your Daylight's name&gt;*. **Advanced › Relay URL** is only for a Daylight that uses
 its own ntfy server (a pairing link already includes it).
 
-To pair with another Daylight, open its pairing link (the app asks before switching), or **⋯ › Unpair this PC** and
-pair again. Unpairing or switching discards anything the old Daylight hasn't picked up yet.
+Opening your Daylight's link again, after you renamed it or moved it to another relay, applies at once (*Pairing
+updated: now sending through …*), and anything not yet delivered goes through the new relay. A link for a **different**
+Daylight asks first and says that it replaces the current one (the button reads **Switch**); switching, or **⋯ › Unpair
+this PC**, discards anything the old Daylight hasn't picked up yet.
 
 ## Send
 
@@ -69,7 +74,9 @@ The window lists what you sent, newest first, in the same words as the other Sen
 While the app runs (in the notification area is enough) it checks for the Daylight's confirmations when it starts,
 right after each send and again about 30 seconds later, every 15 minutes, and when you open the window; and it
 re-sends anything not yet confirmed before the relay forgets it (ntfy.sh keeps messages 12 hours and files 3 hours),
-for up to a week. The history and the copies kept for re-sending survive restarts.
+for up to a week. The history and the copies kept for re-sending survive restarts. Each is written so that a crash or
+a power cut leaves the old version or the new one; if a file is damaged all the same, the app sets it aside (renamed
+to `….json.bad`), says so in the window, and carries on.
 
 Closing the window keeps the app running in the notification area. Left-click the icon to open the window; right-click
 it for **Send clipboard link**, **Open**, **Start at login** and **Quit**. Esc hides the window.
@@ -78,7 +85,7 @@ it for **Send clipboard link**, **Open**, **Start at login** and **Quit**. Esc h
 
 Off by default. Turn it on in the tray menu (**Start at login**) or in **⋯ › Settings**. It then starts quietly in the
 notification area when you sign in to Windows, so re-sends and the hotkey keep working. (It adds an entry under
-*Settings › Apps › Startup*, where you can also turn it off.)
+*Settings › Apps › Startup*, where you can also turn it off.) It stays on after an update (see below).
 
 ## Uninstall
 
@@ -100,16 +107,16 @@ side (`src-tauri/src/`) is kept to what a web page can't do.
 
 | Where | What |
 |---|---|
-| `src/core.js` | Pairing, sending, the outbox and its timers, with `daylight-share.js` (no DOM, no Tauri; unit-tested in node) |
-| `src/app.js`, `index.html`, `styles.css` | The window: pairing, drop zone, history, settings, the hotkey recorder |
+| `src/core.js` | Pairing (the module's `pairingConfirmation` and `applyPairingChange`), sending, the outbox and its timers, with `daylight-share.js` (no DOM, no Tauri; unit-tested in node) |
+| `src/app.js`, `index.html`, `styles.css` | The window: pairing and its confirmation, drop zone, history, settings, the hotkey recorder |
 | `src/logic.js` | Small pure helpers (status labels, MIME types, the hotkey's key names, notification texts) |
 | `src/bridge.js` | Calls into Rust; the storage adapter (one JSON file per key in the app's data folder) |
 | `build.mjs` | Copies `src/` and `../share/js/daylight-share.js` into `dist/`, which Tauri embeds |
 | `src-tauri/src/main.rs` | Tray icon and menu, the window (closing hides it), single instance (a second launch hands over its arguments: Send To files, pairing links), the clipboard hotkey, notifications, start at login, commands for the page |
-| `src-tauri/src/args.rs` | The command line: files, `daylightshare:` links, `--autostart`, test-mode options |
+| `src-tauri/src/args.rs` | The command line: files, `daylightshare:` links, `--autostart`, test-mode options and hooks |
 | `src-tauri/src/sendto.rs` | The **Send to › Daylight** shortcut (created on the first run if the installer didn't) |
-| `src-tauri/src/store.rs` | The page's key-value storage, written atomically |
-| `src-tauri/windows/installer-hooks.nsh` | Installer extras: adds and removes the Send to shortcut |
+| `src-tauri/src/store.rs`, `atomic.rs` | The page's key-value storage: each write flushed to disk, then renamed into place; a damaged file is set aside |
+| `src-tauri/windows/installer-hooks.nsh` | Installer extras: adds and removes the Send to shortcut; puts start at login back after an update |
 | `test/unit/` | Unit tests (node): `core.js` against the mock relay with a Receiver playing the Daylight, helpers, configuration |
 | `test/e2e/windows.e2e.mjs` | The end-to-end test on Windows (below) |
 
@@ -136,20 +143,36 @@ The unit tests run anywhere with node 22. Icons come from the extension's design
 ### CI and the end-to-end test
 
 [`.github/workflows/rx-windows.yml`](../../.github/workflows/rx-windows.yml) runs on `windows-latest` for every push
-that touches this folder or `share/js/`: unit tests, `tauri build`, then `test/e2e/windows.e2e.mjs` against the mock
-relay (`../share/js/mock-relay.mjs`), with a `Receiver` from `daylight-share.js` acting as the Daylight:
+that touches this folder or `share/js/`: unit tests (node, and Rust's `args.rs` and `atomic.rs`), `tauri build`, then
+`test/e2e/windows.e2e.mjs` against the mock relay (`../share/js/mock-relay.mjs`), with `Receiver`s from
+`daylight-share.js` acting as the Daylight. Test mode is `--e2e-status <file>`: the app writes its state (pairing,
+outbox, view, the pairing question, the status line) to the file as it changes. The test hooks `--e2e-confirm`,
+`--e2e-cancel` (answer the pairing question), `--e2e-hotkey` (the hotkey's code path; pressing a global hotkey on a CI
+machine isn't practical) and `--e2e-autostart` (the tray switch) work only in an app started in test mode; otherwise
+none of these options does anything. The test:
 
 1. installs `Send-to-Daylight-windows-setup.exe` silently and checks the Send to shortcut and the link scheme;
-2. starts the installed app in test mode, `--e2e-pair <daylightshare link> --e2e-status <file>`: it pairs without
-   showing anything and writes its outbox as JSON whenever it changes (both options do nothing unless given);
-3. starts the app again with files as arguments, as Send to does: a PDF, a text file and a 3 MB file arrive intact (the
+2. starts the app the way a clicked link does when it isn't running, `send-to-daylight.exe "daylightshare://pair?…"`:
+   it must ask in the protocol's words, pair nothing before the answer, and stay unpaired on Cancel;
+3. hands it the same link again while it runs (a second launch, as a browser does) and answers Pair;
+4. starts the app again with files as arguments, as Send to does: a PDF, a text file and a 3 MB file arrive intact (the
    last in pieces under the relay's 2 MB limit), and a file over the size limit is refused with the library's sentence;
-4. puts a link on the clipboard and starts the app with `--e2e-hotkey`, a test hook that takes the hotkey's code path
-   (pressing a global hotkey on a CI machine isn't practical); only an app started in test mode honours the hooks;
-5. waits until the status file shows all four **Delivered**;
-6. turns on start at login with `--e2e-autostart` (what the tray menu's switch does) and checks this user's Run entry;
-7. opens the window (screenshot), quits and uninstalls, and checks that the shortcut, the link scheme and the
-   start-at-login entry are gone.
+5. puts a link on the clipboard and starts the app with `--e2e-hotkey`;
+6. waits until the status file shows all four **Delivered**;
+7. opens another Daylight's link with the same name: the question shows the other code and **Switch**; Cancel keeps
+   everything;
+8. opens the paired Daylight's link with a new relay and name: no question, *Pairing updated…*, the history kept, and
+   the next file goes through the new relay and is acked there;
+9. turns on start at login with `--e2e-autostart` and checks this user's Run entry;
+10. restarts the app: pairing, history and start at login come back;
+11. zero-fills `outbox.json` and deletes the Run entry, restarts: the app sets the file aside and says so, puts the Run
+    entry back, and Send To still works;
+12. updates the default way (the old uninstaller, then the installer): the Run entry, pairing and history survive;
+13. opens the window (screenshot), quits and uninstalls, and checks that the shortcut, the link scheme and the
+    start-at-login entry are gone.
+
+`--e2e-pair <link>` pairs without asking, for trying the app by hand against a test relay; the test itself takes the
+links' real path.
 
 The workflow then uploads the installer to the `reader-experiment-latest` release; the bare `send-to-daylight.exe`
 and the test output (status file, screenshot) are kept as workflow artifacts.
@@ -157,4 +180,8 @@ and the test output (status file, screenshot) are kept as workflow artifacts.
 ## Not yet
 
 - **Code signing.** Unsigned, hence the SmartScreen warning; signing needs a certificate.
-- **Updates** are manual: install the new build over the old one (pairing and history are kept).
+- **Updates** are manual: run the new build's installer. It finds the old one and offers *Uninstall before installing*
+  (the default) or not; either way the pairing, the history and the settings are kept, as long as *Delete the
+  application data* stays unticked in the uninstaller that may appear. The old uninstaller removes the start-at-login
+  entry; the installer puts it back when you had it on (the app keeps your choice in its data folder), and so does the
+  app when it next starts. The installer closes the running app (it asks first) and its last page can start it again.

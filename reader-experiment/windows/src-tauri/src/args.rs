@@ -25,12 +25,20 @@ pub struct Launch {
     pub e2e_hotkey: bool,
     /// Test hook: turn start at login on, as the tray menu does (only a running app in test mode honours it).
     pub e2e_autostart: bool,
+    /// Test hooks: press the pairing question's button, or Cancel (only a running app in test mode honours them).
+    pub e2e_confirm: bool,
+    pub e2e_cancel: bool,
 }
 
 impl Launch {
     /// Nothing to send or pair: a plain launch (from the Start menu, say).
     pub fn is_plain(&self) -> bool {
-        self.paths.is_empty() && self.links.is_empty() && !self.e2e_hotkey && !self.e2e_autostart
+        self.paths.is_empty()
+            && self.links.is_empty()
+            && !self.e2e_hotkey
+            && !self.e2e_autostart
+            && !self.e2e_confirm
+            && !self.e2e_cancel
     }
 
     /// Started by the end-to-end test.
@@ -76,6 +84,8 @@ pub fn parse<S: AsRef<str>>(args: &[S], cwd: &Path) -> Launch {
                 "e2e-status" => out.e2e_status = value().filter(|v| !v.is_empty()).map(|v| absolute(&v, cwd)),
                 "e2e-hotkey" => out.e2e_hotkey = true,
                 "e2e-autostart" => out.e2e_autostart = true,
+                "e2e-confirm" => out.e2e_confirm = true,
+                "e2e-cancel" => out.e2e_cancel = true,
                 _ => {}
             }
             continue;
@@ -134,12 +144,29 @@ mod tests {
         let l = parse(&["--e2e-pair", "daylightshare://pair?c=Q", "--e2e-status=status.json", "--unknown", "--e2e-hotkey"], &cwd());
         assert!(!l.e2e_autostart);
         assert!(!parse(&["--e2e-autostart"], &cwd()).is_plain());
+        let yes = parse(&["--e2e-confirm"], &cwd());
+        assert!(yes.e2e_confirm && !yes.e2e_cancel && !yes.is_plain() && !yes.is_e2e());
+        let no = parse(&["--e2e-cancel"], &cwd());
+        assert!(no.e2e_cancel && !no.e2e_confirm && !no.is_plain());
         assert_eq!(l.e2e_pair.as_deref(), Some("daylightshare://pair?c=Q"));
         assert_eq!(l.e2e_status, Some(cwd().join("status.json")));
         assert!(l.e2e_hotkey);
         assert!(l.links.is_empty(), "the --e2e-pair value is not a link to handle twice");
         assert!(l.is_e2e());
         assert!(!l.is_plain());
+    }
+
+    /// What Windows runs for a clicked link (`"exe" "%1"`): the link alone, or with the test-mode status option.
+    #[test]
+    fn a_clicked_link_and_a_cold_start_with_one() {
+        let link = "daylightshare://pair?c=E4AYBMQQ6AYE7PJTJCDJ6YJ7ME&r=http%3A%2F%2F127.0.0.1%3A5000&n=Test%20Daylight";
+        let l = parse(&[link], &cwd());
+        assert_eq!(l.links, vec![link.to_string()]);
+        assert!(l.paths.is_empty() && !l.is_plain() && !l.is_e2e());
+        let l = parse(&[link, "--e2e-status", "s.json"], &cwd());
+        assert_eq!(l.links, vec![link.to_string()]);
+        assert_eq!(l.e2e_status, Some(cwd().join("s.json")));
+        assert_eq!(l.e2e_pair, None, "a link is never paired headlessly");
     }
 
     #[test]

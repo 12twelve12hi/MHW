@@ -11,12 +11,35 @@ const tauri = () => {
 export const invoke = (cmd, args) => tauri().core.invoke(cmd, args);
 export const listen = (event, fn) => tauri().event.listen(event, (e) => fn(e.payload));
 
-/** The daylight-share storage adapter: each key is a JSON file in the app's data folder. */
-export function appStorage(log = console) {
+/** What each key must hold; anything else in its file is damage (a power cut mid-write, a truncation, an edit). */
+function plausible(key, v) {
+  if (key === 'outbox') return Array.isArray(v);
+  if (key === 'pairing' || key === 'settings') return v !== null && typeof v === 'object' && !Array.isArray(v);
+  if (String(key).startsWith('outbox/')) return typeof v === 'string';
+  return true;
+}
+
+/**
+ * The daylight-share storage adapter: each key is a JSON file in the app's data folder. A file that can't be read as
+ * what its key holds is renamed aside (`<file>.bad`) and reads as missing, so one damaged file can't stop the app:
+ * onBad(key, error) is told, to say so in the window.
+ */
+export function appStorage(log = console, onBad = () => {}) {
+  async function setAside(key, error) {
+    log.warn?.(`Send to Daylight: ${key} couldn’t be read and was set aside`, error);
+    try { await invoke('kv_set_aside', { key }); } catch (e) { log.warn?.('Send to Daylight: couldn’t set it aside', e); }
+    try { onBad(key, error); } catch { /* only a report */ }
+    return undefined;
+  }
   return {
     async get(key) {
       const s = await invoke('kv_get', { key });
-      return s == null ? undefined : JSON.parse(s);
+      if (s == null) return undefined;
+      let v;
+      try { v = JSON.parse(s); } catch (e) { return setAside(key, e); }
+      if (!plausible(key, v)) return setAside(key, new Error(`not what ${key} holds`));
+      // A row that isn't an object can't be shown or sent: leave it out (the next write drops it).
+      return key === 'outbox' ? v.filter((r) => r && typeof r === 'object' && typeof r.id === 'string') : v;
     },
     async set(key, value) {
       try {
@@ -34,7 +57,7 @@ export function appStorage(log = console) {
 export const bridge = {
   /** -> {version, e2e: {pair, status}, sendTo: {path, exists}, autostart} */
   info: () => invoke('app_info'),
-  /** Things to do that arrived from outside: files (Send To), pairing links, the clipboard (hotkey or tray). */
+  /** Things to do that arrived from outside: files (Send To), pairing links, the clipboard (hotkey or tray), test hooks. */
   takeActions: () => invoke('take_actions'),
   /** A file offered on the command line (Send To): Rust answers with raw bytes (an ArrayBuffer). */
   readFile: async (path, max) => new Uint8Array(await invoke('read_file', { path, max })),

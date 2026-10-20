@@ -51,8 +51,14 @@ test('tauri.conf.json: tray app window, HTML drag and drop, NSIS per user, deep 
   assert.deepEqual(conf.plugins['deep-link'].desktop.schemes, ['daylightshare']);
 });
 
-test('the installer hooks add and remove Send to > Daylight', () => {
+test('the installer hooks add and remove Send to > Daylight, and put start at login back after an update', () => {
   const nsh = fs.readFileSync(path.join(tauriDir, conf.bundle.windows.nsis.installerHooks), 'utf8');
+  const main = fs.readFileSync(path.join(tauriDir, 'src', 'main.rs'), 'utf8');
+  const marker = main.match(/AUTOSTART_MARKER: &str = "([^"]+)"/)[1];
+  const post = nsh.slice(nsh.indexOf('!macro NSIS_HOOK_POSTINSTALL'), nsh.indexOf('!macroend'));
+  assert.ok(post.includes(`\${If} \${FileExists} "$APPDATA\\\${BUNDLEID}\\${marker}"`), 'checks the app’s marker');
+  assert.ok(post.includes(`WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Run" "\${PRODUCTNAME}" '"$INSTDIR\\\${MAINBINARYNAME}.exe" --autostart'`), 'writes the Run entry as the app does');
+  assert.equal(conf.productName, main.match(/PRODUCT: &str = "([^"]+)"/)[1], 'the Run entry has one name');
   assert.match(nsh, /!macro NSIS_HOOK_POSTINSTALL[\s\S]*CreateShortcut "\$APPDATA\\Microsoft\\Windows\\SendTo\\Daylight\.lnk" "\$INSTDIR\\\$\{MAINBINARYNAME\}\.exe"/);
   assert.match(nsh, /!macro NSIS_HOOK_POSTUNINSTALL[\s\S]*Delete "\$APPDATA\\Microsoft\\Windows\\SendTo\\Daylight\.lnk"/);
   const rs = fs.readFileSync(path.join(tauriDir, 'src', 'sendto.rs'), 'utf8');
@@ -69,6 +75,16 @@ test('the capability grants only Tauri core to the window; Rust commands match t
   const invoked = [...bridge.matchAll(/invoke\('([a-z_]+)'/g)].map((m) => m[1]);
   for (const cmd of invoked) assert.ok(handlers.includes(cmd), `bridge.js calls ${cmd}, main.rs doesn't register it`);
   for (const ev of bridge.matchAll(/listen\('([^']+)'/g)) assert.ok(main.includes(`"${ev[1]}"`), `main.rs never emits ${ev[1]}`);
+});
+
+test('the window listens for Send To, links and the hotkey before it reads anything saved', () => {
+  const js = fs.readFileSync(path.join(root, 'src', 'app.js'), 'utf8');
+  const init = js.slice(js.indexOf('async function init()'));
+  const wake = init.indexOf('bridge.onWake(');
+  const tick = init.indexOf('bridge.onTick(');
+  for (const read of ['app.getSettings()', 'app.state()', 'app.rows()']) {
+    assert.ok(wake > 0 && tick > 0 && wake < init.indexOf(read) && tick < init.indexOf(read), `listeners come before ${read}`);
+  }
 });
 
 test('versions are pinned', () => {
@@ -94,6 +110,7 @@ test('appStorage keeps JSON values in Rust’s files; the re-send copy is best e
           return null;
         }
         if (cmd === 'kv_remove') { files.delete(args.key); return null; }
+        if (cmd === 'kv_set_aside') { if (files.has(args.key)) files.set(`${args.key}.bad`, files.get(args.key)); files.delete(args.key); return null; }
         if (cmd === 'read_file') return new Uint8Array([1, 2, 3]).buffer;
         throw new Error(`unexpected ${cmd}`);
       },
@@ -116,6 +133,28 @@ test('appStorage keeps JSON values in Rust’s files; the re-send copy is best e
     await s.remove('pairing');
     assert.equal(files.has('pairing'), false);
     assert.deepEqual(await bridge.readFile('C:\\x'), new Uint8Array([1, 2, 3]));
+
+    // A damaged file (a power cut mid-write leaves it empty or zero-filled) reads as missing and is set aside.
+    const bad = [];
+    const s2 = appStorage({ warn() {} }, (key) => bad.push(key));
+    files.set('outbox', '\0\0\0\0');
+    files.set('pairing', '');
+    files.set('settings', '[1]');
+    files.set('ackSince', '17');
+    assert.equal(await s2.get('outbox'), undefined);
+    assert.equal(await s2.get('pairing'), undefined);
+    assert.equal(await s2.get('settings'), undefined, 'valid JSON of the wrong kind is damage too');
+    assert.equal(await s2.get('ackSince'), 17);
+    assert.deepEqual(bad, ['outbox', 'pairing', 'settings']);
+    assert.equal(files.get('outbox.bad'), '\0\0\0\0');
+    assert.equal(files.has('outbox'), false);
+    files.set('outbox', JSON.stringify([{ id: 'a', status: 'sent' }, null, 7, { status: 'sent' }]));
+    assert.deepEqual(await s2.get('outbox'), [{ id: 'a', status: 'sent' }], 'rows that aren’t rows are left out');
+    // ...and the module's Sender carries on over it.
+    const ds = await load('daylight-share.js');
+    files.set('outbox', '');
+    const sender = new ds.Sender({ pairing: { secret: ds.generateSecret(), relay: 'http://127.0.0.1:9' }, storage: s2 });
+    assert.deepEqual(await sender.list(), []);
   } finally {
     delete globalThis.__TAURI__;
   }

@@ -122,6 +122,10 @@ details[open] summary { color: var(--ink); }
 .error { margin: 10px 0 0; font-size: 14px; }
 .error:empty { display: none; }
 
+.confirm-lines { margin: 0 0 4px; }
+.confirm-line { margin: 0 0 8px; }
+.code-start { font-family: "Cascadia Mono", Consolas, ui-monospace, monospace; font-size: 1.15em; letter-spacing: .08em; }
+
 .row { display: flex; gap: 8px; align-items: stretch; }
 .row .btn { margin-top: 12px; }
 .row.tight { gap: 6px; flex: none; }

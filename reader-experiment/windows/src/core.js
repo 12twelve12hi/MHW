@@ -88,22 +88,37 @@ export function createApp({
     return s;
   }
 
-  async function clearOutbox() {
-    const rows = (await storage.get('outbox')) ?? [];
-    for (const r of rows) await storage.remove(`outbox/${r.id}`);
-    await storage.remove('outbox');
-    await storage.remove('ackSince');
+  /**
+   * A pairing that arrives, and what the protocol says to do with it (PROTOCOL 1.3 "Confirmation", 3.3 step 6), in
+   * the module's own words: input is a daylightshare:// link or a code; relay, the Advanced override for a typed code.
+   * source: 'link' (from outside the app: a clicked link, a launch argument) or 'app' (typed or pasted on the pairing
+   * screen). -> {next, current, confirm: {ask, title, lines, button, notice}}; nothing is saved yet. When confirm.ask,
+   * show title and lines with the buttons `button` and Cancel, and call applyPairing(next) only on `button`; otherwise
+   * call it at once and show `notice` when there is one. Throws ShareError for a bad link, code or relay.
+   */
+  async function preparePairing(input, { source = 'link', relay } = {}) {
+    const next = await ds.parsePairing(input);
+    if (relay != null && String(relay).trim()) next.relay = ds.normalizeRelay(relay);
+    const current = await getPairing();
+    return { next, current, confirm: ds.pairingConfirmation(current, next, { source }) };
   }
 
-  /** input: a pairing link or a typed code. relay: the Advanced override. -> {name, relay} */
-  async function pair(input, { relay } = {}) {
-    const p = await ds.parsePairing(input);
-    if (relay != null && String(relay).trim()) p.relay = ds.normalizeRelay(relay);
+  /**
+   * Saves a pairing from preparePairing. The same secret (a new relay or name) keeps the outbox, whose pending items
+   * then go through the new relay; another secret deletes it (ds.applyPairingChange, under the sender lock).
+   * expect: the code of the pairing in use when the user was asked ('' for none): if it changed since, nothing is
+   * saved and this throws. -> {name, relay}
+   */
+  async function applyPairing(next, { expect } = {}) {
+    const p = { ...next };
     await run(async () => {
-      const old = await getPairing();
-      // Items queued for another Daylight must not go to this one.
-      if (old && (old.code !== p.code || old.relay !== p.relay)) await clearOutbox();
-      if (!p.name && old?.code === p.code) p.name = old.name;
+      const current = await getPairing();
+      if (expect !== undefined && (current?.code ?? '') !== expect) {
+        throw new ds.ShareError('pairing', 'The pairing changed in the meantime. Open the pairing link again.');
+      }
+      // A typed code, or a link without a name, for the Daylight already paired keeps the name it has.
+      if (!ds.cleanName(p.name) && current && ds.samePairingSecret(current, p)) p.name = current.name;
+      await ds.applyPairingChange(storage, current, p);
       await ds.savePairing(storage, p);
       cache = null;
     });
@@ -111,24 +126,18 @@ export function createApp({
     if (queued.length) {
       (async () => { for (const a of queued) await handleAction(a); })().catch((e) => log.warn?.('Send to Daylight:', e));
     }
-    return { name: p.name, relay: p.relay };
+    return { name: ds.cleanName(p.name), relay: ds.normalizeRelay(p.relay) };
   }
 
-  /**
-   * What opening a daylightshare: link should do. -> {action: 'pair' | 'same' | 'switch', name, current}
-   * 'switch' means this PC is paired with another Daylight: ask before replacing it. Throws for a bad link.
-   */
-  async function checkLink(link) {
-    const p = await ds.parsePairing(link);
-    const old = await getPairing();
-    if (!old) return { action: 'pair', name: p.name, current: '' };
-    if (old.code === p.code && old.relay === p.relay) return { action: 'same', name: p.name || old.name, current: old.name };
-    return { action: 'switch', name: p.name, current: old.name };
+  /** Pairs without asking (a typed code on the pairing screen when nothing is paired, and the e2e test's --e2e-pair). */
+  async function pair(input, { relay } = {}) {
+    const { next, current } = await preparePairing(input, { source: 'app', relay });
+    return applyPairing(next, { expect: current?.code ?? '' });
   }
 
   async function unpair() {
     await run(async () => {
-      await clearOutbox();
+      await ds.applyPairingChange(storage, await getPairing(), null);
       await storage.remove('pairing');
       cache = null;
     });
@@ -136,7 +145,10 @@ export function createApp({
 
   async function state() {
     const p = await getPairing();
-    return { paired: !!p, name: p?.name ?? '', relay: p?.relay ?? '', defaultRelay: !p || p.relay === ds.DEFAULT_RELAY };
+    return {
+      paired: !!p, name: p?.name ?? '', relay: p?.relay ?? '', defaultRelay: !p || p.relay === ds.DEFAULT_RELAY,
+      codeStart: p?.code?.slice(0, 4) ?? '',
+    };
   }
 
   const rows = async () => (await storage.get('outbox')) ?? [];
@@ -293,7 +305,7 @@ export function createApp({
   }
 
   return {
-    storage, pair, checkLink, unpair, state, rows, getSettings, setSettings, sendLink, sendFile, sendPaths,
+    storage, preparePairing, applyPairing, pair, unpair, state, rows, getSettings, setSettings, sendLink, sendFile, sendPaths,
     sendClipboard, handleAction, retry, tick, tickIfStale, start, stop, snapshot, settle,
     onChange: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
   };

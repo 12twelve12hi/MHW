@@ -1,8 +1,9 @@
 name: Reader experiment - Windows app
 
 # Builds Send to Daylight for Windows (Tauri), tests it end to end on the runner against the mock relay (installer,
-# Send to, the clipboard hotkey's path, acks, uninstall), then publishes Send-to-Daylight-windows-setup.exe to the
-# "reader-experiment-latest" release. Unsigned for now: SmartScreen warns on first run.
+# pairing links with their confirmation, Send to, the clipboard hotkey's path, acks, restarts, an update, uninstall),
+# then publishes Send-to-Daylight-windows-setup.exe to the "reader-experiment-latest" release. Unsigned for now:
+# SmartScreen warns on first run.
 on:
   push:
     branches: [claude/sweet-goldberg-ej1nb0]
@@ -56,12 +57,14 @@ jobs:
       - name: Unit tests (frontend, against the mock relay)
         run: node --test test/unit/*.test.mjs
 
-      - name: Unit tests (Rust argument parsing)
+      - name: Unit tests (Rust argument parsing, atomic writes)
         working-directory: reader-experiment/windows/src-tauri
         run: |
           mkdir -p target
           rustc --edition 2021 --test src/args.rs -o target/args-test.exe
           ./target/args-test.exe
+          rustc --edition 2021 --test src/atomic.rs -o target/atomic-test.exe
+          ./target/atomic-test.exe
 
       - name: Build the app and the installer (NSIS)
         # The CLI's JavaScript entry point, so the JSON reaches it without a trip through cmd.exe.
@@ -87,7 +90,7 @@ jobs:
           path: reader-experiment/windows/out/send-to-daylight.exe
           if-no-files-found: error
 
-      - name: End-to-end test (install, pair, Send to, clipboard hotkey, Delivered, uninstall) against the mock relay
+      - name: End-to-end test (install, pairing links, Send to, clipboard hotkey, Delivered, restarts, update, uninstall) against the mock relay
         run: node test/e2e/windows.e2e.mjs --installer out/Send-to-Daylight-windows-setup.exe
 
       - name: Keep the end-to-end output (status file, summary, screenshot)

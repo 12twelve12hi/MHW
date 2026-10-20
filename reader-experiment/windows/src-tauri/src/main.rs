@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod args;
+mod atomic;
 mod sendto;
 mod store;
 
@@ -40,6 +41,12 @@ const EV_AUTOSTART: &str = "dls://autostart";
 const TICK_EVERY: Duration = Duration::from_secs(15 * 60);
 /// Never read more than this into memory for the page (the page asks for less: the protocol's own limit).
 const MAX_FILE: u64 = 64 * 1024 * 1024;
+/// Start at login as the user set it in this app: a file in the data folder that exists while it is on. An update
+/// that runs the old uninstaller loses this user's Run entry; the installer (windows/installer-hooks.nsh, which names
+/// this file too) and the app's next start put it back.
+const AUTOSTART_MARKER: &str = "start-at-login";
+#[cfg(windows)]
+const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
 /// Work for the page, queued until it asks for it (so nothing is lost while it is still loading).
 #[derive(Clone, Serialize)]
@@ -51,6 +58,8 @@ enum Action {
     Pair { link: String },
     /// The clipboard's text, for "Send the link on the clipboard" (the hotkey or the tray menu).
     Clipboard { text: String, error: String },
+    /// Test mode only: "confirm" or "cancel" answers the pairing question, as its buttons do.
+    Test { hook: String },
 }
 
 #[derive(Default)]
@@ -129,6 +138,13 @@ fn handle_launch(app: &AppHandle, launch: args::Launch, forwarded: bool) {
     if launch.e2e_autostart && st.e2e.status.is_some() {
         if let Err(e) = apply_autostart(app, true) {
             diag(app, format!("start at login: {e}"));
+        }
+    }
+    if st.e2e.status.is_some() {
+        for (on, hook) in [(launch.e2e_confirm, "confirm"), (launch.e2e_cancel, "cancel")] {
+            if on {
+                actions.push(Action::Test { hook: hook.into() });
+            }
         }
     }
     push(app, actions);
@@ -247,6 +263,7 @@ fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<bool, String> {
         }
     }
     let now = al.is_enabled().unwrap_or(false);
+    remember_autostart(app, now);
     if let Some(item) = state(app).autostart_item.lock().unwrap().as_ref() {
         let _ = item.set_checked(now);
     }
@@ -260,14 +277,13 @@ fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<bool, String> {
 #[cfg(windows)]
 fn autostart_per_user() -> Result<(), String> {
     use windows_registry::{CURRENT_USER, LOCAL_MACHINE};
-    const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
     const APPROVED: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     CURRENT_USER
-        .create(RUN)
+        .create(RUN_KEY)
         .and_then(|k| k.set_string(PRODUCT, format!("\"{}\" --autostart", exe.display())))
         .map_err(|e| e.to_string())?;
-    for path in [RUN, APPROVED] {
+    for path in [RUN_KEY, APPROVED] {
         if let Ok(k) = LOCAL_MACHINE.options().read().write().open(path) {
             if k.get_value(PRODUCT).is_ok() {
                 let _ = k.remove_value(PRODUCT);
@@ -280,6 +296,55 @@ fn autostart_per_user() -> Result<(), String> {
 #[cfg(not(windows))]
 fn autostart_per_user() -> Result<(), String> {
     Ok(())
+}
+
+/// Whether this user's Run key has the app's entry (whatever Task Manager says about it).
+#[cfg(windows)]
+fn run_entry_exists() -> bool {
+    windows_registry::CURRENT_USER.open(RUN_KEY).and_then(|k| k.get_value(PRODUCT)).is_ok()
+}
+
+#[cfg(not(windows))]
+fn run_entry_exists() -> bool {
+    true
+}
+
+fn autostart_marker(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join(AUTOSTART_MARKER))
+}
+
+/// Keeps the user's choice in the data folder (AUTOSTART_MARKER), where an update doesn't reach it.
+fn remember_autostart(app: &AppHandle, on: bool) {
+    let Some(marker) = autostart_marker(app) else { return };
+    let r = if on {
+        marker.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|_| std::fs::write(&marker, "on\n"))
+    } else {
+        match std::fs::remove_file(&marker) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            r => r,
+        }
+    };
+    if let Err(e) = r {
+        diag(app, format!("start at login: couldn't remember the setting: {e}"));
+    }
+}
+
+/// At start: when the user had start at login on and the Run entry is gone (the default "Uninstall before installing"
+/// of an update removes it), puts the entry back. Only the entry: a "Disabled" set in Task Manager or Settings > Apps >
+/// Startup is kept apart (StartupApproved) and still holds. A choice made by a version from before the marker existed
+/// is remembered now.
+fn restore_autostart(app: &AppHandle) {
+    let Some(marker) = autostart_marker(app) else { return };
+    if marker.exists() {
+        if !run_entry_exists() {
+            match autostart_per_user() {
+                Ok(()) => diag(app, "start at login: put this user's Run entry back (an update had removed it)"),
+                Err(e) => diag(app, format!("start at login: couldn't put the Run entry back: {e}")),
+            }
+        }
+    } else if app.autolaunch().is_enabled().unwrap_or(false) {
+        remember_autostart(app, true);
+    }
 }
 
 #[tauri::command]
@@ -385,6 +450,7 @@ fn main() {
             store::kv_get,
             store::kv_set,
             store::kv_remove,
+            store::kv_set_aside,
         ])
         .on_window_event(|window, event| {
             // Closing the window keeps the app in the notification area.
@@ -402,6 +468,8 @@ fn main() {
                 "started {}: {} files, {} links, autostart {}, test mode {}",
                 handle.package_info().version, launch.paths.len(), launch.links.len(), launch.autostart, launch.is_e2e()
             ));
+            // Before the tray reads it for its check mark.
+            restore_autostart(&handle);
             // Without the icon (no notification area, say) the window, Send to and the hotkey still work.
             if let Err(e) = build_tray(&handle) {
                 diag(&handle, format!("no notification-area icon: {e}"));

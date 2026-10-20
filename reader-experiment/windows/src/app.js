@@ -11,7 +11,7 @@ import {
 } from './logic.js';
 
 const $ = (id) => document.getElementById(id);
-const VIEWS = ['view-pair', 'view-switch', 'view-send', 'view-settings'];
+const VIEWS = ['view-pair', 'view-confirm', 'view-send', 'view-settings'];
 const HISTORY_SHOWN = 50;
 
 let app = null;
@@ -22,7 +22,9 @@ let view = '';
 let hotkey = { accel: '', error: '' };
 let recording = null; // {previous} while the hotkey recorder listens
 let unpairArmed = null;
-let pendingSwitch = null; // a pairing link waiting for "Switch"
+let pendingPair = null; // a pairing waiting for the user's answer: {next, expect, confirm}
+let dataProblem = ''; // saved data that couldn't be read and was set aside, said once the window is drawn
+let ready = false; // the first view is drawn: actions from Rust can be handled
 const log = []; // recent events, for the end-to-end test's status file
 
 function note(text) {
@@ -41,12 +43,14 @@ function setStatus(text, bad = false) {
   const s = $('status');
   s.textContent = text || '';
   s.classList.toggle('bad', !!bad);
+  writeStatusSoon();
 }
 
 function show(v) {
   view = v;
   for (const id of VIEWS) $(id).hidden = id !== v;
   $('open-settings').hidden = v !== 'view-send';
+  writeStatusSoon();
 }
 
 // --- pairing --------------------------------------------------------------------------------------------------------
@@ -54,14 +58,58 @@ function show(v) {
 function renderPair(error = '') {
   show('view-pair');
   $('pair-error').textContent = error;
-  setTimeout(() => $('code').focus(), 30);
+  setTimeout(() => { if (view === 'view-pair') $('code').focus(); }, 30);
 }
 
-async function paired(r) {
+async function paired(r, notice = null) {
   st = await app.state();
   rows = await app.rows();
   renderSend();
-  setStatus(`Paired with ${r.name || 'your Daylight'}. Drop something here to send it.`);
+  const said = notice || `Paired with ${r.name || 'your Daylight'}. Drop something here to send it.`;
+  setStatus(said);
+  note(`paired with ${r.name || '(no name)'} at ${r.relay}: ${said}`);
+}
+
+/** The view the window had before a question: the send view when paired, else the pairing screen. */
+function backToMain() {
+  if (st.paired) renderSend(); else renderPair();
+}
+
+/** Asks before pairing (PROTOCOL 1.3), in the protocol module's words: "Pair with …?", "Code starts …", the relay. */
+function renderConfirm(c) {
+  show('view-confirm');
+  $('confirm-h').textContent = c.title;
+  const box = $('confirm-lines');
+  box.textContent = '';
+  for (const line of c.lines) {
+    const p = el('p', 'confirm-line');
+    // Make the code's first group stand out: it is what the user compares with the Daylight's screen.
+    const m = /^(Code starts )(\S+?)(\..*)$/.exec(line);
+    if (m) p.append(m[1], el('strong', 'code-start', m[2]), m[3]); else p.textContent = line;
+    box.append(p);
+  }
+  $('confirm-yes').textContent = c.button;
+  // Replacing a pairing loses what wasn't delivered: then Enter means Cancel.
+  (c.button === 'Switch' ? $('confirm-no') : $('confirm-yes')).focus();
+}
+
+/**
+ * A pairing link or code: asks first when the protocol says so (a link from outside, or a code that replaces another
+ * Daylight), else pairs at once and shows the module's notice ("Pairing updated: now sending through …").
+ * -> 'asked' | 'paired'. Throws ShareError for a bad link, code or relay.
+ */
+async function offerPairing(input, { source, relay } = {}) {
+  const pre = await app.preparePairing(input, { source, relay });
+  const expect = pre.current?.code ?? '';
+  if (pre.confirm.ask) {
+    pendingPair = { next: pre.next, expect, confirm: pre.confirm };
+    note(`asking: ${pre.confirm.title} ${pre.confirm.lines.join(' ')}`);
+    renderConfirm(pre.confirm);
+    return 'asked';
+  }
+  pendingPair = null;
+  await paired(await app.applyPairing(pre.next, { expect }), pre.confirm.notice);
+  return 'paired';
 }
 
 async function onPairSubmit(ev) {
@@ -74,9 +122,7 @@ async function onPairSubmit(ev) {
   btn.disabled = true;
   btn.textContent = 'Pairing…';
   try {
-    const r = await app.pair(input, { relay: $('relay').value });
-    $('code').value = '';
-    await paired(r);
+    if (await offerPairing(input, { source: 'app', relay: $('relay').value }) === 'paired') $('code').value = '';
   } catch (e) {
     err.textContent = e.message;
   } finally {
@@ -88,36 +134,46 @@ async function onPairSubmit(ev) {
 /** A daylightshare://pair?… link opened on this PC (a click in a browser, or the app started with it). */
 async function onPairLink(link) {
   bridge.showWindow().catch(() => {});
-  let check;
   try {
-    check = await app.checkLink(link);
+    await offerPairing(link, { source: 'link' });
   } catch (e) {
     note(`pairing link refused: ${e.message}`);
+    pendingPair = null;
     if (!st.paired) renderPair(`That pairing link didn’t work: ${e.message}`);
-    else setStatus(`That pairing link didn’t work: ${e.message}`, true);
-    return;
+    else { renderSend(); setStatus(`That pairing link didn’t work: ${e.message}`, true); }
   }
-  if (check.action === 'switch') {
-    pendingSwitch = link;
-    $('switch-name').textContent = check.name || 'another Daylight';
-    $('switch-current').textContent = check.current || 'your Daylight';
-    show('view-switch');
-    $('switch-yes').focus();
-    return;
-  }
-  if (check.action === 'same') {
-    renderSend();
-    setStatus(`Already paired with ${check.name || 'this Daylight'}.`);
-    return;
-  }
-  try { await paired(await app.pair(link)); } catch (e) { renderPair(e.message); }
 }
 
-async function onSwitch(yes) {
-  const link = pendingSwitch;
-  pendingSwitch = null;
-  if (!yes || !link) { renderSend(); return; }
-  try { await paired(await app.pair(link)); } catch (e) { renderSend(); setStatus(e.message, true); }
+/** The answer to the pairing question: pair (or switch) only on its button. */
+async function onConfirm(yes) {
+  const p = pendingPair;
+  pendingPair = null;
+  if (!p) { if (view === 'view-confirm') backToMain(); return; }
+  if (!yes) {
+    note(`pairing cancelled: ${p.confirm.title}`);
+    backToMain();
+    if (st.paired) setStatus(`Still sending to ${st.name || 'your Daylight'}.`);
+    return;
+  }
+  const btn = $('confirm-yes');
+  btn.disabled = true;
+  try {
+    await paired(await app.applyPairing(p.next, { expect: p.expect }));
+  } catch (e) {
+    note(`pairing failed: ${e.message}`);
+    st = await app.state().catch(() => st);
+    if (st.paired) { renderSend(); setStatus(e.message, true); } else renderPair(e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/** Test mode only (Rust forwards these only to an app started with --e2e-status): answer the pairing question. */
+async function onTestHook(hook) {
+  if (!info?.e2e?.status) return;
+  note(`test hook ${hook}`);
+  if (hook === 'confirm') await onConfirm(true);
+  else if (hook === 'cancel') await onConfirm(false);
 }
 
 // --- sending --------------------------------------------------------------------------------------------------------
@@ -236,6 +292,7 @@ function drain() {
       note(`action ${a.type}${a.paths ? ` (${a.paths.length} files)` : ''}`);
       try {
         if (a.type === 'pair') await onPairLink(a.link);
+        else if (a.type === 'test') await onTestHook(a.hook);
         else showResults(await app.handleAction(a));
       } catch (e) {
         note(`action ${a.type} failed: ${e?.message ?? e}`);
@@ -280,9 +337,11 @@ let refreshTimer = null;
 function onStorageChange(key) {
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(async () => {
-    rows = await app.rows();
-    if (key === 'pairing') st = await app.state();
-    if (view === 'view-send') renderHistory();
+    try {
+      rows = await app.rows();
+      if (key === 'pairing') st = await app.state();
+    } catch (e) { note(`couldn’t read the history: ${e?.message ?? e}`); }
+    if (view === 'view-send') { $('daylight-name').textContent = st.name || 'your Daylight'; renderHistory(); }
   }, 50);
   writeStatusSoon();
 }
@@ -436,7 +495,12 @@ function writeStatusSoon() {
   statusTimer = setTimeout(async () => {
     try {
       const snap = await app.snapshot();
-      Object.assign(snap, { version: info.version, hotkey, autostart: !!info.autostart, sendTo: info.sendTo, view, log: log.slice(-50) });
+      const c = view === 'view-confirm' ? pendingPair?.confirm : null;
+      Object.assign(snap, {
+        version: info.version, hotkey, autostart: !!info.autostart, sendTo: info.sendTo, view,
+        confirm: c ? { title: c.title, lines: c.lines, button: c.button } : null,
+        statusText: $('status').textContent, pairError: $('pair-error').textContent, log: log.slice(-50),
+      });
       await bridge.e2eStatus(JSON.stringify(snap, null, 2));
     } catch (e) { console.warn('Send to Daylight: status file', e); }
   }, 80);
@@ -446,8 +510,19 @@ function onKey(e) {
   if (recording) { onRecordKey(e); return; }
   if (e.key !== 'Escape' || e.defaultPrevented) return;
   if (view === 'view-settings') { renderSend(); $('open-settings').focus(); }
-  else if (view === 'view-switch') onSwitch(false);
+  else if (view === 'view-confirm') onConfirm(false);
   else if (view === 'view-send') bridge.hideWindow().catch(() => {});
+}
+
+/** Saved data that couldn't be read (a power cut mid-write, say) was set aside by appStorage: say so, carry on. */
+function onBadData(key, e) {
+  const what = key === 'pairing' ? 'The saved pairing couldn’t be read. Pair again.'
+    : key === 'outbox' ? 'The history couldn’t be read, so it starts afresh. Send again anything not yet delivered.'
+      : 'Some settings couldn’t be read and were reset.';
+  note(`set aside ${key}: ${e?.message ?? e}`);
+  if (!dataProblem) dataProblem = what;
+  if (ready) { if (st.paired) setStatus(what, true); else $('pair-error').textContent = what; }
+  writeStatusSoon();
 }
 
 function onShown() {
@@ -460,8 +535,8 @@ async function init() {
   window.addEventListener('error', (e) => { note(`error: ${e.message}`); writeStatusSoon(); });
   window.addEventListener('unhandledrejection', (e) => { note(`unhandled: ${e.reason?.message ?? e.reason}`); writeStatusSoon(); });
   $('pair-form').addEventListener('submit', onPairSubmit);
-  $('switch-yes').addEventListener('click', () => onSwitch(true));
-  $('switch-no').addEventListener('click', () => onSwitch(false));
+  $('confirm-yes').addEventListener('click', () => onConfirm(true));
+  $('confirm-no').addEventListener('click', () => onConfirm(false));
   $('choose').addEventListener('click', () => $('file').click());
   $('file').addEventListener('change', () => {
     const files = [...$('file').files];
@@ -492,11 +567,18 @@ async function init() {
     $('app').setAttribute('aria-busy', 'false');
     return;
   }
-  app = createApp({ bridge, storage: appStorage(), version: info.version });
+  app = createApp({ bridge, storage: appStorage(console, onBadData), version: info.version });
   app.onChange(onStorageChange);
   note(`started ${info.version}${info.e2e?.status ? ' (test mode)' : ''}`);
 
-  const settings = await app.getSettings();
+  // Listen before reading anything saved, so a read that fails can't leave Send To, links and the hotkey unheard.
+  // Their actions wait in Rust's queue until the first view is drawn (drain() below).
+  await bridge.onWake(() => { if (ready) drain(); });
+  await bridge.onTick(() => app.tick().catch(() => {}));
+  await bridge.onAutostart((on) => { info.autostart = !!on; $('autostart').checked = !!on; note(`start at login ${on ? 'on' : 'off'}`); writeStatusSoon(); });
+
+  let settings = {};
+  try { settings = await app.getSettings(); } catch (e) { onBadData('settings', e); }
   await applyHotkey(settings.hotkey ?? DEFAULT_HOTKEY, { save: false });
 
   if (info.e2e?.pair) {
@@ -506,13 +588,20 @@ async function init() {
     } catch (e) { note(`pairing failed: ${e?.message ?? e}`); }
   }
 
-  st = await app.state();
-  rows = await app.rows();
+  try {
+    st = await app.state();
+    rows = await app.rows();
+  } catch (e) {
+    rows = [];
+    dataProblem ||= `Couldn’t read the history (${e?.message ?? e}).`;
+    note(dataProblem);
+  }
   if (st.paired) renderSend(); else renderPair();
+  if (dataProblem) {
+    if (st.paired) setStatus(dataProblem, true); else $('pair-error').textContent = dataProblem;
+  }
 
-  await bridge.onWake(() => drain());
-  await bridge.onTick(() => app.tick().catch(() => {}));
-  await bridge.onAutostart((on) => { info.autostart = !!on; $('autostart').checked = !!on; note(`start at login ${on ? 'on' : 'off'}`); writeStatusSoon(); });
+  ready = true;
   drain();
   app.start();
   setInterval(() => { if (!document.hidden && view === 'view-send') renderHistory(); }, 60 * 1000);
