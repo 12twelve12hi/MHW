@@ -10,6 +10,7 @@ on:
       - 'reader-experiment/extension/**'
       - 'reader-experiment/web/**'
       - 'reader-experiment/share/**'
+      - '!reader-experiment/share/**/*.md'
       - '.github/workflows/rx-extension.yml'
   workflow_dispatch:
 

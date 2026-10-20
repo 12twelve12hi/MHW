@@ -9,6 +9,7 @@ on:
       - 'reader-experiment/e2e/**'
       - 'reader-experiment/android/**'
       - 'reader-experiment/share/**'
+      - '!reader-experiment/share/**/*.md'
       - '.github/workflows/rx-e2e.yml'
   workflow_dispatch:
 

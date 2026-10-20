@@ -11,6 +11,7 @@ on:
     paths:
       - 'reader-experiment/apple/**'
       - 'reader-experiment/share/**'
+      - '!reader-experiment/share/**/*.md'
       - 'reader-experiment/extension/**'
       - '.github/workflows/rx-apple.yml'
   workflow_dispatch:

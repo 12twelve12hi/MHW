@@ -7,6 +7,7 @@ on:
     branches: [claude/sweet-goldberg-ej1nb0]
     paths:
       - 'reader-experiment/share/**'
+      - '!reader-experiment/share/**/*.md'
       - '.github/workflows/rx-share.yml'
   workflow_dispatch:
   schedule:

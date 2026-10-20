@@ -9,6 +9,7 @@ on:
     paths:
       - 'reader-experiment/android/**'
       - 'reader-experiment/share/**'
+      - '!reader-experiment/share/**/*.md'
       - '.github/workflows/rx-android.yml'
   workflow_dispatch:
 
