@@ -146,7 +146,11 @@ class HandoffDecisionsTest {
         assertEquals(DocumentMode.OPEN, app.prefs.documentMode)
         setup("&auto=0")
         assertEquals(DocumentMode.ASK, app.prefs.documentMode)
-        setup("&docs=quiet")
+        setup("&docs=quiet&to=${ReaderApps.EXPERIMENT}")
+        assertEquals(DocumentMode.QUIET, app.prefs.documentMode)
+        assertEquals(ReaderApps.EXPERIMENT, app.prefs.deliverTo)
+        setup("&to=")
+        assertEquals("", app.prefs.deliverTo)
         assertEquals(DocumentMode.QUIET, app.prefs.documentMode)
     }
 

@@ -114,9 +114,10 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Debug builds only, for automated tests:
-     * `daylightshare://setup?role=inbox|sender&c=<code>[&r=<relay>][&n=<name>][&instant=1][&auto=1][&docs=ask|quiet|open]`.
+     * `daylightshare://setup?role=inbox|sender&c=<code>[&r=<relay>][&n=<name>][&instant=1][&auto=1][&docs=ask|quiet|open][&to=<package>]`.
      * Sets the role and uses that pairing secret (instead of generating one) and relay; `instant` turns on Instant
-     * delivery; `docs` sets "Documents" (`auto=1` is `docs=open`, `auto=0` is `docs=ask`).
+     * delivery; `docs` sets "Documents" (`auto=1` is `docs=open`, `auto=0` is `docs=ask`); `to` sets "Deliver to"
+     * (empty: Automatic).
      */
     private fun debugSetup(link: String) {
         val q = Pairing.parseQuery(link.substringAfter('?', "").substringBefore('#'))
@@ -133,6 +134,7 @@ class MainActivity : ComponentActivity() {
         q["instant"]?.let { app.prefs.instantDelivery = it == "1" || it == "true" }
         q["auto"]?.let { app.prefs.documentMode = if (it == "1" || it == "true") DocumentMode.OPEN else DocumentMode.ASK }
         q["docs"]?.let { v -> DocumentMode.parse(v)?.let { app.prefs.documentMode = it } }
+        q["to"]?.let { app.prefs.deliverTo = it.trim() }
         when (q["role"]) {
             "sender" -> {
                 app.sender.pair(p)
@@ -144,7 +146,7 @@ class MainActivity : ComponentActivity() {
                 app.setRole(Role.INBOX)
             }
         }
-        logi("setup: role=${app.prefs.role} relay=${p.relay} inbox=${p.keys.inboxTopic} instant=${app.prefs.instantDelivery} docs=${app.prefs.documentMode.key}")
+        logi("setup: role=${app.prefs.role} relay=${p.relay} inbox=${p.keys.inboxTopic} instant=${app.prefs.instantDelivery} docs=${app.prefs.documentMode.key} to=${app.prefs.deliverTo.ifEmpty { "auto" }}")
         notice.value = "Set up as ${if (app.prefs.role == Role.INBOX) "the Daylight Inbox" else "a sender"} (relay ${p.relay})."
     }
 

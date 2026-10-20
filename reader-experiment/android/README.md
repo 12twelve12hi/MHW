@@ -135,7 +135,7 @@ adb shell am start -a android.intent.action.VIEW \
 
 which makes the device the Inbox with that pairing secret and relay (`role=sender` pairs a sender instead;
 `instant=1` turns on Instant delivery; `docs=ask|quiet|open` sets **Documents**, and `auto=1` / `auto=0` mean
-`docs=open` / `docs=ask`). Debug builds also allow
+`docs=open` / `docs=ask`; `to=<package>` sets **Deliver to**, `to=` puts it back to Automatic). Debug builds also allow
 plain HTTP to `10.0.2.2`, `127.0.0.1` and `localhost`. The setup link also skips the
 notification-permission prompt. Everything is logged under the tag `DaylightShare` (`adb logcat -s DaylightShare`):
 
