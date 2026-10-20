@@ -1736,103 +1736,120 @@ Every card:
 
 **A0 · `apple/DaylightShareKit` · W0 · Swift port and shared UI**
 
-- **Depends on:** L0, P0 (Swift v1.1).
+- **Depends on:** L0, SV0 (for `serverState`), P0-kit.
 - **Builds:**
-  - `Lab.swift` (`LabInboxInfo`, `LabFrame`, `LabLedger`), `LabText.swift`, `LabTopics.swift`;
-  - `ShareSender(onAckHeader:)`; `SharedStore.Key` `dls.lab`, `dls.labNoteShown`, `dls.comfort`;
-  - `Server/` (the 2.6 W0 subset);
-  - in `DaylightShareUI`: `LabSettingsSection`, `WhatsInLabView`, `ServerSettingsView`, `LabNote`, `LabGate`,
-    `TimelineRow` (W0: label and sentence only), `ComfortModifier`;
+  - `Lab.swift` (`LabInboxInfo`, `LabFrame` with the exact parser, `LabLedger` per publisher), `LabText.swift`
+    (with the short states), `LabTopics.swift`;
+  - `ItemHeader` extras (2.3); `ShareSender(onAckHeader:)`; `SharedStore.Key` `dls.lab`, `dls.labNoteShown`;
+  - `Server/` (the 2.6 W0 subset, `noteError` included);
+  - in `DaylightShareUI`: `LabSettingsSection`, `WhatsInLabView` (short states, the server group), `ServerSettingsView`,
+    `LabNote`, `LabGate` (with the 5 s deadline), `TimelineRow` (W0: label and sentence only);
   - tests: `LabVectorTests`, `ServerVectorTests`, `LabLedgerTests`, `LabSkewTests`;
   - `apple/scripts/e2e-receiver.mjs --lab`.
 - **Done when:** the vectors pass, `swift test` is green and the skew suite passes.
 
-**A1 · `apple/iOS`, `apple/Shared` · W0 · iPhone and iPad**
+**A1 · `apple/iOS` · W0 · iPhone and iPad**
 
-- **Depends on:** A0.
-- **Builds:** F00, F17 and F27 for the iPhone (3.2): settings section, note, What's in Lab, server section with the
-  Server code, the share extension following `dls.lab`, Comfort, and the XCUITest parity and accessibility audits;
-  `-DLSLab`.
-- **Done when:** F00.1–6, F17.2, F17.4 (device) and F27.1–4 (iPhone parts) pass.
+- **Depends on:** A0, P0-ios.
+- **Builds:** F00 and F17 for the iPhone (3.2): settings section, What's in Lab, server section with the Server
+  code, the share extension following `dls.lab`, `LAB_NOTE_ENABLED = false`, the XCUITest parity test (tree walk)
+  and the first-run test; `-DLSLab`.
+- **Done when:** F00.1–7, F17.2 and F17.4 (device) pass, and F27.1–4 still hold.
 
 **A2 · `apple/macOS` · W0 · Mac**
 
-- **Depends on:** A0. Runs in parallel with A1.
-- **Builds:** as A1 for the Mac window, the Settings window and the Share menu extension.
-- **Done when:** as A1, for the Mac.
+- **Depends on:** A0, P0-mac. Runs in parallel with A1.
+- **Builds:** as A1, for the Mac window, the Settings window and the Share menu extension. On ad-hoc builds the
+  Share menu item gets its own Lab switch, and What's in Lab gets its closing line (1.1, 1.4).
+- **Done when:** as A1, for the Mac, checked on the released ad-hoc build.
 
 **K0 · `android/share-core` · W0 · Kotlin port**
 
-- **Depends on:** L0, P0 (Kotlin v1.1).
+- **Depends on:** L0, SV0, P0-core.
 - **Builds:**
-  - package `core.lab`: `LabInboxInfo`, `LabFrame`, `LabLedger`, `LabInbox`, `LabText`, `LabTopics`;
+  - package `core.lab`: `LabInboxInfo`, `LabFrame` (the exact parser), `LabLedger` (per publisher), `LabInbox`
+    (2.2.4's rules), `LabText`, `LabTopics`;
+  - `ItemHeader.check` extras, carried by `Reassembler` and `Receiver` (2.3);
   - `Outbox(onAckHeader)`;
-  - package `core.server` (the 2.6 W0 subset);
-  - tests: `LabVectorsTest`, `ServerVectorsTest`, `LabInboxTest`, `LabSkewTest`.
+  - package `core.server` (the 2.6 W0 subset, `noteError` included);
+  - tests: `LabVectorsTest`, `ServerVectorsTest`, `LabInboxTest`, `LabSkewTest` (two publishers included).
 - **Done when:** `./gradlew :share-core:test` is green, with the vectors and skew suite.
 
 **K1 · `android/app` · W0 · Android, both roles**
 
-- **Depends on:** K0.
+- **Depends on:** K0, P0-app.
 - **Builds:**
-  - `Prefs.lab`, `labNoteShown` and `comfort`; `LabCard`, `LabScreen`, `LabNote`; Comfort;
+  - `Prefs.lab` and `labNoteShown`; `LabCard`, `LabScreen` (short states, the server group), `LabNote`;
   - the sender's ledger via `onAckHeader`;
-  - the Inbox's `inbox/LabReporter.kt` (F17: records, flush, hello, the `lab: 0` frame, the log lines);
+  - the Inbox's `inbox/LabReporter.kt` (F17: pairing-lane items only, records, flush under 2.2.4's rules, hello, the
+    `lab: 0` frame and its repeats, the log lines);
   - the debug link's `lab=`;
-  - Robolectric `LabOffParityTest`, `LabReporterTest`, `PrefsLabTest`.
-- **Done when:** F00 (Android parts), F17.1–3 and F27 (Android parts) pass.
+  - Robolectric `LabOffParityTest`, `LabReporterTest`, `PrefsLabTest`, `LabFirstRunTest`.
+- **Done when:** F00 (Android parts), F17.1–3 and F17.5 pass.
 
 **X0 · `extension/` · W0 · Chrome and Safari**
 
-- **Depends on:** L0, P0 (extension v1.1).
+- **Depends on:** L0, P0-ext.
 - **Builds:**
   - `build.mjs` copies `daylight-lab.js` and `daylight-server.js`;
   - `src/lab.js` (service worker: Lab state, ledger, gate, server);
   - `src/lab-ui.js`, `src/lab.html`, `src/lab-page.js`;
-  - the popup settings row and note; Comfort;
-  - `test/unit/lab.test.mjs`, `test/e2e/lab.e2e.mjs`, `test/e2e/a11y.e2e.mjs`.
-- **Done when:** F00, F17 and F27 (extension parts) pass.
+  - the popup settings row;
+  - `test/unit/lab.test.mjs` and `test/e2e/lab.e2e.mjs` (with `ariaSnapshot` parity).
+- **Done when:** F00 and F17 (extension parts) pass.
+- **Release:** not published before the iPhone and Mac W0 builds (6.2).
 
 **B0 · `web/` · W0 · web sender**
 
-- **Depends on:** X0 (it uses `extension/src/lab-ui.js` and `logic.js` through the build).
-- **Builds:** `web/web-lab.js`, the settings row, What's in Lab, the server panel, Comfort; tests in
+- **Depends on:** X0 (it uses `extension/src/lab-ui.js` and `logic.js` through the build), P0-web.
+- **Builds:** `web/web-lab.js`, the settings row, What's in Lab, the server panel; tests in
   `extension/test/{unit,e2e}/web-lab*`.
-- **Done when:** F00, F17 and F27 (web parts) pass.
+- **Done when:** F00 and F17 (web parts) pass.
+- **Release:** as X0.
 
 **WIN0 · `windows/` · W0 · Windows**
 
-- **Depends on:** L0.
-- **Builds:** `build.mjs` copies the two modules; `src/lab.js`; the settings row and panels; Comfort; the CSP; the
+- **Depends on:** L0, P0-win.
+- **Builds:** `build.mjs` copies the two modules; `src/lab.js`; the settings row and panels; the CSP; the
   `--e2e-lab` flag; unit and e2e tests.
-- **Done when:** F00, F17 and F27 (Windows parts) pass in `rx-windows.yml`.
+- **Done when:** F00 and F17 (Windows parts) pass in `rx-windows.yml`.
+- **Release:** as X0.
 
 **E0 · `e2e/`, `.github/workflows/rx-e2e.yml` · W0**
 
 - **Depends on:** K1.
-- **Builds:** `e2e/sender.mjs` reads Lab frames (`lab-states <id…>`); `inbox-e2e.sh` asserts the hello and the states
-  for page, link and PDF, and runs a second pass with `docs=ask`: `waiting`, then a root tap through
-  `HandoffActivity`, then `handed`.
+- **Builds:** `e2e/sender.mjs` reads Lab frames (`lab-states <id…>`). `inbox-e2e.sh` asserts the hello and the states
+  for page, link and PDF. A second pass with `docs=ask` expects `waiting`, then a root tap through
+  `HandoffActivity`, then `handed`. A third pass, with the overlay permission off and the Reader in front, expects
+  `waiting` for a link too.
 - **Done when:** F17.1 runs on the emulator.
 
-**A3 · `apple/DaylightShareKit` · W1**
+**A3 · `apple/DaylightShareKit`, `apple/Shared` · W1**
 
 - **Depends on:** A0, L1.
 - **Builds:**
   - `ShareNormaliser` (with the Apple News fetch), `Excerpt`, `classifyShare`, `testArticle`, `redactDiagnostics`;
-  - `ShareSender` `defer` and `flushNetwork`;
-  - `BackgroundPublisher` and `FrameFileBuilder` (F04);
-  - `TimelineRow` with the step line and check-in header;
-  - shared UI pieces: `QueueSection`, `SetupCheckView`, `ActivityLogView`, `PasteChip`, `OptionsSheet`, `ReviewView`;
+  - `ShareSender` `defer` and `flushNetwork` (both caps, the pass rules);
+  - `BackgroundPublisher` (two passes, re-send timing) and `FrameFileBuilder` (F04);
+  - `FailureNotices` (F04's notifications, with the permission request for the apps);
+  - `TimelineRow` with the step line, what a row shows (2.5) and the check-in header;
+  - shared UI pieces: `QueueSection`, `SetupCheckView`, `ActivityLogView`, `PasteChip` (with the host preview),
+    `OptionsSheet` (no countdown under F04's accessibility rule), `ReviewView`;
+  - **`apple/Shared`**, which both the iPhone and the Mac targets compile: `GetPage.js` returns v1.1's `html` plus
+    the `lab` extras (F03, F10), with `clean-html.js` and Readability synced from `share/js/capture/`. A4 and A5 only
+    wire this; they never edit `apple/Shared`.
   - tests: `NormaliseVectorTests`, `ExcerptVectorTests`, `FrameFileBuilderTests`, `BackgroundCompletionTests`,
-    `OfflineQueueTests`.
+    `OfflineQueueTests`, and the `GetPage.js` XCTest (F03.5).
 
-**A4 · `apple/iOS`, `apple/Shared` · W1 · iPhone and iPad**
+**A4 · `apple/iOS` · W1 · iPhone and iPad**
 
 - **Depends on:** A3, A1.
 - **Builds:**
-  - F01, F03 (`GetPage.js` with clean-html and Readability inlined, the link-only line), F04, F07, F08, F09 (App
-    Intents in `iOS/App/Intents/`, the scheme), F10, F11, F16, F26, F33;
+  - F01, the F02 entry point, F03 (choosing `cleanHtml` by `dls.lab`; the link-only line once), F04 (with the
+    failure notification and the iOS 16–26 timing matrix), F07, F08, F09 (App Intents in `iOS/App/Intents/` with
+    both phrases, the scheme), F10, F16, F26, F33;
+  - `LAB_NOTE_ENABLED = true`;
+  - last, and only after 6.5 Q1: F11's share-sheet paths;
   - `project.yml`: iOS targets only;
   - XCUITests for share-extension timing, intents, the paste chip and the audits.
 - **Done when:** the iPhone acceptance items F01–F33, and a device round on an iPhone with Rooted 2.
@@ -1840,52 +1857,93 @@ Every card:
 **A5 · `apple/macOS` · W1 · Mac**
 
 - **Depends on:** A3, A2. Runs in parallel with A4.
-- **Builds:** F01, F04 (team-signed builds; ad-hoc fallback), F07, F08, F09 (intents and scheme), F11 (Services),
-  F16, F26, F33; `project.yml`: macOS targets only.
-- **Done when:** the Mac acceptance items, and a device round with Rooted 2 (on the Mac mini).
+- **Builds:**
+  - F01, the F02 entry point, F04 (the ad-hoc path, and the team-signed path for when 6.5 Q6 is yes), F07, F08, F09
+    (intents and scheme), F16;
+  - F23's Print menu entry and F29's menu-bar drop (an `NSStatusItem` in place of `MenuBarExtra`);
+  - F26 (with Add to the Print menu);
+  - F33 on the existing clipboard command;
+  - `LAB_NOTE_ENABLED = true`;
+  - last, and only after Q1: F11 (Services);
+  - `project.yml`: macOS targets only.
+- **Done when:** the Mac acceptance items on the released ad-hoc build (F04.3, F23.1, F29.1 included), and a
+  device round with Rooted 2 (on the Mac mini).
 
 **X1 · `extension/` · W1 · Chrome and Safari**
 
 - **Depends on:** X0, L1.
-- **Builds:** F01 (rows, badge `⌛`), F03 (`clean-html.js`), F04 (the click-to-send setting), F07 (`dls-offline`),
-  F10 (Readability, `review.html`), F11, F16, F26, F33, F34 (menus, commands, omnibox).
-- **Done when:** the Chrome and Safari acceptance items; `safari.test.mjs` is green.
+- **Builds:**
+  - F01 (rows, badge `⌛`), the F02 entry point (Chrome);
+  - F03: the build copies `share/js/capture/clean-html.js`, and `extension/src/clean-html.js` is removed;
+  - F04 (the click-to-send setting), F07 (`dls-offline`);
+  - F10 (the "Send as" menu, Readability from `share/js/capture/`, `review.html`);
+  - F11 (the explicit paths only), F16, F26, F33 (with the host preview);
+  - F34 (menus, commands, omnibox).
+- **Done when:** the Chrome and Safari acceptance items pass, and `safari.test.mjs` is green.
+- **Release:** as X0.
 
 **K3 · `android/share-core` · W1**
 
 - **Depends on:** K0, L1.
 - **Builds:** `Normalise`, `Excerpt`, `classifyShare`, `testArticle`, `redactDiagnostics`, `Outbox` `defer` and
-  `flushNetwork`, `LabRowText` steps; the vector tests.
+  `flushNetwork` (both caps, the pass rules), `LabRowText` steps and `final`; the vector tests.
 
 **K4 · `android/app` · W1 · Android phone** (sender packages `sender/`, `ui/SenderScreen.kt`)
 
 - **Depends on:** K3, K1.
-- **Builds:** F01, F03 (the hint), F04, F07, F08 (`Shortcuts.kt`, `shortcuts.xml`), F09 (`AutomationActivity`),
-  F11, F16, F26, F33.
-- **Done when:** the Android-phone acceptance items.
+- **Builds:**
+  - F01, the F02 entry point, F03 (the hint, once);
+  - F04: the "Send results" channel, and its workers `sender/SendWorker.kt` and `sender/FlushWorker.kt`. They live
+    in `sender/`, not in `Work.kt`, which belongs to K5.
+  - F07, F08 (`Shortcuts.kt`, `shortcuts.xml`), F09 (`AutomationActivity`), F16, F26, F33 (with the host preview);
+  - last, and only after 6.5 Q1: F11's share path.
+- **Done when:** the Android-phone acceptance items pass.
 
 **K5 · `android/app` · W1 · DC-1 Inbox** (packages `inbox/`, `ui/InboxScreen.kt`, `Work.kt`)
 
 - **Depends on:** K3, K1. It may run in parallel with K4 under 6.3.
-- **Builds:** F01 (the "Sender sees" line), F03 and F11 (row lines; the cap `cap-kind`), F15, F26 (checks, the
-  Reader hand-off test).
-- **Done when:** the Inbox acceptance items, and E1's emulator steps.
+- **Builds:**
+  - `InboxItem` gains the header `extras` (2.3) and a `lane` field ready for S0;
+  - F01: the "Sender sees" line in item details;
+  - F03 and F11: the row lines from the extras, and the cap `cap-kind`;
+  - F15: Add to Reader and Keep for later, swipe → `held`, grouped excerpt notices;
+  - F26: the checks and the Reader hand-off test.
+- **Done when:** the Inbox acceptance items pass, and E1's emulator steps run.
+
+**K6 · `android/app` · W1 · handover to the Lab Reader** (Inbox role; package `inbox/handover/`)
+
+- **Depends on:** K1.
+- **Builds:**
+  - 5.3.4's `HandoverProvider` and `receivingElsewhere`;
+  - a `<queries>` entry for the Lab Reader's pinned package and its `ShareInboxProvider` authority;
+  - the resume rule of step 4;
+  - Robolectric `HandoverTest` (5.3), including an invisible provider.
+- **Done when:** `HandoverTest` passes, and R1.4 on Rooted 2 once R1 exists.
 
 **B1 · `web/` · W1**
 
 - **Depends on:** B0, X1.
-- **Builds:** F01, F07 (Background Sync), F09 (bookmarklet), F16, F26, F33.
+- **Builds:** F01, the F02 entry point, F07 (Background Sync), F09 (bookmarklet), F16, F26, F33 (with the host
+  preview).
+- **Release:** as X0.
 
 **WIN1 · `windows/` · W1**
 
 - **Depends on:** WIN0, L1.
-- **Builds:** F01 (rows, toast), F07, F08 (toast name), F09 (scheme in `args.rs`), F16, F26, F33.
+- **Builds:** F01 (rows, toast), the F02 entry point, F07, F08 (toast name), F09 (scheme in `args.rs`), F16, F26,
+  and F33 on the existing clipboard command.
+- **Release:** as X0.
 
 **E1 · `e2e/`, `rx-e2e.yml` · W1**
 
 - **Depends on:** K5.
-- **Builds:** the e2e steps for F08 (shortcut listed), F15 (Hold → `held`), F11 (an excerpt imports as a new
-  document), F26 (the Reader hand-off test).
+- **Builds:** the e2e steps for:
+  - F08 (shortcut listed);
+  - F15 (every action of F15.1 → its state);
+  - F11 (an excerpt imports as a new document; after Q1, an NYT headline + link from the share sheet arrives as a
+    link);
+  - F04 (the worker's notification after a forced 413);
+  - F26 (the Reader hand-off test).
 
 ---
 
@@ -1896,32 +1954,38 @@ Every card:
 
 ### 4.1 Wave 2
 
-| Feature | Needs | Depends on | What it takes |
-|---|---|---|---|
-| L2 Return lane (infrastructure) | none | L0 (2.4) | `lane` in JS `Sender` and `Receiver`, then Kotlin and Swift; vectors; skew tests. It comes first in W2. |
-| F06 Send back from the DC-1 | none | L2 | The Inbox role's share-target `activity-alias` "Send to my phone or Mac" (the phone role keeps "Send to Daylight"); the Daylight's return outbox; senders poll the return topic with the ack-topic rules and show "From your Daylight" (Open, Save, Share); the cap `return`. User question 3 (6.5) decides the target devices. |
-| F12 Note, tags, destination | none (filing into collections: Reader) | F04's Options; caps `note`, `dest`, `hold` | `x-note` (≤ 280), `x-tags` (≤ 8 × 40), `x-dest` (`now`, `quiet`, `hold`, `stack`); the Inbox shows and filters them and puts "Note from {from}: …" at the top of pages; senders gate `hold` and `stack` on caps (`needs-inbox`). |
-| F13 Big files on the same Wi-Fi | none | F17 (`lan` in `x-inbox`), F04 | The Inbox's LAN listener (`PUT /dls/v1/frame`, `GET /dls/v1/have`, `/dls/v1/ping`), rate limits; native senders upload 12 MiB frames directly; a new state `needs-same-wifi`. |
-| F22 Tabs as one issue | none | F10 | An EPUB in the extension (fflate) and on Mac and Windows; epubcheck in CI. |
-| F23 Print to Daylight | none | — | A Mac PDF Service; an Android `PrintService`. |
-| F24 Image diet | none | F10 | Image budgets in `inject.js` and `GetPage.js`. Reader check: `data:` images in saved pages. |
-| F29 Mac power moves | none | F09, F11 | Menu-bar drop, a watched folder, a Quick Action, the front browser tab. Windows: a watched folder. |
-| F30 Scan to PDF | none | — | VisionKit (iPhone); ML Kit Document Scanner (Android). |
-| F31 Chrome Reading List | none | F16, F32 | The optional `readingList` permission; throttled; a ledger. |
-| F32 Already sent | none | F16 | A local history keyed by canonical URL and SHA-256. |
-| F41 Android tile and `PROCESS_TEXT` | none | F11, F33 | A `TileService`; `PROCESS_TEXT`. |
-| F42 iPhone controls and widgets | none | F01, F33 | `ControlWidgetButton`; widgets read the App Group outbox and ledger. |
-| F48 Verified delivery, private items | none | F01 | The hash shown on both ends; `x-private`. |
-| F50 iPad layout | none | — | `NavigationSplitView`; drag and drop. |
-| F51 No lock-in | none | — | Export history (JSON, CSV) and the pairing (behind device authentication); a "Your data" page. |
+W2 is built in this order. Within each step, iPhone, Mac and the Inbox come first. Steps 1 to 3 deliver two of the
+DC-1 owner's "finally" items (3.1).
+
+| Order | Feature | Needs | Depends on | What it takes |
+|---|---|---|---|---|
+| 1 | L2 Return lane (infrastructure) | none | L0 (2.4) | In JS `Sender` and `Receiver`: `lane`, the per-lane storage prefix, `x-dev` and per-device delivery, and manifest replacement; then Kotlin and Swift. Also vectors, skew tests, and the return rows of 2.2.7 with their soak. |
+| 2 | F06 Send back from the DC-1 | none | L2 | The Inbox role's share-target `activity-alias` "Send to my phone or Mac" (the phone role keeps "Send to Daylight"). The Daylight's return outbox, with targets per 2.4. Senders poll the return topic with the ack-topic rules and show "From your Daylight" (Open, Save, Share). The cap `return`. 6.5 Q3 decides the default targets. |
+| 3 | F13 Big files on the same Wi-Fi | none | F17 (`lan` in `x-inbox`), F04 | The Inbox's LAN listener (`PUT /dls/v1/frame`, `GET /dls/v1/have`, `/dls/v1/ping`), with rate limits. Native senders upload 12 MiB frames directly. A new state, `needs-same-wifi`. The F02 entry point gains "Or send it over your Wi-Fi." |
+| 4 | F12 Note, tags, destination | none (filing into collections: Reader) | F04's Options; caps `note`, `dest`, `hold` | `x-note` (≤ 280), `x-tags` (≤ 8 × 40), `x-dest` (`now`, `quiet`, `hold`, `stack`). The Inbox shows and filters them, and puts "Note from {from}: …" at the top of pages. Senders gate `hold` and `stack` on caps (`needs-inbox`). |
+| 5 | F32 Already sent | none | F16 | A local history keyed by canonical URL and SHA-256. |
+| 6 | F48 Verified delivery, private items | none | F01 | The hash shown on both ends; `x-private`. |
+| 7 | F23 Print to Daylight, the rest | none | — | An Android `PrintService`; the iPhone's Print › Share tip. The Mac part shipped in W1. |
+| 8 | F29 Mac power moves, the rest | none | F09, F11 | A watched folder, a Quick Action, the front browser tab. Windows: a watched folder. The menu-bar drop shipped in W1. |
+| 9 | F30 Scan to PDF | none | — | VisionKit (iPhone); ML Kit Document Scanner (Android). |
+| 10 | F42 iPhone controls and widgets | none | F01, F33 | `ControlWidgetButton`; widgets read the App Group outbox and ledger. |
+| 11 | F50 iPad layout | none | — | `NavigationSplitView`; drag and drop. |
+| 12 | F51 No lock-in | none | — | Export history (JSON, CSV) and the pairing (behind device authentication); a "Your data" page. |
+| 13 | F22 Tabs as one issue | none | F10 | An EPUB in the extension (fflate) and on Mac and Windows; epubcheck in CI. |
+| 14 | F24 Image diet | none | F10 | Image budgets in `inject.js` and `GetPage.js`. Reader check: `data:` images in saved pages. |
+| 15 | F31 Chrome Reading List | none | F16, F32 | The optional `readingList` permission; throttled; a ledger; its rows in 2.2.7. |
+| 16 | F41 Android tile and `PROCESS_TEXT` | none | F11, F33 | A `TileService`; `PROCESS_TEXT`. |
 
 ### 4.2 Wave S (server lane; starts once the Worker is deployed, alongside W2)
 
+Order: S0, then F02, then F37, F19 and F36, each on iPhone and Mac first. SV0 (W0) already gave the client module
+`noteError` and the `serverState` vectors.
+
 | Feature | Needs | Depends on | What it takes |
 |---|---|---|---|
-| S0 The Inbox's server lane | server | K0, the server deployed | DESIGN 5.5: poll `itemTopic` with `openBox('item')`, ack on the server ack topic with `sealBox('ack')`, and hello with `x-inbox`; Kotlin ports of `sealBox`, `openBox` and `buildServerItemFrames` (tests). Recommended first (DESIGN 3.1), so that v1 delivery stays an exception. |
+| S0 The Inbox's server lane | server | K0, the server deployed | DESIGN 5.5, with Kotlin ports of `sealBox`, `openBox` and `buildServerItemFrames` (tests):<br>• poll `itemTopic` with `openBox('item')`;<br>• ack on the server ack topic with `sealBox('ack')`, batched to at most one ack frame every 15 minutes (2.2.7);<br>• hello with `x-inbox` exactly as `buildInboxInfo` makes it for the pairing lane, `lab: 0` included;<br>• tag server items `lane = "server"`, so LabReporter records nothing for them (2.2.4).<br>After a handover (5.3.4), the server lane stays with Daylight Share, which hands server items to the main Reader, until the Lab Reader's hello carries the cap `server`. On the server side (server lane): `pollAcks` treats `x-inbox.lab === 0` as the end of presence (DESIGN 5.5 updated), and `app` is clamped to 60 characters as Lab does. An integration test puts Lab frames (`ids: []`, `x-st`, `lab: 0`) on the server ack topic in Lab mode. DESIGN 14.1's `needs-lab-inbox` text takes 1.6's. Recommended first (DESIGN 3.1), so that v1 delivery stays an exception. |
+| F02 Files over 9 MB | server + R2 | F04's `BackgroundPublisher` (iPhone) | `files.sendLarge` with the hosted outbox. The iPhone uploads from files with a background session; Chrome uploads from an extension page, never from the service worker. `files.tick` reads acks through the Sender's `onAckHeader` (DESIGN 17.7) instead of its own `server/hostedAckCursor`, so acks are polled once. `LabLedger.prune` keeps hosted ids, so large files show timeline states. The W1 entry point then sends at once. Second in Wave S, iPhone and Mac first: it is the DC-1 owner's first "finally". |
 | F37 Summaries with Claude | server + `ANTHROPIC_API_KEY` | W0 gate | `ai.summarize`, `explain` and `ask` UI, iPhone and Mac first (Swift port of `ai`), then the extension and web (the module as it is), then Android. The first-use notice. The AI cap editable in the server section. |
-| F02 Files over 9 MB | server + R2 | F04's `BackgroundPublisher` (iPhone) | `files.sendLarge` with the hosted outbox; iPhone uploads from files with a background session; Chrome uploads from an extension page, never from the service worker. |
 | F19 Email-in | server + R2 + domain (Workers Paid in practice) | W0 gate | The address with Copy; Recent mail; block and unblock. |
 | F36 Feeds and digest | server | W0 gate | The feed list, OPML import, the digest hour, "Send digest now". |
 | F58 Webhook | server | — | Server only. Not scheduled until the user asks. |
@@ -1963,9 +2027,12 @@ Every card:
 - **Who and where.**
   - Built by the Reader session on the Mac mini, from the live Reader repository.
   - Class names below are from the public snapshot 0.27.843; check each against the live code.
-  - Installed only on Rooted 2 (JP4R01422), as the side-by-side copy `com.daylightcomputer.readerexperiment` that is
-    already there (DEVICE-CHECKS).
-  - Never on JP4R03005; never merged or shipped without the user.
+  - Installed only on Rooted 2 (JP4R01422), as the side-by-side copy already there (DEVICE-CHECKS). Its
+    applicationId is `com.daylightcomputer.readerexperiment`, with no dot, unlike other `-PidSuffix` twins
+    (`com.daylightcomputer.reader.<suffix>`). R1 first confirms it on Rooted 2 (`pm list packages |
+    grep daylightcomputer`), and then every allow-list (5.3.4) and `<queries>` entry names exactly that id, with no
+    suffix pattern.
+  - Never on JP4R03005; never merged or shipped without the user (0.6).
 - **Why its own inbox.** Side-by-side builds keep no implicit intent filter (`app/src/sideBySide/AndroidManifest.xml`,
   checked by `checkIntentClaims<Variant>`). So the Lab Reader cannot be reached by `SAVE_PAGE` or `ACTION_SEND` the way
   the main Reader is, which is also why today's Inbox never hands to it. It receives through its own built-in inbox
@@ -1987,7 +2054,7 @@ Every card:
   - `shareReading` stays off: it is personal and opt-in.
   - `FeatureRegistryTest`'s rules are kept.
 - **share-core.** Vendored as `third_party/share-core`: a copy of `reader-experiment/android/share-core` at v1.1 with
-  Lab (K0, K3), plus `VERSION`, `PATCHES.md` and `tools/share/sync-core.sh`, the same pattern as
+  Lab (K0; K3 is not needed), plus `VERSION`, `PATCHES.md` and `tools/share/sync-core.sh`, the same pattern as
   `third_party/showme-client`. `settings.gradle.kts` gets `include(":share-core")` and its `projectDir`.
 
 ### 5.2 R0 · Fix the ImportActivity race (needed by every path, the main Reader included)
@@ -2015,8 +2082,8 @@ Every card:
   - Device: three PDFs sent 2 s apart through today's Daylight Share to the main Reader on the emulator (the
     `inbox-e2e.sh` pattern) all import; `ShellReceiver count` grows by 3.
 - **Acceptance:** the "PDF handed off but never imported" case of DEVICE-CHECKS no longer happens in 10 runs on
-  Rooted 2 (lab copy), nor on the emulator (snapshot build). The fix is offered to the Reader session for the main
-  app, at the user's discretion.
+  Rooted 2 (lab copy), nor on the emulator (snapshot build). Whether the Reader session is asked to bring it to the
+  main app, for every DC-1 owner, is 6.5 Q8.
 
 ### 5.3 R1 · Built-in inbox with quiet import and "In your Reader" confirmation
 
@@ -2026,10 +2093,10 @@ Package `com.daylightcomputer.reader.labs.share`:
 |---|---|
 | `ShareInbox` | The coordinator, scoped to `AppContainer`. It holds the pairing (from the handover, or its own new one); a share-core `Receiver` (`FileReceiverStore` at `files/share-inbox/receiver-<topic>.json`, `Reassembler` spooling to `files/share-inbox/spool`, `RelayClient` with user agent `DaylightReaderLab/<versionName>`); and a share-core `LabInbox` (`files/share-inbox/lab.json`). Its `accept()` stores durably and returns (store before ack, PROTOCOL 3.4): content to `files/share-inbox/items/<id>/` and a row in `files/share-inbox/items.json` with state `stored`. The ack means "On your Daylight". |
 | `ShareInboxWorker` | Unique periodic WorkManager work "share-inbox", every 15 min, `CONNECTED`: `pollOnce`, then process stored items, then `LabInbox.flush()`. |
-| `ShareProcessor` | Turns stored items into library documents with **no activity**:<br>• `url` and `page`: `ReadLaterCenter.saver(c).save(SavedItem(url, title, source = SavedItem.VIA_REMOTE), html)` in process (the same caps as `SAVE_PAGE`: 4 KB URL, 8 MiB HTML).<br>• `file`: the new `ImportStager.stageFile(file, name, mime, sha256)` (moves the reassembled, already verified file into staging; `Sniffer` decides the format from the bytes), then `ImportWork.enqueueImport(app, staged)`, observing its `WorkInfo`. |
+| `ShareProcessor` | Turns stored items into library documents with **no activity**:<br>• `url` and `page`: `ReadLaterCenter.saver(c).save(SavedItem(url, title, source = SavedItem.VIA_REMOTE), html)` in process (the same caps as `SAVE_PAGE`: 4 KB URL, 8 MiB HTML).<br>• `file`: the new `ImportStager.stageFile(file, name, mime, sha256)` (moves the reassembled, already verified file into staging; `Sniffer` decides the format from the bytes), then the in-process import port, `ImportPipeline(c).run(staged)` (or `ReadLaterPorts.import(staged)`, whichever the live code has), which returns an `ImportOutcome`, as `ReadLaterSaver` and `PerfDocs` already use it. This is simpler than enqueuing `ImportWork` and watching its `WorkInfo`, and it starts no activity. |
 | `ShareLive` | While `ProcessLifecycleOwner` is STARTED and `labs.shareInstant` is on: the ntfy JSON stream, handled like a poll. No foreground service, no "Display over other apps". |
 | `ShareStates` | Maps outcomes to Lab states (2.2.3) and records them in `LabInbox`. |
-| `ShareInboxProvider` | Exported; authority `<applicationId>.shareinbox`. `call("receiving")` → `{receiving: Boolean}`, answered only to the package `com.daylight.share`. |
+| `ShareInboxProvider` | Exported; authority `<applicationId>.shareinbox`. `call("receiving")` → `{receiving: Boolean}`, answered only to the package `com.daylight.share`. On Android 11 and later, package visibility needs declarations on both sides: the Reader's manifest has `<queries><package android:name="com.daylight.share"/></queries>`, so it can call `HandoverProvider`, and K6 gives Daylight Share the matching entry for the Lab Reader. |
 | `ShareInboxSettings` | The rows of the `ShareLabs` group and the receive screen (5.3.5). |
 
 **5.3.1 Changes in existing Reader code:**
@@ -2070,16 +2137,23 @@ Inbox role.
 1. In Daylight Share › Settings › Lab, **Let Daylight Reader (lab) receive** arms a 2-minute grant and shows: "Open
    Daylight Reader (lab) › Settings › Labs › Send to Daylight and choose Take over."
 2. Its exported `HandoverProvider` (authority `com.daylight.share.handover`) answers `call("pairing")` with
-   `{code, relay, name}`. It does so only while armed, and only to the calling package
-   `com.daylightcomputer.readerexperiment` or `com.daylightcomputer.reader.<suffix>` (`getCallingPackage()`).
-3. Daylight Share then sets `receivingElsewhere = <package>`. It stops polling, the live connection and Instant
-   delivery, sends a `lab: 0` hello, and shows: "Daylight Reader (lab) receives for this Daylight now." with
-   **Receive here again**.
-4. Before each would-be poll, Daylight Share asks the Reader's `ShareInboxProvider.call("receiving")`. When the answer
-   is false, or the package is gone, it resumes by itself. **Receive here again** is offered only when the Reader
-   says false.
+   `{code, relay, name}`. It does so only while armed, and only to the calling package (`getCallingPackage()`) named
+   in its allow-list: the Lab Reader's applicationId as confirmed on Rooted 2 (5.1), and nothing else.
+3. Daylight Share then sets `receivingElsewhere = <package>`. It stops polling the pairing lane, the live
+   connection and Instant delivery, sends a `lab: 0` hello, and shows: "Daylight Reader (lab) receives for this
+   Daylight now." with **Receive here again**. The server lane (S0) stays with Daylight Share until the Lab Reader's
+   hello carries the cap `server` (4.2).
+4. Before each would-be poll, Daylight Share asks the Reader's `ShareInboxProvider.call("receiving")`, which its
+   `<queries>` entry (K6) makes visible. It resumes by itself only when the Reader answers false, or when
+   `PackageManager` confirms the package is no longer installed. A provider it cannot reach while the package is
+   installed is **not** a reason to resume, because two receivers would then both take every item. Daylight Share
+   keeps waiting and shows "Can’t reach Daylight Reader (lab) right now." **Receive here again** is offered only when
+   the Reader says false.
 5. Without Daylight Share installed, the Lab Reader can make its own pairing (QR code and typed code), as
-   READER-INTEGRATION describes.
+   READER-INTEGRATION describes. So R1 needs only K0 and R0; K6 is an add-on.
+
+During a handover both apps publish on the ack topic. Senders keep one ledger entry per publisher (2.2.6), so
+neither overwrites the other's caps.
 
 **5.3.5 UI** (Settings › Labs › Send to Daylight):
 
@@ -2093,8 +2167,10 @@ Inbox role.
 
 **Acceptance R1** (Rooted 2 with the Mac mini; senders are the Mac app and `daylight-send` on the Mac):
 
-- [ ] **R1.1** After the handover, `daylight-send --wait-for reader --json` exits 0 within 2 minutes for a link, a
-  page and a 3 MB PDF. The lab copy's `ShellReceiver count` grows by 3.
+- [ ] **R1.1** After the handover, with the lab copy in front (so `ShareLive` is connected),
+  `daylight-send --wait-for reader --json` exits 0 within 2 minutes for a link, a page and a 3 MB PDF. With the lab
+  copy in the background, it exits 0 within 20 minutes (the 15-minute worker). The lab copy's `ShellReceiver count`
+  grows by 3 each time.
 - [ ] **R1.2** Quiet: the resumed activity (`dumpsys activity activities | grep -m1 ResumedActivity`) is the same
   before and after every item. While a PDF is open in the lab copy, an arriving PDF does not change the page shown.
 - [ ] **R1.3** The iPhone and Mac Lab apps show "In your Reader ✓" for all three, the PDF included (`reader-doc`).
@@ -2109,15 +2185,18 @@ Inbox role.
 - `:share-core:test` (the vectors run in the Reader's build too);
 - `ShareInboxTest`: an in-JVM fake relay, poll → stored → ack → processed → states; restart while an item is stored
   but not yet processed;
-- `ShareProcessorTest`: fake `ReadLaterPorts` and `ImportWork`; each `SaveResult` and `ImportOutcome` → its state;
+- `ShareProcessorTest`: fake `ReadLaterPorts` and a fake in-process import port; each `SaveResult` and
+  `ImportOutcome` → its state;
 - `QuietImportTest` (Robolectric): after a link, a page and a file are processed,
   `shadowOf(app).nextStartedActivity == null`;
-- `HandoverTest` (Robolectric, with a fake provider on each side).
+- `HandoverTest` (Robolectric, with a fake provider on each side; in the companion repo, K6). It includes a provider
+  that is invisible while the package is installed: Daylight Share must not resume while the Reader is receiving.
 
 ### 5.4 R2 · Highlights and notes back to phones (F05; needs W2's L2 and the senders' "From your Daylight")
 
 - **Triggers.** `MarksOutbound` runs when a document closes (`ReaderActivity.onStop`) or the screen turns off,
-  debounced 60 s.
+  debounced 60 s, and sends at most 6 batches a day (2.2.7). Changes past that wait and go together in the next
+  batch.
 - **Scope** (setting): "Documents sent from my devices" (default: those with `meta_json.dls`) or "All documents".
 - **What it collects.** Highlights (`highlights`), typed notes (`notes.text_md`) and handwritten notes (sent as the
   placeholder "Handwritten note, page {n}") whose `updated_at` is later than the document's cursor
@@ -2151,7 +2230,9 @@ Inbox role.
   - `article_queue` rows (`queue_state`, `queue_order`, `done_at`);
   - `read_later_queue` (links waiting to download);
   - documents with `meta_json.dls` from the last 30 days.
-- **When.** Debounced 60 s after a change; at most once every 15 minutes; and when the library is shown.
+- **When.** Only when the manifest's content hash changed: debounced 60 s after a change, at most once an hour, and
+  checked when the library is shown. A new manifest drops every un-acked older one from the return outbox (2.4), so
+  at most about 8 go out on a busy day (2.2.7).
 - **Format.** A return item with `x-rk: "queue"`, `mime: application/vnd.daylight.queue+json`, replace semantics
   (phones keep the newest `sent`). Body:
 
@@ -2171,7 +2252,7 @@ Inbox role.
 
 - `ReadingOutbound` sends "opened", progress at close (`reading_positions.progress`) and "finished"
   (`documents.finished`), for documents with `meta_json.dls`. It uses `x-rk: "reading"` and is throttled to one batch
-  an hour.
+  an hour, sent only when something changed, and at most 6 batches a day (2.2.7).
 - Phones extend the F01 line: "Opened Tue · 62% read · Finished".
 - **Acceptance:** with the switch off nothing is sent (a relay-log check); with it on, the iPhone shows the progress
   within an hour of closing the document.
@@ -2181,7 +2262,7 @@ Inbox role.
 | Task | After | Notes |
 |---|---|---|
 | R0 | now | Independent of every companion task |
-| R1 | K0 and K3 (share-core with Lab and W1), K6 (handover) | |
+| R1 | K0 (share-core with Lab and header extras) and R0 | K6 (handover) is an add-on: without it the Lab Reader pairs itself (5.3.4 step 5). K3 is not needed. |
 | R2 | L2 and the senders' W2 "From your Daylight" | |
 | R3 | L2; the phones' read-only list comes with W3's F20 | |
 | R4 | R2 | |
@@ -2196,38 +2277,58 @@ Every R task ends with a device round on Rooted 2, written into DEVICE-CHECKS.md
 
 | Lane | Folders a task may edit | Tasks |
 |---|---|---|
-| share | `share/` and `rx-share.yml` | L0, L1, L2 |
-| kit | `apple/DaylightShareKit/` (both modules) | P0-kit, A0, A3, W2-kit |
-| ios | `apple/iOS/`, `apple/Shared/`, the iOS blocks of `apple/project.yml`, `rx-apple.yml` iOS jobs | A1, A4 |
-| mac | `apple/macOS/`, the macOS blocks of `apple/project.yml`, `rx-apple.yml` macOS jobs | A2, A5 |
+| share | `share/` (with `share/js/capture/`) | L0, L1, L2 |
+| kit | `apple/DaylightShareKit/` (both modules) and `apple/Shared/`, which both the iOS and the macOS targets compile (`project.yml`: `GetPage.js` and `Shared/SafariExtension`) | P0-kit, A0, A3, W2-kit |
+| ios | `apple/iOS/`, the iOS blocks of `apple/project.yml` | P0-ios, A1, A4 |
+| mac | `apple/macOS/`, the macOS blocks of `apple/project.yml` | P0-mac, A2, A5 |
 | core | `android/share-core/` | P0-core, K0, K3 |
-| android-app | `android/app/` and `rx-android.yml` | K1, K4, K5, K6 |
-| ext | `extension/` and `rx-extension.yml` | P0-ext, X0, X1 |
-| web | `web/` (its tests live in `extension/test/*web*`; that is its only edit there) | B0, B1 |
-| win | `windows/` and `rx-windows.yml` | WIN0, WIN1 |
-| e2e | `e2e/` and `rx-e2e.yml` | E0, E1 |
-| server | `server/` | Wave S changes only, if any |
+| android-app | `android/app/` | P0-app, K1, K4, K5, K6 |
+| ext | `extension/` | P0-ext, X0, X1 |
+| web | `web/` (its tests live in `extension/test/*web*`; that is its only edit there) | P0-web, B0, B1 |
+| win | `windows/` | P0-win, WIN0, WIN1 |
+| e2e | `e2e/` | E0, E1 |
+| server | `server/` | SV0 (W0), the Wave S server changes (4.2) |
 | reader | the Reader repository on the Mac mini | R0–R4 |
+
+**CI files.** Several lanes share a workflow file, so jobs are blocks. Each job carries a `# lane: <name>` comment;
+a lane edits only its own blocks and appends new ones. The shared parts of each file (triggers, `env`, permissions,
+the release step) have one owner:
+
+| File | Job blocks | Owner of the shared parts |
+|---|---|---|
+| `rx-apple.yml` | kit: `swift test` and `sync.mjs --check` on `GetPage.js` · ios: iPhone builds, XCUITests, the .ipa · mac: Mac builds, the smoke test, the zip | kit |
+| `rx-android.yml` | core: `:share-core:test` · android-app: app tests, the APKs | core |
+| `rx-extension.yml` | ext: build, tests, zips, `sync.mjs --check` · web: the web build, web tests, the Pages deploy | ext |
+| `rx-share.yml`, `rx-windows.yml`, `rx-e2e.yml`, `rx-server.yml` | one lane each: share, win, e2e, server | that lane |
 
 ### 6.2 Order
 
 ```
-Stage A (now, in parallel):  L0 · R0 · P0-core · P0-kit · P0-ext            (P0 per CHANGES-v1.1 §6)
-Stage B (after L0):          A0 (after P0-kit) · K0 (after P0-core) · X0 (after P0-ext) · WIN0 · L1
-Stage C (W0 apps):           A1 + A2 (after A0; first in line) · K1 (after K0) · B0 (after X0) · E0 (after K1)
-        → device round W0 on Rooted 2: iPhone + Mac + Lab Inbox (F17.4, F00.1)
+Stage A (now, in parallel):  P0 close-outs: P0-core · P0-kit · P0-ios · P0-mac · P0-app · P0-ext · P0-web · P0-win
+                             (v1.1 findings closed, CI green, the F27 baseline with Comfort, Lab-off baselines)
+                             · L0 · SV0 · R0
+Stage B (after L0):          A0 (after P0-kit, SV0) · K0 (after P0-core, SV0) · X0 (after P0-ext)
+                             · WIN0 (after P0-win) · L1
+Stage C (W0 apps):           A1 (after A0, P0-ios) + A2 (after A0, P0-mac), first in line · K1 (after K0, P0-app)
+                             · B0 (after X0, P0-web) · E0 (after K1)
+        → device round W0 on Rooted 2: iPhone + Mac + Lab Inbox (F17.4, F00.1, F00.7), and usability pass 1
+        → publish the iPhone and Mac W0 builds; only then publish the extension, web and Windows W0 builds
 Stage D (W1 ports):          A3 (after A0, L1) · K3 (after K0, L1)
 Stage E (W1 apps):           A4 + A5 (after A3; first in line) · X1 (after X0, L1) · K4 + K5 (after K3, K1)
                              · B1 (after B0, X1) · WIN1 (after WIN0, L1) · E1 (after K5)
-                             · K6 handover (after K1) · R1 (after K0, K3, K6, R0)
-        → device round W1 on Rooted 2 (every F01–F34 device item; R1.1–R1.6)
-Stage F (W2):                L2 first, then the W2 ports and apps in the same lane order;
-                             Wave S once the Worker is deployed (S0 Inbox lane first, then F37 on iPhone + Mac)
+                             · K6 handover (after K1) · R1 (after K0, R0; with K6 when it exists)
+                             · F11's share-sheet paths in A4, A5 and K4: last, after 6.5 Q1
+        → device round W1 on Rooted 2 (every F01–F34 device item; R1.1–R1.6), and usability pass 2
+Stage F (W2, Wave S):        L2 first; then F06 and F13 (iPhone, Mac and Inbox first); then 4.1 in its order.
+                             Wave S once the Worker is deployed: S0, then F02 (iPhone + Mac first), F37, F19, F36
 Stage G (W3), then W4:       as in section 4; R2 after L2 + the senders' F06; R3 with F20
 ```
 
 - **Priority when agents are scarce.** Start tasks in the user's order: iPhone → Mac → Chrome and Safari → Android
   phone → web → DC-1 Inbox → Windows.
+- **Releases follow the priority.** CI publishes every iPhone and Mac build. The extension, web and Windows Lab
+  builds are built and tested as soon as their cards allow, but they reach the release only after the iPhone and Mac
+  builds of the same wave. Otherwise Windows, which depends only on L0, would ship Lab first.
 - **Pulled forward.** Two Inbox pieces jump the queue because the iPhone and Mac need them on real devices: K1's
   hello and states (W0), and S0 (the server lane, Wave S).
 - **What must not wait.** No task waits for a lane it does not depend on.
@@ -2236,35 +2337,94 @@ Stage G (W3), then W4:       as in section 4; R2 after L2 + the senders' F06; R3
 
 - **`apple/project.yml`.** A1 and A4 add only iOS targets, A2 and A5 only macOS targets, each in its own block.
   Whoever merges second rebases; the iPhone usually merges first.
+- **`apple/Shared`.** The kit lane owns it (6.1), because both platforms compile it. A change there must keep both
+  the iPhone's and the Mac's Lab-off parity. A4 and A5 ask A3 for changes; they never edit it.
 - **`android/app`, shared by K4 (sender), K5 (Inbox) and K6 (handover).** Each adds only, in its own blocks:
   - `App.kt`: `Prefs` fields, grouped under a `// Lab: <task>` comment;
-  - `AndroidManifest.xml`: new components;
+  - `AndroidManifest.xml`: new components, and K6's `<queries>` entry;
   - `res/values/strings.xml`: one block per task;
   - `ui/SettingsScreen.kt`: rows inside `LabCard` only.
 
-  K4 merges before K5. Rebasing on these files must not change another task's lines.
+  K4's workers live in `sender/`, and `Work.kt` belongs to K5. K4 merges before K5. Rebasing on these files must not
+  change another task's lines.
+- **Capture code.** `share/js/capture/` (`clean-html.js`, Readability 0.6.0) is the one source. Each consumer keeps a
+  copy:
+  - the extension's build copies the files;
+  - `GetPage.js` inlines them between markers (`// BEGIN clean-html` … `// END clean-html`, and the same for
+    Readability).
+
+  `node share/js/capture/sync.mjs --check <file>` (or `--write`) compares a copy with the source. `rx-extension.yml`
+  and `rx-apple.yml` run `--check` on their own copies. When L changes the source, each consumer lane re-syncs its
+  own copy; no lane edits another's.
 - **`extension/src/logic.js`** is shared with the web build. X tasks own it. B tasks never edit it; they ask the
   matching X task.
-- **Vectors.** Only L tasks edit `share/vectors/*`. A port that finds a vector bug files it to the L lane; it never
-  edits the vector.
+- **Vectors.** Only L tasks edit `share/vectors/*`, and only the server lane edits `server/vectors/*`. A port that
+  finds a vector bug files it to the owning lane; it never edits the vector.
 - **Copy.** `LAB_TEXT` in `daylight-lab.js` is the source. A new string is added there first (L lane), then ported.
 
-### 6.4 Device rounds
+### 6.4 Device rounds and usability passes
 
 After W0 and after W1, and after R1, R2 and R3, the Mac mini session runs the device items of that wave on Rooted 2
 with the real ntfy.sh relay:
 
 - iPhone and Mac first, then Android, Chrome, web and Windows (as available);
+- the realistic conditions of F01.1: the Inbox in front; in the background with the Reader in front, with "Display
+  over other apps" on and off; the screen off with Instant delivery;
 - the results, with times, go into DEVICE-CHECKS.md;
 - the tablet's library goes back to its recorded baseline afterwards, as in rounds 1 and 2.
 
-### 6.5 Decisions for the user (none blocks W0 or W1)
+**Usability pass (W0 and W1 rounds).** The user does five short tasks on the iPhone and the Mac, unaided. The session
+notes the time taken and any wrong turn in DEVICE-CHECKS.md:
 
-1. **Excerpts as documents.** Until the Lab Reader's quiet import, an excerpt is a document. With Documents = Ask it
-   waits for a tap (F11). OK?
+1. Find Lab, turn it off, and turn it on again.
+2. Tell whether a PDF just sent has reached the Reader.
+3. Recover a failed send (the relay forced to answer 413).
+4. Find out what the Daylight server is for, and whether it is needed.
+5. Send a copied link.
+
+The copy review of ground rule 1 follows the W0 pass.
+
+### 6.5 Decisions for the user
+
+Only Q1 holds anything back: F11's share-sheet paths. Nothing else blocks W0 or W1.
+
+1. **Excerpts before the Lab Reader (blocks F11's share-sheet paths in A4, A5 and K4).** With Documents = Ask, every
+   excerpt raises a card or a notice over the Reader and waits for a tap. Choose one:
+   - (a) excerpts are documents now, with a one-time "Excerpts wait for a tap on your Daylight for now." and
+     grouped notices;
+   - (b) only explicit selections (the context menu, Selection mode, a Safari selection, "Send as excerpt") until
+     R1's quiet import;
+   - (c) no sender excerpts until R1, except the Chrome and Safari context menu and Selection mode.
+
+   Until the user answers, only what all three have in common is built: X1's explicit paths and the libraries'
+   excerpt builders (F11).
 2. **The Lab Reader's handover.** The Lab Reader takes receiving over from Daylight Share on the lab tablet (5.3.4).
    Alternatively, both could run, with Daylight Share delivering to the main Reader and the Lab Reader to its own
    library (duplicates in two libraries). The plan assumes the handover.
-3. **Send back targets (F06, W2).** Every paired device, or the tablet asks which one (FEATURES §6 Q3).
-4. **Server lane first.** S0 is recommended as the first Wave S task, ahead of the rest of the DC-1 Lab work
-   (DESIGN 3.1).
+3. **Send back targets (F06, W2).** Every known device (2.4), or the tablet asks which one (FEATURES §6 Q3).
+4. **Wave S order.** S0 first (DESIGN 3.1), so that v1 delivery stays an exception. Then F02, big files, as the
+   DC-1 owner's first "finally", then F37, F19 and F36.
+5. **Per-feature "Use" switches.** The rule is one Lab switch per app. Should What's in Lab rows for features that
+   change how sharing behaves (F04, F16, F33, F03's hint) also get a "Use" switch, on by default, so that one
+   annoyance does not mean turning off all of Lab? W1 builds only the feature settings "Always show Options before
+   sending" and the two notification settings.
+6. **Sign the Mac release.** A Developer ID (or team) signature gives the Mac app its App Group. Share › Daylight then
+   shares the app's pairing, Lab switch and history, and F04 closes in a second. This needs an Apple Developer
+   account and its certificate as repository secrets. Until then the Mac's acceptance runs on the ad-hoc build, and
+   What's in Lab says what it lacks.
+7. **Daylight Share with Lab on JP4R03005.** The plan reads "Never on JP4R03005" (LAB-DECISIONS) as covering the
+   Lab Reader and anything an agent installs. You may install Daylight Share, with Lab on by default, on any DC-1
+   yourself (0.6). Is that right, or should Lab stay on the lab tablet only for now?
+8. **Small requests to the main Reader.** The biggest tablet-side pains for every DC-1 owner can only be fixed in the
+   Reader itself:
+   - a PDF opening over what you are reading;
+   - the card over the Reader, and the "Display over other apps" permission it needs;
+   - a PDF silently dropped by the ImportActivity race.
+
+   Should the Reader session be asked for:
+   - (a) R0's race fix;
+   - (b) a quiet import entry point for documents that answers with the outcome (the `reader-doc` and `quiet`
+     equivalents: import without opening, and report back);
+   - (c) keeping the Daylight Share item id with what it saves (for F18)?
+
+   The Lab Reader work proves each one on Rooted 2 first.
