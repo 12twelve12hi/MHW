@@ -1,0 +1,2254 @@
+[
+  {
+    "id": "F00",
+    "rank": 0,
+    "name": "Lab switch and \"needs setup\" messages",
+    "theme": "Foundation",
+    "summary": "One Lab switch per app, on by default; Lab features that need a server, a key or the Lab Inbox stay visible and explain themselves in one sentence when tapped.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Windows",
+      "Chrome",
+      "Safari",
+      "Web sender",
+      "DC-1 Inbox"
+    ],
+    "needs": "companion-only",
+    "effort": "S",
+    "value": "H",
+    "lab_wave": 0,
+    "acceptance_criteria": [
+      "Fresh install of each app: Lab is on. Upgrading from a build without Lab: Lab is on and a one-time note says so.",
+      "With Lab off, every screen, string and flow matches the last non-Lab build (screenshot diff in each app's UI tests).",
+      "Tapping a Lab feature whose prerequisite is missing shows exactly one sentence naming the missing piece and where to add it; the control is not greyed out (UI test per needs-setup state).",
+      "Turning Lab off never deletes data: queued items still send and history stays."
+    ],
+    "best_in_class": "This is the user's rule (LAB-DECISIONS.md), not a researched product.",
+    "evidence": []
+  },
+  {
+    "id": "F01",
+    "rank": 1,
+    "name": "Honest delivery timeline",
+    "theme": "Delivery",
+    "summary": "Every item shows Queued, On the relay, On your Daylight, In your Reader (or Waiting for a tap), the Daylight's last check-in, and a plain reason plus Retry when it fails.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Windows",
+      "Chrome",
+      "Safari",
+      "Web sender",
+      "DC-1 Inbox"
+    ],
+    "needs": "companion+inbox",
+    "effort": "M",
+    "value": "H",
+    "lab_wave": 1,
+    "acceptance_criteria": [
+      "A link sent while the Lab Inbox is open shows \"In your Reader\" on the sender within 30 s of \"On your Daylight\" (mock-relay e2e test in CI, plus one run on Rooted 2).",
+      "With the Inbox's Documents set to Ask, a PDF shows \"Waiting for a tap on your Daylight\"; after the notification is tapped the sender shows \"Handed to the Reader\" at its next ack check.",
+      "The sender shows \"Your Daylight checked in N min ago\" from the newest ack/hello. With the Daylight off, sends still go out (presence never blocks).",
+      "Every failed row has one sentence naming the cause and a Retry button. No row ever says Delivered without an ack listing its id (unit test over the outbox state machine).",
+      "Against a non-Lab v1.1 Inbox the rows show Sent / Delivered exactly as today (version-skew suite, F17)."
+    ],
+    "best_in_class": "Nobody does all of it. LocalSend (accept/reject, SHA-256 check, Retry since 1.15.4), Tailscale Taildrop (progress counted from bytes the receiver confirmed, \"reportedly offline; trying anyway\"), Chrome Send-tab-to-self (received and opened timestamps back to the sender). Amazon's email route has none.",
+    "evidence": [
+      {
+        "quote": "The file shows up in downloads, but there is no notification.",
+        "source": "https://github.com/tailscale/tailscale/issues/8626",
+        "tier": "opened"
+      },
+      {
+        "quote": "Immich should not claim the upload succeeded when it actually didn't.",
+        "source": "https://github.com/immich-app/immich/issues/2531",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F02",
+    "rank": 2,
+    "name": "Big files through the Daylight server",
+    "theme": "Big files",
+    "summary": "PDFs and books over 9 MB (up to 192 MiB) travel as ordinary encrypted frames hosted on the user's own Cloudflare Worker + R2, with progress and resume.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Windows",
+      "Chrome",
+      "Web sender",
+      "DC-1 Inbox",
+      "Server"
+    ],
+    "needs": "server",
+    "effort": "L",
+    "value": "H",
+    "lab_wave": null,
+    "acceptance_criteria": [
+      "A 150 MB PDF sent from the Mac through the Worker reaches the Reader with a matching SHA-256 and a visible progress bar.",
+      "Killing the network mid-upload and restoring it resumes from the parts the Worker already has (GET /v1/files/{id}).",
+      "A test proves the R2 objects decrypt only with the pairing key.",
+      "Without the server, tapping a >9 MB file shows the protocol sentence plus \"Needs the Daylight server\"."
+    ],
+    "best_in_class": "reMarkable, Boox and Supernote move big PDFs through their own clouds; Send to Kindle's web/app route claims 200 MB.",
+    "evidence": [
+      {
+        "quote": "Lost about two hours to a failed copy",
+        "source": "https://github.com/localsend/localsend/issues/443",
+        "tier": "opened"
+      },
+      {
+        "quote": "I do not want to use the subscription or the RM cloud ... a lot of manual steps (downloading of the paper, resizing using ghostscript, etc.)",
+        "source": "https://github.com/GjjvdBurg/paper2remarkable/issues/142",
+        "tier": "opened"
+      }
+    ],
+    "what_it_would_take": "Deploy the Worker with R2 (server/DESIGN.md section 6), confirm the `ntfy-attach` probe (an external Attach: URL is listed and kept 12 h), and add the hosted-upload client module to each sender. No protocol change."
+  },
+  {
+    "id": "F03",
+    "rank": 3,
+    "name": "Send the page as you see it, and say when only a link came through",
+    "theme": "Capture",
+    "summary": "Pages travel as the rendered HTML (paywalled and logged-in pages work); when another app shares only a bare link, the sender says so and offers the full-page route.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Chrome",
+      "Safari",
+      "DC-1 Inbox"
+    ],
+    "needs": "companion-only",
+    "effort": "S",
+    "value": "H",
+    "lab_wave": 1,
+    "acceptance_criteria": [
+      "[Chrome] A Playwright fixture page that shows text only with a login cookie arrives with that text in the received HTML.",
+      "[Chrome, Safari, iPhone] Sent HTML has no `<script>` except JSON-LD, no `on*` attributes and no form values (unit test with a token in a hidden input).",
+      "[iPhone] Sharing a URL from Notes shows the \"Only the link came through\" line with Open in Safari; sharing a page from Safari never shows it.",
+      "[Inbox] Every row states \"Page as you saw it\" or \"Link\", and TalkBack reads it."
+    ],
+    "best_in_class": "Readwise Reader's extension and iOS Safari share (\"the most robust way to save\"), Matter (\"save behind paywalls\"), Instapaper's bookmarklet.",
+    "evidence": [
+      {
+        "quote": "It handles paywalled articles better than any other extension I've tried.",
+        "source": "https://extensionauditor.com/scan/matter-knjbgabkeojmfdhindppcmhhfiembkeb",
+        "tier": "snippet"
+      },
+      {
+        "quote": "the most robust way to save",
+        "source": "https://docs.readwise.io/reader/docs/saving-content",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F04",
+    "rank": 4,
+    "name": "Share in place: done in a second, never opens the app",
+    "theme": "Capture",
+    "summary": "Share > Daylight queues the item and closes within about a second, leaving you in the source app; a 1.5 s Options window allows choices without slowing the default.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Chrome",
+      "Safari"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "H",
+    "lab_wave": 1,
+    "acceptance_criteria": [
+      "[iPhone] From Safari, Notes and Files the share sheet closes no later than 2.5 s after tapping Daylight (1.5 s Options window included), and the host app scrolls immediately afterwards, on iOS 17, 18 and 26.",
+      "[iPhone] Sharing a 9 MB PDF from Files keeps the extension under 60 MB peak memory (Instruments) and the item reaches \"On the relay\" after the extension has closed.",
+      "[Android] The share activity finishes within 1 s; the upload completes after the app is swiped away.",
+      "Tapping Options inside the window stops the countdown and shows the choices; doing nothing sends with the last-used choices."
+    ],
+    "best_in_class": "Pocket's toast, GoodLinks' Quick Save, Zotero's iOS share extension.",
+    "evidence": [
+      {
+        "quote": "I mean my point of hoarding is to read it later - seeing the app is unnecessary.",
+        "source": "https://github.com/karakeep-app/karakeep/issues/237",
+        "tier": "opened"
+      },
+      {
+        "quote": "Still very relevant in 2026 — sharing from the Android share sheet still launches the full Karakeep app.",
+        "source": "https://github.com/karakeep-app/karakeep/issues/237",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F05",
+    "rank": 5,
+    "name": "Notes come home automatically",
+    "theme": "Round trip",
+    "summary": "Highlights, notes, voice-note transcripts and ink made in the Reader reach the phone and Mac on their own, with stable ids, page anchors and deep links.",
+    "platforms": [
+      "Daylight Reader",
+      "DC-1 Inbox",
+      "iPhone",
+      "iPad",
+      "Mac",
+      "Android phone"
+    ],
+    "needs": "reader-change",
+    "effort": "L",
+    "value": "H",
+    "lab_wave": null,
+    "acceptance_criteria": [
+      "A highlight made on the DC-1 appears in the iPhone app within 2 minutes of closing the document, with text, page, note and a working deep link.",
+      "Editing or deleting it on the DC-1 updates or removes it on the phone; three syncs in a row create no duplicates; order follows the document."
+    ],
+    "best_in_class": "Kindle Scribe (export to Drive/OneDrive/OneNote), Readwise's exporters, KOReader's highlight exporter, InstaKobo.",
+    "evidence": [
+      {
+        "quote": "This would make annotations much more valuable as they are no longer isolated to one system.",
+        "source": "https://github.com/stelzch/zotero.koplugin/issues/13",
+        "tier": "opened"
+      },
+      {
+        "quote": "if we could sync via any of those APIs and sync read/unread/starred status bidirectionally then I'd die a happy man.",
+        "source": "https://github.com/koreader/koreader/issues/9937",
+        "tier": "opened"
+      }
+    ],
+    "what_it_would_take": "Reader: a highlight table with stable ids and an export event (broadcast to com.daylight.share with the batch as a content:// URI), Markdown/JSON format with anchors, and a `daylightreader://open?item=&loc=` deep link. Builds on F06's return topic."
+  },
+  {
+    "id": "F06",
+    "rank": 6,
+    "name": "Send back from the DC-1 to my phone or Mac",
+    "theme": "Round trip",
+    "summary": "On the Daylight, \"Send to my phone or Mac\" is a share target: an annotated PDF, a flattened PDF, notes as Markdown or a link goes end-to-end encrypted to the paired devices.",
+    "platforms": [
+      "DC-1 Inbox",
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Windows",
+      "Chrome",
+      "Safari",
+      "Web sender"
+    ],
+    "needs": "companion+inbox",
+    "effort": "M",
+    "value": "H",
+    "lab_wave": 2,
+    "acceptance_criteria": [
+      "On the DC-1, Reader > Share > \"Send to my phone or Mac\" with a 5 MB annotated PDF: the file appears in the iPhone app's From your Daylight within a minute of opening the app, and its SHA-256 matches.",
+      "Notes exported as Markdown arrive as a .md the iPhone can Share and the Mac can open.",
+      "An item over 9 MB is refused on the DC-1 with the standard sentence.",
+      "Returned file names pass the safe-file-name vectors; a name containing \"../\" is saved inside the app's folder.",
+      "The phone install shows only \"Send to Daylight\" and the Inbox install only \"Send to my phone or Mac\" in the share sheet.",
+      "The Inbox item shows \"Sent\" then \"Received by <device>\"; a non-Lab sender ignores the return topic."
+    ],
+    "best_in_class": "reMarkable (send by email, cloud), Kindle Scribe (notebook export by email), Kobo (notebooks to email or Dropbox).",
+    "evidence": [
+      {
+        "quote": "a huge shortcoming of the ReMarkable ecosystem",
+        "source": "https://github.com/remailable/remailable",
+        "tier": "opened"
+      },
+      {
+        "quote": "annotation export format is unusable for getting back to the highlighted location in another app",
+        "source": "https://christiantietze.de/posts/2023/05/boox-neoreader-annotation-export-is-meh/",
+        "tier": "relayed"
+      }
+    ]
+  },
+  {
+    "id": "F07",
+    "rank": 7,
+    "name": "Offline-first outbox",
+    "theme": "Delivery",
+    "summary": "Shares made offline are accepted at once, shown as \"Waiting for connection\", and go out automatically when the network returns; a visible queue with Cancel.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Windows",
+      "Chrome",
+      "Safari",
+      "Web sender"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "H",
+    "lab_wave": 1,
+    "acceptance_criteria": [
+      "In flight mode, sharing from each app shows \"Waiting for connection\" (not \"Not delivered\"); with the network back the item goes within a minute while the app runs, and on iPhone/Android also with the app closed within the OS's background window.",
+      "The queue shows waiting items with Cancel and a count.",
+      "Twenty links queued offline go out in order without a 429 against the mock relay configured with ntfy.sh's burst limits."
+    ],
+    "best_in_class": "Instapaper (\"rock solid for offline reading\"), Wallabako (syncs when Wi-Fi turns on); requested and not shipped in Karakeep.",
+    "evidence": [
+      {
+        "quote": "I was just on a flight and disappointed this wasn't already a thing.",
+        "source": "https://github.com/karakeep-app/karakeep/issues/2401",
+        "tier": "opened"
+      },
+      {
+        "quote": "just kind of... spins... and tries to connect",
+        "source": "https://github.com/karakeep-app/karakeep/issues/2401",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F08",
+    "rank": 8,
+    "name": "Your Daylight in the share sheet's top row",
+    "theme": "Capture",
+    "summary": "On Android the paired Daylight appears as a Direct Share target next to contacts; one tap sends with no further screen.",
+    "platforms": [
+      "Android phone",
+      "iPhone",
+      "iPad",
+      "Mac",
+      "Windows"
+    ],
+    "needs": "companion-only",
+    "effort": "S",
+    "value": "H",
+    "lab_wave": 1,
+    "acceptance_criteria": [
+      "[Android 13 and 14] After one send, sharing a link from Chrome shows the Daylight's name in the Direct Share row; tapping it sends with no other screen and the item appears in history.",
+      "Unpair removes the shortcut; the shortcut id survives an app update."
+    ],
+    "best_in_class": "Pushbullet (historically); Android's Sharing Shortcuts API is the supported route.",
+    "evidence": [
+      {
+        "quote": "It'd be nice if I could have the favorites show up directly in the share sheet, and be able to one click share without needing to swap apps and confirm send etc.",
+        "source": "https://github.com/localsend/localsend/issues/3014",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F09",
+    "rank": 9,
+    "name": "Automation: Shortcuts, Siri, URL scheme, Android intent, command line",
+    "theme": "Automation",
+    "summary": "A \"Send to Daylight\" App Intent that returns the item id and status, a confirmable URL scheme, an Android intent for Tasker, and a CLI with JSON output.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Mac",
+      "Android phone",
+      "Windows",
+      "Web sender"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "H",
+    "lab_wave": 1,
+    "acceptance_criteria": [
+      "A Shortcut \"Send link to Daylight\" returns an entity with an id and status \"sent\"; \"Get delivery status\" returns \"delivered\" after the Daylight acks.",
+      "The Siri phrase works on a device.",
+      "The URL scheme shows the confirmation sheet unless both `quick=1` and the setting are on; a test web page cannot send silently.",
+      "`daylight-send https://example.com --json` prints {\"id\":..., \"status\":\"sent\"} and exits 0; with `--wait` it exits 0 when delivered and 2 on timeout.",
+      "An empty or unreadable file passed to Send file fails with a sentence and is never sent as 0 bytes."
+    ],
+    "best_in_class": "GoodLinks (Shortcuts, URL scheme with quick=1, CLI and MCP in 4.1), Readwise CLI (`--json`, read-only mode), Taildrop Shortcuts, LocalSend CLI.",
+    "evidence": [
+      {
+        "quote": "made tailscale on iOS so much more powerful",
+        "source": "https://github.com/tailscale/tailscale/issues/2504",
+        "tier": "opened"
+      },
+      {
+        "quote": "When adding a URL to Omnivore using Shortcuts; there is no return value.",
+        "source": "https://github.com/omnivore-app/omnivore/issues/3898",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F10",
+    "rank": 10,
+    "name": "Send as: page, clean article, link or selection, with a thin-content check",
+    "theme": "Capture",
+    "summary": "A one-row choice in the extension and iPhone share options; a smart default; a warning when the extracted article looks empty or cut short; optional preview.",
+    "platforms": [
+      "Chrome",
+      "Safari",
+      "iPhone",
+      "iPad"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "H",
+    "lab_wave": 1,
+    "acceptance_criteria": [
+      "On Readability's test pages plus ten news fixtures, Clean article keeps at least 90% of the expected body text and drops navigation and footers.",
+      "A page with under 150 extracted words shows the thin warning; choosing full page sends the page HTML.",
+      "The chosen mode is remembered per site across browser restarts.",
+      "Review renders within 1 s for a 1 MB page and the edited title is the title sent."
+    ],
+    "best_in_class": "Obsidian Web Clipper (selection > highlights > template > article), Evernote's clip types, Read on reMarkable (article vs PDF).",
+    "evidence": [
+      {
+        "quote": "Note in Obsidian is empty at all of our local newspaper articles",
+        "source": "https://github.com/obsidianmd/obsidian-clipper/issues/484",
+        "tier": "opened"
+      },
+      {
+        "quote": "best parser and typography I've seen among many read-later apps",
+        "source": "https://news.ycombinator.com/item?id=37890742",
+        "tier": "snippet"
+      }
+    ]
+  },
+  {
+    "id": "F11",
+    "rank": 11,
+    "name": "Send a selection as an excerpt",
+    "theme": "Capture",
+    "summary": "Selected text goes as a small quote page with its source link and date; text with no link goes as a Markdown note.",
+    "platforms": [
+      "Chrome",
+      "Safari",
+      "iPhone",
+      "iPad",
+      "Mac",
+      "Android phone",
+      "DC-1 Inbox"
+    ],
+    "needs": "companion+inbox",
+    "effort": "S",
+    "value": "H",
+    "lab_wave": 1,
+    "acceptance_criteria": [
+      "Selecting a paragraph and choosing Send selection delivers one item that shows the quote, the source link and the date in the Reader; the full article is not sent.",
+      "Text with no URL arrives as a Markdown document the Reader opens.",
+      "Excerpt HTML contains only allow-listed tags (unit test) and selections over 50,000 characters are trimmed with a note saying so."
+    ],
+    "best_in_class": "Obsidian Web Clipper (selection wins), Omnivore (highlight from a website), Fabric (share highlighted text).",
+    "evidence": [
+      {
+        "quote": "Would love to help testing as this is my exact workflow.",
+        "source": "https://github.com/omnivore-app/omnivore/issues/2817",
+        "tier": "opened"
+      },
+      {
+        "quote": "share text on phone, open file, copy to clipboard has 200% more steps than share text",
+        "source": "https://github.com/tailscale/tailscale/issues/4896",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F12",
+    "rank": 12,
+    "name": "Note, tags and \"read now / quietly / hold\" at send time",
+    "theme": "Organise",
+    "summary": "Optional one-line note, tags and a destination travel inside the encrypted header; the Inbox shows and filters them and can put the note at the top of the article.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Windows",
+      "Chrome",
+      "Safari",
+      "Web sender",
+      "DC-1 Inbox"
+    ],
+    "needs": "companion+inbox",
+    "effort": "M",
+    "value": "H",
+    "lab_wave": 2,
+    "acceptance_criteria": [
+      "A note typed on the iPhone shows on the Inbox row and, for a page, as the first line of the article in the Reader.",
+      "Tag chips filter the Inbox list; tags are trimmed; a new tag can be created from the keyboard.",
+      "Read now on a PDF opens it in the Reader on arrival with Documents = Ask; Add quietly adds it without opening.",
+      "A non-Lab v1.1 Inbox receives the same item normally (version-skew suite).",
+      "With no interaction, Quick Send publishes 1.5 s after the tap with the last destination."
+    ],
+    "best_in_class": "Readwise Reader's post-save bar (tags, document note, move to Later/Archive), Instapaper's save banner, Zotero's popup (tag autocomplete and note since June 2025).",
+    "evidence": [
+      {
+        "quote": "+1 When I save a lot of articles, later retrieval is faster when they are tagged at once.",
+        "source": "https://github.com/wallabag/android-app/issues/675",
+        "tier": "opened"
+      },
+      {
+        "quote": "we should not have to leave the browser to add labels",
+        "source": "https://github.com/omnivore-app/omnivore/issues/2230",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F13",
+    "rank": 13,
+    "name": "Big files on the same Wi-Fi (direct, no server)",
+    "theme": "Big files",
+    "summary": "When phone or computer and the DC-1 share a Wi-Fi network, files over 9 MB (up to 192 MiB) go straight to the Inbox as encrypted frames, with progress and resume.",
+    "platforms": [
+      "DC-1 Inbox",
+      "iPhone",
+      "iPad",
+      "Mac",
+      "Android phone",
+      "Windows"
+    ],
+    "needs": "companion+inbox",
+    "effort": "L",
+    "value": "H",
+    "lab_wave": 2,
+    "acceptance_criteria": [
+      "A 120 MB PDF from the Mac to the DC-1 on the same Wi-Fi reaches the Reader with a matching SHA-256 and visible progress, in under 3 minutes on a home network.",
+      "Dropping Wi-Fi mid-transfer and restoring it resumes without re-uploading completed parts.",
+      "A frame not sealed with the pairing key gets 400 and is not stored; more than 50 bad requests a minute get 429.",
+      "On another network the sender shows the sentence within 3 s and does not hang.",
+      "The port is closed when Instant delivery is off and the Inbox is not open."
+    ],
+    "best_in_class": "BooxDrop, Supernote Browse & Access, LocalSend, the KOReader LocalSend plugin (PIN, TLS, per-type folders).",
+    "evidence": [
+      {
+        "quote": "without a cloud service, internet connection, or cable",
+        "source": "https://github.com/Toricicim/Boox-Send",
+        "tier": "opened"
+      },
+      {
+        "quote": "Lost about two hours to a failed copy",
+        "source": "https://github.com/localsend/localsend/issues/443",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F14",
+    "rank": 14,
+    "name": "Morning stack: one issue with a contents page, never repeating",
+    "theme": "Calm reading",
+    "summary": "Items marked for the stack wait on the Inbox and arrive at a chosen time as one EPUB with a contents page; nothing repeats; empty days make nothing.",
+    "platforms": [
+      "DC-1 Inbox",
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Windows",
+      "Chrome",
+      "Safari",
+      "Web sender"
+    ],
+    "needs": "companion+inbox",
+    "effort": "L",
+    "value": "H",
+    "lab_wave": 3,
+    "acceptance_criteria": [
+      "Three pages and two links sent to the stack before 07:00 arrive as one EPUB with five contents entries at 07:00 (or the first wake after), and none arrives on its own.",
+      "No item appears in two stacks, across restarts and sender re-sends of the same id (ledger test).",
+      "No stack is made on a day with nothing held.",
+      "The EPUB passes epubcheck and its contents links work in the Reader.",
+      "Send now builds the stack at once."
+    ],
+    "best_in_class": "Instapaper's Kindle digests (\"a personal newspaper with its own contents page\"), Readwise Reader's daily/weekly Kindle delivery, Matter's bulk send as one ebook.",
+    "evidence": [
+      {
+        "quote": "I really love Instapaper and use it a lot. Especially the send to kindle feature",
+        "source": "https://news.ycombinator.com/item?id=17706597",
+        "tier": "snippet"
+      },
+      {
+        "quote": "Same feature as with Instapaper. But it would be better if, Omnivore could convert docs to cleaner format and having the option to send either a compilations or a specific doc ... to Kindle.",
+        "source": "https://github.com/omnivore-app/omnivore/issues/2142",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F15",
+    "rank": 15,
+    "name": "Arrival notification with actions, and Inbox health",
+    "theme": "Delivery",
+    "summary": "Each arrival on the DC-1 can show \"From iPhone: <title>\" with Open in Reader / Hold / Dismiss; the Inbox shows when it last checked and warns when Instant delivery was stopped.",
+    "platforms": [
+      "DC-1 Inbox"
+    ],
+    "needs": "companion+inbox",
+    "effort": "S",
+    "value": "H",
+    "lab_wave": 1,
+    "acceptance_criteria": [
+      "Every arrival posts one notification (grouped when several) whose three actions work; TalkBack reads the title and source.",
+      "Stopping the service from Android's Task Manager shows the warning card on next open and a notification within 15 minutes.",
+      "Lab Inbox screens render their final state with animations disabled, and no state is shown by colour alone."
+    ],
+    "best_in_class": "ntfy (priority channels, instant mode), Tailscale 1.104 (tap to open or copy), NearDrop.",
+    "evidence": [
+      {
+        "quote": "Airdrop on Apple does not need receiving device to be inside an app to receive.",
+        "source": "https://github.com/schlagmichdoch/PairDrop/issues/479",
+        "tier": "opened"
+      },
+      {
+        "quote": "Add a `copy` action on notification",
+        "source": "https://github.com/Martichou/rquickshare/issues/182",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F16",
+    "rank": 16,
+    "name": "Smart intake: unwrap Apple News, AMP, Substack and tracking links",
+    "theme": "Capture",
+    "summary": "One normaliser, pinned by test vectors in all three languages, turns messy shares into the real article URL and a clean title.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Windows",
+      "Chrome",
+      "Safari",
+      "Web sender"
+    ],
+    "needs": "companion-only",
+    "effort": "S",
+    "value": "H",
+    "lab_wave": 1,
+    "acceptance_criteria": [
+      "At least 40 vectors (Apple News text share, Substack app link, AMP, utm, Facebook redirect, plain URL) pass in JS, Kotlin and Swift.",
+      "Sharing from Apple News on an iPhone sends the article URL, not a text note.",
+      "A URL whose only change is removed tracking parameters is otherwise byte-identical."
+    ],
+    "best_in_class": "Karakeep fixed the text-blob case in 2025; nobody examined handles the Substack referral overlay well.",
+    "evidence": [
+      {
+        "quote": "On iOS/iPadOS, sharing to Hoarder from Apple News, saves the headline and link to article as plain text.",
+        "source": "https://github.com/karakeep-app/karakeep/issues/956",
+        "tier": "opened"
+      },
+      {
+        "quote": "resolve the appropriate article URL before the initial crawler fetch",
+        "source": "https://github.com/karakeep-app/karakeep/issues/3134",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F17",
+    "rank": 17,
+    "name": "Capability hello and version-skew safety",
+    "theme": "Foundation",
+    "summary": "The Lab Inbox announces what it supports in a small encrypted hello; senders enable Inbox-dependent features only when it is there; a CI matrix covers every Lab/non-Lab pairing.",
+    "platforms": [
+      "DC-1 Inbox",
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Windows",
+      "Chrome",
+      "Safari",
+      "Web sender"
+    ],
+    "needs": "companion+inbox",
+    "effort": "S",
+    "value": "H",
+    "lab_wave": 0,
+    "acceptance_criteria": [
+      "Every sender/Inbox combination in the matrix delivers url, page and file items and gets acks; Lab-only states appear only when both sides are Lab.",
+      "A sender that has never seen a hello shows Inbox-dependent features with the \"Needs the Lab Inbox\" sentence.",
+      "Hello frames are small messages (under 3,800 base64 characters) and at most three a day plus one per Lab toggle."
+    ],
+    "best_in_class": "KDE Connect (versioned packet types), LocalSend (protocol version field).",
+    "evidence": [
+      {
+        "quote": "I can't pair any device.",
+        "source": "https://github.com/GSConnect/gnome-shell-extension-gsconnect/issues/1932",
+        "tier": "opened"
+      },
+      {
+        "quote": "Fixes older devices being unable to add 1.18.0+ devices as favorites.",
+        "source": "https://github.com/localsend/localsend/releases",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F18",
+    "rank": 18,
+    "name": "Opened, reading progress and finished, back on the phone",
+    "theme": "Round trip",
+    "summary": "The phone and Mac show \"Opened\", \"62% read\" and \"Finished\" for items sent to the Daylight, from events the Reader emits.",
+    "platforms": [
+      "Daylight Reader",
+      "DC-1 Inbox",
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Chrome",
+      "Safari",
+      "Web sender"
+    ],
+    "needs": "reader-change",
+    "effort": "M",
+    "value": "H",
+    "lab_wave": null,
+    "acceptance_criteria": [
+      "Opening and finishing an item on the DC-1 updates the phone's row within a minute of the phone's next check; turning the setting off stops all events."
+    ],
+    "best_in_class": "KOReader sync (kosync), Kindle Whispersync, InstaKobo and kobodeck (read status written back), Chrome Send-tab-to-self (opened timestamps).",
+    "evidence": [
+      {
+        "quote": "I really only want the auto push, so I can spontaneously start reading on my phone",
+        "source": "https://github.com/koreader/koreader/issues/14527",
+        "tier": "opened"
+      },
+      {
+        "quote": "Read your Instapaper articles on Kobo, and sync reading progress and highlights back.",
+        "source": "https://github.com/voidberg/instakobo",
+        "tier": "opened"
+      }
+    ],
+    "what_it_would_take": "Reader: accept an item id extra on SAVE_PAGE/ACTION_SEND and keep it with the saved item; broadcast reading events to com.daylight.share. Inbox: relay them in acks."
+  },
+  {
+    "id": "F19",
+    "rank": 19,
+    "name": "Email-in address for newsletters and documents",
+    "theme": "Sources",
+    "summary": "A private, random, revocable address; forwarded mail and newsletters arrive as articles, attachments as documents.",
+    "platforms": [
+      "Server",
+      "DC-1 Inbox",
+      "iPhone",
+      "Mac"
+    ],
+    "needs": "server",
+    "effort": "L",
+    "value": "H",
+    "lab_wave": null,
+    "acceptance_criteria": [
+      "A forwarded newsletter arrives as a readable article and a mailed PDF as a document; the address is random and can be replaced; first use shows the not-end-to-end notice."
+    ],
+    "best_in_class": "Readwise Reader (library@ and feed@ addresses), Instapaper, Matter, Kill the Newsletter.",
+    "evidence": [
+      {
+        "quote": "It would be nice if you just send an URL to your omnivore email that it would work just like adding an URL from the app.",
+        "source": "https://github.com/omnivore-app/omnivore/issues/1829",
+        "tier": "opened"
+      },
+      {
+        "quote": "that would also be really incredible",
+        "source": "reader DECISIONS 27 (the user, relayed in research/raw/eink-tablets.md)",
+        "tier": "relayed"
+      }
+    ],
+    "what_it_would_take": "A domain on Cloudflare DNS, R2, and in practice Workers Paid for reliable parsing (followup-verify: free-plan handlers \"may exceed these limits and fail\")."
+  },
+  {
+    "id": "F20",
+    "rank": 20,
+    "name": "\"On your Daylight\": see and steer what waits in the Inbox",
+    "theme": "Round trip",
+    "summary": "The phone and Mac list what is held on the tablet's Inbox (held, in tomorrow's stack, waiting for a tap) and can Send now, move it to the stack or remove it.",
+    "platforms": [
+      "DC-1 Inbox",
+      "iPhone",
+      "iPad",
+      "Mac",
+      "Android phone",
+      "Chrome",
+      "Web sender"
+    ],
+    "needs": "companion+inbox",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 3,
+    "acceptance_criteria": [
+      "An item held on the DC-1 appears on the iPhone within 2 minutes; Send now from the iPhone hands it to the Reader at the Inbox's next poll (seconds with Instant delivery).",
+      "Commands are idempotent (a double tap acts once) and Remove asks first and goes to the Inbox trash (F40)."
+    ],
+    "best_in_class": "Calibre-Web's Kobo shelves (web decides what is on the device), Readwise Reader locations; no product found that reorders a device's queue from a phone.",
+    "evidence": [
+      {
+        "quote": "Goes through your inbox one article at a time and says whether each is worth your time",
+        "source": "https://github.com/readwiseio/readwise-skills",
+        "tier": "opened"
+      },
+      {
+        "quote": "When I read a large article from random ones, and then it's difficult to find it to continue reading.",
+        "source": "https://github.com/wallabag/wallabag/issues/8640",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F21",
+    "rank": 21,
+    "name": "Manage the Reader's reading queue from the phone",
+    "theme": "Round trip",
+    "summary": "Read next, reorder, archive and remove items in the Reader's library from the phone, applied when the tablet next syncs.",
+    "platforms": [
+      "Daylight Reader",
+      "DC-1 Inbox",
+      "iPhone",
+      "iPad",
+      "Mac",
+      "Android phone"
+    ],
+    "needs": "reader-change",
+    "effort": "L",
+    "value": "M",
+    "lab_wave": null,
+    "acceptance_criteria": [
+      "\"Read next\" set on the phone moves the item to the top of the Reader's queue at the next sync; Remove exports highlights first and is undoable for 30 days."
+    ],
+    "best_in_class": "Readwise Reader (new/later/shortlist/archive, scriptable), Endle/readwisereader for KOReader (finish -> archived; archived -> removed from device).",
+    "evidence": [
+      {
+        "quote": "Articles you mark as finished in KOReader are archived in Reader at the next sync",
+        "source": "https://github.com/Endle/readwisereader",
+        "tier": "opened"
+      }
+    ],
+    "what_it_would_take": "Reader: a queue order field, an archive state, a trash, and a command intent the Inbox may call (signature-protected)."
+  },
+  {
+    "id": "F22",
+    "rank": 22,
+    "name": "Send several tabs or items as one issue",
+    "theme": "Calm reading",
+    "summary": "\"Send these N tabs\" builds one EPUB with a contents page (a chapter per tab) on the sender, with per-tab results and a size estimate.",
+    "platforms": [
+      "Chrome",
+      "Safari",
+      "Mac",
+      "Windows"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 2,
+    "acceptance_criteria": [
+      "Ten open tabs become one EPUB with ten chapters and a contents page; a tab that cannot be read (chrome://) is listed as skipped and the rest still arrive.",
+      "The size estimate is shown before sending; over 9 MB the user can drop images or split.",
+      "The EPUB passes epubcheck."
+    ],
+    "best_in_class": "Matter (bulk send merged into one ebook), TabTome (up to 25 tabs into one EPUB, per-tab results), SingleFile, MarkDownload.",
+    "evidence": [
+      {
+        "quote": "It would be great if one can also click the icon to select and save several articles in several tabs into Obsidian.",
+        "source": "https://github.com/obsidianmd/obsidian-clipper/issues/83",
+        "tier": "opened"
+      },
+      {
+        "quote": "merges the articles into an ebook, with each article as its own chapter",
+        "source": "https://www.getmatter.com/updates/send-to-kindle",
+        "tier": "snippet"
+      }
+    ]
+  },
+  {
+    "id": "F23",
+    "rank": 23,
+    "name": "PDFs stay PDFs, and \"Print to Daylight\" from any app",
+    "theme": "Documents",
+    "summary": "PDFs are never converted; a Mac print-dialog PDF item and an Android print service turn anything printable into a PDF on the Daylight.",
+    "platforms": [
+      "Mac",
+      "Android phone",
+      "iPhone",
+      "iPad",
+      "DC-1 Inbox"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 2,
+    "acceptance_criteria": [
+      "[Mac] Print > PDF > Send to Daylight from TextEdit delivers a PDF with the same page count.",
+      "[Android] Printing a Chrome page to the Daylight printer delivers a PDF.",
+      "Delivered PDFs match the sender's SHA-256."
+    ],
+    "best_in_class": "KindBeamer (Print -> KindBeamer on Android, keep-layout default), Read on reMarkable (print destination).",
+    "evidence": [
+      {
+        "quote": "PDFs arrive as PDFs unless the user asks for conversion",
+        "source": "https://github.com/bookorbit/bookorbit/issues/1442",
+        "tier": "opened"
+      },
+      {
+        "quote": "breaks PDF's ... throwing out images and formatting",
+        "source": "https://github.com/bookorbit/bookorbit/issues/1205",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F24",
+    "rank": 24,
+    "name": "Image diet: self-contained pages tuned for grayscale",
+    "theme": "Capture",
+    "summary": "Lazy images resolved, WebP/AVIF converted, capped at 1600 px, optionally grayscale, and embedded so pages read offline and stay within the size limits.",
+    "platforms": [
+      "Chrome",
+      "Safari",
+      "iPhone",
+      "iPad"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 2,
+    "acceptance_criteria": [
+      "A fixture page with 20 lazy WebP images shows all of them in the Reader with the tablet offline after delivery, and the page is at most 6 MB.",
+      "The grayscale and No images settings take effect; the budget note appears when images are dropped."
+    ],
+    "best_in_class": "kindle-send-chrome (WebP/AVIF to JPEG, 1600 px cap, q 0.75), KindBeamer, TabTome (no-images mode).",
+    "evidence": [
+      {
+        "quote": "converts WebP and AVIF to JPEG, because ... Kindle's converter can't render WebP",
+        "source": "https://github.com/manabubannai/kindle-send-chrome",
+        "tier": "opened"
+      },
+      {
+        "quote": "related to the image sizes, so we need to resizing them for Kindle.",
+        "source": "https://github.com/input-output-hk/mastering-cardano/issues/47",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F25",
+    "rank": 25,
+    "name": "Read-later connectors pulled by the Inbox",
+    "theme": "Sources",
+    "summary": "The Inbox pulls your Instapaper, Readwise Reader or Readeck queue (everything unread, or only items tagged \"daylight\") straight from the service with your token; no server of ours.",
+    "platforms": [
+      "DC-1 Inbox",
+      "iPhone",
+      "iPad",
+      "Mac"
+    ],
+    "needs": "companion+inbox",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 3,
+    "acceptance_criteria": [
+      "With a test Instapaper account, tagging an article \"daylight\" makes it arrive in the Reader within an hour (or at once with Check now), never twice.",
+      "Removing the token stops polling; the token never appears in logs or diagnostics."
+    ],
+    "best_in_class": "Kobo's built-in Instapaper link (code/QR pairing), InstaKobo, readeck.koplugin, Endle/readwisereader.",
+    "evidence": [
+      {
+        "quote": "one of the selling points for Kobo ereaders",
+        "source": "https://blog.the-ebook-reader.com/2025/07/12/pocket-support-has-ended-on-kobos-without-any-alternatives/",
+        "tier": "relayed"
+      },
+      {
+        "quote": "Read your Instapaper articles on Kobo, and sync reading progress and highlights back.",
+        "source": "https://github.com/voidberg/instakobo",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F26",
+    "rank": 26,
+    "name": "Setup coach, test send and diagnostics",
+    "theme": "Trust",
+    "summary": "A live checklist (share extension on, Safari extension on, notifications, battery, Reader read-later on), a \"Send a test article\" button, and an activity log with redacted copy.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Windows",
+      "Chrome",
+      "Safari",
+      "Web sender",
+      "DC-1 Inbox"
+    ],
+    "needs": "companion-only",
+    "effort": "S",
+    "value": "M",
+    "lab_wave": 1,
+    "acceptance_criteria": [
+      "The test article reaches the Reader from every app and the checklist ticks Delivered and In your Reader.",
+      "Copied diagnostics contain no URL, title, pairing code or topic (unit test on a fixture log).",
+      "Each unmet check has a button that opens the right system settings screen."
+    ],
+    "best_in_class": "Instapaper's and GoodLinks' setup help (share sheet \"More\", disappearing Safari extension), NetNewsWire 7.1's Activity Log and Account Stats.",
+    "evidence": [
+      {
+        "quote": "Added Activity Log to Settings. It shows what the app has been doing",
+        "source": "https://github.com/Ranchero-Software/NetNewsWire/releases?page=4",
+        "tier": "opened"
+      },
+      {
+        "quote": "there's no visual indication/change that it has worked",
+        "source": "https://github.com/obsidianmd/obsidian-clipper/issues/744",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F27",
+    "rank": 27,
+    "name": "Accessibility baseline, plus a Lab comfort mode",
+    "theme": "Trust",
+    "summary": "VoiceOver/TalkBack labels, text up to 200%, spoken delivery changes and non-colour status in every build; Lab adds a one-tap comfort preset and a grayscale preview.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Windows",
+      "Chrome",
+      "Safari",
+      "Web sender",
+      "DC-1 Inbox"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "H",
+    "lab_wave": 0,
+    "acceptance_criteria": [
+      "axe-core reports no violations on the web sender and extension popups (CI).",
+      "Android Accessibility Test Framework checks run in the Robolectric suite; XCUITest accessibility audits pass on the main iPhone and Mac screens.",
+      "A recorded VoiceOver and TalkBack run of pair -> send -> delivered passes each release, with the state change announced."
+    ],
+    "best_in_class": "Apple HIG and Android accessibility guidance; Thorium Reader for blind and low-vision reading.",
+    "evidence": [
+      {
+        "quote": "on black-and-white e-ink, a red wash and a gray wash look identical",
+        "source": "https://github.com/readest/readest/issues/6048",
+        "tier": "opened"
+      },
+      {
+        "quote": "find on average 57% of WCAG issues automatically",
+        "source": "https://github.com/dequelabs/axe-core",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F28",
+    "rank": 28,
+    "name": "YouTube videos as readable transcripts",
+    "theme": "Capture",
+    "summary": "On a YouTube page the extension sends the caption track as an article with chapter headings and timestamp links, in the video's original language.",
+    "platforms": [
+      "Chrome",
+      "Safari"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 3,
+    "acceptance_criteria": [
+      "Three fixture videos (manual captions, auto captions, chapters) produce articles in the original language with chapter headings and working timestamp links.",
+      "A video without captions offers to send the link."
+    ],
+    "best_in_class": "Readwise Reader (transcript under the video, chapters since Oct 2026), Obsidian Web Clipper (interactive transcript since 1.4.0).",
+    "evidence": [
+      {
+        "quote": "interactive transcript, scrubbing, and auto-scroll",
+        "source": "https://github.com/obsidianmd/obsidian-clipper/releases",
+        "tier": "opened"
+      },
+      {
+        "quote": "like Reader for YouTube",
+        "source": "https://gummysearch.com/r/readwise",
+        "tier": "snippet"
+      }
+    ]
+  },
+  {
+    "id": "F29",
+    "rank": 29,
+    "name": "Mac power moves",
+    "theme": "Capture",
+    "summary": "Drop onto the menu-bar icon, a watched ~/Daylight/Send folder, a Services entry, a Finder Quick Action, \"Send front browser tab\", and a global hotkey.",
+    "platforms": [
+      "Mac",
+      "Windows"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 2,
+    "acceptance_criteria": [
+      "A PDF dropped on the menu-bar icon is sent.",
+      "A file saved into ~/Daylight/Send is sent once and moved to Sent/ after Delivered; saving the same bytes again does not resend.",
+      "The Services entry appears for selected text in TextEdit and the Quick Action in Finder."
+    ],
+    "best_in_class": "KindBeamer (keyboard-first window, Services, Finder Open With, CLI), Boox-Send (Finder Quick Action), Booxidian (watched folder with hash dedupe).",
+    "evidence": [
+      {
+        "quote": "Pressing Enter usually sends",
+        "source": "https://github.com/jooray/kindbeamer",
+        "tier": "opened"
+      },
+      {
+        "quote": "Everything is deduplicated by content hash, so re-scanning a folder never creates duplicates",
+        "source": "https://github.com/webline/onyx-boox-sync",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F30",
+    "rank": 30,
+    "name": "Scan paper to a clean PDF",
+    "theme": "Documents",
+    "summary": "Camera scan with edge detection and a high-contrast \"Daylight paper\" filter, multi-page, sent as a PDF.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 2,
+    "acceptance_criteria": [
+      "Scanning five pages produces one PDF of at most 2 MB at the default quality that opens in the Reader with five readable pages.",
+      "Cancelling leaves no item behind."
+    ],
+    "best_in_class": "Apple's VisionKit scanner, Google ML Kit Document Scanner, dedicated scanner apps.",
+    "evidence": [
+      {
+        "quote": "Most scans lack contrast and look blurry in comparison with most \"scanner\" apps.",
+        "source": "https://github.com/astubenbord/paperless-mobile/issues/322",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F31",
+    "rank": 31,
+    "name": "Chrome Reading List to Daylight",
+    "theme": "Sources",
+    "summary": "The Chrome extension mirrors new Chrome Reading List entries (which already sync from Chrome on phones) to the DC-1 and marks them read once delivered.",
+    "platforms": [
+      "Chrome"
+    ],
+    "needs": "companion-only",
+    "effort": "S",
+    "value": "M",
+    "lab_wave": 2,
+    "acceptance_criteria": [
+      "An entry added to the Reading List in Chrome on Android reaches the DC-1 within 15 minutes while desktop Chrome runs, and is marked read after delivery.",
+      "Turning the setting off stops it; no entry is sent twice."
+    ],
+    "best_in_class": "No product found; the stable `chrome.readingList` API (MV3) makes it possible.",
+    "evidence": [
+      {
+        "quote": "Can we add Read Later smart feed?",
+        "source": "https://github.com/Ranchero-Software/NetNewsWire/issues/3023",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F32",
+    "rank": 32,
+    "name": "\"Already sent\" notice and duplicate guard",
+    "theme": "Organise",
+    "summary": "A local, private history of what was sent (canonical URL and file hash) shows \"Sent 3 days ago, Delivered. Send again?\" before a repeat.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Windows",
+      "Chrome",
+      "Safari",
+      "Web sender"
+    ],
+    "needs": "companion-only",
+    "effort": "S",
+    "value": "M",
+    "lab_wave": 2,
+    "acceptance_criteria": [
+      "Sending the same URL (or a tracking-parameter variant) twice within 30 days shows the notice before the second send; the same file bytes too.",
+      "With \"Remember what I sent\" off, nothing is stored (storage inspection)."
+    ],
+    "best_in_class": "Karakeep (opt-in badge from a local cache, Nov 2025), Raindrop (checkmark).",
+    "evidence": [
+      {
+        "quote": "cannot quickly determine if the page you are currently on is already hoarded",
+        "source": "https://github.com/karakeep-app/karakeep/issues/486",
+        "tier": "opened"
+      },
+      {
+        "quote": "Omnivore #2747 (13 thumbs-up) asks the extension to show that a page is already saved",
+        "source": "https://github.com/omnivore-app/omnivore/issues/2747",
+        "tier": "para"
+      }
+    ]
+  },
+  {
+    "id": "F33",
+    "rank": 33,
+    "name": "Send the copied link",
+    "theme": "Capture",
+    "summary": "When a link is on the clipboard the app offers \"Send copied link\" without triggering paste alerts; one tap sends it.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Windows",
+      "Web sender",
+      "Chrome",
+      "Safari"
+    ],
+    "needs": "companion-only",
+    "effort": "S",
+    "value": "M",
+    "lab_wave": 1,
+    "acceptance_criteria": [
+      "Copy a link in Safari, open the app: the chip appears with no iOS paste alert; tapping sends the link.",
+      "No chip appears for a non-URL clipboard; on Android 13 no \"pasted from\" toast appears before the tap."
+    ],
+    "best_in_class": "Karakeep 0.33 (Clipboard entry in one tap), GoodLinks (quick=1), our Mac and Windows apps (hotkeys).",
+    "evidence": [
+      {
+        "quote": "saves clipboard contents in a single tap",
+        "source": "https://github.com/karakeep-app/karakeep/releases/tag/v0.33.1",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F34",
+    "rank": 34,
+    "name": "Full browser context menu and keyboard shortcuts",
+    "theme": "Capture",
+    "summary": "Right-click entries for page, clean article, link, selection and an image's page, per-mode shortcuts, an option to hide entries, and a Chrome omnibox keyword.",
+    "platforms": [
+      "Chrome",
+      "Safari"
+    ],
+    "needs": "companion-only",
+    "effort": "S",
+    "value": "M",
+    "lab_wave": 1,
+    "acceptance_criteria": [
+      "Each menu entry sends the right kind (one e2e test per entry).",
+      "Shortcuts are listed at chrome://extensions/shortcuts; \"dl example.com/story\" in the omnibox sends the link; hiding entries removes them."
+    ],
+    "best_in_class": "MarkDownload (tab, selection, all tabs, link and image as Markdown), SingleFile, Readwise (Alt+R), Chrome's own \"Send to your devices\" omnibox entry.",
+    "evidence": [
+      {
+        "quote": "the simplest way to save with the extension is with the keyboard shortcut",
+        "source": "https://github.com/omnivore-app/omnivore/issues/3143",
+        "tier": "opened"
+      },
+      {
+        "quote": "Karakeep #1174: right-clicking an image saved only the image, and \"the larger context ... is lost\"",
+        "source": "https://github.com/karakeep-app/karakeep/issues/1174",
+        "tier": "para"
+      }
+    ]
+  },
+  {
+    "id": "F35",
+    "rank": 35,
+    "name": "RSS feeds checked by the Inbox",
+    "theme": "Sources",
+    "summary": "The Inbox polls a few chosen feeds on Wi-Fi (hourly), caps each per day, mutes keywords, and sends new posts as links or into the morning stack; subscribe from the extension or import OPML.",
+    "platforms": [
+      "DC-1 Inbox",
+      "Chrome",
+      "Safari",
+      "Mac",
+      "Web sender"
+    ],
+    "needs": "companion+inbox",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 3,
+    "acceptance_criteria": [
+      "Subscribing to a fixture feed delivers nothing at first; a new entry arrives after the next hourly poll.",
+      "The daily cap and mute words hold; RSS 1.0 (rdf), Atom and WordPress fixtures parse.",
+      "`dumpsys jobscheduler` shows at most one feed job an hour and none off Wi-Fi."
+    ],
+    "best_in_class": "KOReader News Downloader (per-feed limit, full text, images, filter element), Readwise Reader's Feed (suggested feeds from saved pages, OPML), Feeder (per-feed filter rules).",
+    "evidence": [
+      {
+        "quote": "One of the biggest things that I use is RSS.",
+        "source": "https://github.com/karakeep-app/karakeep/issues/202",
+        "tier": "opened"
+      },
+      {
+        "quote": "Went from 100% to 54% from 7pm to 3:30pm next day",
+        "source": "https://github.com/koreader/koreader/issues/14537",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F36",
+    "rank": 36,
+    "name": "Server feeds and digests while the tablet sleeps",
+    "theme": "Sources",
+    "summary": "The Worker checks feeds hourly and builds a daily digest even when the DC-1 is off, delivered on the server lane.",
+    "platforms": [
+      "Server",
+      "DC-1 Inbox",
+      "iPhone",
+      "Mac",
+      "Web sender"
+    ],
+    "needs": "server",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": null,
+    "acceptance_criteria": [
+      "A feed added in the Mac app delivers new posts while the DC-1 was off overnight; the digest never repeats an item."
+    ],
+    "best_in_class": "KindleEar (1,000+ recipes), Calibre news recipes, Readwise Reader's Feed.",
+    "evidence": [
+      {
+        "quote": "Your computer needs to be on for this job to run",
+        "source": "https://github.com/jstriblet/Reddit-to-Kindle",
+        "tier": "opened"
+      }
+    ],
+    "what_it_would_take": "Deploy the Worker (Cloudflare secrets); full-text extraction would need Workers Paid."
+  },
+  {
+    "id": "F37",
+    "rank": 37,
+    "name": "AI summary, \"explain this\", ask and translate (Claude)",
+    "theme": "AI",
+    "summary": "A 2-3 line summary on arrival, ask-about-this-document and translation, through the user's own Claude key on the Worker.",
+    "platforms": [
+      "Server",
+      "iPhone",
+      "iPad",
+      "Mac",
+      "DC-1 Inbox",
+      "Chrome"
+    ],
+    "needs": "server",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": null,
+    "acceptance_criteria": [
+      "With the key set, a sent article gets a summary line on the Inbox row; without it, tapping shows the key sentence; a failed AI call never delays delivery."
+    ],
+    "best_in_class": "Readwise Ghostreader (auto-summary and tags, document chat), KindleEar 3.2 (AI summaries, translation).",
+    "evidence": [
+      {
+        "quote": "low-friction, local, privacy-preserving",
+        "source": "https://github.com/Ranchero-Software/NetNewsWire/issues/4665",
+        "tier": "opened"
+      },
+      {
+        "quote": "A single run could exhaust the subscription's usage window",
+        "source": "https://github.com/taruncherukurigit/kindle-daily-digest",
+        "tier": "opened"
+      }
+    ],
+    "what_it_would_take": "The Worker plus the ANTHROPIC_API_KEY secret (server/DESIGN.md section 9)."
+  },
+  {
+    "id": "F38",
+    "rank": 38,
+    "name": "Notes into Obsidian, a folder or Readwise from the Mac",
+    "theme": "Round trip",
+    "summary": "Returned Markdown notes and annotated PDFs (F06) are filed into a chosen folder or Obsidian vault, updating one file per document without touching the user's own text.",
+    "platforms": [
+      "Mac",
+      "iPhone",
+      "iPad"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 3,
+    "acceptance_criteria": [
+      "Returning notes for the same document twice updates one file and keeps text the user added outside the managed region.",
+      "File names are sanitised; a Readwise push is not repeated on re-export."
+    ],
+    "best_in_class": "obsidian-kindle-plugin (\"later syncs add new highlights without overwriting your edits\"), KOBridge (only new highlights on re-export), Readwise's exporters.",
+    "evidence": [
+      {
+        "quote": "Later syncs add new highlights without overwriting your edits",
+        "source": "https://github.com/hadynz/obsidian-kindle-plugin",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F39",
+    "rank": 39,
+    "name": "Handwriting to text for returned pages",
+    "theme": "Round trip",
+    "summary": "Pen pages returned from the DC-1 are transcribed on the Mac or iPhone with Apple's on-device recognition and saved beside the image; nothing goes to a cloud.",
+    "platforms": [
+      "Mac",
+      "iPhone",
+      "iPad",
+      "Android phone"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 3,
+    "acceptance_criteria": [
+      "On a fixture set of handwritten pages the transcript reaches at least 80% word accuracy on the Mac.",
+      "A network monitor shows no traffic during recognition; the original file is unchanged."
+    ],
+    "best_in_class": "reMarkable handwriting conversion, Booxidian (Apple Vision), Supersidian.",
+    "evidence": [
+      {
+        "quote": "Good handwriting support",
+        "source": "https://github.com/SamMorrowDrums/remarkable-mcp",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F40",
+    "rank": 40,
+    "name": "Inbox triage and housekeeping",
+    "theme": "Organise",
+    "summary": "An optional \"hold in the Inbox first\" mode with New / Held / Sent to Reader, search, source filter, a 30-day trash with Undo, retention and a storage bar.",
+    "platforms": [
+      "DC-1 Inbox"
+    ],
+    "needs": "companion+inbox",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 3,
+    "acceptance_criteria": [
+      "In hold mode an arriving item does not reach the Reader until an action is taken.",
+      "Delete moves to the trash and Undo restores it; retention never removes an item that was not handed to the Reader.",
+      "The storage bar is within 5% of the Inbox directory's size."
+    ],
+    "best_in_class": "Readwise Reader's triage (Inbox -> Later / Archive), GoodLinks 3 (auto-delete read items, keep starred), Karakeep's storage display.",
+    "evidence": [
+      {
+        "quote": "When I read a large article from random ones, and then it's difficult to find it to continue reading.",
+        "source": "https://github.com/wallabag/wallabag/issues/8640",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F41",
+    "rank": 41,
+    "name": "Android Quick Settings tile and \"Send to Daylight\" in the text-selection menu",
+    "theme": "Capture",
+    "summary": "A Quick Settings tile sends the clipboard (and one opens the scanner); PROCESS_TEXT puts \"Send to Daylight\" in every app's selection menu.",
+    "platforms": [
+      "Android phone"
+    ],
+    "needs": "companion-only",
+    "effort": "S",
+    "value": "M",
+    "lab_wave": 2,
+    "acceptance_criteria": [
+      "The tile sends the clipboard URL without opening the app on Android 13 and 14 and shows the result as its subtitle.",
+      "The add-tile prompt appears once after the first clipboard send and never again after a refusal.",
+      "Selecting text in Chrome shows \"Send to Daylight\" and sends an excerpt."
+    ],
+    "best_in_class": "Note apps (Obsidian, Notesnook) with capture tiles; requested for Karakeep.",
+    "evidence": [
+      {
+        "quote": "Karakeep #3074 asks for a tile that \"saves the current clipboard content in a single tap\"",
+        "source": "https://github.com/karakeep-app/karakeep/issues/3074",
+        "tier": "para"
+      }
+    ]
+  },
+  {
+    "id": "F42",
+    "rank": 42,
+    "name": "iPhone controls and widgets",
+    "theme": "Capture",
+    "summary": "iOS 18 Control Center / Lock Screen / Action button controls (\"Send clipboard\", \"Scan\"), and a widget with the last sends and the Daylight's last check-in.",
+    "platforms": [
+      "iPhone",
+      "iPad"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 2,
+    "acceptance_criteria": [
+      "The controls appear in the Control Center gallery and require unlock from the Lock Screen; the flow never shows a paste alert.",
+      "The widget reflects a status change within a minute while the app runs."
+    ],
+    "best_in_class": "Instapaper 10 (home-screen widgets, July 2026); Apple's control and interactive-widget APIs.",
+    "evidence": [
+      {
+        "quote": "A control allows your app to execute an action, launch your app to a specific view ... from Control Center, the Lock Screen, or by using the Action button.",
+        "source": "https://developer.apple.com/tutorials/data/documentation/widgetkit/creating-controls-to-perform-actions-across-the-system.json",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F43",
+    "rank": 43,
+    "name": "Paper mode for PDFs: crop margins, blank note pages, writing margin",
+    "theme": "Documents",
+    "summary": "Options to crop white margins, add a blank page after each page, or shrink pages to leave a wide margin for the pen; sent as a copy, original untouched.",
+    "platforms": [
+      "Mac",
+      "iPhone",
+      "iPad",
+      "Android phone"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 3,
+    "acceptance_criteria": [
+      "A 10-page fixture with \"blank page after each\" arrives with 20 pages and selectable text.",
+      "Crop reduces the white margin (bounding-box test); the sender's original file is unchanged."
+    ],
+    "best_in_class": "paper2remarkable (`-b` blank pages, `-c` crop, `-r` right-align).",
+    "evidence": [
+      {
+        "quote": "Insert a blank page after each page using the -b switch (useful for note taking!)",
+        "source": "https://github.com/GjjvdBurg/paper2remarkable",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F44",
+    "rank": 44,
+    "name": "Send a paper by DOI, arXiv id or PubMed id",
+    "theme": "Documents",
+    "summary": "Type or paste an identifier; the sender finds the open PDF, names it \"Author Year - Title.pdf\" and sends it, or sends the landing page with a note when there is none.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Mac",
+      "Android phone",
+      "Web sender"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 3,
+    "acceptance_criteria": [
+      "Fixtures for an arXiv id, a DOI with an open copy and a DOI without one behave as described; the file name follows the pattern.",
+      "A non-PDF response is never sent as a PDF."
+    ],
+    "best_in_class": "paper2remarkable (arXiv, PMC, OpenReview, Semantic Scholar and more).",
+    "evidence": [
+      {
+        "quote": "Send to Tablet is another issue. No way of automating that like Zotfile did",
+        "source": "https://github.com/jlegewie/zotfile/issues/655",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F45",
+    "rank": 45,
+    "name": "X/Twitter threads as one article",
+    "theme": "Capture",
+    "summary": "On a post page, \"Send thread\" collects the author's consecutive posts (with images and quoted posts) into one article, using the user's logged-in page.",
+    "platforms": [
+      "Chrome",
+      "Safari"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 3,
+    "acceptance_criteria": [
+      "A fixture DOM of a 12-post thread produces 12 posts in order with replies by others excluded.",
+      "A timeout ends gracefully with the count."
+    ],
+    "best_in_class": "Readwise (\"save thread\"), kindle-send-chrome's X extractor, Defuddle's X extractor.",
+    "evidence": [
+      {
+        "quote": "the value of the tweet is the threat [thread], not the first post",
+        "source": "https://github.com/karakeep-app/karakeep/issues/1468",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F46",
+    "rank": 46,
+    "name": "Guest drop: let someone send to this Daylight once",
+    "theme": "Capture",
+    "summary": "The Inbox shows a QR for a one-hour guest pairing; a guest sends from any browser via the web sender and every item waits for Approve on the tablet.",
+    "platforms": [
+      "DC-1 Inbox",
+      "Web sender"
+    ],
+    "needs": "companion+inbox",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 3,
+    "acceptance_criteria": [
+      "A guest sends a PDF from a laptop via the QR; the tablet shows Approve; Decline discards it.",
+      "After an hour or Stop, further guest sends are not received; the guest secret cannot read the main pairing's topics."
+    ],
+    "best_in_class": "send2ereader / BookDrop (4-character key and QR from the e-reader's browser), magic-wormhole (single-use codes).",
+    "evidence": [
+      {
+        "quote": "Download links appear on the device within seconds.",
+        "source": "https://github.com/eitan12345om/book-drop",
+        "tier": "opened"
+      },
+      {
+        "quote": "Wormhole codes are single-use and do not need to be memorized",
+        "source": "https://github.com/magic-wormhole/magic-wormhole",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F47",
+    "rank": 47,
+    "name": "Import a reading list",
+    "theme": "Sources",
+    "summary": "Import Pocket/Instapaper/Omnivore/Raindrop CSV exports, browser bookmarks, a file of URLs or OPML, deduplicated and trickled to the Daylight within relay limits.",
+    "platforms": [
+      "Mac",
+      "Web sender"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 3,
+    "acceptance_criteria": [
+      "A 600-row Pocket CSV sends 50 a day by default with a progress line; duplicates are skipped; a restart resumes.",
+      "A seven-day soak against the mock relay with ntfy.sh limits produces no 429."
+    ],
+    "best_in_class": "Readwise Reader's importers (Pocket zip, Instapaper, Matter, OPML converted into views).",
+    "evidence": [
+      {
+        "quote": "Reader automatically converted my previous folders into views",
+        "source": "https://club.macstories.net/posts/using-readwise-reader-as-my-rss-client",
+        "tier": "snippet"
+      }
+    ]
+  },
+  {
+    "id": "F48",
+    "rank": 48,
+    "name": "Verified delivery and private items",
+    "theme": "Trust",
+    "summary": "Both ends show \"Verified: size and SHA-256 match\"; sends from a private window ask first and travel as private, hidden from Inbox history and notifications.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Windows",
+      "Chrome",
+      "Safari",
+      "Web sender",
+      "DC-1 Inbox"
+    ],
+    "needs": "companion+inbox",
+    "effort": "S",
+    "value": "M",
+    "lab_wave": 2,
+    "acceptance_criteria": [
+      "The hash shown on the sender and the Inbox match for the same item.",
+      "An incognito send asks first; the private item's notification has no title and the item leaves Inbox history after hand-off."
+    ],
+    "best_in_class": "RaioPDF's local-only promise; Firefox Send Tab's per-entry private flag.",
+    "evidence": [
+      {
+        "quote": "Your files never leave your computer",
+        "source": "https://github.com/Macrify-LLC/raiopdf",
+        "tier": "opened"
+      },
+      {
+        "quote": "entries is an array of objects holding title, url, and private",
+        "source": "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/services/fxaccounts/FxAccountsCommands.sys.mjs",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F49",
+    "rank": 49,
+    "name": "Pairing fingerprint and safe handling of what arrives",
+    "theme": "Trust",
+    "summary": "Every app shows the same short fingerprint for a pairing, warns when it changes unexpectedly, and treats every received name and file as untrusted.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Windows",
+      "Chrome",
+      "Safari",
+      "Web sender",
+      "DC-1 Inbox"
+    ],
+    "needs": "companion+inbox",
+    "effort": "S",
+    "value": "M",
+    "lab_wave": 3,
+    "acceptance_criteria": [
+      "The fingerprint vectors pass in JS, Kotlin and Swift and the same words show on every app for one pairing.",
+      "Fuzzed file names never escape the receiving app's directory."
+    ],
+    "best_in_class": "Signal-style safety numbers (proposed for PairDrop), LocalSend certificate fingerprints, Warpinator's sandboxed incoming folder.",
+    "evidence": [
+      {
+        "quote": "You need to trust this URL/server.",
+        "source": "https://github.com/schlagmichdoch/PairDrop/issues/180",
+        "tier": "opened"
+      },
+      {
+        "quote": "explicit acceptance, clear sender identity, notifications",
+        "source": "https://github.com/tailscale/tailscale/issues/15670",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F50",
+    "rank": 50,
+    "name": "iPad: sidebar layout, drag and drop, keyboard",
+    "theme": "Platform",
+    "summary": "The iPhone app on iPad gets a sidebar/list/detail layout, drag in and out, and keyboard shortcuts.",
+    "platforms": [
+      "iPad"
+    ],
+    "needs": "companion-only",
+    "effort": "S",
+    "value": "M",
+    "lab_wave": 2,
+    "acceptance_criteria": [
+      "Dragging a PDF from Files onto the app sends it; Cmd-V on the main screen sends a copied link.",
+      "At one-third split width no state label is truncated."
+    ],
+    "best_in_class": "GoodLinks (three-column iPad layout, keyboard shortcuts).",
+    "evidence": [
+      {
+        "quote": "GoodLinks added a three-column iPad layout, widgets and keyboard shortcuts",
+        "source": "https://www.macstories.net/reviews/goodlinks-updated-with-three-column-ipad-layout-widgets-and-new-keyboard-shortcuts/",
+        "tier": "para"
+      }
+    ]
+  },
+  {
+    "id": "F51",
+    "rank": 51,
+    "name": "No lock-in: export, your own relay, a documented protocol",
+    "theme": "Trust",
+    "summary": "Export history and the pairing, use your own ntfy server, and read the protocol; the apps state plainly what happens if the project stops.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone",
+      "Mac",
+      "Windows",
+      "Chrome",
+      "Safari",
+      "Web sender",
+      "DC-1 Inbox"
+    ],
+    "needs": "companion-only",
+    "effort": "S",
+    "value": "M",
+    "lab_wave": 2,
+    "acceptance_criteria": [
+      "Exports open in a spreadsheet; exporting the pairing requires Face ID, Touch ID or the device passcode.",
+      "Switching to a self-hosted ntfy that passes the relay check keeps working end to end."
+    ],
+    "best_in_class": "GoodLinks (no account, iCloud only), self-hostable wallabag/Readeck/Karakeep.",
+    "evidence": [
+      {
+        "quote": "I loved Pocket. I used it nearly daily.",
+        "source": "https://news.ycombinator.com/item?id=44065481",
+        "tier": "snippet"
+      },
+      {
+        "quote": "they gave us so little time to download",
+        "source": "https://github.com/pabuisson/in-my-pocket/issues/4",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F52",
+    "rank": 52,
+    "name": "Reading aids in the Reader: ruler, spacing, fonts, opt-in emphasis",
+    "theme": "Reading",
+    "summary": "A clear-band reading ruler, line/letter/word spacing, Atkinson Hyperlegible and OpenDyslexic fonts, and an opt-in Bionic-style font, all grayscale-safe.",
+    "platforms": [
+      "Daylight Reader"
+    ],
+    "needs": "reader-change",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": null,
+    "acceptance_criteria": [
+      "The ruler follows the pen and finger without losing its place on rotate or resize; no aid relies on colour; Bionic is off by default and one tap from off."
+    ],
+    "best_in_class": "Readest (reading ruler with an explicit e-ink mode, custom fonts), Instapaper 10 (Atkinson Hyperlegible), Thorium.",
+    "evidence": [
+      {
+        "quote": "it is easy to lose the current line after scrolling or moving the eyes away from the screen. This slows down reading and increases eye strain",
+        "source": "https://github.com/readest/readest/issues/3011",
+        "tier": "opened"
+      },
+      {
+        "quote": "the reading ruler is fantastic",
+        "source": "https://github.com/readest/readest/issues/5174",
+        "tier": "opened"
+      }
+    ],
+    "what_it_would_take": "Reader Labs work by the Mac mini session."
+  },
+  {
+    "id": "F53",
+    "rank": 53,
+    "name": "Read aloud on the DC-1",
+    "theme": "Reading",
+    "summary": "Android text-to-speech in the Reader with sentence highlighting, natural pauses, skip rules for footnotes and boilerplate, a queue across articles and resume.",
+    "platforms": [
+      "Daylight Reader"
+    ],
+    "needs": "reader-change",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": null,
+    "acceptance_criteria": [
+      "Playing a sent article highlights the spoken sentence, continues to the next queued article and resumes where it stopped."
+    ],
+    "best_in_class": "Matter (HD voices), Instapaper (AI voices), Readest/Thorium (highlighted read-aloud), Feeder (TTS queue).",
+    "evidence": [
+      {
+        "quote": "the best one I've ever tested in 16 years of writing about apps",
+        "source": "https://www.macstories.net/stories/macstories-selects-2025-recognizing-the-best-apps-of-the-year/",
+        "tier": "snippet"
+      },
+      {
+        "quote": "Right now every sentence gets read with the same flat pacing",
+        "source": "https://github.com/readest/readest/issues/6412",
+        "tier": "opened"
+      }
+    ],
+    "what_it_would_take": "Reader Labs work."
+  },
+  {
+    "id": "F54",
+    "rank": 54,
+    "name": "LivePaper reading ergonomics: whole-page turns, no motion",
+    "theme": "Reading",
+    "summary": "Tap or volume-key page turns, no sliding animations, high contrast for sent articles in the Reader.",
+    "platforms": [
+      "Daylight Reader"
+    ],
+    "needs": "reader-change",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": null,
+    "acceptance_criteria": [
+      "A sent article can be read start to finish with page turns only, with no animation between pages."
+    ],
+    "best_in_class": "Readwise Reader's E-ink Mode (names Daylight and BOOX; reduce motion, volume-key paging, later tap-to-turn), Kindle.",
+    "evidence": [
+      {
+        "quote": "feels like doomscrolling rather than reading a book",
+        "source": "https://redlib.hbubli.cc/r/daylightcomputer/new",
+        "tier": "relayed"
+      }
+    ],
+    "what_it_would_take": "Reader Labs work."
+  },
+  {
+    "id": "F55",
+    "rank": 55,
+    "name": "Open where I stopped reading on the phone",
+    "theme": "Round trip",
+    "summary": "The sender records the first visible passage as a text fragment; the Reader opens the article scrolled there with a \"you were here\" mark.",
+    "platforms": [
+      "Chrome",
+      "Safari",
+      "iPhone",
+      "iPad",
+      "Daylight Reader"
+    ],
+    "needs": "reader-change",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": null,
+    "acceptance_criteria": [
+      "An article sent mid-way opens in the Reader at the same paragraph; a mismatch opens at the top with no error."
+    ],
+    "best_in_class": "Chrome Send-tab-to-self (page context with scroll position, new in M147).",
+    "evidence": [
+      {
+        "quote": "Text fragment data used for scroll position restoration",
+        "source": "https://raw.githubusercontent.com/chromium/chromium/main/components/send_tab_to_self/page_context.h",
+        "tier": "opened"
+      }
+    ],
+    "what_it_would_take": "Reader: accept an anchor extra on SAVE_PAGE and scroll to it. Sender capture is small and can ship with it."
+  },
+  {
+    "id": "F56",
+    "rank": 56,
+    "name": "Listen on the phone",
+    "theme": "Reading",
+    "summary": "Any sent article can be played on the phone with the system voices, in queue order, while the DC-1 stays silent.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Android phone"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 4,
+    "acceptance_criteria": [
+      "A sent article plays from the history row, continues to the next and resumes after interruption; turning Listen off deletes the kept text."
+    ],
+    "best_in_class": "Matter, Instapaper, Omnivore (text stayed visible while playing).",
+    "evidence": [
+      {
+        "quote": "continuous playback across articles and skipping newsletter boilerplate (HN 2023 request)",
+        "source": "https://news.ycombinator.com/item?id=38720882",
+        "tier": "para"
+      }
+    ]
+  },
+  {
+    "id": "F57",
+    "rank": 57,
+    "name": "Zotero plugin: Send to Daylight, annotations back",
+    "theme": "Documents",
+    "summary": "Items tagged @daylight in Zotero 7 are sent to the DC-1; annotated copies returned through F06 attach to the item, pull-only by default, never deleting anything.",
+    "platforms": [
+      "Mac",
+      "Windows"
+    ],
+    "needs": "companion+inbox",
+    "effort": "L",
+    "value": "M",
+    "lab_wave": 4,
+    "acceptance_criteria": [
+      "Tagging an item @daylight sends its PDF once; the annotated PDF returned from the DC-1 attaches beside the original; running twice creates no duplicates."
+    ],
+    "best_in_class": "ZotFile (unmaintained, 4,379 stars), zotero-remarkable-sync and zotRm (2026, experimental).",
+    "evidence": [
+      {
+        "quote": "Send to Tablet is another issue. No way of automating that like Zotfile did",
+        "source": "https://github.com/jlegewie/zotfile/issues/655",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F58",
+    "rank": 58,
+    "name": "Personal webhook for IFTTT, Zapier, Make and n8n",
+    "theme": "Automation",
+    "summary": "One HTTPS endpoint plus a token on the user's Worker: POST a URL or text and it reaches the Daylight.",
+    "platforms": [
+      "Server"
+    ],
+    "needs": "server",
+    "effort": "S",
+    "value": "L",
+    "lab_wave": null,
+    "acceptance_criteria": [
+      "A curl POST with the token delivers a link; without it, 401; over the rate limit, 429."
+    ],
+    "best_in_class": "Pocket's IFTTT integration, Readwise's IFTTT feed, Karakeep's API.",
+    "evidence": [
+      {
+        "quote": "Pocket's TWO BIG features were recommended articles and integration with IFTTT",
+        "source": "https://news.ycombinator.com/item?id=44597668",
+        "tier": "snippet"
+      }
+    ],
+    "what_it_would_take": "The Worker."
+  },
+  {
+    "id": "F59",
+    "rank": 59,
+    "name": "Import from Safari Reading List (Mac)",
+    "theme": "Sources",
+    "summary": "A one-way, opt-in import of unread Safari Reading List URLs into the send queue, with a preview.",
+    "platforms": [
+      "Mac"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "L",
+    "lab_wave": 4,
+    "acceptance_criteria": [
+      "With access granted, unread entries appear in a preview; sending the chosen ones uses the import throttle (F47); nothing in Safari changes."
+    ],
+    "best_in_class": "No product reads it; apps only add to it.",
+    "evidence": [
+      {
+        "quote": "Whenever I use an item's share sheet to add it to the Safari Reading List, iOS asks if I want to allow NNW to do this",
+        "source": "https://github.com/Ranchero-Software/NetNewsWire/issues/3634",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F60",
+    "rank": 60,
+    "name": "Keyboard-first quick send and a command palette",
+    "theme": "Capture",
+    "summary": "A Mac quick-send panel (Enter sends, Esc closes, digits pick a device) and a Cmd-K palette in the web sender.",
+    "platforms": [
+      "Mac",
+      "Web sender"
+    ],
+    "needs": "companion-only",
+    "effort": "S",
+    "value": "L",
+    "lab_wave": 4,
+    "acceptance_criteria": [
+      "The panel opens with the hotkey, Enter sends, Esc closes; the palette works without a mouse and with a screen reader."
+    ],
+    "best_in_class": "KindBeamer, Readwise Reader (Cmd/Ctrl-K).",
+    "evidence": [
+      {
+        "quote": "Enter sends, Esc clears or closes, digits tick devices",
+        "source": "https://github.com/jooray/kindbeamer",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F61",
+    "rank": 61,
+    "name": "Make scans searchable before sending (OCR)",
+    "theme": "Documents",
+    "summary": "An opt-in on-device OCR text layer for scanned PDFs (Apple Vision, ML Kit), so Reader search and read-aloud work.",
+    "platforms": [
+      "Mac",
+      "iPhone",
+      "iPad",
+      "Android phone"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 4,
+    "acceptance_criteria": [
+      "A 20-page scan becomes text-searchable in the Reader; Cancel leaves the original to be sent unchanged."
+    ],
+    "best_in_class": "OCRmyPDF, RaioPDF (offline OCR).",
+    "evidence": [
+      {
+        "quote": "adds an OCR text layer to scanned PDF files, allowing them to be searched or copy-pasted",
+        "source": "https://github.com/ocrmypdf/OCRmyPDF",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F62",
+    "rank": 62,
+    "name": "arXiv and HTML papers with readable maths",
+    "theme": "Documents",
+    "summary": "Send an arXiv link as a reflowable paper with the maths converted to SVG on the sender, because the DC-1's WebView (Chromium 101) does not render MathML.",
+    "platforms": [
+      "Chrome",
+      "Safari",
+      "Mac"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": 4,
+    "acceptance_criteria": [
+      "Three fixture papers arrive with every equation visible in the Reader; a failure sends the PDF instead."
+    ],
+    "best_in_class": "ar5iv / arXiv HTML (no ebook export).",
+    "evidence": [
+      {
+        "quote": "My dream is to read scientific papers on my kindle, but most of the tools out there render papers very poorly.",
+        "source": "https://github.com/dginev/ar5iv/issues/56",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F63",
+    "rank": 63,
+    "name": "Warn about fake redactions and hidden metadata before sending",
+    "theme": "Documents",
+    "summary": "On the Mac, flag black boxes drawn over still-selectable text and offer to strip author and XMP metadata.",
+    "platforms": [
+      "Mac"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "L",
+    "lab_wave": 4,
+    "acceptance_criteria": [
+      "A fixture with a fake redaction triggers the warning; a properly redacted file does not."
+    ],
+    "best_in_class": "Free Law Project's X-Ray, pdf-redactor, RaioPDF.",
+    "evidence": [
+      {
+        "quote": "Manual redact is only putting a layer over the text but if you copy and paste the text is still there",
+        "source": "https://github.com/Stirling-Tools/Stirling-PDF/issues/4641",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F64",
+    "rank": 64,
+    "name": "On-device summary with Apple Intelligence (no key, no server)",
+    "theme": "AI",
+    "summary": "On Apple Intelligence devices, a 2-3 line summary is written before encryption and shown on the Inbox row; skipped elsewhere.",
+    "platforms": [
+      "iPhone",
+      "iPad",
+      "Mac"
+    ],
+    "needs": "companion-only",
+    "effort": "M",
+    "value": "M",
+    "lab_wave": null,
+    "acceptance_criteria": [
+      "On a supported device the Inbox row shows a summary marked as generated; on others the toggle explains \"Needs Apple Intelligence\"."
+    ],
+    "best_in_class": "Requested for NetNewsWire (\"no accounts, no API keys\").",
+    "evidence": [
+      {
+        "quote": "low-friction, local, privacy-preserving",
+        "source": "https://github.com/Ranchero-Software/NetNewsWire/issues/4665",
+        "tier": "opened"
+      }
+    ],
+    "what_it_would_take": "A decision from the user (section 6)."
+  },
+  {
+    "id": "F65",
+    "rank": 65,
+    "name": "Audio edition (server text-to-speech to MP3)",
+    "theme": "Reading",
+    "summary": "The Worker turns an article into an MP3 with a TTS provider and delivers it to the phone or DC-1.",
+    "platforms": [
+      "Server"
+    ],
+    "needs": "server",
+    "effort": "L",
+    "value": "L",
+    "lab_wave": null,
+    "acceptance_criteria": [
+      "With a provider key set, an article becomes an MP3 in From your Daylight; without it the sentence names the missing key."
+    ],
+    "best_in_class": "ElevenReader, Speechify, NaturalReader (not researched first-hand).",
+    "evidence": [],
+    "what_it_would_take": "A TTS provider choice and key from the user."
+  },
+  {
+    "id": "F66",
+    "rank": 66,
+    "name": "Highlight and library sync across devices",
+    "theme": "Round trip",
+    "summary": "Per-record merge of highlights and notes with tombstones, a 90-day trash, and conflicts shown rather than dropped.",
+    "platforms": [
+      "Daylight Reader",
+      "Server"
+    ],
+    "needs": "reader-change",
+    "effort": "L",
+    "value": "M",
+    "lab_wave": null,
+    "acceptance_criteria": [
+      "Edits on two devices offline merge without loss; a delete is recoverable for 90 days."
+    ],
+    "best_in_class": "syncery.koplugin (three-way merge, tombstones), AnnotationSync (trash bin), highlightsync.",
+    "evidence": [
+      {
+        "quote": "surfaced for you to resolve, never dropped silently",
+        "source": "https://github.com/d0nizam/syncery.koplugin",
+        "tier": "opened"
+      }
+    ],
+    "what_it_would_take": "The Reader's library-sync plan (PowerSync, a loose end in the Reader project)."
+  },
+  {
+    "id": "F67",
+    "rank": 67,
+    "name": "Watched folder on the tablet",
+    "theme": "Sources",
+    "summary": "The Inbox imports new files from a folder the user picks (filled by Syncthing, Drive or USB), deduplicated by hash.",
+    "platforms": [
+      "DC-1 Inbox"
+    ],
+    "needs": "companion+inbox",
+    "effort": "M",
+    "value": "L",
+    "lab_wave": 4,
+    "acceptance_criteria": [
+      "A PDF copied into the watched folder reaches the Reader within the next check, once."
+    ],
+    "best_in_class": "KoboCloud (Dropbox, Drive, Nextcloud), Syncthing on PocketBook, ReadEra watched folders.",
+    "evidence": [
+      {
+        "quote": "something more generic and multi-platform like Syncthing (or Dropbox)",
+        "source": "https://github.com/koreader/koreader/issues/3630",
+        "tier": "opened"
+      }
+    ]
+  },
+  {
+    "id": "F68",
+    "rank": 68,
+    "name": "Reading stats",
+    "theme": "Reading",
+    "summary": "Time read, items finished, pace and streaks, computed locally from Reader events.",
+    "platforms": [
+      "Daylight Reader",
+      "iPhone",
+      "Mac"
+    ],
+    "needs": "reader-change",
+    "effort": "S",
+    "value": "L",
+    "lab_wave": null,
+    "acceptance_criteria": [
+      "Stats match the event log; export as CSV."
+    ],
+    "best_in_class": "KoShelf, KOBridge (local dashboard), ha-koreader sensors.",
+    "evidence": [
+      {
+        "quote": "keeps a local copy, so you can view it while the Kindle is off",
+        "source": "https://github.com/danihrndzld/KOBridge",
+        "tier": "opened"
+      }
+    ],
+    "what_it_would_take": "F18."
+  }
+]
