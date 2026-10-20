@@ -1133,10 +1133,10 @@ published by the real Inbox.
 
 | Platform | UI and behaviour | Edge cases |
 |---|---|---|
-| Chrome, Safari | `inject.js` calls `cleanHtml` before returning the capture. | Pages over 8 MiB after cleaning still go as links (unchanged). PDF tabs are not affected. |
-| iPhone, iPad | `apple/Shared/ShareExtension/GetPage.js` inlines `clean-html.js` between the markers `// BEGIN clean-html` and `// END clean-html`, and applies it. When a share from another app carries only a URL (no page from `GetPage.js`), the share card shows: "Only the link came through. If this needs your login, open it in Safari and share from there." | iOS share extensions cannot open other apps, so the history row for that item gets an **Open in Safari** action in the app instead. The line shows at most once per host in 30 days (`lab/linkHintHosts`, 200 hosts). |
-| Android phone | Chrome shares only the title and URL. Once per host in 30 days, the card shows: "Only the link came through. For pages behind a login, send from the browser extension on a computer or from Safari on an iPhone." | — |
-| DC-1 Inbox | Each row gets a line under its title: "Page as you saw it" (`page` with `x-cap` `seen` or none), "Clean article", "Excerpt", "Test article", "Link (the Reader downloads it)" (`url`), or "Document · {MB} MB". Then " · from {from}". | An unknown `x-cap` is shown as if it were absent. |
+| Chrome, Safari | `inject.js` calls `cleanHtml` before returning the capture, with Lab on. | Pages over 8 MiB after cleaning still go as links (unchanged). PDF tabs are not affected. |
+| iPhone, iPad | **`GetPage.js` cannot read the Lab flag.** It is the share extension's JavaScript preprocessing file, so it runs in the page before any extension code and receives nothing from it. It therefore returns `html` exactly as v1.1 does, plus a `lab` object: `cleanHtml`, and the F10 extras (F10). Its copy of `clean-html.js` sits between the markers `// BEGIN clean-html` and `// END clean-html`. The native side chooses: with `dls.lab` on it sends `cleanHtml` with `x-cap: "seen"`; with Lab off it sends `html`, byte for byte as v1.1. **Size:** `cleanHtml` is made only when `html` is at most 8 MiB, and Readability runs only when `html` is at most 2 MiB (F04.2 measures memory with an 8 MiB page). **Link-only hint:** when a share from another app carries only a URL, the share card shows, **once on this device**: "Only the link came through. If this needs your login, open it in Safari and share from there." After that, the line lives in Setup check (F26). | iOS share extensions cannot open other apps, so the history row for that item gets an **Open in Safari** action in the app instead. |
+| Android phone | Chrome shares only the title and URL, so a once-per-site hint would fire for nearly every new site. The card shows it **once on this device**: "Only the link came through. For pages behind a login, send from your computer’s browser with the Send to Daylight extension." After that, the line lives in Setup check. | — |
+| DC-1 Inbox | Each row gets one line under its title, from the item's `extras` (2.3): "Page as you saw it" (`page` with `x-cap` `seen` or none), "Clean article", "Excerpt", "Test article", "Link (the Reader downloads it)" (`url`), or "Document · {MB} MB". Then " · from {from}". | An unknown `x-cap` is shown as if it were absent. |
 
 **Acceptance:**
 
@@ -1144,14 +1144,17 @@ published by the real Inbox.
   the received HTML.
 - [ ] **F03.2 (Chrome, Safari, iPhone)** The sent HTML has no `<script>` except JSON-LD, no `on*` attribute and no
   form value. Unit test: a fixture with a token in a hidden input, `onclick`, a password field and textarea text.
-- [ ] **F03.3 (iPhone)** Sharing a URL from Notes shows the "Only the link came through" line. Sharing a page from
+- [ ] **F03.3 (iPhone, Android)** The first share of a bare URL from another app (Notes on iPhone, Chrome on Android)
+  shows the "Only the link came through" line. Later ones do not, and Setup check lists it. Sharing a page from
   Safari never shows it.
 - [ ] **F03.4 (Inbox)** Every row states its kind line, and TalkBack reads it.
+- [ ] **F03.5 (iPhone, Mac)** With Lab off, a Safari share sends `GetPage.js`'s `html` byte for byte as v1.1 (XCTest
+  with a fixture page in a `WKWebView` host).
 
 **Automated:**
 
-- `extension/test/unit/clean-html.test.mjs`, plus a check that `GetPage.js`'s inlined copy equals `clean-html.js`
-  byte for byte between the markers (run in `rx-extension.yml` and `rx-apple.yml`);
+- `share/js/test/clean-html.test.mjs` (moved from the extension with the file), plus `sync.mjs --check` on every
+  copy: the extension's build copy in `rx-extension.yml`, and `GetPage.js` between the markers in `rx-apple.yml`;
 - e2e F03.1;
 - Robolectric `InboxRowLineTest`.
 
@@ -1159,39 +1162,74 @@ published by the real Inbox.
 
 **Common.**
 
-- Tapping Daylight shows a card "Sending to {name}" (`{name}` = the pairing's `n`, else "your Daylight") with an
-  **Options** button for 1.5 s.
+- Tapping Daylight shows a card "Sending to {name}" on every platform (`{name}` = the pairing's `n`, else "your
+  Daylight"), with an **Options** button for 1.5 s.
 - Doing nothing sends with the last-used choices. Tapping Options stops the countdown, shows the choices and a
   **Send** button.
+- **No timer for people who need more time.** In these cases the card opens with the choices and **Send**, and
+  nothing goes until Send is tapped (WCAG 2.2.1):
+  - Comfort is on;
+  - VoiceOver or Switch Control (iPhone, Mac) is on;
+  - TalkBack or Switch Access (Android: `AccessibilityManager.isTouchExplorationEnabled`, or Switch Access among
+    `getEnabledAccessibilityServiceList`) is on;
+  - the Lab setting **Always show Options before sending** (off by default) is on.
 - The publish starts when the countdown ends or Send is tapped. The card closes within 2.5 s of the tap.
 - The OS and the outbox finish the upload.
+- **When it fails after the card has closed.** iPhone, Mac and Android post a local notification when a
+  share-in-place item ends `failed` or `expired`. A `network` failure is the exception: it waits for a connection
+  instead (F07).
+  - Title: "Couldn’t send ‘{title}’ to {name}". Text: "Open to try again." Tapping it opens the app at the row.
+  - Lab setting **Tell me when a send fails**: on by default.
+  - Optional Lab setting **Tell me when it’s in my Reader**: off by default. When on, a quiet "In your Reader ✓:
+    {title}" is posted when the ledger confirms `reader` while the app runs or refreshes in the background.
+  - Without notification permission nothing is posted, and F04's row in What's in Lab shows `needs-notifications`.
+    iPhone and Mac ask for the permission in the app, the first time it opens after a share in place, and never from
+    the extension. Windows keeps its toasts.
 - **Options in W1:** Send as (F10, where available), Review (F10), and "Send the link instead". Nothing from W2.
 
 | Platform | UI and behaviour | Edge cases |
 |---|---|---|
-| iPhone, iPad, Mac (with an App Group) | New `BackgroundPublisher` in the kit, for the share extension's first attempt:<br>1. Build the item's frames into App Group files (`bg/<id>-<part>.body`: base64 text for small frames, raw for large) by streaming. Read the source with `FileHandle` in `CHUNK`-sized pieces, hash with CryptoKit's incremental `SHA256`, and seal each part. Never hold the whole file.<br>2. Save the row `sending` with `bgAttempt` (UUID) and `bgParts`.<br>3. Start one `uploadTask(with:fromFile:)` per frame on `URLSessionConfiguration.background("com.daylight.share.bg")` with `sharedContainerIdentifier` = the App Group and `timeoutIntervalForResource` = 24 h. `taskDescription` = `"<id>:<part>:<attempt>"`; headers as PROTOCOL 3.1.<br>4. Close.<br>The app handles completions in `application(_:handleEventsForBackgroundURLSession:)` (iOS) or at launch (Mac). All parts 2xx → `sent`. Otherwise classify as PROTOCOL 3.1 → `failed` / `expired` as v1.1's `attempt()`, and cancel the attempt's other tasks. Then delete the body files. | Frames of one attempt go concurrently. Receivers are order-independent (PROTOCOL 2.3), and a failure cancels the rest, which stands in for "later frames are not published". A `sending` row with live tasks for its `bgAttempt` is not stale (checked with `getAllTasks` once per tick). With no tasks after 15 min, the v1.1 staleness rule applies. Re-sends run in the app as today. Peak memory for a 9 MB PDF stays under 60 MB. Ad-hoc Mac builds (no App Group) publish in the extension as today; the card stays until "Sent". |
-| Android phone | `ShareActivity` is translucent. The card reads "Queued for {name}" with an **Options** chip for 1.5 s. The content is copied into the outbox while the grant lives. Then an expedited `OneTimeWorkRequest` `send-<id>` (`setExpedited(RUN_AS_NON_EXPEDITED_WORK_REQUEST)`, `CONNECTED`) is enqueued, and the activity finishes within 1 s of the countdown's end. Options holds: an editable title, and for text with a link, "Send as excerpt" / "Send link". | Inbox role: unchanged message. Process death during the countdown: nothing is queued, and the next share works (no half rows). |
-| Chrome, Safari | New setting "Send when I click the toolbar button" (Lab, off by default). When on, the popup opens with the countdown card. The service worker owns the timer (`scheduleSend(tabId, mode, 1500)`), so closing the popup still sends. Options cancels it. | Pages the extension cannot read: the card says the link will be sent. |
+| iPhone, iPad, Mac (with an App Group) | New `BackgroundPublisher` in the kit, for the share extension's first attempt. Each part's header carries `size`, `sha256` and `parts`, and for text types (`enc: deflate-raw`) the part count depends on the compressed length, so it works in two passes:<br>1. **Measure.** Stream the source with `FileHandle` in `CHUNK`-sized pieces. For text types, stream it through the deflater into a temp file `bg/<id>.src` in the App Group. Hash with CryptoKit's incremental `SHA256`. This gives `size`, `sha256` and `parts`.<br>2. **Seal.** Read the (deflated) source again chunk by chunk, and seal each chunk into `bg/<id>-<part>.body` (base64 text for small frames, raw for large). Never hold the whole file. Delete `bg/<id>.src`.<br>3. Save the row `sending` with `bgAttempt` (UUID) and `bgParts`.<br>4. Start one `uploadTask(with:fromFile:)` per frame on `URLSessionConfiguration.background("com.daylight.share.bg")` with `sharedContainerIdentifier` = the App Group, `isDiscretionary = false`, `sessionSendsLaunchEvents = true` and `timeoutIntervalForResource` = 24 h. `taskDescription` = `"<id>:<part>:<attempt>"`; headers as PROTOCOL 3.1.<br>5. Close.<br>The app handles completions in `application(_:handleEventsForBackgroundURLSession:)` (iOS), or at launch and while it runs (Mac). All parts 2xx → `sent`. Otherwise it classifies the answer as PROTOCOL 3.1 says → `failed` / `expired`, as v1.1's `attempt()` does, cancels the attempt's other tasks and posts the failure notification. Then it deletes the body files.<br>**Re-send timing.** ntfy.sh dates an attachment from its upload, and background parts can finish hours apart. So the row counts as an attachment row, and its `lastPublish` is the first part's completion. If the last part completes more than 170 minutes after the first, part 0 may already have expired, and the row is due for a re-send at once (in the app, as today). | Frames of one attempt go concurrently. Receivers are order-independent (PROTOCOL 2.3), and a failure cancels the rest, which stands in for "later frames are not published". A `sending` row with live tasks for its `bgAttempt` is not stale (checked with `getAllTasks` once per tick). With no tasks after 15 min, the v1.1 staleness rule applies. Re-sends run in the app as today. Peak memory for a 9 MB PDF or an 8 MiB page stays under 60 MB. **Ad-hoc Mac builds** (no App Group) publish in the extension as today. The card stays until "Sent", a failure shows on the card, the item is not in the app's history, and the extension follows its own Lab switch (1.1). |
+| Android phone | `ShareActivity` is translucent. The card reads "Sending to {name}" with an **Options** chip for 1.5 s (no timer in the cases above). The content is copied into the outbox while the grant lives. Then an expedited `OneTimeWorkRequest` `send-<id>` (`sender/SendWorker.kt`; `setExpedited(RUN_AS_NON_EXPEDITED_WORK_REQUEST)`, `CONNECTED`) is enqueued, and the activity finishes within 1 s of the countdown's end. The worker posts the failure notification in a new channel, "Send results" (`IMPORTANCE_DEFAULT`). Options holds an editable title, and, for text with a link and after 6.5 Q1, "Send as excerpt" / "Send link". | Inbox role: unchanged message. Process death during the countdown: nothing is queued, and the next share works (no half rows). |
+| Chrome, Safari | New setting "Send when I click the toolbar button" (Lab, off by default). When on, the popup opens with the countdown card, or with Send and no countdown in the cases above. The service worker owns the timer (`scheduleSend(tabId, mode, 1500)`), so closing the popup still sends. Options cancels it. | Pages the extension cannot read: the card says the link will be sent. |
 
 **Acceptance:**
 
-- [ ] **F04.1 (iPhone)** From Safari, Notes and Files, the share sheet closes no later than 2.5 s after tapping
-  Daylight, and the host app scrolls right after. Run on iOS 17, 18 and 26.
-- [ ] **F04.2 (iPhone)** A 9 MB PDF shared from Files keeps the extension under 60 MB peak (Instruments). The item
-  reaches "Sent" after the extension has closed, with the app not running.
-- [ ] **F04.3 (Mac, team-signed)** The same as F04.1 from Safari, Finder and Preview.
+- [ ] **F04.1 (iPhone)** From Safari, Notes and Files, on iOS 16, 17, 18 and 26 simulators: the share sheet is gone
+  no later than 2.5 s after the tap on Daylight. A swipe sent to the host app at that moment changes its first frame
+  within 500 ms. XCUITest records three timestamps: the tap, the sheet's disappearance and the host's first changed
+  frame. The extension's `debug-status` logs its open and close times.
+- [ ] **F04.2 (iPhone)** A 9 MB PDF shared from Files, and an 8 MiB page shared from Safari, each keep the extension
+  under 60 MB peak (Instruments, on a device). The PDF reaches "Sent" after the extension has closed, with the app
+  not running.
+- [ ] **F04.3 (Mac)** On the released ad-hoc build, Share › Daylight from Safari, Finder and Preview:
+  - closes as soon as the item is "Sent", within 2.5 s for a link on a home connection;
+  - shows a failure on its card;
+  - follows its own Lab switch.
+
+  On a team-signed build (6.5 Q6), the same as F04.1, from Safari, Finder and Preview.
 - [ ] **F04.4 (Android)** The share activity finishes within 1 s of the countdown. The upload completes after the app
   is swiped away.
 - [ ] **F04.5 (all)** Options stops the countdown and shows the choices. Doing nothing sends with the last-used
-  choices.
+  choices. With Comfort, a screen reader, switch access or "Always show Options before sending" on, the card shows
+  the choices and Send, and sends nothing until Send (unit tests with the flags stubbed; one VoiceOver and one
+  TalkBack run per release).
+- [ ] **F04.6 (iPhone, Mac, Android)** The mock relay answers 413 to a share-in-place item after the extension or
+  activity has closed. A notification "Couldn’t send ‘{title}’ to {name}" appears within one background completion:
+  the `handleEventsForBackgroundURLSession` wake on iPhone, the running app on Mac, the worker's end on Android. With
+  "Tell me when a send fails" off, none appears.
 
 **Automated:**
 
-- Swift: `FrameFileBuilderTests` (frames from a file equal `buildItemFrames` for the same nonces; the resident
-  memory delta for a 9 MB file is under 40 MB); `BackgroundCompletionTests` (a fake delegate drives 2xx, 413, 429
-  and a network error into the v1.1 row states; stale attempt ids are ignored).
-- XCUITest share-extension timing (the extension's `debug-status` logs open and close times).
-- Robolectric `ShareActivityTimingTest` (fake clock).
+- Swift `FrameFileBuilderTests`: frames from a file, built in two passes, equal `buildItemFrames` for the same
+  nonces, for a binary file and for a text file that deflates. The resident memory delta for a 9 MB file is under
+  40 MB.
+- Swift `BackgroundCompletionTests`: a fake delegate drives 2xx, 413, 429 and a network error into the v1.1 row
+  states, and stale attempt ids are ignored. Parts that finish more than 3 h apart make the row due for a re-send at
+  once. A failure posts the notification through a fake notification center.
+- XCUITest share-extension timing (F04.1).
+- Robolectric `ShareActivityTimingTest` (fake clock; the accessibility flags) and `SendWorkerTest` (a 413 posts the
+  notification).
 - Extension unit test for `scheduleSend` and cancel.
 
 #### F07 Offline-first outbox
@@ -1201,7 +1239,9 @@ published by the real Inbox.
 - **Connectivity.** iPhone and Mac: `NWPathMonitor`. Android: `ConnectivityManager.NetworkCallback`. JS:
   `navigator.onLine` and the `online` / `offline` events.
 - **Sharing while offline** uses `send(item, {defer: true})` (2.7.1). The row reads "Waiting for connection" (2.5).
-- **Coming back online** calls `flushNetwork()`: rows go oldest first, at most 30 frames a pass, stopping at a 429.
+- **Coming back online** calls `flushNetwork()` (2.7.1). Rows go oldest first, at most 30 frames and 18 MB of
+  attachments a pass. After a 429 nothing more is published, and after a 413 no more attachments. The next pass
+  comes at least 3 minutes later.
 - **The queue view.** History gains a section "Waiting to send ({n})", with **Cancel** (= Remove) on each row.
 
 | Platform | Background |
@@ -1219,11 +1259,14 @@ published by the real Inbox.
   network back, the item goes within a minute while the app runs, and on iPhone and Android also with the app closed,
   within the OS's background window.
 - [ ] **F07.2** The queue shows waiting items with Cancel and a count.
-- [ ] **F07.3** Twenty links queued offline go out in order with no 429, against the mock relay with ntfy.sh's burst
-  limits.
+- [ ] **F07.3** Against the mock relay with ntfy.sh's limits:
+  - 70 links queued offline go out in order with no 429, in three passes;
+  - 10 queued 9 MB files never put more than 18 MB in one pass, or more than 20 MB on the relay at once;
+  - a 413 sends the remaining files into v1.1's 3-hour wait, with its sentence.
 
-**Automated:** JS `flushNetwork` and `defer` tests; the extension e2e (`context.setOffline`); Swift `OfflineQueueTests`
-(an injected path monitor); Robolectric `OfflineFlushTest`; Windows unit test.
+**Automated:** JS `flushNetwork` and `defer` tests, the two F07.3 cases among them; the extension e2e
+(`context.setOffline`); Swift `OfflineQueueTests` (an injected path monitor); Robolectric `OfflineFlushTest`; Windows
+unit test.
 
 #### F08 Your Daylight in the share sheet's top row
 
@@ -1260,12 +1303,17 @@ published by the real Inbox.
   - Exit codes: 0 sent (or delivered, or in the Reader, with `--wait` / `--wait-for`); 2 timed out; 3 refused or too
     big (with the v1.1 sentence on stderr); 1 anything else.
   - `daylight-send status <id> [--json]` prints the row and its Lab state.
+  - **Two runs at once.** The JS storage lock works only inside one process. So the file storage adapter takes an
+    exclusive lock file (`O_EXCL` on `~/.config/daylight-send/lock`, stale after 60 s) and writes every key by
+    atomic rename. Two runs at once, from a script or with `--wait`, lose no rows.
+  - **Re-sends need a run.** Every run, `status` included, first does `tick()` (acks, re-sends). `daylight-send tick`
+    does only that. Re-sends happen only when the CLI runs; SEND-API.md says so and shows a cron line.
   - It is published to the release as `daylight-send.mjs`, and documented in `share/SEND-API.md`, the one list of every
     entry point.
 
 | Platform | UI and behaviour |
 |---|---|
-| iPhone, iPad, Mac | App Intents in the app target: `SendLinkIntent(url, title?)`, `SendTextIntent(text)`, `SendFileIntent(file: IntentFile)` and `GetDeliveryStatusIntent(delivery)`. Each send returns a `DeliveryEntity {id, status, label}` (`label` from `describeLabRow`). `openAppWhenRun = false`. An `AppShortcutsProvider` phrase: "Send to Daylight with \(.applicationName)". The docs show Action button and Back Tap setups. |
+| iPhone, iPad, Mac | App Intents in the app target: `SendLinkIntent(url, title?)`, `SendTextIntent(text)`, `SendFileIntent(file: IntentFile)`, `SendCopiedLinkIntent`, `GetDeliveryStatusIntent(delivery)` and `GetLastDeliveryIntent`. Each send returns a `DeliveryEntity {id, status, label}` (`label` from `describeLabRow`) and the spoken answer "Sent to {name}." `openAppWhenRun = false`. `AppShortcutsProvider` phrases: "Send copied link with \(.applicationName)" (`SendCopiedLinkIntent`; iOS asks to allow pasting the first time) and "Check my Daylight with \(.applicationName)" (`GetLastDeliveryIntent`, which answers with the newest row's title and label). The docs show Action button and Back Tap setups. |
 | Android phone | `sender/AutomationActivity.kt`, exported and translucent, for action `com.daylight.share.action.SEND_URL` (`EXTRA_TEXT`, `EXTRA_TITLE`, boolean `com.daylight.share.extra.QUICK`), behind the same setting. It answers `startActivityForResult` with `RESULT_OK` and the extras `id` and `status`. `daylightshare://send` is routed from `MainActivity` to it. |
 | Windows | `daylightshare://send` in `args.rs`, then the confirmation in the window, unless quick. |
 | Web | `?url=&autosend=1` and the fragment forms stay. Settings gains a bookmarklet generator: `javascript:location.href='<page>#autosend=1&url='+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title)` (the pairing stays in that browser). |
@@ -1281,7 +1329,10 @@ published by the real Inbox.
 
 - [ ] **F09.1** A Shortcut "Send link to Daylight" returns an entity with an id and status "sent". "Get delivery
   status" returns "delivered" after the Daylight acks, and its label once in the Reader.
-- [ ] **F09.2** The Siri phrase works on a device.
+- [ ] **F09.2** On the lab iPhone (iOS 18 or later), with `https://example.com/story` copied, saying "Send copied
+  link with Send to Daylight" (and allowing Paste the first time) makes Siri answer "Sent to {name}.". Within 10 s
+  the history gains a row for example.com reading "Sent · waiting for your Daylight". Then "Check my Daylight with
+  Send to Daylight" answers with that row's title and current label.
 - [ ] **F09.3** The URL scheme shows the confirmation sheet unless both `quick=1` and the setting are on. A test web
   page cannot send silently.
 - [ ] **F09.4** `daylight-send https://example.com --json` prints `{"id":…,"status":"sent",…}` and exits 0. With
@@ -1299,8 +1350,8 @@ the bookmarklet.
 - **Modes:** Page as you see it (default), Clean article, Link only, Selection.
 - **Default by context:** a selection, then a PDF tab (the file), then the mode remembered for the site
   (`lab/sendAs/<host>`, the 500 most recent hosts), then Page.
-- **Clean article** runs Mozilla Readability 0.6.0 (Apache-2.0, vendored as `extension/src/vendor/Readability.js`) on a
-  clone. The result is wrapped as
+- **Clean article** runs Mozilla Readability 0.6.0 (Apache-2.0, vendored once as
+  `share/js/capture/Readability.js` and copied by each consumer, 6.3) on a clone. The result is wrapped as
   `<!doctype html><html><head><meta charset="utf-8"><title>{title}</title><base href="{url}"><meta name="dl:capture" content="clean"></head><body><article><h1>{title}</h1><p>{byline} · {site}</p>{content}</article></body></html>`
   and sent as `page` with `x-cap: "clean"`.
 - **Thin check:** an extraction under 150 words shows "This page looks thin ({n} words). Send the full page
@@ -1312,8 +1363,8 @@ the bookmarklet.
 
 | Platform | UI |
 |---|---|
-| Chrome, Safari | A segmented control in the popup. Review opens `src/review.html`. |
-| iPhone, iPad | Options in the share extension, for Safari pages. `GetPage.js` also inlines Readability and returns `{html, cleanHtml, words, cleanWords, selectionHtml, selectionText, title, url}`. Review uses a `WKWebView` with `allowsContentJavaScript = false`. |
+| Chrome, Safari | One line in the popup, "Send as: Page ▾", a menu with the four modes. It switches to Selection by itself when text is selected. Review opens `src/review.html`. |
+| iPhone, iPad | Options in the share extension, for Safari pages. `GetPage.js` also inlines Readability (from `share/js/capture/`) and returns, next to v1.1's `{html, title, url}`, the object `lab: {cleanHtml, words, article?: {html, words}, selectionHtml, selectionText}` (F03; `article` only when `html` is at most 2 MiB). Review uses a `WKWebView` with `allowsContentJavaScript = false`. |
 
 **Acceptance:**
 
@@ -1322,10 +1373,12 @@ the bookmarklet.
 - [ ] **F10.2** A page with under 150 extracted words shows the thin warning. Choosing Send full page sends the page
   HTML.
 - [ ] **F10.3** The chosen mode is remembered per site across browser restarts.
-- [ ] **F10.4** Review renders within 1 s for a 1 MB page, and the edited title is the title sent.
+- [ ] **F10.4** Review renders a 1 MB fixture page within 1 s, measured in CI Chromium (GitHub's `ubuntu-latest`
+  runner) and on the lab iPhone of the W1 device round (its model is recorded in DEVICE-CHECKS.md). The edited title
+  is the title sent.
 
-**Automated:** `extension/test/unit/readability.test.mjs` (fixtures under `test/fixtures/articles/`); e2e for the
-modes and Review; an XCTest for `GetPage.js` in a `WKWebView` host on fixture pages.
+**Automated:** `share/js/test/readability.test.mjs` (fixtures under `share/js/test/fixtures/articles/`); e2e for the
+modes, the switch to Selection and Review; an XCTest for `GetPage.js` in a `WKWebView` host on fixture pages.
 
 #### F11 Send a selection as an excerpt
 
@@ -1349,17 +1402,38 @@ URL when it deduplicates (`CanonicalUrl.of`). It re-fetches pages under 150 word
   (`text/markdown`): the quote, a blank line, then "— shared from {app} on {date}".
 - **Limits:** 50,000 characters of text. Past that, the text is cut and ends with "(Excerpt trimmed to 50,000
   characters.)".
-- **`classifyShare(text, url)`:** shared text that still has 12 or more words once its URL is removed is an excerpt.
-  Otherwise the share is a link.
-- **For now, excerpts follow the Inbox's Documents setting,** so with Ask they wait for a tap. With the Lab Reader
-  (R1) they arrive quietly.
+- **`classifyShare({text, url, title, source})`** decides between a link and an excerpt. Apps share "headline +
+  link" as text all the time: NYT's "Opinion | The Real Reason Inflation Is Still Too High, According to Economists
+  https://nyti.ms/…", Chrome on Android's "Title\nURL", Apple News, Substack, the Guardian, X. A word-count rule
+  would turn those into quote-only documents that wait for a tap. So it returns an excerpt **only when the share is
+  clearly a selection**:
+  1. `source` is `selection`: the extension's selection (context menu, Selection mode), `GetPage.js`'s
+     `selectionText` in a Safari share, or the Options choice "Send as excerpt".
+  2. The URL carries a text fragment (`#:~:text=`), as Chrome on Android uses for a shared selection. The excerpt
+     is the shared text without the URL, or else the fragment's decoded text.
+  3. There is no URL at all (Notes, Books, the Mac Services text type): a note (`excerptMarkdown`).
+  4. The text left after removing the URL has **at least 40 words or at least 3 sentences**, and it is not the
+     title. A sentence ends in `.`, `!` or `?` followed by a space or the end. "Not the title" means it is not a
+     prefix of `title`, and `title` is not a prefix of it, compared without case, punctuation or repeated
+     whitespace.
+
+  Everything else is a link, with the text as its title (F16). The `labExcerpt` and `normalise.json` vectors hold
+  real headline + link shares, which must come out as links, and selections, which must come out as excerpts.
+- **Excerpts follow the Inbox's Documents setting.** With Ask, they wait for a tap; with the Lab Reader (R1), they
+  arrive quietly. A two-second "send this passage" must not become a tablet interruption, so **6.5 Q1 decides how
+  far F11 goes before R1**. Until the user answers, only the explicit paths are built: the Chrome and Safari context
+  menu and Selection mode (X1), and the excerpt builders in the libraries (L1, A3, K3). The share-sheet paths on
+  iPhone, Mac and Android are the last item of A4, A5 and K4, and start only after the answer. If excerpts stay
+  documents:
+  - the first excerpt sent from each device shows once: "Excerpts wait for a tap on your Daylight for now.";
+  - the Inbox groups waiting excerpts into one notice (F15).
 
 | Platform | UI |
 |---|---|
 | Chrome, Safari | The "Send selection to Daylight" context menu (macOS Safari and Chrome) and the Selection mode (every build, including iPhone Safari, which has no context menus). |
-| iPhone, iPad | A Safari share with a selection uses `GetPage.js`'s selection. Text from other apps goes through `classifyShare`. |
-| Mac | `NSServices` "Send to Daylight" for text, URLs and files (`macOS/App/Services.swift`, `Info.plist` `NSServices` with `NSSendTypes` `public.utf8-plain-text`, `public.url` and `public.file-url`). Text goes through `classifyShare`. |
-| Android phone | `ACTION_SEND` `text/plain` goes through `classifyShare`. Chrome's "Share" of a selection, which carries a `#:~:text=` link, becomes an excerpt with that URL. |
+| iPhone, iPad (after Q1) | A Safari share with a selection uses `GetPage.js`'s selection (rule 1). Text from other apps goes through `classifyShare`. |
+| Mac (after Q1) | `NSServices` "Send to Daylight" for text, URLs and files (`macOS/App/Services.swift`, `Info.plist` `NSServices` with `NSSendTypes` `public.utf8-plain-text`, `public.url` and `public.file-url`). Text goes through `classifyShare`. |
+| Android phone (after Q1) | `ACTION_SEND` `text/plain` goes through `classifyShare`. Chrome's "Share" of a selection carries a `#:~:text=` link (rule 2) and becomes an excerpt with that URL. |
 | DC-1 Inbox | The row title is the header's `title`; the kind line reads "Excerpt" (F03). |
 
 **Acceptance:**
@@ -1370,6 +1444,8 @@ URL when it deduplicates (`CanonicalUrl.of`). It re-fetches pages under 150 word
 - [ ] **F11.3** Excerpt HTML contains only the allowed tags, and a selection over 50,000 characters is cut with the
   note (unit tests and `labExcerpt` vectors).
 - [ ] **F11.4** An excerpt of a page already in the Reader is a new document, not "already in your library".
+- [ ] **F11.5** The headline + link vectors come out as links in JS, Swift and Kotlin. After Q1, an NYT headline +
+  link shared from Chrome on Android arrives as a link that the Reader downloads (Android e2e).
 
 **Automated:** `labExcerpt` vectors in JS, Swift and Kotlin; extension e2e for the context menu; Robolectric for the
 Android share path; Swift tests for the Services handler.
@@ -1382,12 +1458,16 @@ Android share path; Swift tests for the Services handler.
   `IMPORTANCE_LOW`; Alert uses the new channel "Arrivals (alert)" at `IMPORTANCE_HIGH`.
 - "Quiet hours" (off; 22:00–07:00 when on): arrivals are posted with `setSilent(true)`.
 
-**Items that wait for a tap** keep the v1.1 "New items" behaviour (channel, card, announced once). Lab adds three
-actions:
+**Items that wait for a tap** keep the v1.1 "New items" behaviour (channel, card, announced once). On an e-paper
+notice, "Hold" and "Later" would both read as "not now", so Lab gives the notice and the card two actions:
 
 - **Add to Reader**: the tap, as today;
-- **Hold**: the state `held`. The item stays in the Inbox, marked "Held", until **Add to Reader**;
-- **Later**: the existing dismiss.
+- **Keep for later**: the state `held`. The item stays in the Inbox, marked "Kept for later", until **Add to
+  Reader**. It replaces the card's v1.1 **Later**.
+
+Swiping the notice away also records `held`: the item already stays in the Inbox, and now the sender says so.
+Waiting excerpts and documents from one sender share one notice ("3 excerpts from iPhone"), as v1.1 already groups
+notifications.
 
 **Items handed over by themselves** (links and pages, and documents with "Open as they arrive"): one grouped notice
 "Saved to the Reader: {title}", text "From {from}", only **Dismiss**. The group summary reads "{n} saved from {from}"
@@ -1408,17 +1488,22 @@ The existing 15-minute WorkManager job checks the first case and posts "Instant 
 
 **Acceptance:**
 
-- [ ] **F15.1** Every arrival posts one notice (grouped when several), and its actions work. TalkBack reads the title
-  and the source.
+- [ ] **F15.1** Every arrival posts one notice (grouped when several), and TalkBack reads the title and the source.
+  Each action publishes its state on the ack topic, which the emulator e2e reads:
+  - **Add to Reader** → `reader` for a link, `handed` for a document;
+  - **Keep for later** → `held`;
+  - swiping the notice away → `held`;
+  - **Dismiss** on a "Saved to the Reader" notice → no new state.
 - [ ] **F15.2** Stopping the service from Android's Task Manager shows the warning card on the next open, and the
   notice within 15 minutes.
 - [ ] **F15.3** Lab Inbox screens render their final state with animations disabled, and no state is shown by colour
   alone.
-- [ ] **F15.4** Hold makes the sender show "Held on your Daylight", and Add to Reader then gives "In your Reader ✓"
-  for a link.
+- [ ] **F15.4** Keep for later makes the sender show "Kept for later on your Daylight", and Add to Reader then gives
+  "In your Reader ✓" for a link.
 
-**Automated:** Robolectric `ArrivalNoticesTest` (the channels, grouping, actions → hand-off / `held` / dismiss, quiet
-hours); `HealthTest` (a fake heartbeat and clock); emulator e2e for Hold → `held` on the ack topic.
+**Automated:** Robolectric `ArrivalNoticesTest` (the channels, grouping, actions → hand-off / `held`, swipe →
+`held`, quiet hours); `HealthTest` (a fake heartbeat and clock); emulator e2e for every action of F15.1 on the ack
+topic.
 
 #### F16 Smart intake: unwrap Apple News, AMP, Substack and tracking links
 
@@ -1428,8 +1513,8 @@ every entry point while Lab is on.
 1. **URL.** `url` when it passes the web URL rule. Otherwise the first http(s) URL in `text` (`findUrl`), with
    trailing `. , ; : ! ? ' " » ” ’` removed, and a trailing `)` or `]` removed when unbalanced.
 2. **Title.** `subject` when it is not empty. Otherwise `text` with the URL removed, whitespace collapsed, and leading
-   and trailing `- – — : | ·` and quotes trimmed, through `cleanTitle`. When 12 or more words remain, they become
-   `excerpt` and the title is null (F11).
+   and trailing `- – — : | ·` and quotes trimmed, through `cleanTitle`. `excerpt` is set, and the title is null,
+   only when `classifyShare` (F11) returns an excerpt. A headline is always a title, however long.
 3. **Unwrap without the network:**
    - `google.<tld>/amp/s/<rest>` → `https://<rest>`;
    - `google.<tld>/url?q=` or `?url=` → that URL;
@@ -1451,12 +1536,15 @@ every entry point while Lab is on.
    (no cookies, 3 s timeout), then `extractAppleNewsTarget(html)` (pure: the `redirectToUrlAfterTimeout("…")`
    argument, else the first `<a href>` in `<body>` that passes the web URL rule). On failure the apple.news URL
    stays.
-6. **`orig`** = the input URL when the result differs; it is sent as `x-orig`.
+6. **`orig`** = the input URL when the result differs. It is sent as `x-orig`, unless it is over 1,024 characters or
+   would make a small frame large (2.3).
 
 **Acceptance:**
 
-- [ ] **F16.1** At least 40 vectors pass in JS, Kotlin and Swift: an Apple News text share (parser fixture), a
-  Substack app link, AMP, `utm_*`, a Facebook redirect, a plain URL, parentheses, trailing punctuation.
+- [ ] **F16.1** At least 50 vectors pass in JS, Kotlin and Swift: an Apple News text share (parser fixture), a
+  Substack app link, AMP, `utm_*`, a Facebook redirect, a plain URL, parentheses, trailing punctuation, and the real
+  headline + link shares of 2.8 (NYT, the Guardian, Apple News, Substack, X, Chrome on Android), which stay links
+  with the headline as the title.
 - [ ] **F16.2** Sharing from Apple News on an iPhone sends the article URL, not a text note.
 - [ ] **F16.3** A URL whose only change is removed tracking parameters is otherwise byte-identical (a vector check).
 
@@ -1471,7 +1559,9 @@ every entry point while Lab is on.
 - **"Send a test article"** sends `testArticle()`: a bundled page of about 400 words written for this, so the Reader
   neither re-fetches it nor keeps only a link. It goes as `page` with `url` = `https://daylight.invalid/test/<id>`
   (the server's convention for URLs that never resolve), `title` = "Test article from {device}", `x-cap: "test"`. The
-  checklist then follows it along the timeline and ticks "Delivered" and "In your Reader".
+  button's footer says: "It’s added to your Reader library; delete it there when you’re done." The checklist then
+  follows it along the timeline and ticks "Delivered" and "In your Reader".
+- **Hints shown once** (F03's link-only line) stay listed in Setup check afterwards.
 - **"Activity log"**: the last 200 events, `{time, type, id8, kind, status, http}`.
 - **"Copy diagnostics"**: the app version, platform, Lab on, caps seen, last check-in, outbox counts by status, the
   relay as "ntfy.sh" or "custom relay", and the last 50 log events, all passed through `redactDiagnostics`. That
@@ -1480,8 +1570,8 @@ every entry point while Lab is on.
 
 | Platform | Checks |
 |---|---|
-| iPhone, iPad | Paired; share item used at least once (else the steps to add it from "More"); Safari extension (steps only, since iOS cannot detect it); notifications; background app refresh |
-| Mac | Share menu extension and Safari extension state (the app already reads the Safari one); start at login |
+| iPhone, iPad | Paired; share item used at least once (else the steps to add it from "More"); Safari extension (steps only, since iOS cannot detect it); notifications (for F04's failure notices); background app refresh |
+| Mac | Share menu extension and Safari extension state (the app already reads the Safari one); start at login; **Add to the Print menu** (F23); notifications; on ad-hoc builds, the line of 1.4 about the Share menu item |
 | Android phone | Notifications; battery optimisation exemption |
 | DC-1 Inbox | Notifications and the "New items" channel at high importance; Display over other apps; battery optimisation; Instant delivery; a Reader installed that answers `SAVE_PAGE`; the Reader's read-later not refused lately. Instead of a test send: **Test the Reader hand-off**, which hands the bundled test article to the Reader through the normal hand-off and shows the result. |
 | Chrome, Safari | Pinned button (Chrome: `action.getUserSettings().isOnToolbar`); shortcut set (`commands.getAll`); site access (`permissions.contains`) |
@@ -1491,7 +1581,8 @@ every entry point while Lab is on.
 **Acceptance:**
 
 - [ ] **F26.1** The test article reaches the Reader from every app, and the checklist ticks Delivered and In your
-  Reader.
+  Reader. On Rooted 2 this holds in each condition of F01.1. Where the Inbox waits for a tap, the checklist shows
+  "Waiting for a tap on your Daylight" until then.
 - [ ] **F26.2** Copied diagnostics contain no URL, title, pairing code, topic or Server code (unit test on a fixture
   log, plus the `diagnostics` vectors).
 - [ ] **F26.3** Each unmet check has a button that opens the right settings screen.
@@ -1502,19 +1593,23 @@ every entry point while Lab is on.
 
 | Platform | UI and behaviour |
 |---|---|
-| iPhone, iPad | On becoming active, `UIPasteboard.general.hasURLs` (no paste alert) shows a chip. The chip is a SwiftUI `PasteButton(payloadType: URL.self)` labelled "Send copied link"; it reads only on tap. |
-| Mac | When `NSPasteboard.general.types` includes a URL type (the content is not read), a "Send copied link" button shows; a click reads it. |
-| Android phone | On resume, `primaryClipDescription` only. On API 31+, show the chip when `getConfidenceScore(TextClassifier.TYPE_URL) ≥ 0.5`, or the MIME type is `text/uri-list`. Read on tap. |
-| Chrome, Safari, Web, Windows | A "Paste and send" button, always shown, reads the clipboard on click. A non-URL gives "No link on the clipboard." |
+| iPhone, iPad | On becoming active, `UIPasteboard.general.hasURLs` (no paste alert) shows a chip. The chip is a SwiftUI `PasteButton(payloadType: URL.self)` labelled "Send copied link"; it reads only on tap, then shows "Send {host} to {name}?" with **Send** and **Cancel**. |
+| Mac | **No new control.** The app's existing **Send Clipboard Link** command (the window's button, the menu bar item's entry, ⇧⌘L) is F33 on the Mac. With Lab on it is labelled "Send copied link" and runs `normaliseShare`. The button shows the host and **Send** before sending; the menu entry and ⇧⌘L send at once, as today, and their result line names the host. With Lab off it is exactly v1.1. |
+| Android phone | On resume, `primaryClipDescription` only. On API 31+, show the chip when `getConfidenceScore(TextClassifier.TYPE_URL) ≥ 0.5`, or the MIME type is `text/uri-list`. Read on tap, then show the host and **Send**. |
+| Chrome, Safari, Web | A "Paste and send" button, always shown, reads the clipboard on click and shows "Send {host}?" with **Send** and **Cancel**. A non-URL gives "No link on the clipboard." |
+| Windows | **No new control**: the existing **Send clipboard link** (the window's button, the tray menu, Ctrl+Alt+D), labelled "Send copied link" with Lab on. The window's button shows the host and **Send** first; the tray entry and the hotkey send at once, and their toast names the host, as today. |
 
-All of them run `normaliseShare` on what they read.
+All of them run `normaliseShare` on what they read. A stale clipboard is never sent unseen from a button: only the
+Mac and Windows hotkeys and menu entries send at once, as they already do, and their result names the host.
 
 **Acceptance:**
 
-- [ ] **F33.1** Copy a link in Safari and open the app: the chip appears with no iOS paste alert, and tapping it
-  sends the link.
+- [ ] **F33.1** Copy a link in Safari and open the app: the chip appears with no iOS paste alert. Tapping it shows
+  the link's host, and Send sends the link.
 - [ ] **F33.2** No chip appears for a non-URL clipboard. On Android 13, no "pasted from" toast appears before the
   tap.
+- [ ] **F33.3** In every app, a button that reads the clipboard shows the host before anything is sent. Lab off on
+  the Mac and Windows: the clipboard command's label and behaviour equal v1.1 (parity test).
 
 **Automated:** XCUITest with a seeded pasteboard; Robolectric with a `ClipDescription` stub; extension e2e with
 clipboard permission granted.
@@ -1541,29 +1636,82 @@ clipboard permission granted.
 **Automated:** `core.test.mjs` with the fake browser (menu ids per Lab state); Playwright for the menus, the commands
 and the omnibox; `safari.test.mjs` checks the Safari manifest has no `omnibox`.
 
+#### F23 and F29, Mac parts: Print to Daylight, and drop on the menu bar
+
+The research's Mac list for a DC-1 owner (raw/eink-tablets.md §8.2, item 8) names these two. They are small and need
+nothing else, so the Mac gets them in W1. The rest of F23 and F29 stays in W2 (4.1).
+
+| Platform | UI and behaviour | Edge cases |
+|---|---|---|
+| Mac | **Print › PDF › Send to Daylight.** Setup check offers **Add to the Print menu**. It opens a save panel at `~/Library/PDF Services` that creates an alias to the app named "Send to Daylight"; the user picks the folder, so the sandbox needs only user-selected access. The print system then opens the printed PDF with the app (`application(_:open:)`, the path a file dropped on the Dock icon already takes), which sends it as a file titled with the document's name. **Drop on the menu bar.** The menu bar item accepts dropped files and links. SwiftUI's `MenuBarExtra` (`SendToDaylightMacApp.swift`) takes no drops, so A5 replaces it with an `NSStatusItem` whose button is registered for file URLs and URLs, and which keeps the same menu. Each drop sends at once; the item's menu shows the result line. | Lab off: no drop target. A Print menu alias already added keeps working, because it uses the v1.1 open-file path. A file over 9 MB gives the too-big sentence and the F02 entry point. |
+
+**Acceptance:**
+
+- [ ] **F23.1 (Mac)** Print › PDF › Send to Daylight from TextEdit delivers a PDF with the same page count
+  (XCUITest drives TextEdit's print panel on the macOS runner; device round on the Mac mini).
+- [ ] **F29.1 (Mac)** A PDF from Finder and a link from Safari, dropped on the menu-bar icon, are both sent
+  (XCUITest drag; device round).
+
+**Automated:** an XCTest for the open-file path with a PDF Services-style temporary file; XCUITest for the
+status-item drop.
+
 ### 3.4 What W0 and W1 deliberately do not do
 
 - No note, tags or destination fields (F12, W2).
 - No return topic polling (F06, W2).
 - No LAN transfers (F13, W2).
-- No server feature UI beyond the gate and the `later` state (Wave S).
+- No server feature UI beyond the gate, the F02 entry point and the `later` state (Wave S).
+- No per-feature Lab switches (6.5 Q5). Feature settings such as "Always show Options before sending" are ordinary
+  settings inside their feature.
 - No Reader-side change: the Lab Reader is section 5. Its R0 fix and R1 inbox may land during W1; senders need no
-  change to show the Lab Reader's states.
+  change to show the Lab Reader's states. Main-Reader requests wait for the user (6.5 Q8).
 
 ### 3.5 Task cards
 
-Every card: build on P0 for that folder; keep the folder's CI green; update its README (Lab section, test hooks);
-show the strings exactly as `LAB_TEXT` gives them; and **Done when** includes the parity test (F00.2) for every app
-the card touches.
+Every card:
+
+- builds on the folder's P0 close-out (0.2);
+- keeps the folder's CI green, editing only its lane's job blocks (6.3);
+- updates its README (Lab section, test hooks);
+- shows the strings exactly as `LAB_TEXT` gives them;
+- has a **Done when** list that includes the parity test (F00.2) for every app the card touches.
+
+**P0 close-outs · one per lane · Stage A** (P0-core, P0-kit, P0-ios, P0-mac, P0-app, P0-ext, P0-web, P0-win)
+
+- **Depends on:** nothing. P0-ios and P0-mac also depend on P0-kit.
+- **Builds**, in this order and in the lane's own folders:
+  1. the folder's remaining v1.1 review findings (CHANGES-v1.1 §6). P0-app includes cb57057 and the document
+     hand-off workaround; P0-mac includes 0e90108. Both are confirmed on the pending device re-check.
+  2. the F27 baseline with Comfort, as a non-Lab commit. P0-kit builds `ComfortModifier` and the baseline pieces of
+     `DaylightShareUI`; P0-ios and P0-mac wire them.
+  3. the Lab-off parity baselines of 1.7, recorded from that commit. P0-core and P0-kit have no screens, so they
+     have none.
+- **Done when:** the folder's CI is green, F27.1–F27.4 hold for its apps, and the baselines are committed.
+
+**SV0 · `server/` · W0 · client-module gaps**
+
+- **Depends on:** nothing.
+- **Builds:**
+  - `DaylightServer.noteError(feature, error)` (2.6);
+  - the `serverState` vectors;
+  - `server/pendingMove` in DESIGN 13.1's key list;
+  - DESIGN 5.5's note that Lab frames on the pairing ack topic count as presence in v1 mode;
+  - the `pollAcks` test with Lab frames (2.8).
+- **CI:** `rx-server.yml`.
+- **Done when:** `npm test` is green and `npm run vectors` leaves no diff.
 
 **L0 · `share/` · W0 · JS reference**
 
 - **Depends on:** nothing.
 - **Builds:**
-  - 2.7.1 (`aadFor`, `onAckHeader`, `defer`, `flushNetwork`, `lab/*` removal);
-  - `share/js/daylight-lab.js` (2.7.2, W0 list);
-  - `share/vectors/generate-lab.mjs` and `lab-vectors.json` (2.8);
-  - `share/js/test/lab.test.mjs` and `lab-skew.test.mjs` with the soak;
+  - 2.7.1: `aadFor`, `checkItemHeader` extras (2.3), `onAckHeader`, `defer`, `flushNetwork` with both caps and the
+    pass rules, `lab/*` removal;
+  - `share/js/daylight-lab.js` (2.7.2, W0 list). It includes the exact parser (2.2.5), the per-publisher ledger
+    (2.2.6), `LabInbox` with spacing, giving way, the daily cap, halving and the `lab: 0` repeats (2.2.4), and
+    `labGate` with its 5 s deadline;
+  - `share/vectors/generate-lab.mjs` and `lab-vectors.json` with every section of 2.8;
+  - `share/js/test/lab.test.mjs`, and `lab-skew.test.mjs` with the v1.0 peer fixture (b48752b), the two-publisher
+    cases and the household soak;
   - `share/LAB-PROTOCOL.md`: section 2 of this plan, copied verbatim and kept as the normative text from then on;
   - a pointer from `share/README.md`.
 - **CI:** `rx-share.yml` (2.8).
@@ -1573,13 +1721,18 @@ the card touches.
 
 - **Depends on:** L0.
 - **Builds:**
-  - `normaliseShare`, `extractAppleNewsTarget`, `classifyShare`, `excerptHtml`, `excerptMarkdown`,
-    `excerptFileName`, `textFragment`, `testArticle`, `redactDiagnostics` and the W1 `LAB_TEXT`;
-  - `share/vectors/normalise.json` and the `labExcerpt` and `diagnostics` sections;
-  - `share/js/bin/daylight-send.mjs` with `cli.test.mjs`;
+  - `normaliseShare`, `extractAppleNewsTarget`, `classifyShare` (F11's four rules), `excerptHtml`,
+    `excerptMarkdown`, `excerptFileName`, `textFragment`, `testArticle`, `redactDiagnostics` and the W1 `LAB_TEXT`;
+  - `share/js/capture/`: `clean-html.js` (moved from the extension, with its test), Readability 0.6.0 and `sync.mjs`
+    (6.3);
+  - `share/vectors/normalise.json` (with the headline + link shares) and the `labExcerpt` and `diagnostics`
+    sections;
+  - `share/js/bin/daylight-send.mjs` with `cli.test.mjs`, with the lock file, atomic renames and `tick()` on every run
+    (F09);
   - `share/SEND-API.md`;
   - `rx-share.yml` publishes `daylight-send.mjs` to the release.
-- **Done when:** F09.4, F16.1 (JS) and F26.2 (JS) pass.
+- **Done when:** F09.4, F11.5 (JS), F16.1 (JS) and F26.2 (JS) pass, and two `daylight-send` runs at once lose no
+  rows.
 
 **A0 · `apple/DaylightShareKit` · W0 · Swift port and shared UI**
 
