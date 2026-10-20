@@ -1,7 +1,10 @@
 name: Reader experiment - end to end on an emulator
 
 # Builds the Daylight Reader from its public source snapshot (a12k-a2b/daylight-reader, with x86_64 added for the
-# emulator) and checks, on an Android 14 emulator, that what the Daylight Inbox hands over lands in the Reader's library.
+# emulator) and checks, on an Android 14 emulator, that what the Daylight Inbox hands over lands in the Reader's library:
+# a phone (e2e/sender.mjs, protocol 1.1) sends through the mock relay with ntfy.sh's limits; pages, links, PDFs, a 5 MB
+# PDF in parts, two PDFs 20 s apart while the Reader is in front, and Documents = Ask (card and notification taps) and
+# batch. Screenshots and logs: the e2e-screens artifact.
 on:
   push:
     branches: [claude/sweet-goldberg-ej1nb0]
@@ -16,9 +19,11 @@ on:
 permissions:
   contents: read
 
+# One emulator run at a time. A run in progress is not cancelled by a newer push (several sessions push to this branch,
+# and a cancelled run proves nothing); the newest push waits and runs next.
 concurrency:
   group: rx-e2e
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   reader:
