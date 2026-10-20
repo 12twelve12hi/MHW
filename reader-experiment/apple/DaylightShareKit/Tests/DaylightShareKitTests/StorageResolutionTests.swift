@@ -72,7 +72,7 @@ final class StorageResolutionTests: XCTestCase {
     }
 
     @MainActor
-    func waitFor(_ what: String, timeout: TimeInterval = 5, _ condition: () -> Bool) async throws {
+    func waitFor(_ what: String, timeout: TimeInterval = 5, _ condition: @escaping () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
             if Date() > deadline { XCTFail("timed out waiting for \(what)"); return }
