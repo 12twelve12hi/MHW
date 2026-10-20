@@ -291,7 +291,7 @@ async function main() {
   }, { timeout: 120000 });
   const gotPdf = files.find((i) => i.header.name === 'Quiet paper – draft.pdf');
   const gotTxt = files.find((i) => i.header.name === 'Field notes ✓.txt');
-  const gotBig = files.find((i) => i.header.name === 'Scan 3 MB.pdf');
+  const gotBig = files.find((i) => i.header.name === 'Scan 5 MB.pdf');
   check(gotPdf && Buffer.from(gotPdf.content).equals(pdf), 'the PDF arrives intact', gotPdf ? `${gotPdf.content.length} bytes, ${gotPdf.header.mime}` : `got ${files.map((f) => f.header.name)}`);
   check(gotPdf?.header.mime === 'application/pdf' && gotPdf?.header.title === 'Quiet paper – draft', 'with its name, type and title');
   check(gotTxt && Buffer.from(gotTxt.content).equals(txt), 'the text file arrives intact', gotTxt ? `${gotTxt.content.length} bytes, enc ${gotTxt.header.enc}` : '');

@@ -277,7 +277,10 @@ async function onSendClipboard() {
 async function retry(id, button) {
   button.disabled = true;
   button.textContent = 'Sending…';
-  try { showResults([{ row: await app.retry(id) }]); } catch (e) { setStatus(e.message, true); }
+  try {
+    const row = await app.retry(id);
+    if (row) showResults([{ row }]); // null: the row was removed meanwhile
+  } catch (e) { setStatus(e.message, true); }
 }
 
 async function remove(id, button) {
