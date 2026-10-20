@@ -124,6 +124,9 @@ class HandoffDecisionsTest {
         return c
     }
 
+    /** Every activity started since the last call (and takes them off the list). */
+    private fun started(): List<Intent> = generateSequence { shadowOf(app).nextStartedActivity }.toList()
+
     private fun itemNotice(id: String): Notification? = shadowOf(nm).getNotification(id, Handoff.ITEM_NOTIFICATION)
     private fun summary(): Notification? = shadowOf(nm).getNotification(Handoff.SUMMARY_NOTIFICATION)
     private fun Notification.title(): String = extras.getCharSequence(Notification.EXTRA_TITLE).toString()
@@ -711,10 +714,12 @@ class HandoffDecisionsTest {
         assertEquals(ReaderApps.ACTION_SAVE_PAGE, save.intent.action) // answered by the Reader: no gap
         shadowOf(c.get()).receiveResult(save.intent, Activity.RESULT_OK, Intent().putExtra(ReaderApps.EXTRA_STATUS, "refused"))
         idle()
-        assertNull(shadowOf(app).nextStartedActivity)
+        // Every start so far (the SAVE_PAGE above is still listed at app level): no shared link yet.
+        assertTrue(started().none { it.action == Intent.ACTION_SEND })
         assertLogged("links: next hand-off in 20 s")
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(21))
-        val sent = shadowOf(app).nextStartedActivity
+        val sent = started().single()
+        assertEquals(Intent.ACTION_SEND, sent.action)
         assertEquals("text/plain", sent.type)
         assertTrue(sent.flags and Intent.FLAG_ACTIVITY_CLEAR_TASK != 0)
         assertEquals("send_link", app.inbox.get(link.id)!!.via)
