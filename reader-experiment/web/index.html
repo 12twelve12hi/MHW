@@ -29,8 +29,9 @@
 
     <noscript><p class="error">This page needs JavaScript to encrypt and send.</p></noscript>
 
-    <!-- Not paired yet -->
+    <!-- Not paired yet (or "Change pairing…" in Settings) -->
     <section id="view-pair" hidden>
+      <button id="pair-back" class="back" type="button" hidden>‹ Back</button>
       <p id="pending-share" class="notice" hidden></p>
       <h2>Pair with your Daylight</h2>
       <p class="hint">On your Daylight, open <b>Daylight Share</b>. Type the 28-character code it shows, or paste its pairing link.</p>
@@ -68,7 +69,7 @@
 
       <label id="drop" class="drop" for="file">
         <span class="drop-title">Choose a file</span>
-        <span class="drop-hint">PDF, EPUB, Word, Markdown, text or HTML, up to 64 MB</span>
+        <span class="drop-hint">PDF, EPUB, Word, Markdown, text or HTML, up to 9 MB</span>
         <input id="file" type="file" multiple
           accept=".pdf,.epub,.docx,.doc,.odt,.rtf,.md,.markdown,.txt,.html,.htm,application/pdf,application/epub+zip,text/plain,text/markdown,text/html">
       </label>
@@ -104,6 +105,7 @@
       </div>
       <p class="hint small"><a href="https://github.com/12twelve12hi/MHW/blob/claude/sweet-goldberg-ej1nb0/reader-experiment/web/SHORTCUT.md" target="_blank" rel="noopener">Step-by-step Shortcut instructions</a></p>
 
+      <button id="repair" class="btn secondary" type="button">Change pairing…</button>
       <button id="unpair" class="btn danger" type="button">Unpair this device</button>
       <p class="hint small fine">Everything you send is end-to-end encrypted with a key from the pairing code. The relay (<span id="set-relay-2"></span>) only sees scrambled data.</p>
     </section>

@@ -137,11 +137,18 @@ details[open] summary { color: var(--ink); }
 .st { font-weight: 600; color: var(--ink); }
 .st.busy { color: var(--muted); }
 .st.bad { color: var(--bad); }
+.acts { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 .retry {
-  margin-left: auto; font: inherit; font-size: 14px; font-weight: 600; color: var(--ink); background: transparent;
+  font: inherit; font-size: 14px; font-weight: 600; color: var(--ink); background: transparent;
   border: 1px solid var(--rule-strong); border-radius: 8px; padding: 4px 12px; min-height: 32px; cursor: pointer;
 }
+.remove {
+  font: inherit; font-size: 13px; color: var(--muted); background: transparent; border: 0; padding: 4px 4px; min-height: 32px;
+  cursor: pointer; text-decoration: underline; text-underline-offset: 3px;
+}
+.retry:disabled, .remove:disabled { opacity: .45; cursor: default; }
 .note { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+.note.bad { color: var(--bad); }
 
 .facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 10px 0 4px; }
 .facts dt { color: var(--muted); }

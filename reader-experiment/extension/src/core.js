@@ -5,7 +5,7 @@ import * as ds from './daylight-share.js';
 import { capturePage, pdfStart, pdfChunk, pdfEnd, linkText } from './inject.js';
 import {
   PDF_MIME, PDF_CHUNK, MAX_PDF, NOTES, originPattern, pdfFileName, isPdfBytes, titleFromName,
-  planForCapture, defaultDeviceName, isPending,
+  planForCapture, defaultDeviceName, isPending, isTrouble,
 } from './logic.js';
 
 export const MENU = { page: 'dls-page', link: 'dls-link', pdfLink: 'dls-pdf-link' };
@@ -16,19 +16,14 @@ export const COMMAND_SEND = 'send-page';
 export const PDF_LINK_PATTERNS = ['*://*/*.pdf', '*://*/*.PDF', '*://*/*.Pdf', '*://*/*.pdf?*', '*://*/*.PDF?*'];
 const PENDING_PDF_MS = 5 * 60 * 1000;
 
-/** A chrome.storage area as a daylight-share storage adapter. */
-export function areaStorage(area, log = console) {
+/**
+ * A chrome.storage area as a daylight-share storage adapter. Every failed write is reported: the library keeps sending
+ * an item whose re-send copy ('outbox/<id>') can't be stored (it goes once), and must know when anything else fails.
+ */
+export function areaStorage(area) {
   return {
     async get(k) { const o = await area.get(k); return o?.[k]; },
-    async set(k, v) {
-      try {
-        await area.set({ [k]: v });
-      } catch (e) {
-        // The copy of an item's content kept for re-sends is best effort: without it the item is still sent once.
-        if (String(k).startsWith('outbox/')) { log.warn?.('Send to Daylight: could not keep a copy for re-sending', e); return; }
-        throw e;
-      }
-    },
+    async set(k, v) { await area.set({ [k]: v }); },
     async remove(k) { await area.remove(k); },
   };
 }
@@ -78,7 +73,7 @@ function makeBadge(action) {
 export function createApp({
   api, target = 'chrome', storage, fetch: fetchImpl, now = () => Date.now(), log = console, pdfChunkSize = PDF_CHUNK,
 } = {}) {
-  storage ??= areaStorage(api.storage.local, log);
+  storage ??= areaStorage(api.storage.local);
   const fetchFn = fetchImpl ?? ((...a) => globalThis.fetch(...a));
   const run = serial();
   const badge = makeBadge(api.action ?? api.browserAction);
@@ -119,32 +114,41 @@ export function createApp({
     return s;
   }
 
-  async function clearOutbox() {
-    const rows = (await storage.get('outbox')) ?? [];
-    for (const r of rows) await storage.remove(`outbox/${r.id}`);
-    await storage.remove('outbox');
-    await storage.remove('ackSince');
-  }
-
-  /** input: a pairing link or code. relay: optional override (the Advanced field). from: this browser's name. */
-  async function pair({ input, from, relay } = {}) {
-    const p = await ds.parsePairing(input);
-    if (relay != null && String(relay).trim()) p.relay = ds.normalizeRelay(relay);
+  /**
+   * The popup's pairing field: a typed or pasted code or link (PROTOCOL 1.3, the app's own pairing screen). It pairs at
+   * once, unless it would replace a Daylight with a different code: then nothing changes and it answers
+   * {needsConfirm: {title, lines, button, expect}} in the protocol module's words (pairingConfirmation), and pairs when
+   * the popup sends it again with confirm: true and that expect (the code in use when it asked). The same code with a
+   * new relay or name keeps the outbox, whose items then go through the new relay; a different code deletes it
+   * (applyPairingChange). relay: the Advanced override. from: this browser's name.
+   * -> {name, relay, notice} (notice: "Pairing updated…" for the same code, else null) | {needsConfirm}
+   */
+  async function pair({ input, from, relay, confirm = false, expect } = {}) {
+    const next = await ds.parsePairing(input);
+    if (relay != null && String(relay).trim()) next.relay = ds.normalizeRelay(relay);
     return run(async () => {
-      const old = await getPairing();
-      // Items queued for another Daylight must not go to this one.
-      if (old && (old.code !== p.code || old.relay !== p.relay)) await clearOutbox();
-      if (!p.name && old?.code === p.code) p.name = old.name;
-      await ds.savePairing(storage, p);
+      const current = await getPairing();
+      const c = ds.pairingConfirmation(current, next, { source: 'app' });
+      if (confirm) {
+        if (expect != null && (current?.code ?? '') !== expect) {
+          throw new ds.ShareError('pairing', 'The pairing changed in the meantime. Try again.');
+        }
+      } else if (c.ask) {
+        return { needsConfirm: { title: c.title, lines: c.lines, button: c.button, expect: current?.code ?? '' } };
+      }
+      // A typed code (or a link without a name) for the Daylight already paired keeps the name it has.
+      if (!ds.cleanName(next.name) && current && ds.samePairingSecret(current, next)) next.name = current.name;
+      await ds.applyPairingChange(storage, current, next);
+      await ds.savePairing(storage, next);
       if (from != null) await storage.set('settings', { ...(await getSettings()), from: ds.cleanName(from) });
       cache = null;
-      return { name: p.name, relay: p.relay };
+      return { name: ds.cleanName(next.name), relay: ds.normalizeRelay(next.relay), notice: c.notice };
     });
   }
 
   async function unpair() {
     return run(async () => {
-      await clearOutbox();
+      await ds.applyPairingChange(storage, await getPairing(), null);
       await storage.remove('pairing');
       cache = null;
       await badge.clear();
@@ -173,7 +177,12 @@ export function createApp({
       const p = await ds.parsePairing(code);
       if (a.relay) p.relay = ds.normalizeRelay(a.relay);
       if (a.name) p.name = ds.cleanName(a.name);
-      await run(async () => { if (!(await getPairing())) await ds.savePairing(storage, p); });
+      // The user's own app: no question (PROTOCOL 1.3). Only when nothing is paired, so there is no outbox to keep.
+      await run(async () => {
+        if (await getPairing()) return;
+        await ds.applyPairingChange(storage, null, p);
+        await ds.savePairing(storage, p);
+      });
       cache = null;
       return true;
     } catch { return false; }
@@ -244,7 +253,7 @@ export function createApp({
   async function pdfViaTab(tabId, url, frameId) {
     const head = await inject(tabId, pdfStart, [url ?? null, MAX_PDF], frameId);
     if (!head || head.error) return null;
-    if (head.tooLarge) return { tooLarge: true };
+    if (head.tooLarge) return { tooLarge: true, size: head.size };
     try {
       const parts = [];
       for (let off = 0; off < head.size; off += pdfChunkSize) {
@@ -263,9 +272,10 @@ export function createApp({
   async function pdfViaExtension(url, credentials) {
     const res = await fetchFn(url, { credentials, redirect: 'follow' });
     if (!res.ok) return null;
-    if (Number(res.headers.get('content-length')) > MAX_PDF) return { tooLarge: true };
+    const declared = Number(res.headers.get('content-length'));
+    if (declared > MAX_PDF) return { tooLarge: true, size: declared };
     const bytes = new Uint8Array(await res.arrayBuffer());
-    if (bytes.length > MAX_PDF) return { tooLarge: true };
+    if (bytes.length > MAX_PDF) return { tooLarge: true, size: bytes.length };
     if (!isPdfBytes(bytes)) return null;
     return { bytes, disposition: res.headers.get('content-disposition') ?? '' };
   }
@@ -312,7 +322,7 @@ export function createApp({
     if (!got) throw new ds.ShareError('pdf', 'Couldn’t read this PDF.');
     if (got.tooLarge) {
       if (u) return sendUrl(u, title, 'pdf-too-large');
-      throw new ds.ShareError('too-large', 'That PDF is larger than 64 MB.');
+      throw new ds.ShareError('too-large', ds.tooBigMessage(got.size > MAX_PDF ? got.size : MAX_PDF + 1));
     }
     const t = ds.cleanTitle(title);
     const usable = t && t !== u && !/^https?:\/\//i.test(t) ? t : '';
@@ -365,11 +375,18 @@ export function createApp({
     }
   }
 
+  /** "Retry now" (a failed row) and "Try again" (an expired one), as the library allows. -> {row} */
   async function retry(id) {
     const s = await requireSender();
     const row = await run(() => s.retry(id));
     scheduleSoon();
     return { row };
+  }
+
+  /** "Remove": the row and its stored content. -> {removed} */
+  async function remove(id) {
+    const s = await getSender();
+    return { removed: s ? await run(() => s.remove(id)) : false };
   }
 
   /** Acks and re-sends (PROTOCOL 3.3). Skips the relay entirely when nothing is waiting. */
@@ -387,7 +404,7 @@ export function createApp({
     let outcome = 'error';
     try {
       const r = await fn();
-      outcome = r?.needsPermission ? 'idle' : r?.row?.status === 'failed' ? 'error' : 'ok';
+      outcome = r?.needsPermission ? 'idle' : isTrouble(r?.row) ? 'error' : 'ok';
       return r;
     } finally {
       await badge.done(outcome);
@@ -493,6 +510,7 @@ export function createApp({
         if (!claim(msg.token)) return { handled: true }; // permissions.onAdded already sent it
         return withBadge(() => sendPdf({ url: msg.url, title: msg.title, asked: true }));
       case 'retry': return withBadge(() => retry(msg.id));
+      case 'remove': return remove(msg.id);
       case 'tick': return tick();
       case 'clearBadge': await badge.clear(); return {};
       default: throw new ds.ShareError('message', `unknown message ${msg?.type}`);
@@ -510,7 +528,7 @@ export function createApp({
   }
 
   return {
-    storage, state, pair, unpair, setDeviceName, pairFromApp, sendTab, sendPdf, sendUrl, retry, tick, start,
+    storage, state, pair, unpair, setDeviceName, pairFromApp, sendTab, sendPdf, sendUrl, retry, remove, tick, start,
     setupMenus, ensureAlarms, onMenu, onCommand, onAlarm, onPermissionsAdded, onMessage, handleMessage,
     getSender, getPairing, claim,
   };

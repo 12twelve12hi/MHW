@@ -1,6 +1,6 @@
 # Send to Daylight: web sender
 
-A single web page that sends links and files (PDF, EPUB, Word, Markdown, text, HTML; up to 64 MB) to your Daylight
+A single web page that sends links and files (PDF, EPUB, Word, Markdown, text, HTML; up to 9 MB) to your Daylight
 DC-1. Nothing to install: it works in any modern browser, on a phone, a tablet or a computer someone else owns. It is
 the fallback for devices without the app or the browser extension, and the target of the
 [iPhone Shortcut](SHORTCUT.md).
@@ -13,10 +13,18 @@ anywhere: unzip `send-to-daylight-web.zip` from the
 ## Use
 
 1. **Pair:** type the 28-character code from Daylight Share, or paste its pairing link. A link to the page with
-   `#pair=<pairing link or code>` at the end pairs in one tap. *Advanced: Relay URL* is only for your own ntfy server.
+   `#pair=<pairing link or code>` at the end pairs too: it asks first (*Pair with …? Code starts E4AY…*, and the
+   relay when it isn't ntfy.sh), unless it is the Daylight already paired, whose new relay or name then applies at
+   once (*Pairing updated…*). A link or code for a **different** Daylight says that it replaces the current one, and
+   switching discards what the old one hasn't picked up yet. *Advanced: Relay URL* is only for your own ntfy server.
+   **Settings › Change pairing…** takes a code again.
 2. **Send a link:** paste or type it (`example.com/story` is fine) and tap **Send link**.
-3. **Send a file:** tap **Choose a file** (or drop files on it on a computer).
-4. The history shows *Sent*, then **Delivered ✓** once the Daylight confirms it, or *Not delivered* with **Retry**.
+3. **Send a file:** tap **Choose a file** (or drop files on it on a computer). Files can be up to 9 MB; a larger one
+   is refused before it is read (*Too big to send. Files can be up to 9 MB; this one is 14.2 MB.*). The free relay
+   takes 2 MB per attachment, so larger files travel in pieces that fit.
+4. The history uses the words of every Send to Daylight app: **Sent · waiting for your Daylight**, then
+   **Delivered ✓** once the Daylight confirms it; **Waiting to send** with why (and **Retry now** when the relay
+   couldn't be reached); **Not delivered** with why (and **Try again** where that can help). Every row has **Remove**.
 
 Links into the page can carry what to send, for Shortcuts, bookmarklets and other apps:
 
@@ -44,8 +52,8 @@ The page checks for the Daylight's confirmations when it opens, every minute whi
 and re-sends anything unconfirmed that the relay may have dropped. It can't do that while closed: open it now and then
 if the Daylight was off for a long time (or use the app or extension, which check in the background).
 
-The service worker caches the page so it opens offline; sends made offline show *Not delivered* and go out with
-**Retry** or the next time the page opens online.
+The service worker caches the page so it opens offline; sends made offline show *Waiting to send* and go out with
+**Retry now** or the next time the page opens online.
 
 **Privacy note for github.io hosting:** every GitHub Pages site of the same account shares one browser origin
 (`12twelve12hi.github.io`), so another page on it could read this page's storage, pairing included. Host the zip on its

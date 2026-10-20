@@ -1,9 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { built } from '../helpers/built.mjs';
 
 const b = built('chrome');
 const L = await b.load('logic.js');
+const ds = await b.load('daylight-share.js');
+const V = JSON.parse(fs.readFileSync(new URL('../../../share/vectors/test-vectors.json', import.meta.url), 'utf8'));
 
 test('looksLikePdfUrl', () => {
   assert.equal(L.looksLikePdfUrl('https://a.org/papers/x.pdf'), true);
@@ -68,11 +71,6 @@ test('names, statuses and labels', () => {
   assert.equal(L.defaultDeviceName('chrome', 'win'), 'Chrome on Windows');
   assert.equal(L.defaultDeviceName('safari', 'ios'), 'Safari on iPhone');
   assert.equal(L.defaultDeviceName('safari', ''), 'Safari');
-  assert.equal(L.statusInfo({ status: 'sending' }).label, 'Sending…');
-  assert.equal(L.statusInfo({ status: 'sent' }).label, 'Sent');
-  assert.equal(L.statusInfo({ status: 'delivered' }).label, 'Delivered ✓');
-  assert.deepEqual([L.statusInfo({ status: 'failed' }).label, L.statusInfo({ status: 'failed' }).retry], ['Not delivered', true]);
-  assert.equal(L.statusInfo({ status: 'expired' }).retry, true);
   assert.equal(L.kindLabel({ kind: 'file', mime: 'application/pdf' }), 'PDF');
   assert.equal(L.kindLabel({ kind: 'file', name: 'a.epub', mime: 'application/epub+zip' }), 'File');
   assert.equal(L.kindLabel({ kind: 'url' }), 'Link');
@@ -81,4 +79,37 @@ test('names, statuses and labels', () => {
   assert.equal(L.relativeTime(0, 5 * 60_000), '5 min ago');
   assert.equal(L.relativeTime(0, 3 * 3600_000), '3 h ago');
   assert.equal(L.relativeTime(0, 26 * 3600_000), 'yesterday');
+});
+
+test('statusInfo follows describeRow for every row of CHANGES-v1.1 2.5 (vectors > statusText)', () => {
+  assert.ok(V.statusText.length >= 12);
+  const tones = { sending: 'busy', failed: 'busy', sent: 'sent', delivered: 'ok', expired: 'bad' };
+  const buttons = { 'retry-now': 'Retry now', 'try-again': 'Try again' };
+  for (const c of V.statusText) {
+    const info = L.statusInfo(c.row, c.now);
+    assert.equal(info.label, c.label, c.name);
+    assert.equal(info.hint, c.sentence ?? '', c.name);
+    assert.equal(info.action, c.action, c.name);
+    assert.equal(info.retry, c.action ? buttons[c.action] : null, `${c.name}: the button`);
+    assert.equal(info.tone, tones[c.row.status], `${c.name}: the tone`);
+    // After a share: the label, then the sentence.
+    const label = /[.…✓]$/.test(c.label) ? c.label : `${c.label}.`;
+    assert.equal(L.rowMessage(c.row, c.now), c.sentence ? `${label} ${c.sentence}` : label, c.name);
+  }
+  const now = Date.now();
+  assert.equal(L.rowMessage({ status: 'failed', errorCode: 'network', created: now }, now),
+    'Waiting to send. Couldn’t send right now. It will try again by itself.');
+  assert.equal(L.rowMessage({ status: 'sent', created: now }, now), 'Sent · waiting for your Daylight.');
+  assert.equal(L.rowMessage({ status: 'sending', created: now }, now), 'Sending…');
+  assert.equal(L.statusInfo({ status: 'expired', errorCode: 'too-large', size: 14_200_000 }).hint, ds.tooBigMessage(14_200_000));
+  assert.equal(L.isTrouble({ status: 'failed' }), true);
+  assert.equal(L.isTrouble({ status: 'expired' }), true);
+  assert.equal(L.isTrouble({ status: 'sent' }), false);
+});
+
+test('PDFs follow the protocol’s one size limit, with the shared notes', () => {
+  assert.equal(L.MAX_PDF, ds.MAX_ITEM);
+  assert.equal(L.MAX_PDF, 9_000_000);
+  assert.equal(L.NOTES['pdf-too-large'], 'The PDF is over 9 MB, so its link was sent.');
+  assert.equal(L.NOTES['too-large'], 'The page is larger than 8 MB, so its link was sent.');
 });

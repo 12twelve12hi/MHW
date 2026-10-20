@@ -1,7 +1,7 @@
 # iPhone Shortcut: "Send to Daylight" in the share sheet
 
 With this Shortcut, **Share > Send to Daylight** in Safari (or any app that shares a link) opens the web sender,
-which sends the link to your Daylight and shows **Sent ✓**. It takes about five minutes to set up, once. (The Send to
+which sends the link to your Daylight and shows **Sent · waiting for your Daylight**. It takes about five minutes to set up, once. (The Send to
 Daylight iPhone app does the same without a Shortcut and also sends whole pages; this is the no-install route.)
 
 The web sender lives at <https://12twelve12hi.github.io/MHW/send/> (or wherever you host
@@ -59,8 +59,12 @@ The finished shortcut, top to bottom:
 
 In Safari, tap the **Share** button, then **Send to Daylight** in the row of actions (scroll down, or tap **Edit
 Actions…** to add it to your favourites). The first time, iOS asks whether the shortcut may open the page: choose
-**Always Allow**. Safari opens the web sender, which sends the link and shows **Sent ✓**; switch back to what you
-were reading. It works the same from News, Mail and any other app whose share sheet offers a link.
+**Always Allow**. Safari opens the web sender, which sends the link and shows **Sent · waiting for your Daylight**;
+switch back to what you were reading. It works the same from News, Mail and any other app whose share sheet offers a
+link.
+
+If Safari has cleared the web sender's data, the first run afterwards asks *Pair with …? Code starts …* before it
+sends: check the code against your Daylight and tap **OK**. Runs after that don't ask.
 
 The Daylight Reader downloads the article from its link, so the Shortcut sends the address, not the page as you see
 it: pages behind a login may arrive as the login page. To send those whole, use the Send to Daylight app or its
@@ -70,8 +74,8 @@ Safari extension.
 
 - **"The pairing in this link didn't work":** copy the link again from Settings (step 1.3) and paste it over the old
   one in the Text action.
-- **Nothing happens / no "Sent ✓":** check that the Text action ends in `&url=` followed directly by the blue
-  **URL Encoded Text** token, and that **Open URLs** opens that Text.
+- **Nothing happens / no "Sent · waiting for your Daylight":** check that the Text action ends in `&url=` followed
+  directly by the blue **URL Encoded Text** token, and that **Open URLs** opens that Text.
 - **It sent to the wrong Daylight:** the link carries one pairing; if you pair again (or reset pairing on the
   Daylight), copy the new link into the Shortcut.
 - **Delivered?** Open the web sender: the history shows **Delivered ✓** once the Daylight has picked an item up. The

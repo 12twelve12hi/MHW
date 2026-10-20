@@ -44,6 +44,16 @@ test('the Safari background script pairs from the app and sends', async () => {
     await fb.api.runtime.sendMessage({ type: 'tick' });
     const rows = (await fb.api.storage.local.get('outbox')).outbox;
     assert.equal(rows[0].status, 'delivered');
+
+    // Protocol 1.1 pairing in the bundle: the same code applies with the module's notice; another code asks first.
+    const same = await fb.api.runtime.sendMessage({ type: 'pair', input: await ds.formatCode(secret), relay: relay.url });
+    assert.equal(same.ok, true, same.error);
+    assert.equal(same.result.notice, 'Pairing updated.');
+    assert.equal(same.result.name, 'Desk Daylight', 'a typed code keeps the name');
+    const other = await fb.api.runtime.sendMessage({ type: 'pair', input: await ds.formatCode(ds.generateSecret()) });
+    assert.equal(other.result.needsConfirm.button, 'Switch');
+    assert.equal(other.result.needsConfirm.lines.at(-1), 'This replaces Desk Daylight. Items not yet delivered to it will not be sent.');
+    assert.equal((await fb.api.runtime.sendMessage({ type: 'state' })).result.name, 'Desk Daylight', 'nothing changed before the answer');
   } finally {
     await relay.close();
     delete globalThis.browser;

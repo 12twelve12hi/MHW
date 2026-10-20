@@ -2,11 +2,11 @@
 // Shortcut or Android's share sheet (when installed) hands it a link with ?url=…&autosend=1 or #…&url=….
 
 import * as ds from './daylight-share.js';
-import { statusInfo, kindLabel, displayTitle, relativeTime, isPending, titleFromName } from './logic.js';
+import { statusInfo, rowMessage, kindLabel, displayTitle, relativeTime, isPending, titleFromName } from './logic.js';
 import { readParams, hasShareParams, sharedLink, normalizeUserUrl, mimeFor, deviceName, shortcutPrefix, serial } from './web-logic.js';
 import { openStorage, takeShared, pruneShared } from './web-storage.js';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const APP = `web/${VERSION}`;
 const HISTORY_SHOWN = 8;
 const TICK_MS = 60 * 1000;
@@ -62,28 +62,39 @@ function changed() {
   return loadRows();
 }
 
-async function clearOutbox() {
-  for (const r of (await storage.get('outbox')) ?? []) await storage.remove(`outbox/${r.id}`);
-  await storage.remove('outbox');
-  await storage.remove('ackSince');
-}
-
-async function savePairing(p, from) {
+/**
+ * Saves a pairing (PROTOCOL 3.3 step 6, through the protocol module): the same code with a new relay or name keeps the
+ * outbox, whose items then go through the new relay; another code deletes it. expect: the code in use when the user was
+ * asked ('' for none); when it changed since, nothing is saved. from: this device's name, when given.
+ */
+async function applyPairing(next, { from, expect } = {}) {
+  const p = { ...next };
   await lock(async () => {
-    const old = await ds.loadPairing(storage).catch(() => null);
-    if (old && (old.code !== p.code || old.relay !== p.relay)) await clearOutbox();
-    if (!p.name && old?.code === p.code) p.name = old.name;
+    const current = await ds.loadPairing(storage).catch(() => null);
+    if (expect !== undefined && (current?.code ?? '') !== expect) {
+      throw new ds.ShareError('pairing', 'The pairing changed in the meantime. Try again.');
+    }
+    // A typed code, or a link without a name, for the Daylight already paired keeps the name it has.
+    if (!ds.cleanName(p.name) && current && ds.samePairingSecret(current, p)) p.name = current.name;
+    await ds.applyPairingChange(storage, current, p);
     await ds.savePairing(storage, p);
-    if (from != null) await storage.set('settings', { ...settings, from: ds.cleanName(from) });
+    if (from != null) await storage.set('settings', { ...((await storage.get('settings')) ?? {}), from: ds.cleanName(from) });
   });
   await loadState();
   await changed();
 }
 
+/** Asks in the protocol module's words (pairingConfirmation): its title and lines; OK stands for its button. */
+function confirmPairing(c) {
+  return window.confirm([c.title, ...c.lines].join('\n\n'));
+}
+
 // --- pairing --------------------------------------------------------------------------------------------------------
 
+/** The pairing form: when nothing is paired, or from Settings > "Change pairing…" (then with a way back). */
 function renderPair() {
   show('view-pair');
+  $('pair-back').hidden = !pairing;
   $('from').placeholder = defaultFrom;
   const n = $('pending-share');
   n.hidden = !pendingShare;
@@ -93,6 +104,10 @@ function renderPair() {
   }
 }
 
+/**
+ * The page's own pairing form (PROTOCOL 1.3: a typed or pasted code or link): pairs at once, unless it would replace a
+ * Daylight with a different code; then it asks first.
+ */
 async function onPair(ev) {
   ev.preventDefault();
   const err = $('pair-error');
@@ -103,13 +118,15 @@ async function onPair(ev) {
   btn.disabled = true;
   btn.textContent = 'Pairing…';
   try {
-    const p = await ds.parsePairing(input);
+    const next = await ds.parsePairing(input);
     const relay = $('relay').value.trim();
-    if (relay) p.relay = ds.normalizeRelay(relay);
-    await savePairing(p, $('from').value);
+    if (relay) next.relay = ds.normalizeRelay(relay);
+    const c = ds.pairingConfirmation(pairing, next, { source: 'app' });
+    if (c.ask && !confirmPairing(c)) return;
+    await applyPairing(next, { from: $('from').value, expect: pairing?.code ?? '' });
     $('code').value = '';
     await renderSend();
-    setStatus(`Paired with ${pairing.name || 'your Daylight'}.`, 'ok');
+    setStatus(c.notice || `Paired with ${pairing.name || 'your Daylight'}.`, 'ok');
     if (pendingShare) { const s = pendingShare; pendingShare = null; await sendShare(s); }
   } catch (e) {
     err.textContent = e.message;
@@ -119,18 +136,24 @@ async function onPair(ev) {
   }
 }
 
-/** #pair=<link or code>: pair in one tap from a link (or from the iPhone Shortcut, every time it runs). */
+/**
+ * #pair=<link or code>, from a link or the iPhone Shortcut (every time it runs): a pairing from outside the page, so it
+ * asks first (PROTOCOL 1.3), unless it is the Daylight already paired (a new relay or name applies at once). -> paired?
+ */
 async function pairFromParam(value) {
-  let p;
-  try { p = await ds.parsePairing(value); } catch (e) { setStatus(`The pairing in this link didn’t work: ${e.message}`, 'bad'); return; }
-  if (pairing && pairing.code === p.code && pairing.relay === p.relay) {
-    if (p.name && p.name !== pairing.name) await savePairing(p);
-    return;
+  let next;
+  try { next = await ds.parsePairing(value); } catch (e) { setStatus(`The pairing in this link didn’t work: ${e.message}`, 'bad'); return false; }
+  const c = ds.pairingConfirmation(pairing, next, { source: 'link' });
+  if (c.ask && !confirmPairing(c)) {
+    if (pairing) setStatus(`Still sending to ${pairing.name || 'your Daylight'}.`);
+    return false;
   }
-  if (pairing && !window.confirm(`Send to ${p.name || 'this Daylight'} from now on, instead of ${pairing.name || 'your current Daylight'}?`)) return;
-  await savePairing(p);
+  try {
+    await applyPairing(next, { expect: pairing?.code ?? '' });
+  } catch (e) { setStatus(e.message, 'bad'); return false; }
   await renderSend();
-  setStatus(`Paired with ${pairing.name || 'your Daylight'}.`, 'ok');
+  setStatus(c.notice || `Paired with ${pairing.name || 'your Daylight'}.`, 'ok');
+  return true;
 }
 
 // --- sending --------------------------------------------------------------------------------------------------------
@@ -151,7 +174,8 @@ async function sendLink(url, title) {
 }
 
 async function sendFile(file) {
-  if (file.size > ds.MAX_ENCODED) throw new ds.ShareError('too-large', `“${file.name}” is larger than 64 MB.`);
+  // One limit for every relay (protocol 1.1), checked before the file is read.
+  if (file.size > ds.MAX_ITEM) throw new ds.ShareError('too-large', ds.tooBigMessage(file.size));
   const bytes = new Uint8Array(await file.arrayBuffer());
   const name = file.name || 'document';
   const row = await lock(() => sender.send({ kind: 'file', name, mime: mimeFor(name, file.type), title: titleFromName(name), content: bytes }));
@@ -160,11 +184,20 @@ async function sendFile(file) {
   return row;
 }
 
-function describe(rowsSent) {
-  const failed = rowsSent.filter((r) => r.status === 'failed');
-  if (failed.length) return { text: `Couldn’t reach the relay (${failed[0].error || 'offline?'}). It tries again when you open this page; or use Retry.`, tone: 'bad' };
-  const what = rowsSent.length > 1 ? `${rowsSent.length} items are` : rowsSent[0]?.kind === 'file' ? 'The file is' : 'The link is';
-  return { text: `Sent ✓ ${what} on the way to ${pairing?.name || 'your Daylight'}.`, tone: 'ok' };
+/**
+ * The status after a share (CHANGES-v1.1 2.5): the row's label, then its sentence. results: outbox rows, or
+ * {name, error} for a file that couldn't be sent. Several: one line when they all ended alike, else each one's.
+ */
+function describe(results) {
+  // A row's own `error` is technical detail for logs; only {name, error} entries (no id) show theirs.
+  const isRow = (r) => typeof r.id === 'string';
+  const say = (r) => (isRow(r) ? rowMessage(r) : r.error);
+  const tone = results.some((r) => !isRow(r) || r.status === 'expired') ? 'bad'
+    : results.every((r) => r.status === 'sent' || r.status === 'delivered') ? 'ok' : '';
+  if (results.length === 1) return { text: say(results[0]), tone };
+  const said = [...new Set(results.map(say))];
+  if (said.length === 1) return { text: `${results.length} items. ${said[0]}`, tone };
+  return { text: results.map((r) => `${isRow(r) ? displayTitle(r) : r.name}: ${say(r)}`).join(' '), tone };
 }
 
 async function withBusy(label, fn) {
@@ -188,15 +221,18 @@ async function withBusy(label, fn) {
 async function onSendUrl(ev) {
   ev.preventDefault();
   const sent = await withBusy('Sending…', async () => [await sendLink($('url').value, $('title').value)]);
-  if (sent.length && sent[0].status !== 'failed') { $('url').value = ''; $('title').value = ''; }
+  if (sent.length && sent[0].status !== 'failed' && sent[0].status !== 'expired') { $('url').value = ''; $('title').value = ''; }
 }
 
 async function sendFiles(list) {
   const files = [...list].filter((f) => f && f.size >= 0);
   if (!files.length) return [];
   return withBusy(files.length > 1 ? `Sending ${files.length} files…` : `Sending “${files[0].name}”…`, async () => {
+    if (files.length === 1) return [await sendFile(files[0])];
     const out = [];
-    for (const f of files) out.push(await sendFile(f));
+    for (const f of files) {
+      try { out.push(await sendFile(f)); } catch (e) { out.push({ name: f.name || 'document', error: e.message ?? String(e) }); }
+    }
     return out;
   });
 }
@@ -213,10 +249,19 @@ async function retry(id, button) {
   button.textContent = 'Sending…';
   try {
     const row = await lock(() => sender.retry(id));
-    const m = describe([row]);
-    setStatus(m.text, m.tone);
-    afterSend();
+    if (row) {
+      const m = describe([row]);
+      setStatus(m.text, m.tone);
+      afterSend();
+    }
   } catch (e) { setStatus(e.message, 'bad'); }
+  await changed();
+}
+
+/** "Remove": the row and its stored content. */
+async function remove(id, button) {
+  button.disabled = true;
+  try { await lock(() => sender.remove(id)); } catch (e) { setStatus(e.message, 'bad'); }
   await changed();
 }
 
@@ -247,19 +292,28 @@ function renderHistory() {
     const title = el('span', 'item-title', displayTitle(row));
     title.title = row.url || row.name || '';
     line.append(el('span', 'kind', kindLabel(row)), title);
+    // The protocol library's words (describeRow): the same label, sentence and button in every Send to Daylight app.
     const info = statusInfo(row);
     const meta = el('div', 'item-meta');
-    const st = el('span', `st ${info.tone}`, info.label);
-    if (info.hint) st.title = info.hint;
-    meta.append(st, el('span', 'when', `· ${relativeTime(row.created)}`));
-    if (info.retry && sender) {
-      const b = el('button', 'retry', 'Retry');
-      b.type = 'button';
-      b.addEventListener('click', () => retry(row.id, b));
-      meta.append(b);
+    meta.append(el('span', `st ${info.tone}`, info.label), el('span', 'when', `· ${relativeTime(row.created)}`));
+    if (sender) {
+      const acts = el('span', 'acts');
+      if (info.retry) {
+        const b = el('button', 'retry', info.retry);
+        b.type = 'button';
+        b.setAttribute('aria-label', `${info.retry}: ${displayTitle(row)}`);
+        b.addEventListener('click', () => retry(row.id, b));
+        acts.append(b);
+      }
+      const rm = el('button', 'remove', 'Remove');
+      rm.type = 'button';
+      rm.setAttribute('aria-label', `Remove: ${displayTitle(row)}`);
+      rm.addEventListener('click', () => remove(row.id, rm));
+      acts.append(rm);
+      meta.append(acts);
     }
     li.append(line, meta);
-    if (row.status === 'failed' && row.error) li.append(el('p', 'note', row.error));
+    if (info.hint) li.append(el('p', `note sentence${info.tone === 'bad' ? ' bad' : ''}`, info.hint));
     list.append(li);
   }
 }
@@ -317,7 +371,10 @@ async function onUnpair() {
   }
   clearTimeout(unpairArmed);
   unpairArmed = null;
-  await lock(async () => { await clearOutbox(); await storage.remove('pairing'); });
+  await lock(async () => {
+    await ds.applyPairingChange(storage, await ds.loadPairing(storage).catch(() => null), null);
+    await storage.remove('pairing');
+  });
   await loadState();
   rows = [];
   renderPair();
@@ -361,12 +418,14 @@ async function handleAddress() {
   $('title').value = share.title || '';
   if (params.autosend || params.share) {
     const sent = await sendShare(share);
-    if (sent.length && sent.every((r) => r.status !== 'failed')) { $('url').value = ''; $('title').value = ''; }
+    if (sent.length && sent.every((r) => r.status === 'sent' || r.status === 'delivered')) { $('url').value = ''; $('title').value = ''; }
   }
 }
 
 function wire() {
   $('pair-form').addEventListener('submit', onPair);
+  $('pair-back').addEventListener('click', () => renderSend());
+  $('repair').addEventListener('click', () => { $('pair-error').textContent = ''; renderPair(); });
   $('url-form').addEventListener('submit', onSendUrl);
   $('file').addEventListener('change', async (e) => { const input = e.target; await sendFiles(input.files); input.value = ''; });
   $('open-settings').addEventListener('click', renderSettings);

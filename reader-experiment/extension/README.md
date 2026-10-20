@@ -54,29 +54,49 @@ paste the pairing link (`daylightshare://pair?...`), optionally name this browse
 **Pair**. *Advanced: Relay URL* is only for a Daylight that uses its own ntfy server (a pairing link already carries
 it).
 
+**⋯ › Change pairing…** takes a code again. The same Daylight's code with a new relay (or a new name) applies at once
+(*Pairing updated: now sending through …*) and keeps anything not yet delivered, which then goes through the new
+relay. Another Daylight's code asks first, showing the start of its code (*Code starts E4AY*) and that it replaces the
+current Daylight; **Switch** discards what the old one hasn't picked up yet. These words, like the history's, come from
+the protocol library (Daylight Share protocol 1.1), so every Send to Daylight app says the same.
+
 ## Use
 
 | | What it sends |
 |---|---|
-| **Send this page** | The page's HTML as you see it, with its address and title. A PDF tab sends the PDF file itself (downloaded with your cookies, so PDFs behind a login work). Pages over 8 MB, images and pages the browser won't let extensions read (the Chrome Web Store, for example) send their link instead; the popup says when that happens. |
+| **Send this page** | The page's HTML as you see it, with its address and title. A PDF tab sends the PDF file itself, up to 9 MB (downloaded with your cookies, so PDFs behind a login work). Pages over 8 MB, PDFs over 9 MB, images and pages the browser won't let extensions read (the Chrome Web Store, for example) send their link instead; the popup says when that happens. |
 | **Send link only** | Just the address and title; the Daylight Reader downloads the article itself. |
 | Right-click a page: **Send page to Daylight** | Same as *Send this page*. |
 | Right-click a link: **Send link to Daylight** | The link, titled with the link's text. |
-| Right-click a link ending in .pdf: **Send PDF link to Daylight** | Downloads the PDF and sends the file; sends the link if it can't. |
+| Right-click a link ending in .pdf: **Send PDF link to Daylight** | Downloads the PDF and sends the file (up to 9 MB); sends the link if it can't. |
 | **Alt+Shift+D** (Option+Shift+D on a Mac) | *Send this page*. Change it at `chrome://extensions/shortcuts`. |
 
-The toolbar button shows **…** while sending, **✓** when sent and **!** when something went wrong. The popup lists
-the last few sends: *Sending…*, *Sent* (on its way; the relay has it), **Delivered ✓** (the Daylight confirmed it) or
-*Not delivered* with a **Retry** button. The **⋯** button opens settings: the Daylight's name, the relay, this
-browser's name and **Unpair**.
+**Sizes:** files and PDFs up to 9 MB, pages up to 8 MB. The free relay (ntfy.sh) takes attachments of up to 2 MB, so
+larger ones travel in pieces that fit; it holds about 20 MB per network at a time, so after a burst of big files the
+rest waits a few hours (the history says so).
+
+The toolbar button shows **…** while sending, **✓** when sent and **!** when it couldn't be sent yet. The popup lists
+the last few sends in the words every Send to Daylight app uses:
+
+- *Sending…*;
+- **Sent · waiting for your Daylight**: the relay has it; the Daylight hasn't picked it up yet (it may be asleep);
+- **Delivered ✓**: the Daylight confirmed it;
+- **Waiting to send**, with why: the relay couldn't be reached (**Retry now**), or it is full or turned the item down
+  (it tries again by itself in about 3 hours);
+- **Not delivered**, with why, and **Try again** where trying again can help (for example the Daylight didn't pick it
+  up within a week).
+
+Every row has **Remove**. The **⋯** button opens settings: the Daylight's name, the relay, this browser's name,
+**Change pairing…** and **Unpair**.
 
 When a PDF can't be read inside its tab (Safari's PDF viewer, for example) and the server doesn't allow it otherwise,
 the popup asks for permission to download from that one site. Saying no sends the link instead.
 
 **Delivery.** Items wait on the relay until the Daylight picks them up (ntfy.sh keeps messages 12 hours, files 3
 hours). The extension checks for the Daylight's confirmation after each send, 30 seconds later, whenever the popup is
-open, and every 15 minutes while the browser runs; anything unconfirmed is sent again before the relay forgets it, for
-up to a week. An item still undelivered after a week shows *Not delivered* with **Retry**.
+open, and every 15 minutes while the browser runs. Anything unconfirmed is sent again: links and small pages every 11
+hours, files and large pages 3 hours apart twice, then twice a day, for up to a week. An item still undelivered after
+a week shows *Not delivered* with **Try again**.
 
 ## Privacy
 
@@ -120,9 +140,12 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   which runs the real injected functions from `src/inject.js` on a stubbed page), the mock ntfy relay and a
   `Receiver` playing the Daylight. `test/unit/safari.test.mjs` loads the Safari bundle exactly as Safari does.
 - `test/e2e/extension.e2e.mjs` loads `dist/chrome-test` into Chromium, pairs in the popup, sends an article, a PDF
-  shown in Chrome's PDF viewer, a link, an 8 MB+ page, the PDF-link menu and the shortcut, receives them with a
-  `Receiver` and waits for **Delivered ✓**. `test/e2e/web.e2e.mjs` does the same for the web sender, including the
-  Android share target and offline use. Screenshots land in `test-results/`.
+  shown in Chrome's PDF viewer, a 5 MB PDF (three pieces under the mock relay's 2 MB per attachment), a link, an
+  8 MB+ page, the PDF-link menu and the shortcut, receives them with a `Receiver` and waits for **Delivered ✓**. It
+  then makes the relay answer 429 and 413 (*Waiting to send*, **Retry now**, **Remove**) and changes the pairing (the
+  same code on a new relay, then another Daylight's code with its question). `test/e2e/web.e2e.mjs` does the same for
+  the web sender, including the `#pair=` question, a file over 9 MB refused before it is read, the Android share
+  target and offline use. Screenshots land in `test-results/`.
 - CI: [`.github/workflows/rx-extension.yml`](../../.github/workflows/rx-extension.yml) builds, runs both test suites,
   publishes the two zips to the release, uploads `dist/safari` as the `send-to-daylight-safari` artifact, and deploys
   the web sender to GitHub Pages (see [`../web/README.md`](../web/README.md)).

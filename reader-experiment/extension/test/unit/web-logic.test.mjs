@@ -42,6 +42,7 @@ test('normalizeUserUrl', () => {
   assert.equal(W.normalizeUserUrl('just words'), null);
   assert.equal(W.normalizeUserUrl('javascript:alert(1)'), null);
   assert.equal(W.normalizeUserUrl(''), null);
+  assert.equal(W.normalizeUserUrl('https:/example.com'), null, 'protocol 1.1 webUrl: one slash is not a web address');
 });
 
 test('mimeFor and deviceName', () => {
@@ -77,6 +78,12 @@ test('the site has every file the page, the manifest and the service worker refe
   assert.match(sw, new RegExp(`const BUILD = '${w.build}'`));
   const shell = JSON.parse(sw.match(/const SHELL = (\[[^\]]+\])/)[1].replace(/'/g, '"').replace(/,\s*\]/, ']'));
   for (const f of shell.filter((f) => f !== './')) assert.ok(fs.existsSync(path.join(w.dir, f)), f);
+  // The protocol library and the status helpers are unmodified copies of their one source.
+  const share = new URL('../../../share/js/daylight-share.js', import.meta.url);
+  assert.ok(fs.readFileSync(path.join(w.dir, 'daylight-share.js')).equals(fs.readFileSync(share)), 'daylight-share.js');
+  assert.ok(fs.readFileSync(path.join(w.dir, 'logic.js')).equals(fs.readFileSync(new URL('../../src/logic.js', import.meta.url))), 'logic.js');
+  assert.doesNotMatch(html, /64 MB/, 'protocol 1.1: files up to 9 MB');
+  assert.match(html, /up to 9 MB/);
   // Every module import resolves inside the site.
   for (const f of fs.readdirSync(w.dir).filter((f) => f.endsWith('.js'))) {
     for (const m of fs.readFileSync(path.join(w.dir, f), 'utf8').matchAll(/from '\.\/([^']+)'/g)) assert.ok(fs.existsSync(path.join(w.dir, m[1])), `${f} imports ${m[1]}`);

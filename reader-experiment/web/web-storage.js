@@ -48,10 +48,8 @@ export function localStorageAdapter(prefix = 'send-to-daylight:') {
   return {
     kind: 'localstorage',
     async get(k) { const v = localStorage.getItem(prefix + k); return v == null ? undefined : JSON.parse(v); },
-    async set(k, v) {
-      try { localStorage.setItem(prefix + k, JSON.stringify(v)); }
-      catch (e) { if (!String(k).startsWith('outbox/')) throw e; /* no room for the re-send copy: send once */ }
-    },
+    // A full localStorage throws; for the re-send copy ('outbox/<id>') the protocol library catches it and sends once.
+    async set(k, v) { localStorage.setItem(prefix + k, JSON.stringify(v)); },
     async remove(k) { localStorage.removeItem(prefix + k); },
   };
 }

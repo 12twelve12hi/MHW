@@ -18,8 +18,9 @@
       </button>
     </header>
 
-    <!-- Not paired yet -->
+    <!-- Not paired yet (or "Change pairing…" in Settings) -->
     <section id="view-pair" hidden>
+      <button id="pair-back" class="back" type="button" hidden>‹ Back</button>
       <h2>Pair with your Daylight</h2>
       <p class="hint">On your Daylight, open <b>Daylight Share</b>. Type the 28-character code it shows, or paste its pairing link.</p>
       <form id="pair-form" novalidate>
@@ -37,6 +38,17 @@
         <p id="pair-error" class="error" role="alert"></p>
         <button id="pair-btn" class="btn primary" type="submit">Pair</button>
       </form>
+    </section>
+
+    <!-- A code that would replace another Daylight: asked first (PROTOCOL 1.3), in the protocol module's words
+         (pairingConfirmation). -->
+    <section id="view-confirm" hidden aria-labelledby="confirm-h">
+      <h2 id="confirm-h">Pair with a Daylight?</h2>
+      <div id="confirm-lines" class="confirm-lines"></div>
+      <div class="row">
+        <button id="confirm-yes" class="btn primary" type="button">Pair</button>
+        <button id="confirm-no" class="btn secondary" type="button">Cancel</button>
+      </div>
     </section>
 
     <!-- Paired -->
@@ -78,6 +90,7 @@
         </div>
         <p id="name-saved" class="hint small" role="status"></p>
       </form>
+      <button id="repair" class="btn secondary" type="button">Change pairing…</button>
       <p class="hint small">Everything you send is end-to-end encrypted with a key from the pairing code. The relay only sees scrambled data.</p>
       <button id="unpair" class="btn danger" type="button">Unpair this browser</button>
       <p id="version" class="hint small version"></p>

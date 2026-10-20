@@ -1,6 +1,6 @@
 {
   "name": "send-to-daylight-extension",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Send to Daylight: build and tests for the Chrome/Safari extension and the web sender page",

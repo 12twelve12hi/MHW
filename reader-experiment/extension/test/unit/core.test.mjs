@@ -13,12 +13,15 @@ const core = await b.load('core.js');
 const ds = await b.load('daylight-share.js');
 const quiet = { warn() {}, log() {} };
 const PDF = makePdf({ pages: 3, fillerBytes: 20_000 });
+const BIG_PDF = makePdf({ pages: 2, fillerBytes: 10_000_000 }); // a 10 MB PDF: over the protocol's 9 MB
 
 /** fetch as an extension without host permissions sees it: cross-origin requests fail unless CORS allows them. */
 function extensionFetch(fb, site, flags) {
   return async (url, init = {}) => {
     const u = new URL(url);
-    if (flags.relayDown && !url.startsWith(site.url)) return new Response('{"error":"too large"}', { status: 413 });
+    if (flags.relayStatus && !url.startsWith(site.url) && init.method !== 'GET') {
+      return new Response(JSON.stringify({ http: flags.relayStatus }), { status: flags.relayStatus });
+    }
     if (url.startsWith(site.url) && !u.pathname.startsWith('/cors/') && !fb.granted.has('http://127.0.0.1/*')) {
       throw new TypeError('Failed to fetch');
     }
@@ -26,12 +29,12 @@ function extensionFetch(fb, site, flags) {
   };
 }
 
-async function setup({ target = 'chrome', native, pdfChunkSize, paired = true, contextMenus = true } = {}) {
+async function setup({ target = 'chrome', native, pdfChunkSize, paired = true, contextMenus = true, now, storage } = {}) {
   const relay = await startMockRelay();
-  const site = await startSite({ pdf: PDF });
+  const site = await startSite({ pdf: PDF, bigPdf: BIG_PDF });
   const fb = fakeBrowser({ native, contextMenus });
-  const flags = { relayDown: false };
-  const app = core.createApp({ api: fb.api, target, fetch: extensionFetch(fb, site, flags), pdfChunkSize, log: quiet });
+  const flags = { relayStatus: 0 };
+  const app = core.createApp({ api: fb.api, target, fetch: extensionFetch(fb, site, flags), pdfChunkSize, log: quiet, now, storage });
   const secret = ds.generateSecret();
   const link = await ds.pairingLink({ secret, relay: relay.url, name: 'Test Daylight' });
   const pairing = { secret, relay: relay.url };
@@ -53,7 +56,7 @@ test('pairing with a link, a typed code and the Advanced relay', async () => {
     assert.equal((await s.app.state()).paired, false);
     await assert.rejects(s.app.pair({ input: 'ABCD-EFGH' }), /28 letters/);
     const r = await s.app.pair({ input: s.link, from: '  My   laptop ' });
-    assert.deepEqual(r, { name: 'Test Daylight', relay: s.relay.url });
+    assert.deepEqual(r, { name: 'Test Daylight', relay: s.relay.url, notice: null });
     const st = await s.app.state();
     assert.equal(st.paired, true);
     assert.equal(st.name, 'Test Daylight');
@@ -62,12 +65,14 @@ test('pairing with a link, a typed code and the Advanced relay', async () => {
     assert.equal(st.shortcut, 'Alt+Shift+D');
     // A typed code (lowercase, look-alikes) with the relay typed in Advanced keeps the name it had.
     const code = (await ds.formatCode(s.secret)).toLowerCase().replace(/o/g, '0');
-    await s.app.pair({ input: code, relay: s.relay.url.replace('http://', 'http://') + '/' });
+    const again = await s.app.pair({ input: code, relay: s.relay.url + '/' });
+    assert.equal(again.notice, 'Pairing updated.', 'the same code: no question, the module’s notice');
     const st2 = await s.app.state();
     assert.equal(st2.relay, s.relay.url);
     assert.equal(st2.name, 'Test Daylight');
     // A typed code alone means ntfy.sh.
-    await s.app.pair({ input: code });
+    const moved = await s.app.pair({ input: code });
+    assert.equal(moved.notice, 'Pairing updated: now sending through ntfy.sh.');
     assert.equal((await s.app.state()).relay, 'https://ntfy.sh');
   } finally { await s.close(); }
 });
@@ -259,21 +264,54 @@ test('the keyboard command sends the active tab; unpaired, it opens the pairing 
   } finally { await s.close(); }
 });
 
-test('relay failure marks the row failed with a ! badge; Retry sends it', async () => {
+test('a relay that is busy (429): "Waiting to send" with Retry now, a ! badge; Retry now sends it', async () => {
   const s = await setup();
   try {
-    s.flags.relayDown = true;
+    s.flags.relayStatus = 429;
     const t = s.fb.addTab({ url: 'https://example.com/a', title: 'A', html: articleHtml });
     const r = await s.app.onMessage({ type: 'sendTab', tabId: t });
     assert.equal(r.row.status, 'failed');
+    assert.equal(r.row.errorCode, 'network');
     assert.equal(s.fb.badge.text, '!');
-    s.flags.relayDown = false;
+    const L = await b.load('logic.js');
+    assert.deepEqual(L.statusInfo(r.row), {
+      label: 'Waiting to send', tone: 'busy', hint: 'Couldn’t send right now. It will try again by itself.', action: 'retry-now', retry: 'Retry now',
+    });
+    s.flags.relayStatus = 0;
     const again = await s.app.onMessage({ type: 'retry', id: r.row.id });
     assert.equal(again.row.status, 'sent');
     assert.equal(again.row.id, r.row.id);
     const items = await s.receive();
     assert.equal(items.length, 1);
     assert.equal(items[0].header.id, r.row.id);
+  } finally { await s.close(); }
+});
+
+test('a relay that is full (413) waits about 3 hours; the third time it is Not delivered with Try again', async () => {
+  let clock = Date.now();
+  const s = await setup({ now: () => clock });
+  try {
+    const L = await b.load('logic.js');
+    s.flags.relayStatus = 413;
+    const t = s.fb.addTab({ url: 'https://example.com/full', title: 'Full', html: articleHtml });
+    const r = await s.app.onMessage({ type: 'sendTab', tabId: t });
+    assert.deepEqual([r.row.status, r.row.errorCode], ['failed', 'full']);
+    assert.deepEqual(L.statusInfo(r.row, clock), {
+      label: 'Waiting to send', tone: 'busy', action: null, retry: null,
+      hint: 'A lot has been sent from this network in the last few hours. It will send by itself in about 3 hours.',
+    });
+    assert.deepEqual(await s.app.tick(), { delivered: 0, resent: 0 }, 'not due before 185 minutes');
+    for (let i = 0; i < 2; i++) { clock += 185 * 60000; await s.app.tick(); }
+    const row = (await s.rows())[0];
+    assert.deepEqual([row.status, row.errorCode, row.slowFails], ['expired', 'full', 3]);
+    assert.deepEqual(L.statusInfo(row, clock), {
+      label: 'Not delivered', tone: 'bad', action: 'try-again', retry: 'Try again',
+      hint: 'Too much was sent from this network for hours, so it stopped trying. Try again later.',
+    });
+    s.flags.relayStatus = 0;
+    const tried = await s.app.onMessage({ type: 'retry', id: row.id });
+    assert.equal(tried.row.status, 'sent', 'Try again sends it again');
+    assert.equal((await s.receive())[0].header.id, row.id);
   } finally { await s.close(); }
 });
 
@@ -290,22 +328,90 @@ test('tick stays off the relay when nothing is waiting; start sets up menus and 
   } finally { await s.close(); }
 });
 
-test('unpairing, or pairing with another Daylight, discards the outbox', async () => {
+test('pairing again: the same code with a new relay keeps the outbox; another code asks first, then clears it', async () => {
   const s = await setup();
+  const relay2 = await startMockRelay();
   try {
-    s.flags.relayDown = true;
+    s.flags.relayStatus = 429;
     const t = s.fb.addTab({ url: 'https://example.com/a', title: 'A', html: articleHtml });
     const r = await s.app.onMessage({ type: 'sendTab', tabId: t });
     assert.ok(s.fb.local.has(`outbox/${r.row.id}`));
-    await s.app.pair({ input: s.link }); // the same Daylight: kept
+    s.flags.relayStatus = 0;
+
+    // The same Daylight, moved to another relay: no question, the outbox stays and goes through the new relay.
+    const code = await ds.formatCode(s.secret);
+    const moved = await s.app.onMessage({ type: 'pair', input: code, relay: relay2.url });
+    assert.deepEqual(moved, { name: 'Test Daylight', relay: relay2.url, notice: `Pairing updated: now sending through ${ds.relayHost(relay2.url)}.` });
     assert.equal((await s.rows()).length, 1);
-    const other = await ds.pairingLink({ secret: ds.generateSecret(), relay: s.relay.url });
-    await s.app.pair({ input: other });
+    assert.ok(s.fb.local.has(`outbox/${r.row.id}`));
+    const resent = await s.app.onMessage({ type: 'retry', id: r.row.id });
+    assert.equal(resent.row.status, 'sent');
+    const r2 = new ds.Receiver({ pairing: { secret: s.secret, relay: relay2.url }, storage: new ds.MemoryStorage() });
+    assert.deepEqual((await r2.pollOnce()).items.map((i) => i.header.id), [r.row.id], 'through the new relay');
+
+    // Another Daylight's code: it asks, in the module's words, and changes nothing until the answer.
+    const other = ds.generateSecret();
+    const otherCode = await ds.formatCode(other);
+    const ask = await s.app.onMessage({ type: 'pair', input: otherCode, relay: s.relay.url });
+    const expected = ds.pairingConfirmation({ secret: s.secret, relay: relay2.url, name: 'Test Daylight' },
+      { secret: other, relay: s.relay.url, name: '' }, { source: 'app' });
+    assert.deepEqual(ask, { needsConfirm: { title: expected.title, lines: expected.lines, button: 'Switch', expect: code } });
+    assert.ok(ask.needsConfirm.lines.includes('This replaces Test Daylight. Items not yet delivered to it will not be sent.'));
+    assert.equal((await s.rows()).length, 1, 'nothing changes before the answer');
+    assert.equal((await s.app.state()).relay, relay2.url);
+    // The answer comes after the pairing changed some other way: refused.
+    await assert.rejects(s.app.onMessage({ type: 'pair', input: otherCode, confirm: true, expect: 'SOMETHING-ELSE' }), /changed in the meantime/);
+    // Switch: the old outbox, its content and the ack cursor go.
+    await s.fb.api.storage.local.set({ ackSince: 123 });
+    const switched = await s.app.onMessage({ type: 'pair', input: otherCode, relay: s.relay.url, confirm: true, expect: code });
+    assert.deepEqual(switched, { name: '', relay: s.relay.url, notice: null });
     assert.equal((await s.rows()).length, 0);
     assert.equal(s.fb.local.has(`outbox/${r.row.id}`), false);
+    assert.equal(s.fb.local.has('ackSince'), false);
+
     await s.app.onMessage({ type: 'unpair' });
     assert.equal((await s.app.state()).paired, false);
     assert.equal(s.fb.local.has('pairing'), false);
+    // Nothing paired: a typed code pairs without a question.
+    assert.equal((await s.app.onMessage({ type: 'pair', input: code })).notice, null);
+  } finally { await s.close(); await relay2.close(); }
+});
+
+test('Remove drops a row and its stored content', async () => {
+  const s = await setup();
+  try {
+    s.flags.relayStatus = 429;
+    const t = s.fb.addTab({ url: 'https://example.com/a', title: 'A', html: articleHtml });
+    const r = await s.app.onMessage({ type: 'sendTab', tabId: t });
+    assert.ok(s.fb.local.has(`outbox/${r.row.id}`));
+    assert.deepEqual(await s.app.onMessage({ type: 'remove', id: r.row.id }), { removed: true });
+    assert.deepEqual(await s.rows(), []);
+    assert.equal(s.fb.local.has(`outbox/${r.row.id}`), false);
+    assert.deepEqual(await s.app.onMessage({ type: 'remove', id: r.row.id }), { removed: false });
+  } finally { await s.close(); }
+});
+
+test('a 10 MB PDF sends its link with the shared note; a 5 MB one goes as a file in pieces under the relay’s 2 MB', async () => {
+  const s = await setup();
+  try {
+    const big = s.fb.addTab({ url: `${s.site.url}/files/big.pdf`, title: 'Big', contentType: 'application/pdf' });
+    const r = await s.app.onMessage({ type: 'sendTab', tabId: big });
+    assert.equal(r.row.kind, 'url');
+    assert.equal(r.note, 'The PDF is over 9 MB, so its link was sent.');
+    assert.ok(BIG_PDF.length > ds.MAX_ITEM);
+
+    const mid = makePdf({ pages: 2, fillerBytes: 5_000_000 });
+    s.site.routes.set('/files/mid.pdf', { type: 'application/pdf', body: Buffer.from(mid) });
+    const t = s.fb.addTab({ url: `${s.site.url}/files/mid.pdf`, title: 'Mid', contentType: 'application/pdf' });
+    const f = await s.app.onMessage({ type: 'sendTab', tabId: t });
+    assert.equal(f.row.kind, 'file');
+    assert.equal(f.row.status, 'sent');
+    const items = await s.receive();
+    const file = items.find((i) => i.header.kind === 'file');
+    assert.deepEqual(file.content, mid);
+    const attachments = [...s.relay.state.topics.values()].flat().filter((m) => m.attachment);
+    assert.equal(attachments.length, 3, 'three frames');
+    assert.ok(attachments.every((m) => m.attachment.size <= 2_000_000), attachments.map((m) => m.attachment.size).join(', '));
   } finally { await s.close(); }
 });
 
@@ -345,15 +451,35 @@ test('Safari also accepts a pairing link from the app; Chrome never asks', async
   } finally { await c.close(); }
 });
 
-test('the storage adapter keeps sending when the copy for re-sends cannot be stored', async () => {
-  const area = { m: new Map(), async get(k) { return this.m.has(k) ? { [k]: this.m.get(k) } : {}; }, async set(o) { for (const [k, v] of Object.entries(o)) { if (k.startsWith('outbox/')) throw new Error('QUOTA_BYTES quota exceeded'); this.m.set(k, v); } }, async remove(k) { this.m.delete(k); } };
-  const st = core.areaStorage(area, quiet);
-  await st.set('outbox/abc', 'x'.repeat(10));
-  assert.equal(await st.get('outbox/abc'), undefined);
+test('a re-send copy that can’t be stored: the item is still sent once, then ends as no longer stored', async () => {
+  const area = {
+    m: new Map(),
+    async get(k) { return this.m.has(k) ? { [k]: structuredClone(this.m.get(k)) } : {}; },
+    async set(o) { for (const [k, v] of Object.entries(o)) { if (k.startsWith('outbox/')) throw new Error('QUOTA_BYTES quota exceeded'); this.m.set(k, structuredClone(v)); } },
+    async remove(k) { this.m.delete(k); },
+  };
+  const st = core.areaStorage(area);
+  await assert.rejects(st.set('outbox/abc', 'x'), /QUOTA_BYTES/, 'the adapter reports every failed write');
   await st.set('pairing', { code: 'x' });
   assert.deepEqual(await st.get('pairing'), { code: 'x' });
-  area.set = async () => { throw new Error('disk full'); };
-  await assert.rejects(st.set('pairing', {}), /disk full/);
+
+  let clock = Date.now();
+  const s = await setup({ storage: st, now: () => clock });
+  try {
+    const t = s.fb.addTab({ url: 'https://example.com/quota', title: 'Quota', html: articleHtml });
+    const r = await s.app.onMessage({ type: 'sendTab', tabId: t });
+    assert.equal(r.row.status, 'sent');
+    assert.equal(s.relay.state.published, 1, 'sent once');
+    clock += 12 * 3600000; // due for a re-send, with nothing to re-send (and the Daylight hasn't picked it up)
+    await s.app.tick();
+    const row = (await st.get('outbox'))[0];
+    assert.deepEqual([row.status, row.errorCode], ['expired', 'gone']);
+    assert.equal(s.relay.state.published, 1, 'nothing more was published');
+    assert.equal((await s.receive()).length, 1, 'the one copy arrives');
+    const L = await b.load('logic.js');
+    assert.equal(L.statusInfo(row).hint, 'This is no longer stored on this device. Share it again.');
+    assert.equal(L.statusInfo(row).retry, null);
+  } finally { await s.close(); }
 });
 
 test('messages: errors come back as {ok:false}; other extensions are ignored', async () => {

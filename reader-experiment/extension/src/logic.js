@@ -1,11 +1,12 @@
 // Pure helpers shared by the background and the popup. No browser APIs here, so the unit tests run them in node.
 
-import { safeFileName, cleanTitle, webUrl, MAX_ENCODED } from './daylight-share.js';
+import { safeFileName, cleanTitle, webUrl, describeRow, MAX_ITEM } from './daylight-share.js';
 
 export const PDF_MIME = 'application/pdf';
 /** The PDF is read out of the page in pieces of this many bytes (each piece crosses the extension boundary as base64). */
 export const PDF_CHUNK = 4 * 1024 * 1024;
-export const MAX_PDF = MAX_ENCODED;
+/** The largest PDF sent as a file (protocol 1.1: 9 MB for every item); a larger one goes as its link. */
+export const MAX_PDF = MAX_ITEM;
 
 /** True when a URL's path ends in .pdf (ignoring case, query and fragment). */
 export function looksLikePdfUrl(url) {
@@ -95,7 +96,7 @@ export function planForCapture(cap, tabUrl) {
 export const NOTES = {
   'unscriptable': 'Extensions can’t read this page, so its link was sent.',
   'too-large': 'The page is larger than 8 MB, so its link was sent.',
-  'pdf-too-large': 'The PDF is larger than 64 MB, so its link was sent.',
+  'pdf-too-large': 'The PDF is over 9 MB, so its link was sent.',
   'pdf-failed': 'Couldn’t download the PDF, so its link was sent.',
   'pdf-denied': 'Without access to the site the PDF can’t be downloaded, so its link was sent.',
 };
@@ -107,17 +108,31 @@ export function defaultDeviceName(target, os = '') {
   return where ? `${browser} on ${where}` : browser;
 }
 
-/** How a history row reads in the popup. */
-export function statusInfo(row) {
-  switch (row?.status) {
-    case 'sending': return { label: 'Sending…', tone: 'busy', retry: false };
-    case 'sent': return { label: 'Sent', tone: 'sent', retry: false, hint: 'Waiting for your Daylight to pick it up' };
-    case 'delivered': return { label: 'Delivered ✓', tone: 'ok', retry: false };
-    case 'expired': return { label: 'Not delivered', tone: 'bad', retry: true, hint: 'Your Daylight didn’t pick it up within a week' };
-    case 'failed': return { label: 'Not delivered', tone: 'bad', retry: true, hint: row.error || 'Couldn’t reach the relay' };
-    default: return { label: String(row?.status ?? ''), tone: 'sent', retry: false };
-  }
+/** The words on a row's button, by describeRow's action. */
+export const ACTION_LABELS = { 'retry-now': 'Retry now', 'try-again': 'Try again' };
+
+const TONES = { sending: 'busy', failed: 'busy', sent: 'sent', delivered: 'ok', expired: 'bad' };
+
+/**
+ * How a history row reads, in the words every Send to Daylight app uses (CHANGES-v1.1 2.5, from the protocol library's
+ * describeRow): {label, tone, hint, action, retry}. hint is the sentence under the label ('' for none); retry is the
+ * button's words ("Retry now" or "Try again"), or null when the row has no button. Every row can also be removed.
+ */
+export function statusInfo(row, now = Date.now()) {
+  const d = describeRow(row, now);
+  return { label: d.label, tone: TONES[row?.status] ?? 'sent', hint: d.sentence ?? '', action: d.action, retry: ACTION_LABELS[d.action] ?? null };
 }
+
+/** What to say after a share (CHANGES-v1.1 2.5): the row's label, then its sentence when it has one. */
+export function rowMessage(row, now = Date.now()) {
+  const d = describeRow(row, now);
+  if (!d.label) return '';
+  const label = /[.…✓]$/.test(d.label) ? d.label : `${d.label}.`;
+  return d.sentence ? `${label} ${d.sentence}` : label;
+}
+
+/** True when a share's outcome is worth a warning: the item is not on its way (yet). */
+export const isTrouble = (row) => row?.status === 'failed' || row?.status === 'expired';
 
 export function kindLabel(row) {
   if (row?.kind === 'page') return 'Page';
