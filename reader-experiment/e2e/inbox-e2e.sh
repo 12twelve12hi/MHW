@@ -48,7 +48,7 @@ adb logcat -G 16M 2>/dev/null || true
 adb logcat -c
 
 # ------------------------------------------------------------------------------------------------------------ helpers
-count() { local n; n="$(reader_library_count)"; echo "${n:-0}"; }
+count() { local n; n="$(reader_library_count || true)"; echo "${n:-0}"; }
 inbox_log() { adb logcat -d -s DaylightShare:* 2>/dev/null | tr -d '\r'; }
 front() { adb shell dumpsys activity activities 2>/dev/null | tr -d '\r' | grep -m1 -E 'topResumedActivity|mResumedActivity' | tr -s ' ' || true; }
 
@@ -112,7 +112,7 @@ tap_card_add() {
   if tap_text '^Add (all )?to Reader$' "$SHARE_PKG"; then return 0; fi
   adb shell dumpsys window windows 2>/dev/null | tr -d '\r' > "$OUT/windows.txt" || true
   local dpi xy
-  dpi="$(adb shell wm density | tr -d '\r' | sed -n 's/.*: *\([0-9][0-9]*\).*/\1/p' | tail -1)"
+  dpi="$(adb shell wm density | tr -d '\r' | sed -n 's/.*: *\([0-9][0-9]*\).*/\1/p' | tail -1 || true)"
   xy="$(node "$here/ui-find.mjs" card-add "$OUT/windows.txt" "${dpi:-160}")" || return 1
   echo "tap the card's Add to Reader at $xy (placed from its window frame; uiautomator did not show it)"
   adb shell input tap $xy
@@ -327,8 +327,8 @@ for scroll in 0 1 2 3 4 5; do
   [ "$scroll" = 0 ] || { adb shell input swipe 160 560 160 140 400 >/dev/null 2>&1 || true; sleep 2; }
   timeout 45 adb shell uiautomator dump /sdcard/e2e-ui.xml >/dev/null 2>&1 || continue
   adb exec-out cat /sdcard/e2e-ui.xml > "$OUT/41-inbox-items.xml" 2>/dev/null || continue
-  confirmed="$(grep -o 'In your Reader ✓' "$OUT/41-inbox-items.xml" | wc -l)"
-  handed="$(grep -o 'Handed to the Reader' "$OUT/41-inbox-items.xml" | wc -l)"
+  confirmed="$(grep -o 'In your Reader ✓' "$OUT/41-inbox-items.xml" | wc -l || true)"
+  handed="$(grep -o 'Handed to the Reader' "$OUT/41-inbox-items.xml" | wc -l || true)"
   if [ $((confirmed + handed)) -gt 0 ]; then
     labels="on screen after $scroll scrolls: $confirmed x In your Reader ✓, $handed x Handed to the Reader"
     break
