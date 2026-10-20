@@ -32,6 +32,7 @@ All builds: <https://github.com/12twelve12hi/MHW/releases/tag/reader-experiment-
 | Android phone | **Daylight Share**, choose "Send from this phone" | `daylight-share.apk` (the same app) |
 | Chrome (any computer) | **Send to Daylight** extension | `send-to-daylight-chrome.zip` |
 | Mac | **Send to Daylight** app with its Share menu item and Safari extension | `Send-to-Daylight-mac.zip` |
+| Windows PC | **Send to Daylight** tray app with File Explorer's *Send to › Daylight* and a clipboard-link hotkey | `Send-to-Daylight-windows-setup.exe` |
 | iPhone | **Send to Daylight** app with its share sheet item (and Safari extension) | `Send-to-Daylight-unsigned.ipa` |
 | Anything with a browser | **Web sender** page (and an iPhone Shortcut) | `send-to-daylight-web.zip` |
 

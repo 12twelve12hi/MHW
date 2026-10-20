@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Send to Daylight</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="boot.js"></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <main id="app" aria-busy="true">
+    <header class="top">
+      <img class="mark" src="icon.svg" alt="" width="24" height="24">
+      <h1>Send to Daylight</h1>
+      <button id="open-settings" class="icon-btn" type="button" aria-label="Settings" title="Settings" hidden>
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+      </button>
+    </header>
+
+    <!-- Not paired yet -->
+    <section id="view-pair" hidden aria-labelledby="pair-h">
+      <h2 id="pair-h">Pair with your Daylight</h2>
+      <p class="hint">On your Daylight, open <b>Daylight Share</b> and choose <b>This is my Daylight</b>. Type the
+        28-character code it shows, or open its pairing link on this PC.</p>
+      <form id="pair-form" novalidate>
+        <label for="code">Pairing code or link</label>
+        <textarea id="code" rows="2" autocomplete="off" autocapitalize="characters" spellcheck="false"
+          placeholder="ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23" required></textarea>
+        <details id="advanced">
+          <summary>Advanced</summary>
+          <label for="relay">Relay URL</label>
+          <input id="relay" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://ntfy.sh">
+          <p class="hint small">Only if your Daylight uses its own ntfy server. A pairing link already includes it.</p>
+        </details>
+        <p id="pair-error" class="error" role="alert"></p>
+        <button id="pair-btn" class="btn primary" type="submit">Pair</button>
+      </form>
+    </section>
+
+    <!-- A pairing link for another Daylight arrived while paired -->
+    <section id="view-switch" hidden aria-labelledby="switch-h">
+      <h2 id="switch-h">Switch to <span id="switch-name">another Daylight</span>?</h2>
+      <p class="hint">This PC sends to <b id="switch-current">your Daylight</b> now. If you switch, items it hasn’t
+        picked up yet are discarded.</p>
+      <div class="row">
+        <button id="switch-yes" class="btn primary" type="button">Switch</button>
+        <button id="switch-no" class="btn secondary" type="button">Keep the current one</button>
+      </div>
+    </section>
+
+    <!-- Paired -->
+    <section id="view-send" hidden aria-labelledby="target">
+      <p class="target" id="target">Sending to <strong id="daylight-name">your Daylight</strong></p>
+      <div id="drop" class="drop">
+        <svg class="drop-icon" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 17v3h16v-3"/></svg>
+        <p class="drop-title">Drop files or links here</p>
+        <p class="drop-sub">PDF, EPUB, Word, text, web links…</p>
+        <button id="choose" class="btn secondary inline" type="button">Choose files…</button>
+        <input id="file" type="file" multiple hidden>
+      </div>
+      <button id="send-clip" class="btn primary" type="button">Send the link on the clipboard</button>
+      <p class="hint small center" id="hotkey-hint"></p>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+
+      <h2 class="recent-h" id="recent-h" hidden>Recent</h2>
+      <ol id="history" class="history" aria-labelledby="recent-h"></ol>
+    </section>
+
+    <!-- Settings -->
+    <section id="view-settings" hidden aria-labelledby="settings-h">
+      <button id="close-settings" class="back" type="button">‹ Back</button>
+      <h2 id="settings-h">Settings</h2>
+      <dl class="facts">
+        <dt>Daylight</dt><dd id="set-daylight"></dd>
+        <dt>Relay</dt><dd id="set-relay"></dd>
+      </dl>
+
+      <h3>Send the clipboard’s link</h3>
+      <div class="setting">
+        <p class="setting-text">Hotkey: <kbd id="hotkey-now">Ctrl + Alt + D</kbd></p>
+        <div class="row tight">
+          <button id="hotkey-change" class="btn secondary small-btn" type="button">Change…</button>
+          <button id="hotkey-off" class="btn secondary small-btn" type="button">Turn off</button>
+        </div>
+      </div>
+      <p id="hotkey-msg" class="hint small" role="status" aria-live="polite"></p>
+
+      <h3>Windows</h3>
+      <div class="setting">
+        <label class="check" for="autostart"><input id="autostart" type="checkbox"> Start at login (in the notification area)</label>
+      </div>
+      <div class="setting">
+        <p class="setting-text" id="sendto-text">File Explorer: <b>Send to › Daylight</b></p>
+        <button id="sendto-add" class="btn secondary small-btn" type="button" hidden>Add it</button>
+      </div>
+      <p id="windows-msg" class="hint small" role="status" aria-live="polite"></p>
+
+      <p class="hint small">Everything you send is end-to-end encrypted with a key from the pairing code. The relay
+        only sees scrambled data.</p>
+      <button id="unpair" class="btn danger" type="button">Unpair this PC</button>
+      <p id="version" class="hint small version"></p>
+    </section>
+  </main>
+</body>
+</html>

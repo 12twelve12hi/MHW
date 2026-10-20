@@ -1,0 +1,156 @@
+# Send to Daylight for Windows
+
+A small app in the notification area (the system tray) that sends files and web links from a Windows PC to your
+Daylight DC-1, where they land in the Daylight Reader. Three ways to send: drop things on its window, right-click
+files in File Explorer and choose **Send to › Daylight**, or copy a link and press **Ctrl + Alt + D** anywhere.
+
+It speaks the same end-to-end encrypted protocol as the other Send to Daylight apps
+([`../share/PROTOCOL.md`](../share/PROTOCOL.md)); the protocol code is
+[`../share/js/daylight-share.js`](../share/js/daylight-share.js) itself, copied in when the app is built.
+
+## Install
+
+1. Download **`Send-to-Daylight-windows-setup.exe`** from the
+   [latest builds](https://github.com/12twelve12hi/MHW/releases/tag/reader-experiment-latest).
+2. Run it. The build isn't signed yet, so Windows SmartScreen says *Windows protected your PC*: click
+   **More info**, then **Run anyway**. (Your browser may also ask whether to keep the download: choose **Keep**.)
+3. It installs for your Windows account only, without asking for an administrator, into
+   `%LOCALAPPDATA%\Send to Daylight`, and adds a Start menu entry and **Send to › Daylight** in File Explorer.
+
+The app opens and its icon (a small sun over a horizon) appears in the notification area at the right of the taskbar;
+it may be under the **^** arrow. Drag it next to the clock to keep it in sight.
+
+Windows 10 and 11 (64-bit). It uses the Microsoft Edge WebView2 runtime that comes with Windows; on an old Windows 10
+without it, the installer downloads it.
+
+## Pair with your Daylight
+
+On the Daylight, open **Daylight Share** and choose **This is my Daylight**. It shows a QR code and a 28-character
+pairing code. Then either:
+
+- **type the code** into the app's window and click **Pair** (dashes, spaces and lower case are fine), or
+- **open the pairing link** on the PC: a `daylightshare://pair?…` link opens Send to Daylight and pairs it. (When the
+  browser asks, allow it to open *Send to Daylight*.)
+
+The window then says *Sending to &lt;your Daylight's name&gt;*. **Advanced › Relay URL** is only for a Daylight that uses
+its own ntfy server (a pairing link already includes it).
+
+To pair with another Daylight, open its pairing link (the app asks before switching), or **⋯ › Unpair this PC** and
+pair again. Unpairing or switching discards anything the old Daylight hasn't picked up yet.
+
+## Send
+
+- **Drag and drop** files (PDF, EPUB, Word, text, Markdown, HTML…) or a link (from the browser's address bar or a
+  page) onto the window. **Choose files…** does the same from a file dialog, and works from the keyboard.
+- **File Explorer:** select one or more files, right-click, **Send to › Daylight** (on Windows 11: **Show more
+  options** first, or Shift + right-click). A notification says *Sent &lt;name&gt;*, or why not. The app needn't be open;
+  it starts if it isn't running. Internet shortcuts (`.url` files) send their web address.
+- **The clipboard's link:** copy a web address anywhere and press **Ctrl + Alt + D**. A notification says
+  *Sent &lt;site&gt;*, or that there was no link to send. The tray menu's **Send clipboard link** and the button in the
+  window do the same. Change or turn off the hotkey in **⋯ › Settings** (click **Change…**, then press the new
+  combination; it needs Ctrl, Alt or Win).
+
+**Size limit, for now:** the free relay (ntfy.sh) takes files up to 2 MB, and about 20 MB per sender at a time. Until
+the protocol fix for this lands, files over about 1.5 MB may not go through: they show *Not delivered* with the
+relay's reason in the history.
+
+## History and retries
+
+The window lists what you sent, newest first:
+
+- **Sent**: on its way; the Daylight hasn't picked it up yet (it may be asleep).
+- **Delivered ✓**: the Daylight confirmed it.
+- **Not delivered**, with the reason and a **Retry** button: the relay couldn't be reached or refused it, or the
+  Daylight didn't pick it up within a week.
+
+While the app runs (in the notification area is enough) it checks for the Daylight's confirmations when it starts,
+right after each send and again about 30 seconds later, every 15 minutes, and when you open the window; and it
+re-sends anything not yet confirmed before the relay forgets it (ntfy.sh keeps messages 12 hours and files 3 hours),
+for up to a week. The history and the copies kept for re-sending survive restarts.
+
+Closing the window keeps the app running in the notification area. Left-click the icon to open the window; right-click
+it for **Send clipboard link**, **Open**, **Start at login** and **Quit**. Esc hides the window.
+
+## Start at login
+
+Off by default. Turn it on in the tray menu (**Start at login**) or in **⋯ › Settings**. It then starts quietly in the
+notification area when you sign in to Windows, so re-sends and the hotkey keep working. (It adds an entry under
+*Settings › Apps › Startup*, where you can also turn it off.)
+
+## Uninstall
+
+Quit it (right-click the icon › **Quit**), then *Settings › Apps › Installed apps › Send to Daylight › Uninstall* (or
+*Control Panel › Programs and Features*). This removes the app, **Send to › Daylight**, the `daylightshare:` link
+handler and the start-at-login entry. Tick *Delete the application data* to remove the pairing and history too
+(`%APPDATA%\com.daylight.share.windows` and `%LOCALAPPDATA%\com.daylight.share.windows`).
+
+## Privacy
+
+Everything is encrypted on this PC with a key derived from the pairing code before it leaves; the relay sees only
+random topic names and scrambled data. The pairing, the settings and the outbox (including a copy of each item until
+the Daylight confirms it) are JSON files in `%APPDATA%\com.daylight.share.windows\store`.
+
+## How it's built
+
+A [Tauri 2](https://v2.tauri.app) app. The window is plain HTML, CSS and JavaScript (`src/`, no framework); the Rust
+side (`src-tauri/src/`) is kept to what a web page can't do.
+
+| Where | What |
+|---|---|
+| `src/core.js` | Pairing, sending, the outbox and its timers, with `daylight-share.js` (no DOM, no Tauri; unit-tested in node) |
+| `src/app.js`, `index.html`, `styles.css` | The window: pairing, drop zone, history, settings, the hotkey recorder |
+| `src/logic.js` | Small pure helpers (status labels, MIME types, the hotkey's key names, notification texts) |
+| `src/bridge.js` | Calls into Rust; the storage adapter (one JSON file per key in the app's data folder) |
+| `build.mjs` | Copies `src/` and `../share/js/daylight-share.js` into `dist/`, which Tauri embeds |
+| `src-tauri/src/main.rs` | Tray icon and menu, the window (closing hides it), single instance (a second launch hands over its arguments: Send To files, pairing links), the clipboard hotkey, notifications, start at login, commands for the page |
+| `src-tauri/src/args.rs` | The command line: files, `daylightshare:` links, `--autostart`, test-mode options |
+| `src-tauri/src/sendto.rs` | The **Send to › Daylight** shortcut (created on the first run if the installer didn't) |
+| `src-tauri/src/store.rs` | The page's key-value storage, written atomically |
+| `src-tauri/windows/installer-hooks.nsh` | Installer extras: adds and removes the Send to shortcut |
+| `test/unit/` | Unit tests (node): `core.js` against the mock relay with a Receiver playing the Daylight, helpers, configuration |
+| `test/e2e/windows.e2e.mjs` | The end-to-end test on Windows (below) |
+
+Plugins (all used from Rust only, so the page needs no plugin permissions): single-instance, deep-link (the
+`daylightshare` scheme), global-shortcut, clipboard-manager, notification, autostart. Versions are pinned in
+`src-tauri/Cargo.toml`, `Cargo.lock` and `package-lock.json`.
+
+### Build it yourself (on Windows)
+
+Needs [Node.js 22](https://nodejs.org), [Rust](https://rustup.rs) (stable, MSVC) and the Visual Studio C++ build tools
+(see Tauri's [prerequisites](https://v2.tauri.app/start/prerequisites/)).
+
+```sh
+cd reader-experiment/windows
+npm ci
+npm test                              # builds dist/ and runs the unit tests
+npx tauri build --bundles nsis        # -> src-tauri/target/release/bundle/nsis/Send to Daylight_<version>_x64-setup.exe
+npx tauri dev                         # runs it from source (after npm test or node build.mjs), with the developer tools
+```
+
+The unit tests run anywhere with node 22. Icons come from the extension's design: `node scripts/make-icons.mjs`
+(see the script for what it needs).
+
+### CI and the end-to-end test
+
+[`.github/workflows/rx-windows.yml`](../../.github/workflows/rx-windows.yml) runs on `windows-latest` for every push
+that touches this folder or `share/js/`: unit tests, `tauri build`, then `test/e2e/windows.e2e.mjs` against the mock
+relay (`../share/js/mock-relay.mjs`), with a `Receiver` from `daylight-share.js` acting as the Daylight:
+
+1. installs `Send-to-Daylight-windows-setup.exe` silently and checks the Send to shortcut and the link scheme;
+2. starts the installed app in test mode, `--e2e-pair <daylightshare link> --e2e-status <file>`: it pairs without
+   showing anything and writes its outbox as JSON whenever it changes (both options do nothing unless given);
+3. starts the app again with a PDF and a text file as arguments, as Send to does, and checks that the Daylight gets
+   both intact;
+4. puts a link on the clipboard and starts the app with `--e2e-hotkey`, a test hook that takes the hotkey's code path
+   (pressing a global hotkey on a CI machine isn't practical); a test-mode app is the only one that honours it;
+5. waits until the status file shows all three **Delivered**, opens the window (screenshot), quits and uninstalls, and
+   checks that the shortcut, the link scheme and the start-at-login entry are gone.
+
+The workflow then uploads the installer to the `reader-experiment-latest` release; the bare `send-to-daylight.exe`
+and the test output (status file, screenshot) are kept as workflow artifacts.
+
+## Not yet
+
+- **Code signing.** Unsigned, hence the SmartScreen warning; signing needs a certificate.
+- **Files over ~1.5 MB** wait for the protocol fix (see *Size limit* above); the app adds no chunking of its own.
+- **Updates** are manual: install the new build over the old one (pairing and history are kept).

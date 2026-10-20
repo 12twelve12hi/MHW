@@ -1,0 +1,107 @@
+name: Reader experiment - Windows app
+
+# Builds Send to Daylight for Windows (Tauri), tests it end to end on the runner against the mock relay (installer,
+# Send to, the clipboard hotkey's path, acks, uninstall), then publishes Send-to-Daylight-windows-setup.exe to the
+# "reader-experiment-latest" release. Unsigned for now: SmartScreen warns on first run.
+on:
+  push:
+    branches: [claude/sweet-goldberg-ej1nb0]
+    paths:
+      - 'reader-experiment/windows/**'
+      - 'reader-experiment/share/js/**'
+      - '!reader-experiment/share/**/*.md'
+      - '.github/workflows/rx-windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Runs queue rather than cancel, so a release upload is never cut off half way.
+concurrency:
+  group: rx-windows
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Build, test end to end, publish
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+        working-directory: reader-experiment/windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: reader-experiment/windows/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: reader-experiment/windows/src-tauri -> target
+
+      - name: Install the Tauri CLI
+        run: npm ci
+
+      - name: Build the frontend (copies in ../share/js/daylight-share.js)
+        run: node build.mjs
+
+      - name: Unit tests (frontend, against the mock relay)
+        run: node --test test/unit/*.test.mjs
+
+      - name: Unit tests (Rust argument parsing)
+        working-directory: reader-experiment/windows/src-tauri
+        run: |
+          mkdir -p target
+          rustc --edition 2021 --test src/args.rs -o target/args-test.exe
+          ./target/args-test.exe
+
+      - name: Build the app and the installer (NSIS)
+        # The CLI's JavaScript entry point, so the JSON reaches it without a trip through cmd.exe.
+        run: node node_modules/@tauri-apps/cli/tauri.js build --bundles nsis --config "{\"version\":\"1.0.${GITHUB_RUN_NUMBER}\"}"
+
+      - name: Collect Send-to-Daylight-windows-setup.exe and the bare exe
+        run: |
+          mkdir -p out
+          ls -la src-tauri/target/release/bundle/nsis
+          cp src-tauri/target/release/bundle/nsis/*-setup.exe out/Send-to-Daylight-windows-setup.exe
+          cp src-tauri/target/release/send-to-daylight.exe out/send-to-daylight.exe
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Send-to-Daylight-windows-setup
+          path: reader-experiment/windows/out/Send-to-Daylight-windows-setup.exe
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: send-to-daylight-exe
+          path: reader-experiment/windows/out/send-to-daylight.exe
+          if-no-files-found: error
+
+      - name: End-to-end test (install, pair, Send to, clipboard hotkey, Delivered, uninstall) against the mock relay
+        run: node test/e2e/windows.e2e.mjs --installer out/Send-to-Daylight-windows-setup.exe
+
+      - name: Keep the end-to-end output (status file, summary, screenshot)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rx-windows-e2e-results
+          path: reader-experiment/windows/test-results
+          if-no-files-found: ignore
+
+      - name: Publish Send-to-Daylight-windows-setup.exe to the release
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/scripts/rx-publish.sh reader-experiment/windows/out/Send-to-Daylight-windows-setup.exe

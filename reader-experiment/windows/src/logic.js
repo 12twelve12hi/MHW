@@ -1,6 +1,8 @@
 // Pure helpers for the Windows app (no DOM, no Tauri), so the unit tests run them in node.
 
-import { webUrl, findUrl, safeFileName, cleanTitle } from './daylight-share.js';
+import * as ds from './daylight-share.js';
+
+const { webUrl, findUrl, safeFileName, cleanTitle } = ds;
 
 export const DEFAULT_HOTKEY = 'Ctrl+Alt+D';
 export const PDF_MIME = 'application/pdf';
@@ -85,6 +87,27 @@ export function statusInfo(row) {
   }
 }
 
+/** True when the protocol library words the history itself (describeRow, protocol revision 1.1 and later). */
+export const libraryWords = () => typeof ds.describeRow === 'function';
+
+/**
+ * How a history row reads: {label, tone, sentence, retry, retryLabel}. The protocol library's own words when it has
+ * them (the same on every Send to Daylight app); otherwise Sent / Delivered ✓ / Not delivered with the relay's reason.
+ */
+export function rowView(row, now = Date.now()) {
+  if (libraryWords()) {
+    const d = ds.describeRow(row, now);
+    const tone = { sending: 'busy', sent: 'sent', delivered: 'ok', failed: 'busy', expired: 'bad' }[row?.status] ?? 'sent';
+    return {
+      label: d.label, tone, sentence: row?.status === 'delivered' ? '' : d.sentence ?? '', retry: !!d.action,
+      retryLabel: d.action === 'try-again' ? 'Try again' : 'Retry now',
+    };
+  }
+  const s = statusInfo(row);
+  const sentence = row?.status === 'failed' || row?.status === 'expired' ? row.error || s.hint || '' : '';
+  return { label: s.label, tone: s.tone, sentence, retry: s.retry, retryLabel: 'Retry' };
+}
+
 export function kindLabel(row) {
   if (row?.kind === 'page') return 'Page';
   if (row?.kind === 'url') return 'Link';
@@ -128,12 +151,12 @@ export const isPending = (row) => !!row && (row.status === 'sending' || row.stat
 export function sendSummary(results) {
   const ok = results.filter((r) => r.row && r.row.status !== 'failed');
   const failed = results.filter((r) => !r.row || r.row.status === 'failed');
-  const why = (r) => (r.row ? r.row.error : r.error) || 'Something went wrong.';
+  const why = (r) => (r.row ? rowView(r.row).sentence || r.row.error : r.error) || 'Something went wrong.';
   const nameOf = (r) => (r.row ? shortName(r.row) : r.name || 'it');
   if (results.length === 1) {
     const r = results[0];
     if (ok.length) return { title: `Sent ${nameOf(r)}`, body: 'On its way to your Daylight.' };
-    const retrying = r.row?.status === 'failed';
+    const retrying = r.row?.status === 'failed' && !libraryWords();
     return { title: `Couldn’t send ${nameOf(r)}`, body: why(r) + (retrying ? ' It will try again.' : '') };
   }
   if (!failed.length) return { title: `Sent ${ok.length} items`, body: 'On their way to your Daylight.' };
@@ -143,8 +166,6 @@ export function sendSummary(results) {
 }
 
 // --- the clipboard hotkey -------------------------------------------------------------------------------------------
-
-const MODS = ['Ctrl', 'Alt', 'Shift', 'Super'];
 
 /**
  * A pressed key combination (a KeyboardEvent's fields) -> an accelerator string the global-shortcut plugin parses,
@@ -172,5 +193,3 @@ export function describeAccel(accel) {
   if (!accel) return 'Off';
   return String(accel).split('+').map((k) => k.replace(/^Arrow/, '').replace(/^Super$/, 'Win')).join(' + ');
 }
-
-export const isModifier = (k) => MODS.includes(k);

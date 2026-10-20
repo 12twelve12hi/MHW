@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The window: Tauri's core (events, so the page hears dls://wake, dls://tick and dls://autostart). The app's own commands (main.rs) need no capability; every plugin is used from Rust only.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
