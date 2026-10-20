@@ -6,28 +6,50 @@ and the user's rules in `LAB-DECISIONS.md` into work that independent agents can
 `DEVICE-CHECKS.md`, `READER-INTEGRATION.md`, the app READMEs and the Daylight Reader's public snapshot
 (`a12k-a2b/daylight-reader` 0.27.843; the live Reader has moved on, so check every Reader class name before editing).*
 
+**Revision 2 (Oct 20, 2026)** answers a product review and an engineering review. Section 7 logs every point and
+what was done with it. The main changes:
+
+- Excerpts come only from clear selections, so "headline + link" shares stay links (F11, F16).
+- Share in place notifies when a send fails after the card closed, and never runs on a timer for people who need
+  more time (F04).
+- The first run is quiet: short states in What's in Lab, the server features grouped, and the one-time note held
+  until a build has F01 or F04 (1.4–1.6). Comfort moves to the accessibility baseline (F27).
+- A household message budget, with Lab frames as the lowest priority (2.2.4, 2.2.7). Exact parse rules, ledger
+  entries per publisher, and header extras that reach the Inbox (2.2.5, 2.2.6, 2.3).
+- The Mac's W1 gains Print to Daylight and the menu-bar drop. W1 offers big files where a file is refused. W2 is
+  ordered, with F06 and F13 first (3.1, 4.1).
+- P0 close-out tasks, a W0 server-lane task (SV0), the K6 card, and clearer ownership of `apple/Shared`, the capture
+  code and the CI files (3.5, 6).
+
 **How to use it.** Sections 1 and 2 are binding for every task. Section 3 specifies Waves 0 and 1 feature by
 feature. For each feature it gives the common rules, then the UI, behaviour, edge cases, acceptance checks (`[ ]`,
 with IDs) and automated tests for each platform. Section 3.5 has one task card per folder: pick a card, read what it
 cites, build it, and stop when its "Done when" list passes. Section 4 lists the later waves, section 5 the Reader-side
-work, and section 6 the schedule.
+work, section 6 the schedule and the user's open decisions, and section 7 the critique log.
 
 ---
 
 ## 0. Ground rules
 
-1. **Copy is final.** Every user-visible string in this plan is the text to ship, written with ASCII apostrophes
-   where a table needs them. Apps show ’ … · ✓ → (U+2019, U+2026, U+00B7, U+2713, U+2192) exactly as protocol v1.1
+1. **Copy is final for W0 and W1.** It is revisited once, after the W0 device round and its usability pass (6.4).
+   Every user-visible string in this plan is the text to ship, written with ASCII apostrophes where a table needs
+   them. Apps show ’ … · ✓ → (U+2019, U+2026, U+00B7, U+2713, U+2192) exactly as protocol v1.1
    does (CHANGES-v1.1 2.5). `{braces}` are template slots. The vectors (2.8) pin every string, so the apps cannot
    drift apart.
-2. **Prerequisite P0: protocol v1.1 everywhere.** Today only the JS reference (`share/js`) and the Windows app (which
-   copies it) are at v1.1. `android/share-core` still has 12 MiB chunks and 200-id acks, and `apple/DaylightShareKit`
-   is also v1.0. The extension and the web sender still use `MAX_ENCODED` (64 MB). Their checklists are
-   CHANGES-v1.1 §6.3–6.8. A Lab task in `android/`, `apple/`, `extension/` or `web/` builds on that folder's v1.1
-   port. The same agent may do the port first, as its own commit and PR. Lab code calls the v1.1 row text (`describeRow`,
-   `RowText.of`, `RowText(row:now:)`) and never re-implements it. The fixes under review from DEVICE-CHECKS (cb57057,
-   0e90108, and the Inbox's `FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_CLEAR_TASK` document hand-off workaround) are part
-   of P0.
+2. **Prerequisite P0: protocol v1.1 everywhere.** Every folder's v1.1 port is now on the branch (CHANGES-v1.1
+   §6.3–6.8):
+   - `share/js` (44968a6) and Windows (0e7a470);
+   - `android/share-core` (5e9f918) and `android/app` (08e7ff7, with the `FLAG_ACTIVITY_NEW_TASK |
+     FLAG_ACTIVITY_CLEAR_TASK` document hand-off workaround);
+   - `apple/DaylightShareKit` and the Apple apps (c1b445c and its follow-ups);
+   - the extension and the web sender (b44c509);
+   - the DEVICE-CHECKS fixes cb57057 (Inbox) and 0e90108 (Mac).
+
+   The v1.1 review findings are still being closed. A folder's P0 is done when its findings are closed and its CI is
+   green. One **P0 close-out** task per lane tracks this (6.2, Stage A). It ends with the F27 accessibility baseline
+   (Comfort included) as a non-Lab commit, and then records that app's Lab-off baselines (1.7). A Lab task in a
+   folder starts only after that folder's close-out. Lab code calls the v1.1 row text (`describeRow`, `RowText.of`,
+   `RowText(row:now:)`) and never re-implements it.
 3. **Wire rule.** `v` stays `1`. Lab adds only `x-` header fields, ack-topic frames whose `ids` is empty, and new
    derived topics with their own AAD (2.1). Every v1.0 and v1.1 peer keeps working, and CI proves it (2.8).
 4. **One task, one folder** (6.1). A task edits only the folders its card names. Shared files follow 6.3.
@@ -35,8 +57,14 @@ work, and section 6 the schedule.
    *Chrome* and *Safari* = the extension in `extension/` (Safari's build ships inside the Apple apps). *Web* =
    `web/`. *Android phone* and *DC-1 Inbox* = `android/app` in its two roles. *Windows* = `windows/`. *JS reference* =
    `share/js`. *Lab Reader* = the side-by-side Reader copy on the lab tablet (section 5).
-6. **Devices.** Lab builds of the Reader go only to the lab tablet "Rooted 2" (JP4R01422). Nothing is ever installed
-   on JP4R03005. Nothing is merged into the main Reader or shipped without the user (LAB-DECISIONS).
+6. **Devices.**
+   - **The Lab Reader** (section 5) is installed only on the lab tablet "Rooted 2" (JP4R01422). It is never
+     installed on JP4R03005, and never merged into the main Reader or shipped without the user (LAB-DECISIONS,
+     "Reader-side features").
+   - **Agents install nothing on JP4R03005**, Lab or not. Device rounds run on Rooted 2.
+   - **Daylight Share with Lab** is the ordinary release APK: Lab is a switch inside it (1.2). The user may install it
+     on any DC-1, JP4R03005 included, so the iPhone and Mac Lab features work with the tablet the user reads on. 6.5
+     Q7 asks the user to confirm this reading of LAB-DECISIONS. Until then, no acceptance item depends on it.
 
 ---
 
@@ -44,13 +72,19 @@ work, and section 6 the schedule.
 
 ### 1.1 Where it lives
 
-Each app has exactly one **Lab** switch, at the top of its settings. While Lab is on, the switch has three rows under
-it: **What’s in Lab ›**, **Daylight server ›** and **Comfort**. With Lab off, only the switch shows.
+Each app has exactly one **Lab** switch, at the top of its settings. While Lab is on, the switch has two rows under
+it:
+
+- **What’s in Lab ›**;
+- **Daylight server ›**, with the subtitle "Optional · {short state}" (1.4), for example "Optional · Not set up".
+
+With Lab off, only the switch shows. **Comfort** is not under Lab. It is part of the accessibility baseline (F27)
+and has its own settings row in every build, Lab on or off.
 
 | App | Place |
 |---|---|
 | iPhone, iPad | Settings sheet (`SettingsView`, `iOS/App/HomeView.swift`): a new first section "Lab". The share sheet item follows the app's switch through the App Group (1.2). |
-| Mac | Settings window (`MacSettingsView`, `macOS/App/MacViews.swift`): a new first section "Lab". The Share menu item follows the app through the App Group. Ad-hoc builds have no App Group, so their Share menu item always behaves as Lab on. The menu bar item gets no Lab row. |
+| Mac | Settings window (`MacSettingsView`, `macOS/App/MacViews.swift`): a new first section "Lab". The Share menu item follows the app through the App Group. **Ad-hoc builds** (the released `Send-to-Daylight-mac.zip`) have no App Group. On them the Share menu item counts as its own app, like the Safari extension: its pairing card's ⋯ settings gain their own Lab switch, on by default. What's in Lab says what such a build lacks (1.4). The menu bar item gets no Lab row. |
 | Safari extension (Mac, iPhone) | Its popup › ⋯ settings, first row. It is its own app for this purpose: the extension code keeps its own storage. |
 | Chrome extension | Popup › ⋯ settings, first row. "What’s in Lab" and "Daylight server" open the extension page `lab.html`. |
 | Android phone | Settings screen (`ui/SettingsScreen.kt`, sender role): a top card "Lab". `ShareActivity` follows it. |
@@ -62,15 +96,19 @@ it: **What’s in Lab ›**, **Daylight server ›** and **Comfort**. With Lab o
 
 | Platform | Keys | Store |
 |---|---|---|
-| iPhone, iPad, Mac | `dls.lab`, `dls.labNoteShown`, `dls.comfort` (Bool), added to `SharedStore.Key` | `SharedStore` defaults: the App Group suite once it is resolved, else the process's own (`SharedStore.swift`) |
-| Android (both roles) | `lab`, `labNoteShown`, `comfort` | `Prefs` (`App.kt`, SharedPreferences `daylight-share`) |
-| Chrome, Safari | `lab`, `labNoteShown`, `comfort` fields of the existing `settings` object | `storage.local` |
+| iPhone, iPad, Mac | `dls.lab`, `dls.labNoteShown` (Bool), added to `SharedStore.Key` | `SharedStore` defaults: the App Group suite once it is resolved, else the process's own (`SharedStore.swift`) |
+| Android (both roles) | `lab`, `labNoteShown` | `Prefs` (`App.kt`, SharedPreferences `daylight-share`) |
+| Chrome, Safari | `lab`, `labNoteShown` fields of the existing `settings` object | `storage.local` |
 | Web | the same fields of `settings` | IndexedDB `kv` (`web-storage.js`) |
 | Windows | the same fields of `settings` | the app's JSON store (`bridge.js`) |
 
-- **A missing key means on.** The first start of a build with Lab writes `lab = true` when the key is missing. It
-  then shows the one-time note (1.6) until it is dismissed (`labNoteShown = true`). This applies to fresh installs and
-  upgrades alike.
+The baseline's `comfort` key (F27) sits in the same stores, but it is not a Lab key and Lab never reads it.
+
+- **A missing key means on.** The first start of a build with Lab writes `lab = true` when the key is missing. This
+  applies to fresh installs and upgrades alike.
+- **The one-time note waits for something you can feel.** The note (1.6) shows only in builds where the app has F01
+  or F04, so from that app's first W1 build, and never in a W0 build. It shows once, until it is dismissed
+  (`labNoteShown = true`). Each app sets the build constant `LAB_NOTE_ENABLED`.
 - The switch belongs to the app and the device. It is never synced and never in a pairing link. Pairing, unpairing,
   re-pairing and updates leave it as it is; an uninstall loses it, and a fresh install starts it on again.
 - **One reading.** UI and background code read the flag through one accessor: `LabSettings.isOn` (Swift),
@@ -81,44 +119,82 @@ it: **What’s in Lab ›**, **Daylight server ›** and **Comfort**. With Lab o
 ### 1.3 What turns off with it
 
 With Lab off, every screen, string and flow is the last non-Lab build's. Neither the v1.1 fixes nor the F27
-accessibility baseline are Lab features.
+accessibility baseline (Comfort included) are Lab features.
 
 | Lab off does this | Lab off never does this |
 |---|---|
-| Hides every Lab control: rows, menu entries, the Options window, the timeline's step line and check-in header, the "Daylight server" section and "What’s in Lab" (the switch row stays). | Deletes the pairing, the outbox, history, the Lab ledger (2.2.6), the server pin and notices, or any Lab feature's own settings. They return when Lab is turned on. |
+| Hides every Lab control: rows, menu entries, the Options window, the timeline's step line and check-in header, the "Daylight server" section, "What’s in Lab" and Lab's notifications (F04). The switch row stays. | Deletes the pairing, the outbox, history, the Lab ledger (2.2.6), the server pin and notices, or any Lab feature's own settings. They return when Lab is turned on. |
 | Stops Lab background work. The Inbox sends one last hello with `lab: 0` (2.2.4), then no hellos and no state frames. Return-lane polling (W2) stops, connectivity-triggered sending (F07) falls back to v1.1 back-off, and the F08 shortcut is removed. | Changes sending. Items already queued keep their `x-` fields and go out as stored. |
 | F09: URL-scheme `send` links, App Intents and the Android `SEND_URL` intent answer "Turn on Lab in {app} to use this." Pairing links still work. | Stops recording Lab frames read from the ack topic. The ledger keeps learning, invisibly, so turning Lab on shows correct states at once. |
 
 ### 1.4 What's in Lab
 
-A list with one row per Lab feature this app has in this build. Each row has the name, one sentence and the state in
-words: **Ready**, or the needs-setup sentence (1.5). Tapping a row opens the feature, or runs its gate. The list's
-header line is the Inbox's Lab state: "Your Daylight: Lab on · checked in 4 min ago" (2.5), or the `needs-inbox`
-sentence. Names and sentences, shared by every app:
+A list with one row per Lab feature this app has in this build. Each row has the name, one sentence and a **short
+state** (table below), such as "Ready" or "Needs Lab on your Daylight". The full needs-setup sentence (1.6) appears
+only when the row is tapped, as for any other control (1.5). Nothing in the list spells out setup steps until
+something is tapped. Tapping a row opens the feature, or runs its gate. The list's header line is the Inbox's Lab
+state: "Your Daylight: Lab on · checked in 4 min ago" (2.5), or the `needs-inbox` short state with the check-in time.
+
+Names and sentences, shared by every app:
 
 | Feature | Name | Sentence | Apps |
 |---|---|---|---|
-| F01 | Delivery timeline | See each item reach the relay, your Daylight and the Reader. | all senders |
+| F01 | Delivery timeline | See each item reach your Daylight and its Reader. | all senders |
 | F03 | Pages as you see them | Pages go as you see them, logged-in parts included, without scripts or form contents. | iPhone, Chrome, Safari |
 | F04 | Share in place | Share › Daylight closes in a second; Options lets you choose how it goes. | iPhone, Mac, Android, Chrome, Safari |
 | F07 | Works offline | Items shared offline wait here and go as soon as you’re back online. | all senders |
 | F08 | Your Daylight in the share sheet | Your Daylight appears next to your contacts when you share. | Android |
 | F09 | Shortcuts and automation | Send from Shortcuts, Siri, scripts and other apps. | iPhone, Mac, Android, Windows, web |
 | F10 | Send as | Choose page, clean article, link or selection. | iPhone, Chrome, Safari |
-| F11 | Send a selection | Send just the passage you selected, with its source. | iPhone, Mac, Android, Chrome, Safari |
+| F11 | Send a selection | Send just the passage you selected, with its source. | Chrome, Safari; iPhone, Mac and Android after 6.5 Q1 |
 | F15 | Arrival notices | See what arrived and from where, and act on it. | DC-1 Inbox |
 | F16 | Clean links | Removes tracking from links and finds the real article. | all senders |
+| F23 | Print to Daylight | Print › PDF › Send to Daylight from any app. | Mac |
 | F26 | Setup check | Checks your setup and sends a test article. | all apps |
-| F27 | Comfort | Larger text and buttons, more contrast, no motion. | all apps |
-| F33 | Send copied link | Send a link you copied with one tap. | all senders |
+| F29 | Drop on the menu bar | Drop files and links on the menu-bar icon to send them. | Mac |
+| F33 | Send copied link | Send a link you copied with one tap. | all senders (Mac and Windows: the existing clipboard command) |
 | F34 | More right-click choices | Send a page, clean article, link, selection or an image’s page from the right-click menu and shortcuts. | Chrome, Safari |
+
+**With your Daylight server (optional).** The four server features come last, under this heading, with one line
+under it: the server's short state, for example "Not set up". Each row below it shows its own short state only when
+it differs from the heading's, for example "Needs a Claude key".
+
+| Feature | Name | Sentence | Apps |
+|---|---|---|---|
+| F02 | Files over 9 MB | Big PDFs and books go through your Daylight server. | iPhone, Mac, Android, Chrome, web, Windows |
 | F37 | Summaries with Claude | Short summaries and answers about what you send, using your Claude key. | iPhone, Mac, Chrome, Safari, web, Android |
 | F19 | Email-in address | Forward newsletters and documents to your Daylight by email. | iPhone, Mac, Chrome, web, Android |
 | F36 | Feeds and daily digest | Follow feeds; new articles arrive one by one or in a morning digest. | iPhone, Mac, Chrome, web, Android |
-| F02 | Files over 9 MB | Big PDFs and books go through your Daylight server. | iPhone, Mac, Android, Chrome, web, Windows |
 
-The four server features (F37, F19, F36, F02) are listed from Wave 0, as LAB-DECISIONS requires. Until a platform
-builds one (Wave S, 4.2), its gate ends in the state `later` when the server is ready.
+These four are listed from Wave 0, as LAB-DECISIONS requires. Until a platform builds one (Wave S, 4.2), its gate
+ends in the state `later` once the server is ready. F02 is also offered where a file is refused as too big (3.1, the
+F02 entry point).
+
+**Ad-hoc Mac builds** end the list with: "This copy of the Mac app isn’t signed with a team, so Share › Daylight
+keeps its own pairing and Lab switch, its sends don’t show here, and it waits until an item is sent before closing."
+
+**Short states** (`LAB_TEXT.short`, 2.7.2):
+
+| State | Short state |
+|---|---|
+| ready | Ready |
+| `needs-pairing` | Pair first |
+| `needs-inbox` | Needs Lab on your Daylight |
+| `needs-notifications` | Needs notifications |
+| `needs-quick-sends` | Off in Lab settings |
+| `needs-site-access` | Needs access to this site |
+| `needs-server` | Not set up (the heading) · Needs your Daylight server (a row) |
+| `pairing-mismatch`, `locked` | Needs the new Server code |
+| `server-outdated` | Server needs an update |
+| `app-outdated` | Update this app |
+| `needs-key` | Needs a Claude key |
+| `needs-r2` | Needs R2 storage |
+| `needs-domain` | Needs an email domain |
+| `needs-paid` | Needs Workers Paid |
+| `needs-lab-inbox` | Waiting to hear from your Daylight |
+| `OFFLINE` | Can’t reach the server |
+| `error` | Server problem |
+| `later` | In a later update |
 
 ### 1.5 The "needs setup" behaviour
 
@@ -134,11 +210,12 @@ builds one (Wave S, 4.2), its gate ends in the state `later` when the server is 
     `liveRegion = LiveRegionMode.Polite`, and `aria-live="polite"` on the web, in the extension and on Windows.
   - It is never an auto-dismissing toast. It is never a modal alert, except F09's confirmation sheet.
   - It may carry one button, and only when this device can fix the problem directly: **Open Settings** (an OS
-    permission), **Turn on** (a setting in this app), **Copy Server code** (`needs-server`) or **Allow** (site access
-    in the extension).
+    permission), **Open setting** (a setting in this app: it opens that setting with its footer and never changes
+    it by itself), **Copy Server code** (`needs-server`) or **Allow** (site access in the extension).
 - **Server states.** A cached status that is 10 minutes old or less answers at once. Otherwise the note first says
-  "Checking your Daylight server…" for at most 5 s, then shows the state. A network failure gives `OFFLINE`.
-- What's in Lab shows each feature's current state without a tap. It uses cached states and refreshes the server
+  "Checking your Daylight server…" for at most 5 s, then shows the state. `labGate` enforces the 5 s itself (2.7.2):
+  a server that has not answered by then gives `OFFLINE`, as a network failure does.
+- What's in Lab shows each feature's short state without a tap (1.4). It uses cached states and refreshes the server
   status when the list opens.
 
 ### 1.6 Copy
@@ -149,10 +226,13 @@ builds one (Wave S, 4.2), its gate ends in the state `later` when the server is 
 |---|---|
 | Section title and switch | Lab |
 | Switch footer | New features we’re trying out. Turn Lab off for the plain app; nothing you sent is lost. |
-| One-time note (button **OK**) | Lab is on. New features to try are in Settings › Lab, where you can turn it off. |
+| One-time note (button **OK**; only in builds with F01 or F04, 1.2) | Lab is on. New features to try are in Settings › Lab, where you can turn it off. |
 | List title | What’s in Lab |
 | A feature with nothing missing | Ready |
-| Comfort switch, footer | Comfort · Larger text and buttons, more contrast, no motion. |
+| Server row subtitle | Optional · {short state} |
+| Server features heading | With your Daylight server (optional) |
+| Comfort switch (baseline, F27; not under Lab) | Comfort |
+| Comfort footer | Larger text and buttons, more contrast, no motion. |
 | Answer from an automation entry with Lab off | Turn on Lab in {app} to use this. |
 
 `{app}` is "Send to Daylight" on Apple, the extension, the web sender and Windows, and "Daylight Share" on Android.
@@ -162,13 +242,17 @@ builds one (Wave S, 4.2), its gate ends in the state `later` when the server is 
 | State | Decided by | Message | Button |
 |---|---|---|---|
 | `needs-pairing` | app: not paired | Pair with your Daylight first: open Daylight Share on the Daylight and scan or type its code here. | — |
-| `needs-inbox` | app: no fresh Lab hello carrying the feature's capability (2.2.6) | Needs Lab on your Daylight. Update Daylight Share on the Daylight and turn on Lab there. | — |
-| `needs-reader-lab` | app: no `reader-doc` (or the feature's) capability | Needs the Lab copy of the Daylight Reader, which is only on the lab tablet for now. | — |
+| `needs-inbox` | app: no fresh Lab hello carrying the feature's capability (2.2.6) | Your Daylight hasn’t confirmed Lab yet. Update Daylight Share on it and open it once. | — |
 | `needs-notifications` | app: OS permission off | Needs notifications for {app}. Turn them on in {path}. | Open Settings |
-| `needs-quick-sends` | app: setting off (F09) | Quick sends from other apps are off. Turn on “Allow quick sends from other apps” in Lab settings. | Turn on |
+| `needs-quick-sends` | app: setting off (F09) | Quick sends from other apps are off. Turn on “Allow quick sends from other apps” in Lab settings. | Open setting |
 | `needs-site-access` | extension: host permission | Needs access to this site. Choose Allow when your browser asks. | Allow |
-| `needs-server`, `pairing-mismatch`, `server-outdated`, `app-outdated`, `locked`, `needs-key`, `needs-domain`, `needs-r2`, `needs-lab-inbox`, `needs-paid`, `OFFLINE`, `error` | app or server (2.6) | Exactly `STATE_MESSAGES[state]` from `server/client/daylight-server.js` (DESIGN 14.1), or the server's own `message` for `error` | `needs-server`: Copy Server code |
+| `needs-server` | app (2.6) | Needs your Daylight server. Add the Cloudflare secrets to turn this on (Lab › Daylight server shows how). | Copy Server code |
+| `needs-lab-inbox` | server (2.6) | Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on. | — |
+| `pairing-mismatch`, `server-outdated`, `app-outdated`, `locked`, `needs-key`, `needs-domain`, `needs-r2`, `needs-paid`, `OFFLINE`, `error` | app or server (2.6) | Exactly `STATE_MESSAGES[state]` from `server/client/daylight-server.js` (DESIGN 14.1), or the server's own `message` for `error` | — |
 | `later` | app: the server answers ready, this app lacks the feature yet | Your Daylight server is ready. {feature} comes to this app in a later Lab update. | — |
+
+No W0 or W1 feature gates on a Reader capability, so there is no Reader state in `LAB_TEXT`. The phone features of
+R2–R4 (W2 and later) add their own, worded then, and show them only for the lab tablet's pairing.
 
 `{path}` for notifications:
 
@@ -179,8 +263,16 @@ builds one (Wave S, 4.2), its gate ends in the state `later` when the server is 
 | Android | Settings › Apps › Daylight Share › Notifications |
 | Windows | Settings › System › Notifications › Send to Daylight |
 
-`needs-inbox` and the server's `needs-lab-inbox` are different states. The first means Daylight Share on the DC-1
-has no Lab. The second means the server's delivery lane has not heard from a Lab Inbox. Both messages stay as written.
+`needs-inbox` and `needs-lab-inbox` are different states:
+
+- **`needs-inbox`** is decided by this app, from its Lab ledger. No fresh Lab hello reached it, usually because
+  Daylight Share on the Daylight is old or hasn't run for a while.
+- **`needs-lab-inbox`** is decided by the server: its delivery lane has no hello yet.
+
+Under controls, `LAB_TEXT` overrides the module's `needs-server` and `needs-lab-inbox` texts with the two above. The
+**Daylight server** section (2.6) keeps DESIGN 14.1's long texts, with the exact secret names and the re-run step,
+because that is where setup happens. The server lane brings DESIGN 14.1's `needs-lab-inbox` text in line in Wave S
+(S0, 4.2).
 
 ### 1.7 Test hooks (test builds and launch arguments only)
 
@@ -193,15 +285,18 @@ has no Lab. The second means the server's delivery lane has not heard from a Lab
 | Windows | `--e2e-lab 0\|1` in test mode; the status file gains `lab` |
 
 **Lab-off parity test (F00, every app).** With Lab off, the accessibility tree of each main screen must equal a
-baseline recorded from the last non-Lab build of the same app. The tree is element types, labels and values, in
-order:
+baseline recorded from the last non-Lab build of the same app. That build is the app's P0 close-out: v1.1 plus the
+F27 baseline with Comfort (0.2). The tree is element types, labels and values, in order. Each platform records it
+with a tool whose output is stable across tool releases:
 
-- Apple: XCUITest `debugDescription` filtered to type and label;
-- Android: the Compose semantics tree in Robolectric;
-- extension, web and Windows: Playwright `page.accessibility.snapshot()`.
+- Apple: an explicit walk of the `XCUIElement` tree (`elementType`, `label`, `value`, in order). Not
+  `debugDescription`, whose format changes between Xcode releases.
+- Android: the Compose semantics tree in Robolectric.
+- Extension, web and Windows: Playwright `locator('body').ariaSnapshot()` (YAML). Not `page.accessibility.snapshot()`,
+  which Playwright 1.56 deprecates and which is effectively Chromium-only.
 
-Baselines live next to the tests (`…/lab-off-baseline/*.json`) and are re-recorded only together with a matching
-non-Lab change. Pixel screenshots are uploaded as CI artifacts for review, not compared.
+Baselines live next to the tests (`…/lab-off-baseline/*.json` or `*.yml`) and are re-recorded only together with a
+matching non-Lab change. Pixel screenshots are uploaded as CI artifacts for review, not compared.
 
 ---
 
@@ -211,7 +306,7 @@ non-Lab change. Pixel screenshots are uploaded as CI artifacts for review, not c
 
 1. `v` stays `1`. Frames, keys, the inbox and ack topics and the pairing link are unchanged.
 2. Lab adds only:
-   - item header fields named `x-…` (2.3);
+   - item header fields named `x-…`, which receivers pass on as validated extras (2.3);
    - frames on the ack topic whose `ids` is `[]` and that carry `x-inbox` and maybe `x-st` (2.2);
    - new derived topics with their own AAD (2.4);
    - the server lane, as DESIGN 5 specifies.
@@ -222,8 +317,11 @@ non-Lab change. Pixel screenshots are uploaded as CI artifacts for review, not c
 5. A Lab sender whose Inbox is not Lab shows exactly the v1.1 rows (`describeRow`).
 6. Everything Lab reads from the wire is untrusted. It is validated as in 2.2.5, a reader never throws on it, and
    unknown fields, tokens and values are ignored.
-7. `LAB_LEVEL = 1`. A later incompatible change to a Lab structure raises it, and readers ignore structures of a
-   level above theirs.
+7. `LAB_LEVEL = 1`. A later incompatible change to a Lab structure raises it. A reader treats a Lab frame whose
+   `lab` is above its own `LAB_LEVEL` as unknown (2.2.5). So an Inbox that raises the level keeps sending level-1
+   frames as long as it supports level-1 senders.
+8. Lab frames are the lowest priority on the household's relay budget (2.2.7). They never delay an ack, and they are
+   the first traffic to give way.
 
 ### 2.2 Lab frames on the ack topic: hello and item states (the return path for W0/W1)
 
@@ -241,7 +339,7 @@ always a small frame published with `POST`. Header:
 | `x-inbox` field | Type | Rule |
 |---|---|---|
 | `lab` | integer | The Lab level the Inbox speaks; `0` in the one frame sent when Lab is turned off |
-| `app` | ASCII string, ≤ 40 characters (readers clamp anything longer) | `android/<versionName>` (Daylight Share) or `reader-lab/<versionName>` (the Lab Reader) |
+| `app` | Printable ASCII string, ≤ 60 characters, the server's clamp too (readers clamp anything longer and drop anything else, 2.2.5) | `android/<versionName>` (Daylight Share) or `reader-lab/<versionName>` (the Lab Reader). The part before the first `/` names the publisher (2.2.6). |
 | `caps` | array of ≤ 16 tokens, each `/^[a-z0-9-]{1,16}$/` | 2.2.2 |
 | `poll` | ISO 8601 UTC with milliseconds | When the Inbox last polled the inbox topic successfully |
 | `live` | boolean | Instant delivery has a connection open now |
@@ -252,10 +350,12 @@ always a small frame published with `POST`. Header:
 - `s` is a state token (2.2.3);
 - `t` is when the Inbox reached that state, in Unix **seconds**.
 
-**Size.** Take the worst case: `from` of 60 four-byte code points, `app` of 40, 16 caps of 16 characters, and 24
-entries with 7-character states. The header is then at most 2,455 bytes, the frame 2,491 bytes and its base64 3,324
-characters, under 3,800. `buildLabFrame` refuses more than 24 entries and checks `isSmallFrame`, and a vector pins
-the worst case.
+**Size.** The worst case is not 60 emoji in `from` but 60 lone surrogates: `JSON.stringify` and Kotlin's
+`Json.quote` escape each one as 6 bytes (`\ud800`). Add `app` of 60 characters, `lab` 99, 16 caps of 16 characters
+and 24 entries with 7-character states and 10-digit times. The header is then 2,572 bytes, the frame 2,608 bytes and
+its base64 3,480 characters, under 3,800. (Swift strings cannot hold lone surrogates, so Swift's worst case is
+smaller.) `buildLabFrame` refuses more than 24 entries and checks `isSmallFrame`, and a vector pins this case.
+`LabInbox.flush()` never stalls on a refusal (2.2.4).
 
 **2.2.2 Capability tokens.**
 
@@ -273,26 +373,43 @@ the worst case.
 
 | `s` | Rank | Meaning | The Inbox reports it when |
 |---|---|---|---|
-| `waiting` | 1 | Waits for a tap on the Daylight | The item is first announced (notification or card) |
-| `held` | 1 | Kept in the Inbox on purpose | **Hold** is chosen (F15) |
-| `inbox` | 1 | Stays in the Inbox: no Reader takes it | Kept in the Inbox (`no_reader`, `no_route`) |
-| `handed` | 2 | Handed to the Reader, which did not confirm | Status `sent`, `ok` or `no_answer`. Today that is every document, and a refused `SAVE_PAGE` that was retried as a shared link. |
-| `failed` | 2 | The Reader tried and could not add it | Lab Reader import failure (R1) |
-| `queued` | 3 | In the Reader's read-later queue; downloads when online | `SAVE_PAGE` status `queued` |
-| `reader` | 4 | In the Reader's library | `SAVE_PAGE` status `saved` or `duplicate`; the Lab Reader's import done, or already on the shelf |
+| `waiting` | 1 | Waits for a tap on the Daylight | The item is first announced (notification or card). Never again for the same id. |
+| `held` | 2 | Kept in the Inbox for later, on purpose | **Keep for later** is chosen on its notice or card, or its notice is swiped away (F15) |
+| `inbox` | 2 | Stays in the Inbox: no Reader takes it | Kept in the Inbox (`no_reader`, `no_route`) |
+| `handed` | 3 | Handed to the Reader, which did not confirm | Status `sent`, `ok` or `no_answer`. Today that is every document, and a refused `SAVE_PAGE` that was retried as a shared link. |
+| `failed` | 3 | The Reader tried and could not add it | Lab Reader import failure (R1) |
+| `queued` | 4 | In the Reader's read-later queue; downloads when online | `SAVE_PAGE` status `queued` |
+| `reader` | 5 | In the Reader's library | `SAVE_PAGE` status `saved` or `duplicate`; the Lab Reader's import done, or already on the shelf |
 
 These are the Inbox's own log statuses (`HandoffActivity.start`/`done`, README "Debug builds"), mapped: `saved`,
-`duplicate` → `reader`; `queued` → `queued`; `sent`, `ok`, `no_answer` → `handed`; `no_reader`, `no_route` →
-`inbox`.
+`duplicate` → `reader`; `queued` → `queued`; `no_reader`, `no_route` → `inbox`; `sent`, `ok`, `no_answer` and **any
+status not listed here** → `handed`. (The Reader's status is a free string, `EXTRA_STATUS.take(20)`.)
 
-**2.2.4 When the Inbox publishes.**
+`held` ranks above `waiting`, so a re-announced item (`HandoffActivity`'s `finally` calls `notifyWaiting` again on
+everything still waiting) can never go back from "Kept for later" to "Waiting for a tap", on the Inbox or on a
+sender.
 
+**2.2.4 When the Inbox publishes.** Lab frames come last on the household's relay budget (2.1 rule 8, 2.2.7).
+
+- **Which items.** Only items received on the pairing's inbox topic. Items from the server lane (S0) are tagged
+  `lane = "server"` in `InboxItem` and get no states: no sender holds their ids, and their states would push sender
+  items out of the state digest.
 - **States.**
-  - `LabInbox.record(id, s, t)` persists an entry; for the same id, a later entry replaces an unpublished one.
+  - `LabInbox.record(id, s, t)` persists an entry. For the same id, a new entry replaces an unpublished one only
+    under the ledger's merge rule: a higher rank, or the same rank with a later `t` (2.2.6).
   - `LabInbox.flush()` publishes pending entries, oldest first, in frames of at most 24. It runs:
     - after every poll or live batch, once its acks are out;
     - at the end of every hand-off run (`HandoffActivity`'s `finally`);
     - otherwise 2 s after the last `record`.
+  - **Spacing.** At most one Lab frame every 30 s. A flush that comes sooner waits until 30 s after the previous Lab
+    frame, and takes along whatever was recorded meanwhile.
+  - **Giving way.** `flush()` publishes nothing, and keeps its entries, while the last poll's acks failed to
+    publish, or within an hour of any `429` or `413` from the relay (`LabInbox.noteRelayLimit`). It runs again at
+    the next flush point after that.
+  - **Daily cap.** At most 30 Lab frames (hellos and state frames) per UTC day. Past the cap, states wait for the
+    next state digest, and hellos for the next day.
+  - **Never stalls.** If `buildLabFrame` refuses a batch as not small, `flush()` halves the batch and tries again,
+    down to one entry. The 2.2.1 bound makes this unexpected. An entry that still does not fit is dropped and logged.
   - With no network, `flush()` schedules the WorkManager one-time job `lab-flush` with a `CONNECTED` constraint.
   - A failed publish keeps the entries. At most 500 pending entries are kept; the oldest go first.
 - **Hello.** A hello is a Lab frame with no `x-st`. It goes out:
@@ -301,30 +418,54 @@ These are the Inbox's own log statuses (`HandoffActivity.start`/`done`, README "
   - at any flush when the last Lab frame is more than 11 hours old (so at most 3 a day while idle).
 
   Every frame that carries states also carries `x-inbox` and counts as a hello. When Lab is turned off, the Inbox
-  sends one frame with `lab: 0` and `caps: []`, then nothing.
+  sends one frame with `lab: 0` and `caps: []`. For the next 48 hours, each v1.1 ack digest is followed by the same
+  `lab: 0` frame (at most 5 more frames), so a sender that was offline still sees it. Then nothing.
 - **State digest.** With the v1.1 11-hourly ack digest, the Inbox republishes the latest state of every item whose
   state changed in the last 48 hours: at most 48 entries (2 frames), newest first. A sender that missed a frame
   catches up. For this, `LabInbox` keeps every published entry `{id, s, t}` for 48 hours in its store, next to the
-  pending ones and the time of the last Lab frame.
+  pending ones, the time of the last Lab frame and the day's frame count. Digest frames follow the giving-way rule
+  but not the daily cap.
 - **Order.** No order relative to acks is needed. A sender keeps states for ids it has not seen acked and uses them
   only once the row is delivered (2.2.6).
-- **Budget.** Idle: at most 3 hellos a day, plus 1 per Lab toggle. Busy: about one state frame per hand-off batch,
-  plus at most 2 digest frames every 11 hours. The soak test checks it (2.8).
+- **Budget.** Idle: at most 3 hellos a day, plus 1 per Lab toggle. Busy: at most 30 Lab frames, plus 4 digest
+  frames. 2.2.7 has the whole household; the soak checks it (2.8).
 
-**2.2.5 Parsing**, the same in every implementation and pinned by the `labParse` vectors:
+**2.2.5 Parsing.** This is an exact algorithm: JS, Kotlin and Swift must produce the same result, and the
+`labParse` vectors pin every step.
 
 ```
-parseLabAck(header) -> {inbox: Info | null, states: [{id, s, t}]}           never throws
-  header.kind != "ack"                       -> {null, []}
-  ids missing, not an array, or not empty    -> {null, []}      Lab fields count only on frames with ids []
-  x-inbox is an object whose lab is an integer 0..99:
-      app  : string -> first 40 code points, else ""
-      caps : array -> strings matching /^[a-z0-9-]{1,16}$/, first 16, duplicates removed; else []
-      poll : string matching /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/ -> ms since epoch; else null
-      live : true only for the JSON value true
-    else inbox = null
-  x-st is an array: its first 64 entries, each kept only when it is an object with
-      i matching /^[0-9a-f]{32}$/, s one of the 7 tokens of 2.2.3, and t an integer with 0 <= t <= 4102444800
+parseLabAck(header) -> {inbox: Info | null, states: [{id, s, t}]}                     never throws
+  1. header is not a JSON object, kind != "ack", or ids is not an empty array  -> {null, []}
+     (Lab fields count only on frames whose ids is [].)
+  2. x = header["x-inbox"]
+     x is an object and x.lab is an integer (rule I):
+        x.lab > LAB_LEVEL        -> return {null, []}       a later level is unknown (2.1 rule 7)
+        x.lab < 0                -> inbox = null
+        otherwise                -> inbox = {lab, app, caps, poll, live}:
+          app  : a string made only of printable ASCII (U+0020 to U+007E) -> its first 60 characters;
+                 anything else (non-ASCII included) -> ""
+          caps : an array -> (a) take its first 16 elements, (b) keep the strings that match
+                 /^[a-z0-9-]{1,16}$/, (c) drop repeats, keeping the first; anything else -> []
+          poll : a string matching /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,3})?Z$/ whose
+                 fields pass rule D -> ms since 1970-01-01 UTC (the fraction right-padded to 3 digits);
+                 else null
+          live : true only for the JSON value true
+     otherwise inbox = null
+  3. x-st is an array -> (a) take its first 64 elements, (b) keep each element that is an object with
+        i : a string matching /^[0-9a-f]{32}$/,
+        s : one of the 7 tokens of 2.2.3,
+        t : an integer (rule I) with 0 <= t <= 4102444800,
+     in order, repeats of an id included (the ledger merges them in order, 2.2.6); anything else -> []
+
+  Rule I, integers. A JSON number (not a string and not a boolean) whose value is a whole number:
+     1, 1.0 and 1e0 are 1; -0 is 0; "1", true, 1.5 and 1e400 are not integers.
+     Kotlin: JsonPrimitive with isString == false, content.toDoubleOrNull() finite and whole.
+     Swift: an NSNumber that is not a CFBoolean, finite and whole.
+  Rule D, dates. Checked field by field, never with a platform date parser (JS Date.parse accepts
+     2026-02-30 and T24:00): month 1-12; day 1 to the month's length (February has 29 days in Gregorian
+     leap years); hour 0-23; minute 0-59; second 0-59.
+  A header that the platform's JSON parser rejects outright counts as step 1. Vectors keep every number
+  within ±1e300, which every parser reads, and store headers as JSON text so every port parses the same source.
 ```
 
 **2.2.6 Sender ledger (`LabLedger`).** It records every ack-topic message that decrypts, whether Lab is on or off,
