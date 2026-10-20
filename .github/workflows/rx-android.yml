@@ -54,10 +54,14 @@ jobs:
       - name: Protocol tests (vectors, mock relay, JS interop)
         run: ./gradlew --no-daemon :share-core:test
 
+      # The app's build and tests run (and report) even when the protocol tests failed; the job still fails, and
+      # nothing is published unless every step passed.
       - name: Build the APKs
+        if: ${{ !cancelled() }}
         run: ./gradlew --no-daemon :app:assembleRelease :app:assembleDebug
 
-      - name: App tests (share parsing, Reader routing; Robolectric)
+      - name: App tests (share parsing, Reader routing, hand-off and notifications; Robolectric)
+        if: ${{ !cancelled() }}
         run: ./gradlew --no-daemon :app:testDebugUnitTest
 
       - name: Name the APKs
