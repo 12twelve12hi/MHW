@@ -68,6 +68,7 @@ class HandoffDecisionsTest {
         HandoffActivity.running = false
         HandoffActivity.requestedAt = 0L
         HandoffActivity.claim = null
+        HandoffActivity.lastDocumentHandoff = 0L
         WaitingCard.forget()
         // FileProvider caches its roots in a static map; every Robolectric test has a new files folder.
         FileProvider::class.java.declaredFields
@@ -542,6 +543,9 @@ class HandoffDecisionsTest {
         assertEquals("application/pdf", sent.type)
         assertTrue(sent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)!!.path!!.endsWith("/paper.pdf"))
         assertTrue(sent.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
+        // A fresh Reader task for every document (the Reader drops a document shared while an import is pending).
+        assertTrue(sent.flags and Intent.FLAG_ACTIVITY_NEW_TASK != 0)
+        assertTrue(sent.flags and Intent.FLAG_ACTIVITY_CLEAR_TASK != 0)
         assertNull(shadowOf(app).nextStartedActivity) // the EPUB was not asked for
         app.inbox.get(pdf.id)!!.let {
             assertEquals(InboxItem.IN_READER, it.state)
@@ -556,6 +560,41 @@ class HandoffDecisionsTest {
         assertTrue(c.get().isFinishing)
         assertNull(HandoffActivity.claim)
         assertFalse(HandoffActivity.running)
+    }
+
+    @Test
+    fun documentHandOffsAreSpacedOutAndBatched() {
+        installReader()
+        inboxWith(pdf, epub, notes)
+        runHandoff(HandoffActivity.forItem(app, pdf.id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val first = shadowOf(app).nextStartedActivity
+        assertEquals(Intent.ACTION_SEND, first.action)
+        assertLogged("documents: 1 to $main via send_file in a fresh task (NEW_TASK|CLEAR_TASK)")
+
+        // A tap on the next document right away: it waits rather than meet the Reader's pending import.
+        val c = runHandoff(HandoffActivity.forItem(app, epub.id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        assertNull(shadowOf(app).nextStartedActivity)
+        assertTrue(HandoffActivity.running)
+        assertLogged("documents: 1 waiting; next hand-off in 25 s")
+        assertEquals(InboxItem.WAITING, app.inbox.get(epub.id)!!.state)
+        // Meanwhile a third one is tapped: it joins the same hand-off.
+        c.newIntent(HandoffActivity.forItem(app, notes.id))
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(10))
+        assertNull(shadowOf(app).nextStartedActivity)
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(16))
+        val batch = shadowOf(app).nextStartedActivity
+        assertEquals(Intent.ACTION_SEND_MULTIPLE, batch.action)
+        assertEquals(2, batch.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)!!.size)
+        assertTrue(batch.flags and Intent.FLAG_ACTIVITY_CLEAR_TASK != 0)
+        assertLogged("documents: handing over 2 together")
+        for (id in listOf(epub.id, notes.id)) assertEquals("send_multiple", app.inbox.get(id)!!.via)
+        assertTrue(c.get().isFinishing)
+        assertFalse(HandoffActivity.running)
+
+        // A link never waits for the document gap.
+        app.inbox.put(link.copy(id = "e".repeat(32)))
+        val l = runHandoff(HandoffActivity.intent(app, HandoffActivity.MODE_ALL))
+        assertEquals(ReaderApps.ACTION_SAVE_PAGE, shadowOf(l.get()).nextStartedActivityForResult.intent.action)
     }
 
     @Test

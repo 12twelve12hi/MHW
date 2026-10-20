@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
+import androidx.annotation.VisibleForTesting
 import com.daylight.share.App
 import com.daylight.share.BuildConfig
 import com.daylight.share.Work
@@ -11,6 +12,7 @@ import com.daylight.share.core.BytesBody
 import com.daylight.share.core.FileBody
 import com.daylight.share.core.FileOutboxStore
 import com.daylight.share.core.Kind
+import com.daylight.share.core.Limits
 import com.daylight.share.core.OutboxRow
 import com.daylight.share.core.Outbox
 import com.daylight.share.core.OutgoingItem
@@ -52,10 +54,24 @@ class SenderRepo(private val app: App) {
 
     fun pairing(): Pairing? = _pairing.value
 
+    /**
+     * Uses [p] from now on (PROTOCOL 3.3 step 6): the same secret (a new relay or name) keeps the outbox, so pending
+     * items go through the new relay; a different secret deletes the old outbox, its rows and their content. Callers
+     * ask first when [PairingConfirmation] says so.
+     */
     fun pair(p: Pairing) {
+        val old = pairing()
+        val replaced = old != null && !old.sameSecret(p)
+        synchronized(this) {
+            if (replaced) {
+                FileOutboxStore(File(root, old!!.keys.inboxTopic)).clear()
+                logi("sender: a different Daylight: the outbox for ${old.name.ifEmpty { "the previous one" }} was deleted")
+            }
+            outbox = null
+        }
         app.prefs.senderLink = p.link()
         _pairing.value = p
-        synchronized(this) { outbox = null }
+        if (replaced) _rows.value = emptyList()
         logi("sender: paired with ${p.name.ifEmpty { "a Daylight" }} via ${p.relay}")
     }
 
@@ -96,7 +112,9 @@ class SenderRepo(private val app: App) {
 
     /**
      * Puts what was shared into the outbox: copies streams into private storage first (a shared URI's grant ends with
-     * the activity that received it). Throws [ShareException] with a message for the user.
+     * the activity that received it). Anything over 9 MB is refused before it is read or copied, with the shared
+     * sentence ("Too big to send. Files can be up to 9 MB; this one is 14.2 MB."). Throws [ShareException] with a
+     * message for the user.
      */
     suspend fun add(shared: Shared): OutboxRow = withContext(Dispatchers.IO) {
         val o = outbox() ?: throw ShareException("pairing", "Pair with your Daylight first.")
@@ -155,9 +173,25 @@ class SenderRepo(private val app: App) {
         }
     }
 
-    private class Copy(val file: File, val name: String, val mime: String, val title: String?)
+    internal class Copy(val file: File, val name: String, val mime: String, val title: String?)
 
-    private fun copyIn(uri: Uri, mimeHint: String?): Copy {
+    /** The size a content or file URI says it has (OpenableColumns.SIZE, or the file's length); null when unknown. */
+    @VisibleForTesting
+    internal fun sizeOf(uri: Uri): Long? {
+        if (uri.scheme == ContentResolver.SCHEME_FILE) return uri.path?.let { File(it) }?.takeIf { it.isFile }?.length()
+        return runCatching {
+            app.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) c.getLong(0).takeIf { it >= 0 } else null
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * Copies a shared stream into private storage. Over [Limits.MAX_ITEM] bytes it is refused before anything is read
+     * when its size is known, and as soon as the copy passes the limit when it is not.
+     */
+    @VisibleForTesting
+    internal fun copyIn(uri: Uri, mimeHint: String?): Copy {
         val cr = app.contentResolver
         if (uri.scheme == ContentResolver.SCHEME_FILE) {
             // Never send our own private files (an app could ask us to share our settings with the paired Daylight).
@@ -166,6 +200,7 @@ class SenderRepo(private val app: App) {
         } else if (uri.scheme != ContentResolver.SCHEME_CONTENT) {
             throw ShareException("content", "Couldn’t read that file.")
         }
+        sizeOf(uri)?.let { size -> if (size > Limits.MAX_ITEM) throw ShareException("too-large", Text.tooBigMessage(size)) }
         var name: String? = null
         runCatching {
             cr.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
@@ -176,42 +211,62 @@ class SenderRepo(private val app: App) {
         val mime = pickMime(mimeHint, runCatching { cr.getType(uri) }.getOrNull(), name)
         var fileName = Text.safeFileName(name, "document")
         if (!fileName.contains('.')) {
-            MimeTypeMap.getSingleton().getExtensionFromMimeType(mime)?.let { fileName += ".$it" }
+            MimeTypeMap.getSingleton().getExtensionFromMimeType(mime)?.let { fileName = Text.safeFileName("$fileName.$it") }
         }
-        incoming.mkdirs()
         val tmp = File(incoming, UUID.randomUUID().toString())
         try {
+            incoming.mkdirs()
             val input = cr.openInputStream(uri) ?: throw ShareException("content", "Couldn’t read that file.")
-            input.use { inp ->
-                tmp.outputStream().use { out ->
-                    val buf = ByteArray(256 * 1024)
-                    var total = 0L
-                    while (true) {
-                        val n = inp.read(buf)
-                        if (n < 0) break
-                        total += n
-                        if (total > MAX_RAW) throw ShareException("too-large", "That file is larger than 64 MB.")
-                        out.write(buf, 0, n)
-                    }
-                }
-            }
-        } catch (e: IOException) {
-            tmp.delete()
-            throw ShareException("content", "Couldn’t read that file (${e.message}).")
+            input.use { copyCapped(it, tmp) }
         } catch (e: SecurityException) {
             tmp.delete()
             throw ShareException("content", "Daylight Share isn’t allowed to read that file.")
         } catch (e: ShareException) {
             tmp.delete()
             throw e
+        } catch (e: IOException) {
+            tmp.delete()
+            throw ShareException("content", "Couldn’t read that file (${e.message}).", cause = e)
         }
         val title = fileName.substringBeforeLast('.').takeIf { it.isNotBlank() }
         return Copy(tmp, fileName, mime, title)
     }
 
     companion object {
-        /** Raw size cap before encoding (text compresses; the protocol caps the encoded size at 64 MiB). */
-        const val MAX_RAW = 256L * 1024 * 1024
+        /** A stream of unknown size that passed 9 MB while it was copied (the shared sentence, without the size). */
+        const val TOO_BIG_UNKNOWN = "Too big to send. Files can be up to 9 MB."
+
+        /**
+         * Copies [input] to [dest], stopping as soon as it passes [Limits.MAX_ITEM] bytes ("too-large"). A write that
+         * fails is "storage" ("This device is out of space…"), a read that fails is "content". On failure [dest] may be
+         * left for the caller to delete.
+         */
+        fun copyCapped(input: java.io.InputStream, dest: File) {
+            val out = try {
+                dest.outputStream()
+            } catch (e: IOException) {
+                throw ShareException("storage", Outbox.OUT_OF_SPACE, cause = e)
+            }
+            out.use {
+                val buf = ByteArray(256 * 1024)
+                var total = 0L
+                while (true) {
+                    val n = try {
+                        input.read(buf)
+                    } catch (e: IOException) {
+                        throw ShareException("content", "Couldn’t read that file (${e.message}).", cause = e)
+                    }
+                    if (n < 0) break
+                    total += n
+                    if (total > Limits.MAX_ITEM) throw ShareException("too-large", TOO_BIG_UNKNOWN)
+                    try {
+                        it.write(buf, 0, n)
+                    } catch (e: IOException) {
+                        throw ShareException("storage", Outbox.OUT_OF_SPACE, cause = e)
+                    }
+                }
+            }
+        }
 
         private val BY_EXTENSION = mapOf(
             "pdf" to "application/pdf", "epub" to "application/epub+zip", "md" to "text/markdown", "markdown" to "text/markdown",

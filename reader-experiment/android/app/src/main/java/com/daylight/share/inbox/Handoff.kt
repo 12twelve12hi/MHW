@@ -182,6 +182,15 @@ enum class DocumentMode(val key: String, val label: String) {
 object Routes {
     private const val AUTHORITY_SUFFIX = ".files"
 
+    /**
+     * Every document hand-off starts the Reader's import in a fresh task. The Reader's ImportActivity (singleTask)
+     * collects navigation only while resumed: a document shared while an earlier import's "open the document" event is
+     * still pending arrives through onNewIntent, the stale event reopens the earlier document and finishes the
+     * activity, and the new document is dropped (DEVICE-CHECKS.md, round 2). CLEAR_TASK gives every import a new
+     * ImportActivity, so nothing stale is left; [HandoffActivity] also spaces document hand-offs out.
+     */
+    const val DOCUMENT_FLAGS = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+
     fun uriFor(context: Context, file: File): Uri = FileProvider.getUriForFile(context, context.packageName + AUTHORITY_SUFFIX, file)
 
     /** [uriFor], or null (logged) when the file cannot be shared: the item then stays in the Inbox. */
@@ -217,7 +226,7 @@ object Routes {
                     ?.let { out += Route(pkg, Path.SEND_FILE_GENERIC, it, ids) }
             }
             for (pkg in pkgs) {
-                val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).setPackage(pkg).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).setPackage(pkg).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or DOCUMENT_FLAGS)
                 if (resolves(context, view)) out += Route(pkg, Path.VIEW_FILE, view, ids)
             }
         }
@@ -266,7 +275,7 @@ object Routes {
         val i = Intent(Intent.ACTION_SEND).setType(mime).setPackage(pkg).putExtra(Intent.EXTRA_STREAM, uri)
         i.clipData = ClipData(ClipDescription(item.name ?: "document", arrayOf(mime)), ClipData.Item(uri))
         item.title?.let { i.putExtra(Intent.EXTRA_TITLE, it).putExtra(Intent.EXTRA_SUBJECT, it) }
-        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or DOCUMENT_FLAGS)
         return i
     }
 
@@ -284,7 +293,7 @@ object Routes {
         for (u in uris.drop(1)) clip.addItem(ClipData.Item(u))
         val i = Intent(Intent.ACTION_SEND_MULTIPLE).setType(type).setPackage(pkg)
             .putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or DOCUMENT_FLAGS)
         i.clipData = clip
         return if (resolves(context, i)) Route(pkg, Path.SEND_MULTIPLE, i, items.map { it.first.id }) else null
     }

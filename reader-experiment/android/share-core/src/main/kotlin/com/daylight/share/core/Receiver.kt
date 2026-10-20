@@ -94,7 +94,8 @@ class Receiver(
     /**
      * [items]: new items, stored. [ackIds]: this poll's ids whose ack was published. [digestIds]: older ids the digest
      * re-published. [ackError]: why an ack could not be published (null when all went out). [storeError]: why [accept]
-     * failed for an item (null when every item was stored).
+     * failed for an item (null when every item was stored). [limited]: a download answered 429 or 413 (the relay is
+     * limiting this network; what it held back arrives later).
      */
     class Result(
         val items: List<ItemHeader>,
@@ -102,6 +103,7 @@ class Receiver(
         val ackError: String? = null,
         val storeError: String? = null,
         val digestIds: List<String> = emptyList(),
+        val limited: Boolean = false,
     )
 
     /**
@@ -132,7 +134,7 @@ class Receiver(
         else if (digestDue) state.lastDigest = now
         if (ackError != null || digestDue) store.save(state)
         val sent = published.toHashSet()
-        Result(handled.items, acks.filter { it in sent }, ackError, handled.storeError, digest.filter { it in sent })
+        Result(handled.items, acks.filter { it in sent }, ackError, handled.storeError, digest.filter { it in sent }, handled.limited)
     }
 
     /** The cursor to resume a live stream from. */
@@ -177,8 +179,10 @@ class Receiver(
             ids.forEach { state.partMsgs.remove(it) }
             return ids
         }
+        var limited = false
         for (m in msgs) {
             newest = maxOf(newest, m.time)
+            if (m.status == 429 || m.status == 413) limited = true
             when (m.outcome) {
                 Outcome.SKIPPED -> continue
                 Outcome.RETRY -> {
@@ -240,7 +244,7 @@ class Receiver(
         }
         for (t in state.incomplete.values) held = minOf(held ?: t, t)
         if (msgs.isNotEmpty()) state.since = RelayClient.nextCursor(state.since, newest, held)
-        return Result(items, ack.toList(), null, storeError)
+        return Result(items, ack.toList(), null, storeError, limited = limited)
     }
 
     /**

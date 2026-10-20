@@ -41,9 +41,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.daylight.share.App
 import com.daylight.share.core.Kind
 import com.daylight.share.core.Limits
+import com.daylight.share.core.Relay
 import com.daylight.share.inbox.DocumentMode
 import com.daylight.share.inbox.Handoff
 import com.daylight.share.inbox.InboxItem
+import com.daylight.share.inbox.InboxText
 import com.daylight.share.inbox.InstantDeliveryService
 import com.daylight.share.inbox.Live
 import com.daylight.share.inbox.Path
@@ -73,6 +75,8 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
     var confirmReset by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val notice = activity.notice.value
+    // The one-time background relay check's warning (it never changes the saved relay): shown until the relay changes.
+    val relayWarning = remember(resumes, pairing) { app.prefs.inboxRelayWarning?.takeIf { app.prefs.inboxRelayChecked == app.prefs.inboxRelay } }
 
     val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { activity.resumes.intValue++ }
     fun openSettings(action: String, extra: Pair<String, String>? = null, fallback: String) {
@@ -105,7 +109,7 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
                         when {
                             live == Live.State.LIVE -> "Connected · items arrive right away"
                             sync.checking -> "Checking…"
-                            sync.error != null -> "Offline: ${sync.error}"
+                            sync.error != null -> sync.error!!
                             sync.lastCheck > 0 -> "Checked ${ago(sync.lastCheck)}"
                             else -> "Not checked yet"
                         },
@@ -119,6 +123,15 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
             Section {
                 Text(notice)
                 TextButton(onClick = { activity.notice.value = null }) { Text("OK") }
+            }
+        }
+        if (sync.storeFull) item {
+            Section { Text(InboxText.OUT_OF_SPACE) }
+        }
+        if (relayWarning != null) item {
+            Section("The relay") {
+                Text(relayWarning)
+                Text("Change it in Settings › Relay, or use ntfy.sh.", style = MaterialTheme.typography.bodySmall)
             }
         }
 
@@ -135,9 +148,10 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
                     Mono(groups.take(4).joinToString("-"), Modifier.align(Alignment.CenterHorizontally))
                     Mono(groups.drop(4).joinToString("-"), Modifier.align(Alignment.CenterHorizontally))
                     Text(
-                        "Name: ${p.name.ifEmpty { "Daylight" }}" + if (p.relay != Limits.DEFAULT_RELAY) " · relay ${p.relay}" else "",
+                        "Name: ${p.name.ifEmpty { "Daylight" }}" + if (p.relay != Limits.DEFAULT_RELAY) " · relay ${Relay.host(p.relay)}" else " · relay ntfy.sh",
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    Text(LIMITS_LINE, style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         SecondaryButton("Reset pairing") { confirmReset = true }
                         if (received.isNotEmpty()) SecondaryButton("Hide") { showPairing = false }
@@ -287,13 +301,13 @@ private fun ItemRow(activity: MainActivity, item: InboxItem, readerInstalled: Bo
         if (item.kind != Kind.FILE && item.url != null && item.title != null) {
             Text(item.url, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        // "In your Reader ✓" only when the Reader confirmed it (SAVE_PAGE: saved or duplicate); documents get no answer.
         val status = when (item.state) {
             InboxItem.IN_READER -> {
                 val how = when (item.readerStatus) {
-                    "saved" -> "saved"
                     "duplicate" -> "already there"
                     "queued" -> "saving"
-                    "started" -> "handing over"
+                    "started" -> "waiting for the Reader’s answer"
                     else -> null
                 }
                 val via = when (item.via) {
@@ -303,13 +317,15 @@ private fun ItemRow(activity: MainActivity, item: InboxItem, readerInstalled: Bo
                     Path.SEND_MULTIPLE.key -> "with other documents"
                     else -> null
                 }
-                "In Reader ✓" + listOfNotNull(how, via).joinToString(", ").let { if (it.isEmpty()) "" else " ($it)" } +
+                item.readerLabel + listOfNotNull(how, via).joinToString(", ").let { if (it.isEmpty()) "" else " ($it)" } +
                     (item.deliveredTo?.let { " · " + ReaderApps.label(activity, it) } ?: "")
             }
-            InboxItem.OPEN -> "Open — not in the Reader"
-            else -> "Waiting"
+            else -> item.readerLabel
         }
         Text(status, style = MaterialTheme.typography.bodyLarge)
+        if (item.state == InboxItem.IN_READER && !item.confirmedInReader && item.kind == Kind.FILE) {
+            Text("The Reader doesn’t confirm documents: look for it in its library.", style = MaterialTheme.typography.bodySmall)
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (readerInstalled && item.state != InboxItem.IN_READER) {
                 PrimaryButton("Add to Reader") {

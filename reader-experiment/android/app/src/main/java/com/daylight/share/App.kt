@@ -10,9 +10,13 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
+import com.daylight.share.core.Limits
 import com.daylight.share.core.Pairing
 import com.daylight.share.core.Relay
+import com.daylight.share.core.RelayProbe
+import com.daylight.share.core.ShareException
 import com.daylight.share.core.Text
+import com.daylight.share.core.UrlConnectionHttp
 import com.daylight.share.inbox.DocumentMode
 import com.daylight.share.inbox.InboxRepo
 import com.daylight.share.inbox.InstantDeliveryService
@@ -23,6 +27,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 /** Logcat tag for everything (the emulator test greps "received <id> kind=... -> handed to <pkg> via <path> status=..."). */
 const val TAG = "DaylightShare"
@@ -60,11 +65,34 @@ class App : Application() {
         onRoleChanged()
     }
 
+    /**
+     * A custom Inbox relay saved before protocol 1.1 is checked once in the background (CHANGES-v1.1 finding 21). A
+     * failure only shows its sentence as a warning on the Inbox screen: the saved relay and the pairing code never
+     * change here. A check that could not reach the relay is not recorded, so the next start tries again.
+     */
+    fun checkInboxRelayOnce() {
+        val relay = prefs.inboxRelay
+        if (relay == Limits.DEFAULT_RELAY || prefs.inboxRelayChecked == relay) return
+        scope.launch(Dispatchers.IO) {
+            val failure = runCatching { RelayProbe.check(relay, UrlConnectionHttp("DaylightShare/${BuildConfig.VERSION_NAME} (inbox)")) }
+                .getOrElse { e -> e as? ShareException ?: ShareException("relay", RelayProbe.UNREACHABLE, RelayProbe.REASON_NETWORK) }
+            if (prefs.inboxRelay != relay) return@launch // changed meanwhile: Save checked it
+            if (failure?.reason == RelayProbe.REASON_NETWORK) {
+                logi("relay check of $relay: not reachable now; trying again at the next start")
+                return@launch
+            }
+            prefs.inboxRelayChecked = relay
+            prefs.inboxRelayWarning = failure?.message
+            logi("relay check of $relay: " + (failure?.message ?: "ok"))
+        }
+    }
+
     /** Schedules the periodic work for the current role, polls once, and starts or stops Instant delivery. */
     fun onRoleChanged() {
         when (prefs.role) {
             Role.INBOX -> {
                 inbox.ensurePairing()
+                checkInboxRelayOnce()
                 Work.schedulePeriodic(this)
                 Work.syncNow(this)
                 if (prefs.instantDelivery) InstantDeliveryService.start(this) else InstantDeliveryService.stop(this)
@@ -149,6 +177,16 @@ class Prefs(private val context: Context) {
     var inboxRelay: String
         get() = sp.getString("inboxRelay", null) ?: com.daylight.share.core.Limits.DEFAULT_RELAY
         set(v) = sp.edit().putString("inboxRelay", Relay.normalize(v)).apply()
+
+    /** The Inbox relay the relay check last passed or failed for (set by Save, or by the one-time background check). */
+    var inboxRelayChecked: String?
+        get() = sp.getString("inboxRelayChecked", null)
+        set(v) = sp.edit().putString("inboxRelayChecked", v).apply()
+
+    /** The background relay check's sentence when it failed (shown on the Inbox screen), else null. */
+    var inboxRelayWarning: String?
+        get() = sp.getString("inboxRelayWarning", null)
+        set(v) = sp.edit().putString("inboxRelayWarning", v).apply()
 
     // The sender's pairing (the Daylight it sends to).
     var senderLink: String?

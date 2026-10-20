@@ -23,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,9 +37,14 @@ import com.daylight.share.Prefs
 import com.daylight.share.Role
 import com.daylight.share.core.Limits
 import com.daylight.share.core.Relay
+import com.daylight.share.core.RelayProbe
 import com.daylight.share.core.ShareException
+import com.daylight.share.core.UrlConnectionHttp
 import com.daylight.share.inbox.InstantDeliveryService
 import com.daylight.share.inbox.ReaderApps
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** First launch: which device is this? */
 @Composable
@@ -79,6 +85,8 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
     var confirmRole by remember { mutableStateOf<Role?>(null) }
     var deliverTo by remember { mutableStateOf(app.prefs.deliverTo) }
     var saved by remember { mutableStateOf<String?>(null) }
+    var checking by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     @Suppress("UNUSED_VARIABLE") val tick = activity.resumes.intValue
 
     Column(
@@ -110,32 +118,59 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
         Section("Relay") {
             Text(
                 if (role == Role.INBOX) "Items travel through an ntfy relay, end-to-end encrypted. Changing it changes the pairing code: senders pair again."
-                else "The ntfy relay your Daylight uses. It comes with the pairing; change it only if your Daylight did.",
+                else "The ntfy relay your Daylight uses. It comes with the pairing; change it only if your Daylight did. Items not yet delivered are sent through the new one.",
                 style = MaterialTheme.typography.bodyMedium,
             )
+            Text(RELAY_LIMITS, style = MaterialTheme.typography.bodySmall)
             OutlinedTextField(
                 value = relay, onValueChange = { relay = it; relayError = null }, singleLine = true, label = { Text("Relay URL") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
                 isError = relayError != null, modifier = Modifier.fillMaxWidth(),
             )
             relayError?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+            if (checking) Text("Checking the relay: sending a 2 MB test file through it…", style = MaterialTheme.typography.bodyMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                SecondaryButton("Save relay") {
-                    try {
-                        val r = Relay.normalize(relay)
-                        if (role == Role.INBOX) {
-                            app.prefs.inboxRelay = r
-                            app.inbox.refreshPairing()
-                        } else {
-                            app.sender.setRelay(r)
-                        }
-                        relay = r
-                        saved = "Relay saved."
+                SecondaryButton("Save relay", enabled = !checking) {
+                    val r = try {
+                        Relay.normalize(relay)
                     } catch (e: ShareException) {
                         relayError = e.message
+                        return@SecondaryButton
+                    }
+                    if (role != Role.INBOX) {
+                        // Same secret, another relay: the outbox stays and pending items go through the new relay.
+                        app.sender.setRelay(r)
+                        relay = r
+                        saved = "Relay saved."
+                        return@SecondaryButton
+                    }
+                    if (r == app.prefs.inboxRelay) {
+                        relay = r
+                        saved = "Relay saved."
+                        return@SecondaryButton
+                    }
+                    checking = true
+                    relayError = null
+                    scope.launch {
+                        // A relay other than ntfy.sh must take the largest frame a sender makes and give it back.
+                        val failure = if (r == Limits.DEFAULT_RELAY) null else withContext(Dispatchers.IO) {
+                            runCatching { RelayProbe.check(r, UrlConnectionHttp("DaylightShare/${BuildConfig.VERSION_NAME} (inbox)")) }
+                                .getOrElse { e -> e as? ShareException ?: ShareException("relay", RelayProbe.UNREACHABLE, RelayProbe.REASON_NETWORK) }
+                        }
+                        checking = false
+                        if (failure != null) {
+                            relayError = failure.message // the relay is not saved
+                            return@launch
+                        }
+                        app.prefs.inboxRelay = r
+                        app.prefs.inboxRelayChecked = r
+                        app.prefs.inboxRelayWarning = null
+                        app.inbox.refreshPairing()
+                        relay = r
+                        saved = "Relay saved. Scan the code again on your phones: it now carries the new relay."
                     }
                 }
-                SecondaryButton("Use ntfy.sh") { relay = Limits.DEFAULT_RELAY }
+                SecondaryButton("Use ntfy.sh", enabled = !checking) { relay = Limits.DEFAULT_RELAY }
             }
         }
 
@@ -207,6 +242,9 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
         )
     }
 }
+
+/** What the relay takes and keeps (PROTOCOL 3.5), said plainly. */
+const val RELAY_LIMITS = "ntfy.sh, the default relay, is free and needs no account. It keeps links for 12 hours and files for 3 hours, takes files in parts of up to 2 MB (Send to Daylight sends files of up to 9 MB that way), and lets each network send about 250 messages and 200 MB a day. Another ntfy server works if anyone can use it without a login and it accepts files of at least 2 MB; the Inbox checks that before saving it."
 
 @Composable
 fun Choice(label: String, selected: Boolean, detail: String? = null, onClick: () -> Unit) {

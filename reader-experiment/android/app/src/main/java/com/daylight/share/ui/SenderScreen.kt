@@ -37,6 +37,9 @@ import com.daylight.share.core.Kind
 import com.daylight.share.core.Limits
 import com.daylight.share.core.OutboxRow
 import com.daylight.share.core.Pairing
+import com.daylight.share.core.PairingConfirmation
+import com.daylight.share.core.Relay
+import com.daylight.share.core.RowText
 import com.daylight.share.core.ShareException
 import com.daylight.share.core.Status
 import com.daylight.share.sender.Shared
@@ -64,8 +67,8 @@ fun SenderScreen(activity: MainActivity, onSettings: () -> Unit) {
         scope.launch {
             try {
                 val row = app.sender.add(s)
-                val r = app.sender.publish(row.id)
-                message = if (r?.status == Status.SENT) "Sent ✓" else "Not sent yet: ${r?.error ?: "no connection"}. It will be retried."
+                val r = app.sender.publish(row.id) ?: row
+                message = RowText.of(r).line
                 if (s is Shared.Link) link = ""
             } catch (e: ShareException) {
                 message = e.message
@@ -91,7 +94,7 @@ fun SenderScreen(activity: MainActivity, onSettings: () -> Unit) {
                     val p = pairing
                     Text(
                         if (p == null) "Not paired yet" else "Sending to ${p.name.ifEmpty { "your Daylight" }}" +
-                            if (p.relay != Limits.DEFAULT_RELAY) " · ${p.relay}" else "",
+                            if (p.relay != Limits.DEFAULT_RELAY) " · through ${Relay.host(p.relay)}" else "",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -127,6 +130,7 @@ fun SenderScreen(activity: MainActivity, onSettings: () -> Unit) {
                         }
                     }
                     Text("Anywhere else: Share › Send to Daylight.", style = MaterialTheme.typography.bodySmall)
+                    Text(LIMITS_LINE, style = MaterialTheme.typography.bodySmall)
                     message?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
                 }
             }
@@ -151,7 +155,7 @@ private fun PairSection(activity: MainActivity) {
     val scan = rememberLauncherForActivityResult(ScanContract()) { result ->
         val text = result.contents ?: return@rememberLauncherForActivityResult
         try {
-            activity.pairSender(Pairing.parse(text))
+            activity.offerPairing(Pairing.parse(text), PairingConfirmation.Source.APP)
         } catch (e: ShareException) {
             error = "That QR code isn’t a Daylight pairing code."
         }
@@ -181,7 +185,7 @@ private fun PairSection(activity: MainActivity) {
         error?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
         SecondaryButton("Pair", enabled = code.isNotBlank()) {
             try {
-                activity.pairSender(Pairing.parse(code))
+                activity.offerPairing(Pairing.parse(code), PairingConfirmation.Source.APP)
             } catch (e: ShareException) {
                 error = e.message
             }
@@ -200,21 +204,18 @@ private fun OutboxRowView(row: OutboxRow, onRetry: () -> Unit, onRemove: () -> U
             Kind.PAGE -> "Web page"
             else -> row.name.substringAfterLast('.', "").uppercase().ifEmpty { "Document" }
         }
-        Text(listOfNotNull(kind, sizeText(row.size).ifEmpty { null }, ago(row.created)).joinToString(" · "), style = MaterialTheme.typography.bodySmall)
-        val status = when (row.status) {
-            Status.DELIVERED -> "Delivered ✓" + (row.deliveredBy.ifEmpty { null }?.let { " to $it" } ?: "") + " · ${ago(row.delivered)}"
-            Status.SENT -> "Sent · waiting for the Daylight to pick it up"
-            Status.SENDING -> "Sending…"
-            Status.FAILED -> "Not delivered yet: ${row.error.ifEmpty { "no connection" }} (retrying)"
-            Status.EXPIRED -> "Not delivered (gave up after 7 days)"
-            else -> row.status
-        }
-        Text(status, style = MaterialTheme.typography.bodyLarge)
+        val delivered = if (row.status == Status.DELIVERED && row.delivered > 0) "delivered ${ago(row.delivered)}" + (row.deliveredBy.ifEmpty { null }?.let { " to $it" } ?: "") else null
+        Text(listOfNotNull(kind, sizeText(row.size).ifEmpty { null }, ago(row.created).ifEmpty { null }, delivered).joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+        // The same words on every surface (CHANGES-v1.1 2.5): the label, its sentence, and a button only when it helps.
+        val text = RowText.of(row)
+        Text(text.label, style = MaterialTheme.typography.bodyLarge)
+        text.sentence?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (row.status == Status.FAILED || row.status == Status.EXPIRED || row.status == Status.SENT) {
-                SecondaryButton(if (row.status == Status.EXPIRED) "Try again" else "Retry") { onRetry() }
-            }
+            text.button?.let { SecondaryButton(it) { onRetry() } }
             TextButton(onClick = onRemove) { Text("Remove") }
         }
     }
 }
+
+/** What senders can send, and what the relay keeps (ntfy.sh's limits; PROTOCOL 3.5). */
+const val LIMITS_LINE = "Files can be up to 9 MB. They go through the relay in parts of under 2 MB; the relay keeps files for 3 hours and links for 12, so your phone sends again until your Daylight has them, for up to a week."

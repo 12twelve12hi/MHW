@@ -11,6 +11,8 @@ import androidx.lifecycle.lifecycleScope
 import com.daylight.share.App
 import com.daylight.share.Role
 import com.daylight.share.Work
+import com.daylight.share.core.OutboxRow
+import com.daylight.share.core.RowText
 import com.daylight.share.core.ShareException
 import com.daylight.share.core.Status
 import com.daylight.share.core.Text
@@ -83,14 +85,10 @@ class ShareActivity : ComponentActivity() {
             val job = app.scope.async { ids.map { app.sender.publish(it) } }
             Work.syncNow(app)
             val rows = withTimeoutOrNull(12_000) { job.await() }
-            val what = if (ids.size == 1) "" else "${ids.size} items "
-            when {
-                rows == null -> text.value = "Still sending ${what}to $daylight in the background."
-                rows.all { it?.status == Status.SENT } -> text.value = "Sent ${what}to $daylight ✓"
-                else -> text.value = "Not sent yet: ${rows.firstNotNullOfOrNull { it?.error?.ifBlank { null } } ?: "no connection"}. It will be sent when you’re online."
-            }
+            val allSent = rows != null && rows.all { it?.status == Status.SENT }
+            text.value = resultText(rows, ids.size, daylight)
             if (error != null) text.value += "\n$error"
-            delay(if (rows != null && rows.all { it?.status == Status.SENT } && error == null) 1_200 else 3_000)
+            delay(if (allSent && error == null) 1_200 else 3_500)
             finish()
         }
     }
@@ -109,6 +107,21 @@ class ShareActivity : ComponentActivity() {
     }
 
     companion object {
+        /**
+         * What the card says after a share (CHANGES-v1.1 2.5): the row's label, then its sentence ("Sent · waiting for
+         * your Daylight", "Waiting to send. Couldn’t send right now. It will try again by itself."); for several items,
+         * the count and the words of the first one that is not sent. [rows] is null while the publish still runs.
+         */
+        fun resultText(rows: List<OutboxRow?>?, count: Int, daylight: String): String {
+            val what = if (count == 1) "" else "$count items "
+            if (rows == null) return "Still sending ${what}to $daylight in the background."
+            val shown = rows.filterNotNull()
+            if (shown.isEmpty()) return "Nothing was sent."
+            val worst = shown.firstOrNull { it.status != Status.SENT } ?: shown[0]
+            val line = RowText.of(worst).line
+            return if (count == 1) line else "$count items. $line"
+        }
+
         /** Reads the share Intent (untrusted): streams first, else the first URL in the text, else the text itself. */
         fun parse(intent: Intent?): List<Shared> {
             if (intent == null) return emptyList()

@@ -2,6 +2,8 @@ package com.daylight.share.inbox
 
 import com.daylight.share.App
 import com.daylight.share.BuildConfig
+import androidx.annotation.VisibleForTesting
+import com.daylight.share.core.ErrorCode
 import com.daylight.share.core.FileBody
 import com.daylight.share.core.FileReceiverStore
 import com.daylight.share.core.ItemHeader
@@ -21,6 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 
 /** One received item, as the Inbox lists it. */
 data class InboxItem(
@@ -47,6 +50,20 @@ data class InboxItem(
     val displayTitle: String
         get() = title?.takeIf { it.isNotBlank() } ?: name?.takeIf { it.isNotBlank() } ?: url ?: "Untitled"
 
+    /** The Reader said it has the item: SAVE_PAGE answered `saved` or `duplicate`. Documents get no such answer. */
+    val confirmedInReader: Boolean get() = state == IN_READER && readerStatus in CONFIRMED
+
+    /**
+     * Where the item is, in the Inbox's words: "In your Reader ✓" only when the Reader confirmed it; "Handed to the
+     * Reader" when it was handed over without an answer (documents, shared links) or the answer is still to come.
+     */
+    val readerLabel: String
+        get() = when (state) {
+            IN_READER -> if (confirmedInReader) IN_YOUR_READER else HANDED_TO_READER
+            OPEN -> "Open — not in the Reader"
+            else -> "Waiting"
+        }
+
     fun toJson(): Map<String, Any?> = linkedMapOf(
         "id" to id, "kind" to kind, "url" to url, "title" to title, "name" to name, "mime" to mime, "size" to size,
         "from" to from, "app" to app, "sent" to sent, "received" to received, "file" to file, "state" to state,
@@ -60,6 +77,11 @@ data class InboxItem(
         const val IN_READER = "in_reader"
         /** No Reader takes it: it stays here, to open with another app. */
         const val OPEN = "open"
+
+        /** The Reader's SAVE_PAGE answers that mean it has the item. */
+        val CONFIRMED = setOf("saved", "duplicate")
+        const val IN_YOUR_READER = "In your Reader ✓"
+        const val HANDED_TO_READER = "Handed to the Reader"
 
         fun fromJson(m: Map<String, Any?>): InboxItem? {
             val id = m["id"] as? String ?: return null
@@ -76,8 +98,38 @@ data class InboxItem(
     }
 }
 
-/** Connection state for the UI. */
-data class SyncState(val live: Boolean = false, val lastCheck: Long = 0, val error: String? = null, val checking: Boolean = false)
+/**
+ * Connection state for the UI. [error] is one of the Inbox sentences ([InboxText]) or null; [storeFull] stays on from
+ * a failed store until an item is stored.
+ */
+data class SyncState(
+    val live: Boolean = false,
+    val lastCheck: Long = 0,
+    val error: String? = null,
+    val checking: Boolean = false,
+    val storeFull: Boolean = false,
+)
+
+/** What the Daylight Inbox says about receiving (CHANGES-v1.1 2.5, "The Daylight Inbox"). */
+object InboxText {
+    const val OUT_OF_SPACE = "Your Daylight is out of space, so new items can’t be saved. Free some space."
+    const val LIMITED = "Too much has gone through this network for now. New items will arrive later."
+    const val OFFLINE = "Offline. New items will arrive when this Daylight is back online."
+    fun relayError(status: Int) = "The relay isn’t working right now (error $status). It will keep trying."
+    const val RELAY_ERROR = "The relay isn’t working right now. It will keep trying."
+
+    /** The sentence for a poll (or the live connection) that failed with [e]. */
+    fun forFailure(e: Throwable): String {
+        val status = (e as? ShareException)?.status ?: 0
+        return when {
+            status == 429 || status == 413 -> LIMITED
+            e is ShareException && e.code == ErrorCode.NETWORK -> OFFLINE
+            status >= 300 -> relayError(status)
+            e is ShareException -> RELAY_ERROR
+            else -> OFFLINE
+        }
+    }
+}
 
 /**
  * The Daylight Inbox's data: its pairing, the received items (`files/inbox/items.json` and `files/inbox/files/<id>/`),
@@ -158,16 +210,20 @@ class InboxRepo(private val app: App) {
         sync.value = sync.value.copy(checking = true)
         try {
             val r = receiver().pollOnce()
-            sync.value = sync.value.copy(lastCheck = System.currentTimeMillis(), error = null, checking = false)
-            if (r.items.isNotEmpty()) logi("inbox: poll found ${r.items.size} new, acked ${r.ackIds.size}")
+            val stored = r.items.isNotEmpty()
+            sync.value = sync.value.copy(
+                lastCheck = System.currentTimeMillis(), checking = false,
+                error = if (r.limited) InboxText.LIMITED else null,
+                storeFull = if (r.storeError != null) true else if (stored) false else sync.value.storeFull,
+            )
+            if (stored || r.digestIds.isNotEmpty()) logi("inbox: poll found ${r.items.size} new, acked ${r.ackIds.size}, digest ${r.digestIds.size}")
+            r.ackError?.let { logw("inbox: ack failed: $it (the next poll publishes the digest)") }
+            r.storeError?.let { logw("inbox: could not store an item: $it (it comes back with the sender's next re-send)") }
+            if (r.limited) logw("inbox: the relay is limiting this network (429/413 on a download)")
             r.items.size
-        } catch (e: ShareException) {
-            logw("inbox: poll failed: ${e.message}")
-            sync.value = sync.value.copy(error = e.message, checking = false)
-            0
         } catch (e: Exception) {
-            logw("inbox: poll failed", e)
-            sync.value = sync.value.copy(error = e.message ?: e.javaClass.simpleName, checking = false)
+            logw("inbox: poll failed: ${e.message ?: e.javaClass.simpleName}" + ((e as? ShareException)?.status?.let { " (status $it)" } ?: ""))
+            sync.value = sync.value.copy(error = InboxText.forFailure(e), checking = false)
             0
         }
     }
@@ -184,38 +240,88 @@ class InboxRepo(private val app: App) {
                 r.ackFailed()
             }
         }
-        if (res.items.isNotEmpty()) sync.value = sync.value.copy(lastCheck = System.currentTimeMillis(), error = null)
+        if (res.items.isNotEmpty()) sync.value = sync.value.copy(lastCheck = System.currentTimeMillis(), error = null, storeFull = false)
+        if (res.storeError != null) {
+            logw("inbox: could not store an item: ${res.storeError} (it comes back with the sender's next re-send)")
+            sync.value = sync.value.copy(storeFull = true)
+        }
+        if (res.limited) sync.value = sync.value.copy(error = InboxText.LIMITED)
         return res.items.size
     }
 
-    /** Stores a complete item (called by the Receiver before it acks). Throws to have it tried again. */
-    private fun accept(done: Reassembler.Completed) {
+    /**
+     * Stores a complete item (called by the Receiver before it remembers or acks it). Throws to have it come back with
+     * the sender's next re-send (a full disk). An id already in the list is not stored or queued for the Reader again
+     * (the app stopped between storing an item and saving the receiver's state).
+     */
+    @VisibleForTesting
+    internal fun accept(done: Reassembler.Completed) {
         val h = done.header
+        val content = (done.content as? FileBody)?.file
+        if (get(h.id) != null) {
+            content?.delete()
+            logi("received ${h.id} kind=${h.kind} again: already in the Inbox, not queued again")
+            return
+        }
         var rel: String? = null
         if (h.kind != Kind.URL) {
-            val src = (done.content as? FileBody)?.file ?: error("content not on disk")
-            val folder = File(filesRoot, h.id).apply { mkdirs() }
-            val fileName = if (h.kind == Kind.PAGE) "page.html" else (h.name ?: "document")
-            val dest = File(folder, fileName)
-            if (dest.exists()) dest.delete()
-            if (!src.renameTo(dest)) {
-                src.copyTo(dest, overwrite = true)
-                src.delete()
+            val src = content ?: error("content not on disk")
+            val folder = File(filesRoot, h.id)
+            if (!folder.isDirectory && !folder.mkdirs()) throw IOException("could not create the item's folder")
+            rel = if (h.kind == Kind.PAGE) {
+                try {
+                    File(folder, "page.html").writeBytes(withUtf8Meta(src.readBytes()))
+                } finally {
+                    src.delete()
+                }
+                "${h.id}/page.html"
+            } else {
+                "${h.id}/" + storeFile(src, folder, h.name ?: "document")
             }
-            rel = "${h.id}/$fileName"
         }
         val item = InboxItem(
             id = h.id, kind = h.kind, url = h.url, title = h.title, name = h.name, mime = h.mime, size = h.size ?: 0,
             from = h.from, app = h.app, sent = h.sent, received = System.currentTimeMillis(), file = rel,
         )
         update { list -> listOf(item) + list.filter { it.id != item.id } }
+        if (sync.value.storeFull) sync.value = sync.value.copy(storeFull = false)
         logi("received ${h.id} kind=${h.kind} from=${h.from ?: "?"} size=${h.size ?: 0} stored")
+    }
+
+    /** Moves [src] to [dest] (tests replace it to make the file system refuse a name). */
+    @VisibleForTesting
+    internal var move: (src: File, dest: File) -> Unit = { src, dest ->
+        if (dest.exists()) dest.delete()
+        if (!src.renameTo(dest)) {
+            src.copyTo(dest, overwrite = true)
+            src.delete()
+        }
+    }
+
+    /**
+     * Stores [src] in [folder] under the safe [name] (the Reader sees it through FileProvider's DISPLAY_NAME). When the
+     * file system refuses that name, it is stored as `document` plus the extension; the item keeps its name. Returns the
+     * file's name.
+     */
+    private fun storeFile(src: File, folder: File, name: String): String {
+        try {
+            move(src, File(folder, name))
+            return name
+        } catch (e: IOException) {
+            val dot = name.lastIndexOf('.')
+            val fallback = "document" + if (dot > 0 && name.length - dot - 1 in 1..10) name.substring(dot) else ""
+            if (fallback == name) throw e
+            logw("could not store \"$name\" (${e.message}); stored as $fallback")
+            File(folder, name).delete()
+            move(src, File(folder, fallback))
+            return fallback
+        }
     }
 
     fun get(id: String): InboxItem? = _items.value.firstOrNull { it.id == id }
 
     /** Adds or replaces a row (tests; received items come through the Receiver). */
-    @androidx.annotation.VisibleForTesting
+    @VisibleForTesting
     internal fun put(item: InboxItem) = update { list -> listOf(item) + list.filter { it.id != item.id } }
 
     fun waiting(): List<InboxItem> = _items.value.filter { it.state == InboxItem.WAITING }.sortedBy { it.received }
@@ -263,5 +369,24 @@ class InboxRepo(private val app: App) {
     companion object {
         const val MAX_ITEMS = 300
         private const val WEEK = 7L * 24 * 3600 * 1000
+        private val META = "<meta charset=\"utf-8\">".toByteArray(Charsets.US_ASCII)
+        private val DOCTYPE = "<!doctype".toByteArray(Charsets.US_ASCII)
+
+        /**
+         * The page as the Inbox stores it (PROTOCOL 3.4 step 5): `<meta charset="utf-8">` right after a leading
+         * `<!doctype …>` (after an optional byte-order mark and whitespace; any case), else at the very start, so a
+         * Reader that sniffs the encoding reads UTF-8 (the body is UTF-8 whatever its own meta says).
+         */
+        fun withUtf8Meta(html: ByteArray): ByteArray {
+            var i = 0
+            if (html.size >= 3 && html[0] == 0xEF.toByte() && html[1] == 0xBB.toByte() && html[2] == 0xBF.toByte()) i = 3
+            while (i < html.size && html[i].toInt().toChar() in " \t\n\r\u000C") i++
+            var at = 0
+            if (i + DOCTYPE.size <= html.size && DOCTYPE.indices.all { k -> (html[i + k].toInt() or 0x20).toByte() == DOCTYPE[k] || html[i + k] == DOCTYPE[k] }) {
+                val close = (i + DOCTYPE.size until html.size).firstOrNull { html[it] == '>'.code.toByte() }
+                if (close != null) at = close + 1
+            }
+            return html.copyOfRange(0, at) + META + html.copyOfRange(at, html.size)
+        }
     }
 }

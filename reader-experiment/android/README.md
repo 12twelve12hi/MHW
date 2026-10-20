@@ -8,8 +8,9 @@ One APK, two jobs:
   send, and hands each item to the Daylight Reader.
 
 Items travel through an [ntfy](https://ntfy.sh) relay (free, no account), end-to-end encrypted with a key only your
-devices have. The format is the Daylight Share protocol, [`../share/PROTOCOL.md`](../share/PROTOCOL.md), the same
-one the iPhone app, the Mac app and the browser extensions speak.
+devices have. The format is the Daylight Share protocol, revision 1.1
+([`../share/PROTOCOL.md`](../share/PROTOCOL.md); what changed and why: [`../share/CHANGES-v1.1.md`](../share/CHANGES-v1.1.md)),
+the same one the iPhone app, the Mac app and the browser extensions speak.
 
 ## Install
 
@@ -30,20 +31,35 @@ and keeps your pairing and history.
 2. On the phone, open Daylight Share and tap **Scan the QR code** (or point the camera app at it: the
    `daylightshare://pair?...` link opens the app), or type the code.
 
+A code scanned with the camera app or a tapped link is applied only after you confirm: the app shows the Daylight's
+name, "Code starts E4AY. Check it matches the code on your Daylight.", the relay when it is not ntfy.sh, and, when the
+phone already sends to a Daylight with another code, "This replaces …. Items not yet delivered to it will not be sent."
+(button **Switch**). A link with the code you already use (a new relay or name) applies at once with "Pairing
+updated". The same code keeps the history and sends what is pending through the new relay; another code deletes it.
+
 Pair as many phones and computers as you like with the same code. **Reset pairing** on the Daylight makes a new
 code; everything paired before has to pair again. Whoever has the code can send to your Daylight and read what is
 sent to it, so the code is only shown on the Daylight.
 
 ## Send
 
-- From any app: **Share › Send to Daylight**. A small card says "Sending to Daylight…" and then "Sent ✓"; the
-  upload carries on in the background if you leave.
+- From any app: **Share › Send to Daylight**. A small card says "Sending to Daylight…" and then the item's status
+  ("Sent · waiting for your Daylight"); the upload carries on in the background if you leave.
 - In the app: paste a link and tap **Send link**, or tap **Send a file**.
-- The history shows **Sent** (on the relay), **Delivered ✓** (the Daylight has it) or **Not delivered** with
-  **Retry**. Items the Daylight has not picked up are sent again before the relay forgets them (ntfy.sh keeps
-  messages 12 hours, attachments 3 hours) for up to 7 days.
+- The history uses the words every Daylight Share app uses (CHANGES-v1.1 2.5): **Sending…**, **Sent · waiting for
+  your Daylight**, **Delivered ✓** (the Daylight has it), **Waiting to send** (with why, and **Retry now** only when
+  it failed for lack of a connection) and **Not delivered** (with why, and **Try again** when that can help).
 
-Links go as links (the Reader downloads the article). Files up to 64 MB go as they are; text files are compressed.
+Links go as links (the Reader downloads the article). **Files can be up to 9 MB** (before compression; text files are
+compressed); a bigger file is refused before it is copied, with "Too big to send. Files can be up to 9 MB; this one
+is 14.2 MB."
+
+What the relay does, honestly: ntfy.sh takes files of up to 2 MB, so a file travels in parts of at most 1.9 MB, and
+keeps them for 3 hours (links and small items for 12). Until the Daylight confirms an item, the phone sends it again:
+links every 11 hours; files 3 hours 5 minutes after sending, again 3 hours 5 minutes later, then every 12 hours; for
+up to 7 days. ntfy.sh also limits each network (a phone and a Daylight on the same Wi-Fi share it) to about 250
+messages and 200 MB a day and 20 MB of files at a time; when that is used up, items wait ("A lot has been sent from
+this network in the last few hours. It will send by itself in about 3 hours.") and stop after three tries.
 
 ## How items reach the Reader
 
@@ -57,6 +73,14 @@ each item, acknowledges it (that is the sender's "Delivered ✓"), and hands it 
 | Link | `SAVE_PAGE` with the URL and title (the Reader's read-later) | the Reader's small "Saved" card |
 | Web page | `SAVE_PAGE` with the URL, the title and the page's HTML | the same; paywalled and logged-in pages work |
 | Document | `ACTION_SEND` with the file, or `ACTION_SEND_MULTIPLE` (several at once, or **Add to the library as a batch**) | one document: the Reader imports it and opens it; several at once: the Reader's library ("N added"), which closes the document that was open |
+
+Each item in the Inbox says **In your Reader ✓** only when the Reader confirmed it (`SAVE_PAGE` answered `saved` or
+`duplicate`); documents and shared links get no answer from the Reader, so they say **Handed to the Reader**.
+
+Every document hand-off starts the Reader's import in a fresh task (`FLAG_ACTIVITY_NEW_TASK |
+FLAG_ACTIVITY_CLEAR_TASK`), and a document hand-off never starts within 25 seconds of the previous one: it waits, and
+then hands over together whatever is waiting by then (logged as `documents: … waiting; next hand-off in N s`). Today's
+Reader drops a document shared while its previous import is still pending (DEVICE-CHECKS.md, round 2).
 
 If the Reader refuses `SAVE_PAGE` (read-later from the browser switched off in the Reader's settings), the Inbox
 shares the link with the Reader instead. Builds that only have some entry points get what they support
@@ -111,6 +135,18 @@ how many documents arrive together. One document is followed into the reader and
 adds a batch without opening anything, and asking is the default. The earlier switch
 "Open documents as they arrive", when it was on, carries over as **Open as they arrive**.
 
+### When nothing arrives
+
+The Inbox says why, in one sentence: "Offline. New items will arrive when this Daylight is back online.", "Too much has
+gone through this network for now. New items will arrive later.", "The relay isn’t working right now (error 502). It
+will keep trying.", or "Your Daylight is out of space, so new items can’t be saved. Free some space." (an item that
+could not be stored is not acknowledged; it comes back with the sender's next re-send).
+
+**Settings › Relay** on the Inbox checks a relay other than ntfy.sh before saving it: it sends a 2 MB test file through
+it and downloads it again, and keeps the old relay with a sentence when that fails (too small a file limit, files
+turned off, a login needed, or files the Daylight can't download). A relay saved before this check existed is checked
+once in the background, and only a warning shows if it fails.
+
 ## Build
 
 Requirements: JDK 17 or 21. The protocol module needs nothing else; the APK needs the Android SDK (platform 35).
@@ -133,7 +169,8 @@ CI (`.github/workflows/rx-android.yml`) runs the tests, builds both APKs, upload
 
 - `share-core/`: the protocol in plain Kotlin/JVM, no Android classes, no dependencies, so the Reader can embed it:
   `Pairing`, `Keys`, `FrameCodec`, `ItemHeader`, `ItemBuilder`/`PreparedItem`, `Reassembler`, `RelayClient`,
-  `Outbox` (sender) and `Receiver` (Inbox).
+  `Outbox` (sender) and `Receiver` (Inbox), plus `RowText` (the shared status words), `PairingConfirmation` and
+  `RelayProbe` (the Inbox's relay check).
 - `app/`: Compose UI (`ui/`), the share target and outbox (`sender/`), the Inbox (`inbox/`: receiving, live
   connection, Instant delivery service, hand-off to the Reader), WorkManager jobs (`Work.kt`).
 

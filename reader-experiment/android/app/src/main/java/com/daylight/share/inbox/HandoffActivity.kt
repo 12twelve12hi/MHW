@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResult
@@ -19,6 +20,7 @@ import com.daylight.share.ui.MainActivity
 import com.daylight.share.ui.StatusCard
 import com.daylight.share.ui.DaylightTheme
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -130,12 +132,27 @@ class HandoffActivity : ComponentActivity() {
                 continue
             }
             attempted += waiting.map { it.id }
-            message.value = when {
-                waiting.size > 1 -> "Adding ${waiting.size} documents to Daylight Reader…"
-                docs == DocumentMode.QUIET -> "Adding “${waiting[0].displayTitle.take(60)}” to Daylight Reader…"
-                else -> "Opening “${waiting[0].displayTitle.take(60)}” in Daylight Reader…"
+            var batch = waiting
+            // The Reader drops a document shared while its previous import is still pending (DEVICE-CHECKS.md, round
+            // 2): a document hand-off never starts within DOCUMENT_GAP_MS of the last one. It waits, and then hands
+            // over together everything this hand-off takes by then (taps and arrivals meanwhile included).
+            val wait = documentWait()
+            if (wait > 0) {
+                logi("documents: ${waiting.size} waiting; next hand-off in ${(wait + 999) / 1000} s (the Reader drops a document shared while its previous import is pending)")
+                message.value = if (waiting.size > 1) "Adding ${waiting.size} documents to Daylight Reader in a moment…"
+                else "Adding “${waiting[0].displayTitle.take(60)}” to Daylight Reader in a moment…"
+                delay(wait)
+                batch = repo.waiting().filter { it.kind == Kind.FILE && wanted(mode, picked, it, docs) }
+                attempted += batch.map { it.id }
+                if (batch.isEmpty()) break
+                if (batch.size != waiting.size) logi("documents: handing over ${batch.size} together")
             }
-            handed += handFiles(waiting, docs)
+            message.value = when {
+                batch.size > 1 -> "Adding ${batch.size} documents to Daylight Reader…"
+                docs == DocumentMode.QUIET -> "Adding “${batch[0].displayTitle.take(60)}” to Daylight Reader…"
+                else -> "Opening “${batch[0].displayTitle.take(60)}” in Daylight Reader…"
+            }
+            handed += handFiles(batch, docs)
             break // the Reader is in front now; documents that remain wait for the next hand-off
         }
         return handed
@@ -180,7 +197,9 @@ class HandoffActivity : ComponentActivity() {
         // alone (the rest at the next hand-off).
         for (route in Routes.forDocuments(this, withFiles, ReaderApps.targetsFor(this, Kind.FILE), docs)) {
             val status = start(route, null) ?: continue
+            lastDocumentHandoff = SystemClock.elapsedRealtime()
             val carried = withFiles.filter { it.first.id in route.ids }
+            logi("documents: ${carried.size} to ${route.pkg} via ${route.path.key} in a fresh task (NEW_TASK|CLEAR_TASK); the next document hand-off waits ${DOCUMENT_GAP_MS / 1000} s")
             for ((item, _) in carried) done(item, route, status, docs)
             return carried.size
         }
@@ -245,7 +264,22 @@ class HandoffActivity : ComponentActivity() {
         logi("received ${item.id} kind=${item.kind} -> handed to ${route.pkg} via ${route.path.key} status=$status" + (if (docs != null) " docs=${docs.key}" else "") + " by=$by")
     }
 
+    /** How long to wait before the next document hand-off may start (0 = now). */
+    private fun documentWait(): Long {
+        val last = lastDocumentHandoff
+        if (last == 0L) return 0L
+        val since = SystemClock.elapsedRealtime() - last
+        return if (since in 0 until DOCUMENT_GAP_MS) DOCUMENT_GAP_MS - since else 0L
+    }
+
     companion object {
+        /** The least time between two document hand-offs: the Reader's import of the previous one must be done. */
+        const val DOCUMENT_GAP_MS = 25_000L
+
+        /** When the last document hand-off started ([SystemClock.elapsedRealtime]; 0 = none in this process). */
+        @Volatile
+        var lastDocumentHandoff = 0L
+
         const val EXTRA_MODE = "mode"
         /** Everything waiting (foreground, or the notification's tap). */
         const val MODE_ALL = "all"

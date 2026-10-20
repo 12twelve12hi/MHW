@@ -25,6 +25,7 @@ import com.daylight.share.App
 import com.daylight.share.BuildConfig
 import com.daylight.share.Role
 import com.daylight.share.core.Pairing
+import com.daylight.share.core.PairingConfirmation
 import com.daylight.share.core.ShareException
 import com.daylight.share.inbox.DocumentMode
 import com.daylight.share.inbox.Handoff
@@ -43,8 +44,11 @@ class MainActivity : ComponentActivity() {
     /** A one-line message at the top ("Paired with …", errors). */
     val notice = mutableStateOf<String?>(null)
 
-    /** A pairing link opened on a device that is set up as the Inbox: asks before switching. */
-    private val pendingPair = mutableStateOf<Pairing?>(null)
+    /** A pairing that waits for the user's answer (PROTOCOL 1.3 "Confirmation"), with what the dialog says. */
+    class PendingPairing(val pairing: Pairing, val confirmation: PairingConfirmation, val inboxRole: Boolean)
+
+    /** The pairing the dialog asks about, or null. */
+    val pendingPair = mutableStateOf<PendingPairing?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -99,16 +103,39 @@ class MainActivity : ComponentActivity() {
                     notice.value = "That pairing link doesn’t work: ${e.message}"
                     return
                 }
-                if (app.prefs.role == Role.INBOX) pendingPair.value = p else pairSender(p)
+                offerPairing(p, PairingConfirmation.Source.LINK)
             }
             "setup" -> if (BuildConfig.DEBUG) debugSetup(data.toString()) else notice.value = "Setup links work in debug builds only."
         }
     }
 
-    fun pairSender(p: Pairing) {
+    /**
+     * A pairing that arrived from a link ([PairingConfirmation.Source.LINK]: the camera, a tapped link) or from the
+     * app's own pairing screen ([PairingConfirmation.Source.APP]). It is applied at once only when the confirmation
+     * rule says so (the same secret as the current pairing, or a code typed here while unpaired); otherwise the dialog
+     * asks first. A device set up as the Inbox always asks, because pairing makes it a sender.
+     */
+    fun offerPairing(p: Pairing, source: PairingConfirmation.Source) {
+        val current = app.sender.pairing()
+        val inbox = app.prefs.role == Role.INBOX
+        // On the Inbox the question is also whether to stop receiving: ask even for the same secret.
+        val c = PairingConfirmation.of(if (inbox && current?.sameSecret(p) == true) null else current, p, if (inbox) PairingConfirmation.Source.LINK else source)
+        logi("pairing from ${source.name.lowercase()}: ${if (c.ask) "asking (${c.button})" else "applied"}${if (inbox) " (inbox)" else ""}")
+        if (c.ask) pendingPair.value = PendingPairing(p, c, inbox) else pairSender(p, c.notice)
+    }
+
+    /** The dialog's button: pairs with the pairing it asked about. */
+    fun confirmPairing() {
+        val pending = pendingPair.value ?: return
+        pendingPair.value = null
+        if (pending.inboxRole) InstantDeliveryService.stop(this)
+        pairSender(pending.pairing, null)
+    }
+
+    fun pairSender(p: Pairing, updated: String? = null) {
         app.sender.pair(p)
         if (app.prefs.role != Role.SENDER) app.setRole(Role.SENDER)
-        notice.value = "Paired with ${p.name.ifEmpty { "your Daylight" }}. Share links and files with “Send to Daylight”."
+        notice.value = updated ?: "Paired with ${p.name.ifEmpty { "your Daylight" }}. Share links and files with “Send to Daylight”."
         lifecycleScope.launch { app.sender.refresh() }
     }
 
@@ -161,19 +188,15 @@ class MainActivity : ComponentActivity() {
             role == Role.INBOX -> InboxScreen(this, onSettings = { settings = true })
             else -> SenderScreen(this, onSettings = { settings = true })
         }
-        val pair = pendingPair.value
-        if (pair != null) {
+        val pending = pendingPair.value
+        if (pending != null) {
+            val c = pending.confirmation
+            val lines = c.lines + if (pending.inboxRole) listOf(INBOX_LINE) else emptyList()
             AlertDialog(
                 onDismissRequest = { pendingPair.value = null },
-                title = { Text("Send from this device?") },
-                text = { Text("This device is set up as the Daylight Inbox. Pairing it with ${pair.name.ifEmpty { "that Daylight" }} makes it a sender instead; it stops receiving.") },
-                confirmButton = {
-                    TextButton(onClick = {
-                        pendingPair.value = null
-                        InstantDeliveryService.stop(this)
-                        pairSender(pair)
-                    }) { Text("Switch to sending") }
-                },
+                title = { Text(c.title ?: "Pair with a Daylight?") },
+                text = { Text(lines.joinToString("\n\n")) },
+                confirmButton = { TextButton(onClick = { confirmPairing() }) { Text(c.button ?: "Pair") } },
                 dismissButton = { TextButton(onClick = { pendingPair.value = null }) { Text("Cancel") } },
             )
         }
@@ -181,5 +204,8 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val LIVE_HOLDER = "screen"
+
+        /** Added to the pairing question on a device set up as the Inbox. */
+        const val INBOX_LINE = "This device is set up as the Daylight Inbox. Pairing makes it a sender instead; it stops receiving."
     }
 }
