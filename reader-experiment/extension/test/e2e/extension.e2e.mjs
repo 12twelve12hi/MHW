@@ -275,7 +275,7 @@ test('relay trouble reads as in every app: Waiting to send with Retry now, the f
   }
 });
 
-test('Change pairing: the same code on a new relay applies with the module’s notice; another code asks first', { timeout: 60000 }, async () => {
+test('Change pairing: the relay in use is filled in; the same code on a new relay applies with the module’s notice; another code asks first', { timeout: 60000 }, async () => {
   const page = await ctx.newPage();
   await page.goto(`${site.url}/article.html`);
   const tabId = await tabIdFor(`${site.url}/article.html`);
@@ -287,13 +287,16 @@ test('Change pairing: the same code on a new relay applies with the module’s n
   await popup.click('#repair');
   await popup.waitForSelector('#view-pair:not([hidden])');
   assert.equal(await popup.isVisible('#pair-back'), true, 'a way back while paired');
+  // Advanced > Relay URL holds the relay in use, so a typed code doesn't silently move this browser to ntfy.sh.
+  assert.equal(await popup.inputValue('#relay'), relay.url);
+  assert.equal(await popup.evaluate(() => document.querySelector('#advanced').open), true);
 
   // Another Daylight's code: the question, in the module's words; Cancel changes nothing.
   const other = ds.generateSecret();
   await popup.fill('#code', await ds.formatCode(other));
   await popup.click('#pair-btn');
   await popup.waitForSelector('#view-confirm:not([hidden])');
-  const expected = ds.pairingConfirmation({ secret, relay: relay.url, name: 'E2E Daylight' }, { secret: other, relay: 'https://ntfy.sh', name: '' }, { source: 'app' });
+  const expected = ds.pairingConfirmation({ secret, relay: relay.url, name: 'E2E Daylight' }, { secret: other, relay: relay.url, name: '' }, { source: 'app' });
   assert.equal(await popup.textContent('#confirm-h'), expected.title);
   assert.deepEqual(await popup.$$eval('#confirm-lines p', (ps) => ps.map((p) => p.textContent)), expected.lines);
   assert.equal(await popup.textContent('#confirm-yes'), 'Switch');
@@ -302,9 +305,19 @@ test('Change pairing: the same code on a new relay applies with the module’s n
   await popup.waitForSelector('#view-pair:not([hidden])');
   assert.equal((await outbox()).length, kept, 'Cancel keeps the outbox');
 
-  // The same Daylight on another relay: no question; the outbox stays and the next send goes through the new relay.
+  // The same code typed again (to rename this browser): no question, and the relay stays.
   await popup.fill('#code', await ds.formatCode(secret));
-  await popup.click('#view-pair summary');
+  await popup.fill('#from', 'E2E Chrome, renamed');
+  await popup.click('#pair-btn');
+  await popup.waitForSelector('#view-send:not([hidden])');
+  assert.equal(await popup.textContent('#status'), 'Pairing updated.');
+  assert.equal(await sw.evaluate(async () => (await chrome.storage.local.get('pairing')).pairing.relay), relay.url);
+  assert.equal((await outbox()).length, kept);
+
+  // The same Daylight on another relay: no question; the outbox stays and the next send goes through the new relay.
+  await popup.click('#open-settings');
+  await popup.click('#repair');
+  await popup.fill('#code', await ds.formatCode(secret));
   await popup.fill('#relay', relay2.url);
   await popup.click('#pair-btn');
   await popup.waitForSelector('#view-send:not([hidden])');
@@ -320,6 +333,7 @@ test('Change pairing: the same code on a new relay applies with the module’s n
   // Switch: the old outbox goes.
   await popup.click('#open-settings');
   await popup.click('#repair');
+  assert.equal(await popup.inputValue('#relay'), relay2.url);
   await popup.fill('#code', await ds.formatCode(other));
   await popup.fill('#relay', relay.url);
   await popup.click('#pair-btn');

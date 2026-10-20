@@ -113,3 +113,32 @@ test('PDFs follow the protocol’s one size limit, with the shared notes', () =>
   assert.equal(L.NOTES['pdf-too-large'], 'The PDF is over 9 MB, so its link was sent.');
   assert.equal(L.NOTES['too-large'], 'The page is larger than 8 MB, so its link was sent.');
 });
+
+test('wantsAcks: a row that isn’t delivered and was shared less than 15 days ago (7 days of re-sends + 8 of digests)', () => {
+  const now = Date.now();
+  const day = 86400000;
+  assert.equal(L.ACK_WINDOW_MS, 15 * day);
+  assert.equal(L.wantsAcks([], now), false);
+  assert.equal(L.wantsAcks(undefined, now), false);
+  assert.equal(L.wantsAcks([{ status: 'delivered', created: now }], now), false);
+  assert.equal(L.wantsAcks([{ status: 'sent', created: now - day }], now), true);
+  assert.equal(L.wantsAcks([{ status: 'expired', created: now - 14 * day }], now), true, 'an expired row can still be acked');
+  assert.equal(L.wantsAcks([{ status: 'expired', created: now - 15 * day }], now), false);
+  assert.equal(L.wantsAcks([{ status: 'failed', created: now - 16 * day }, { status: 'expired', created: now - 2 * day }], now), true);
+});
+
+test('relayForInput: Advanced applies to a typed code; a link names its own relay', async () => {
+  const secret = ds.generateSecret();
+  const code = await ds.formatCode(secret);
+  const link = await ds.pairingLink({ secret, relay: 'https://relay.example.org', name: 'D' });
+  const bare = await ds.pairingLink({ secret });
+  const at = async (input, adv) => L.relayForInput(await ds.parsePairing(input), input, adv);
+  assert.equal(await at(code, ''), 'https://ntfy.sh');
+  assert.equal(await at(code, '  '), 'https://ntfy.sh');
+  assert.equal(await at(code, 'own.example.net/'), 'https://own.example.net');
+  assert.equal(await at(link, 'own.example.net'), 'https://relay.example.org');
+  assert.equal(await at(` ${bare.replace('daylightshare', 'DaylightShare')}`, 'own.example.net'), 'https://ntfy.sh');
+  assert.throws(() => L.relayForInput({ relay: 'https://ntfy.sh' }, code, 'ftp://x'), (e) => e.code === 'relay');
+  assert.equal(L.isPairingLink(link), true);
+  assert.equal(L.isPairingLink(code), false);
+});

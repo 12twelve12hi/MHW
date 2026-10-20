@@ -5,7 +5,7 @@ import * as ds from './daylight-share.js';
 import { capturePage, pdfStart, pdfChunk, pdfEnd, linkText } from './inject.js';
 import {
   PDF_MIME, PDF_CHUNK, MAX_PDF, NOTES, originPattern, pdfFileName, isPdfBytes, titleFromName,
-  planForCapture, defaultDeviceName, isPending, isTrouble,
+  planForCapture, defaultDeviceName, isTrouble, maintain, relayForInput,
 } from './logic.js';
 
 export const MENU = { page: 'dls-page', link: 'dls-link', pdfLink: 'dls-pdf-link' };
@@ -36,6 +36,37 @@ export function serial() {
     chain = p.then(() => {}, () => {});
     return p;
   };
+}
+
+/**
+ * A response's body, read only up to max bytes (protocol 1.1: refuse a file over MAX_ITEM before reading it all).
+ * -> {bytes} | {tooLarge, size}: size is the declared Content-Length, or, without one, the bytes read when it went
+ * over max (a lower bound).
+ */
+export async function readCapped(res, max) {
+  const declared = Number(res.headers?.get?.('content-length'));
+  if (declared > max) {
+    try { await res.body?.cancel?.(); } catch { /* nothing to cancel */ }
+    return { tooLarge: true, size: declared };
+  }
+  const reader = res.body?.getReader?.();
+  if (!reader) {
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    return bytes.length > max ? { tooLarge: true, size: bytes.length } : { bytes };
+  }
+  const parts = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > max) {
+      reader.cancel().catch(() => {});
+      return { tooLarge: true, size };
+    }
+    parts.push(value);
+  }
+  return { bytes: ds.concat(...parts) };
 }
 
 function withTimeout(promise, ms) {
@@ -120,12 +151,13 @@ export function createApp({
    * {needsConfirm: {title, lines, button, expect}} in the protocol module's words (pairingConfirmation), and pairs when
    * the popup sends it again with confirm: true and that expect (the code in use when it asked). The same code with a
    * new relay or name keeps the outbox, whose items then go through the new relay; a different code deletes it
-   * (applyPairingChange). relay: the Advanced override. from: this browser's name.
+   * (applyPairingChange). relay: the Advanced field, for a typed code (a link names its own relay). from: this
+   * browser's name.
    * -> {name, relay, notice} (notice: "Pairing updated…" for the same code, else null) | {needsConfirm}
    */
   async function pair({ input, from, relay, confirm = false, expect } = {}) {
     const next = await ds.parsePairing(input);
-    if (relay != null && String(relay).trim()) next.relay = ds.normalizeRelay(relay);
+    next.relay = relayForInput(next, input, relay);
     return run(async () => {
       const current = await getPairing();
       const c = ds.pairingConfirmation(current, next, { source: 'app' });
@@ -272,12 +304,10 @@ export function createApp({
   async function pdfViaExtension(url, credentials) {
     const res = await fetchFn(url, { credentials, redirect: 'follow' });
     if (!res.ok) return null;
-    const declared = Number(res.headers.get('content-length'));
-    if (declared > MAX_PDF) return { tooLarge: true, size: declared };
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    if (bytes.length > MAX_PDF) return { tooLarge: true, size: bytes.length };
-    if (!isPdfBytes(bytes)) return null;
-    return { bytes, disposition: res.headers.get('content-disposition') ?? '' };
+    const got = await readCapped(res, MAX_PDF);
+    if (got.tooLarge) return got;
+    if (!isPdfBytes(got.bytes)) return null;
+    return { bytes: got.bytes, disposition: res.headers.get('content-disposition') ?? '' };
   }
 
   async function hasOrigins(origins) {
@@ -389,13 +419,15 @@ export function createApp({
     return { removed: s ? await run(() => s.remove(id)) : false };
   }
 
-  /** Acks and re-sends (PROTOCOL 3.3). Skips the relay entirely when nothing is waiting. */
+  /**
+   * Acks and re-sends (PROTOCOL 3.3, logic.maintain): the local re-send pass always runs (it ends week-old rows and
+   * drops expired rows' content after 14 days); the ack topic is read only while a row could still be acked.
+   */
   async function tick() {
     const s = await getSender();
     if (!s) return { delivered: 0, resent: 0 };
     return run(async () => {
-      if (!(await s.list()).some(isPending)) return { delivered: 0, resent: 0 };
-      try { return await s.tick(); } catch (e) { log.warn?.('Send to Daylight: tick failed', e); return { delivered: 0, resent: 0 }; }
+      try { return await maintain(s, now()); } catch (e) { log.warn?.('Send to Daylight: tick failed', e); return { delivered: 0, resent: 0 }; }
     });
   }
 

@@ -13,15 +13,17 @@ anywhere: unzip `send-to-daylight-web.zip` from the
 ## Use
 
 1. **Pair:** type the 28-character code from Daylight Share, or paste its pairing link. A link to the page with
-   `#pair=<pairing link or code>` at the end pairs too: it asks first (*Pair with …? Code starts E4AY…*, and the
-   relay when it isn't ntfy.sh), unless it is the Daylight already paired, whose new relay or name then applies at
-   once (*Pairing updated…*). A link or code for a **different** Daylight says that it replaces the current one, and
-   switching discards what the old one hasn't picked up yet. *Advanced: Relay URL* is only for your own ntfy server.
-   **Settings › Change pairing…** takes a code again.
+   `#pair=<pairing link or code>` at the end pairs too: it asks first, on the page (*Pair with …? Code starts
+   E4AY…*, and the relay when it isn't ntfy.sh; **Pair** or **Cancel**), unless it is the Daylight already paired,
+   whose new relay or name then applies at once (*Pairing updated…*). A link or code for a **different** Daylight says
+   that it replaces the current one (**Switch** or **Cancel**), and switching discards what the old one hasn't picked
+   up yet. *Advanced: Relay URL* is only for your own ntfy server, with a typed code (a link carries its relay).
+   **Settings › Change pairing…** takes a code again, with the relay in use filled in.
 2. **Send a link:** paste or type it (`example.com/story` is fine) and tap **Send link**.
 3. **Send a file:** tap **Choose a file** (or drop files on it on a computer). Files can be up to 9 MB; a larger one
-   is refused before it is read (*Too big to send. Files can be up to 9 MB; this one is 14.2 MB.*). The free relay
-   takes 2 MB per attachment, so larger files travel in pieces that fit.
+   is refused before it is read (*Too big to send. Files can be up to 9 MB; this one is 14.2 MB.*); one shared to
+   the installed app on Android isn't even copied. The free relay takes 2 MB per attachment, so larger files travel in
+   pieces that fit.
 4. The history uses the words of every Send to Daylight app: **Sent · waiting for your Daylight**, then
    **Delivered ✓** once the Daylight confirms it; **Waiting to send** with why (and **Retry now** when the relay
    couldn't be reached); **Not delivered** with why (and **Try again** where that can help). Every row has **Remove**.
@@ -49,7 +51,10 @@ the site. The pairing and the outbox live in this browser's IndexedDB (localStor
 end-to-end encrypted in the page before they leave it; the relay (ntfy.sh by default) sees only scrambled data.
 
 The page checks for the Daylight's confirmations when it opens, every minute while open, and shortly after each send,
-and re-sends anything unconfirmed that the relay may have dropped. It can't do that while closed: open it now and then
+and re-sends anything unconfirmed that the relay may have dropped. An item still undelivered after a week shows *Not
+delivered* with **Try again**; its copy is kept for that until two weeks after the share, and a confirmation that
+arrives within about two weeks still makes it *Delivered ✓*. With nothing waiting or still to be confirmed, the page
+doesn't contact the relay. It can't do that while closed: open it now and then
 if the Daylight was off for a long time (or use the app or extension, which check in the background).
 
 The service worker caches the page so it opens offline; sends made offline show *Waiting to send* and go out with

@@ -2,7 +2,7 @@
 // Shortcut or Android's share sheet (when installed) hands it a link with ?url=…&autosend=1 or #…&url=….
 
 import * as ds from './daylight-share.js';
-import { statusInfo, rowMessage, kindLabel, displayTitle, relativeTime, isPending, titleFromName } from './logic.js';
+import { statusInfo, rowMessage, kindLabel, displayTitle, relativeTime, titleFromName, maintain, relayForInput } from './logic.js';
 import { readParams, hasShareParams, sharedLink, normalizeUserUrl, mimeFor, deviceName, shortcutPrefix, serial } from './web-logic.js';
 import { openStorage, takeShared, pruneShared } from './web-storage.js';
 
@@ -10,6 +10,8 @@ const VERSION = '1.1.0';
 const APP = `web/${VERSION}`;
 const HISTORY_SHOWN = 8;
 const TICK_MS = 60 * 1000;
+/** CHANGES-v1.1 2.5: a shared file the device had no room to keep (the share target's copy failed). */
+const NO_SPACE = 'This device is out of space, so it can’t send this.';
 
 const $ = (id) => document.getElementById(id);
 const local = serial();
@@ -23,6 +25,7 @@ let settings = {};
 let sender = null;
 let rows = [];
 let pendingShare = null;
+let pendingAsk = null; // the open pairing question: {resolve(yes)}
 let unpairArmed = null;
 const defaultFrom = deviceName(navigator.userAgent, navigator.maxTouchPoints);
 
@@ -40,7 +43,7 @@ function setStatus(text, tone = '') {
 }
 
 function show(view) {
-  for (const v of ['view-pair', 'view-send', 'view-settings']) $(v).hidden = v !== view;
+  for (const v of ['view-pair', 'view-confirm', 'view-send', 'view-settings']) $(v).hidden = v !== view;
   $('open-settings').hidden = view !== 'view-send';
 }
 
@@ -84,18 +87,50 @@ async function applyPairing(next, { from, expect } = {}) {
   await changed();
 }
 
-/** Asks in the protocol module's words (pairingConfirmation): its title and lines; OK stands for its button. */
-function confirmPairing(c) {
-  return window.confirm([c.title, ...c.lines].join('\n\n'));
+/**
+ * Asks on a sheet in the page, in the protocol module's words (pairingConfirmation): its title and lines, its button
+ * ("Pair", or "Switch" when it replaces another Daylight) and Cancel. -> true on the button. A new question answers
+ * one still open with Cancel (its caller then leaves the view alone: pendingAsk is set). The caller shows the next
+ * view.
+ */
+function askPairing(c) {
+  pendingAsk?.resolve(false);
+  show('view-confirm');
+  $('confirm-h').textContent = c.title;
+  const box = $('confirm-lines');
+  box.textContent = '';
+  for (const line of c.lines) {
+    const p = el('p', 'confirm-line');
+    // The code's first group is what the user compares with the Daylight's screen.
+    const m = /^(Code starts )(\S+?)(\..*)$/.exec(line);
+    if (m) p.append(m[1], el('strong', 'code-start', m[2]), m[3]); else p.textContent = line;
+    box.append(p);
+  }
+  $('confirm-yes').textContent = c.button;
+  // Replacing a pairing loses what wasn't delivered: Enter then means Cancel.
+  (c.button === 'Switch' ? $('confirm-no') : $('confirm-yes')).focus();
+  return new Promise((resolve) => {
+    const ask = { resolve: (yes) => { if (pendingAsk === ask) pendingAsk = null; resolve(yes); } };
+    pendingAsk = ask;
+  });
 }
 
 // --- pairing --------------------------------------------------------------------------------------------------------
 
-/** The pairing form: when nothing is paired, or from Settings > "Change pairing…" (then with a way back). */
-function renderPair() {
+/**
+ * The pairing form: when nothing is paired, or from Settings > "Change pairing…" (then with a way back). fresh: a new
+ * visit (not a return from the question), which sets Advanced > Relay URL to the relay in use, so that typing the
+ * same Daylight's code again (to rename this device, say) keeps a self-hosted relay instead of moving to ntfy.sh.
+ */
+function renderPair({ fresh = false } = {}) {
   show('view-pair');
   $('pair-back').hidden = !pairing;
   $('from').placeholder = defaultFrom;
+  if (fresh) {
+    const own = pairing && pairing.relay !== ds.DEFAULT_RELAY ? pairing.relay : '';
+    $('relay').value = own;
+    $('advanced').open = !!own;
+  }
   const n = $('pending-share');
   n.hidden = !pendingShare;
   if (pendingShare) {
@@ -106,7 +141,8 @@ function renderPair() {
 
 /**
  * The page's own pairing form (PROTOCOL 1.3: a typed or pasted code or link): pairs at once, unless it would replace a
- * Daylight with a different code; then it asks first.
+ * Daylight with a different code; then it asks first. Advanced > Relay URL applies to a typed code; a link names its
+ * own relay.
  */
 async function onPair(ev) {
   ev.preventDefault();
@@ -119,11 +155,11 @@ async function onPair(ev) {
   btn.textContent = 'Pairing…';
   try {
     const next = await ds.parsePairing(input);
-    const relay = $('relay').value.trim();
-    if (relay) next.relay = ds.normalizeRelay(relay);
+    next.relay = relayForInput(next, input, $('relay').value);
+    const expect = pairing?.code ?? '';
     const c = ds.pairingConfirmation(pairing, next, { source: 'app' });
-    if (c.ask && !confirmPairing(c)) return;
-    await applyPairing(next, { from: $('from').value, expect: pairing?.code ?? '' });
+    if (c.ask && !(await askPairing(c))) { if (!pendingAsk) renderPair(); return; } // Cancel: back to the form as it was
+    await applyPairing(next, { from: $('from').value, expect });
     $('code').value = '';
     await renderSend();
     setStatus(c.notice || `Paired with ${pairing.name || 'your Daylight'}.`, 'ok');
@@ -143,14 +179,20 @@ async function onPair(ev) {
 async function pairFromParam(value) {
   let next;
   try { next = await ds.parsePairing(value); } catch (e) { setStatus(`The pairing in this link didn’t work: ${e.message}`, 'bad'); return false; }
+  const expect = pairing?.code ?? '';
   const c = ds.pairingConfirmation(pairing, next, { source: 'link' });
-  if (c.ask && !confirmPairing(c)) {
-    if (pairing) setStatus(`Still sending to ${pairing.name || 'your Daylight'}.`);
+  if (c.ask && !(await askPairing(c))) {
+    if (pendingAsk) return false; // another question took its place
+    if (pairing) { await renderSend(); setStatus(`Still sending to ${pairing.name || 'your Daylight'}.`); } else renderPair();
     return false;
   }
   try {
-    await applyPairing(next, { expect: pairing?.code ?? '' });
-  } catch (e) { setStatus(e.message, 'bad'); return false; }
+    await applyPairing(next, { expect });
+  } catch (e) {
+    if (pairing) await renderSend(); else renderPair();
+    setStatus(e.message, 'bad');
+    return false;
+  }
   await renderSend();
   setStatus(c.notice || `Paired with ${pairing.name || 'your Daylight'}.`, 'ok');
   return true;
@@ -174,7 +216,9 @@ async function sendLink(url, title) {
 }
 
 async function sendFile(file) {
-  // One limit for every relay (protocol 1.1), checked before the file is read.
+  if (file.noSpace) throw new ds.ShareError('storage', NO_SPACE);
+  // One limit for every relay (protocol 1.1), checked before the file is read. A file shared to the installed app
+  // over it arrives as {name, size} only (sw.js never copies it).
   if (file.size > ds.MAX_ITEM) throw new ds.ShareError('too-large', ds.tooBigMessage(file.size));
   const bytes = new Uint8Array(await file.arrayBuffer());
   const name = file.name || 'document';
@@ -265,15 +309,14 @@ async function remove(id, button) {
   await changed();
 }
 
-/** Acks and re-sends (PROTOCOL 3.3); stays off the relay when nothing is waiting. */
+/**
+ * Acks and re-sends (PROTOCOL 3.3, logic.maintain): the local re-send pass always runs (it ends week-old rows and
+ * drops expired rows' content after 14 days); the ack topic is read only while a row could still be acked.
+ */
 async function tick() {
   if (!sender) return;
-  try {
-    await lock(async () => {
-      if (!((await sender.list()).some(isPending))) return;
-      await sender.tick();
-    });
-  } catch { /* offline: next time */ }
+  const s = sender;
+  try { await lock(() => maintain(s)); } catch { /* offline: next time */ }
   await changed();
 }
 
@@ -377,7 +420,7 @@ async function onUnpair() {
   });
   await loadState();
   rows = [];
-  renderPair();
+  renderPair({ fresh: true });
   channel?.postMessage('changed');
 }
 
@@ -392,7 +435,12 @@ async function takeShareFromAddress() {
   if (params.share) {
     const e = await takeShared(db, params.share).catch(() => null);
     if (e) {
-      const files = (e.files ?? []).map((f) => (f.blob instanceof File ? f.blob : new File([f.blob], f.name || 'document', { type: f.type || '' })));
+      // sw.js keeps the bytes of files the page can send; for others ({name, size}, maybe noSpace) the page says why.
+      const files = (e.files ?? []).map((f) => {
+        if (f.blob instanceof File) return f.blob;
+        if (f.blob) return new File([f.blob], f.name || 'document', { type: f.type || '' });
+        return { name: f.name || 'document', type: f.type || '', size: Number(f.size) || 0, noSpace: !!f.noSpace };
+      });
       const link = sharedLink({ url: e.url, text: e.text, title: e.title });
       share = { url: link.url, title: link.title, files };
     }
@@ -425,7 +473,9 @@ async function handleAddress() {
 function wire() {
   $('pair-form').addEventListener('submit', onPair);
   $('pair-back').addEventListener('click', () => renderSend());
-  $('repair').addEventListener('click', () => { $('pair-error').textContent = ''; renderPair(); });
+  $('repair').addEventListener('click', () => { $('pair-error').textContent = ''; renderPair({ fresh: true }); });
+  $('confirm-yes').addEventListener('click', () => pendingAsk?.resolve(true));
+  $('confirm-no').addEventListener('click', () => pendingAsk?.resolve(false));
   $('url-form').addEventListener('submit', onSendUrl);
   $('file').addEventListener('change', async (e) => { const input = e.target; await sendFiles(input.files); input.value = ''; });
   $('open-settings').addEventListener('click', renderSettings);
@@ -453,13 +503,14 @@ async function init() {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
   pruneShared(db).catch(() => {});
-  if (pairing) await renderSend(); else renderPair();
-  await handleAddress();
-  if (storage.kind === 'memory') setStatus('This browser blocks site storage, so the pairing is forgotten when you close the page.', 'bad');
+  if (pairing) await renderSend(); else renderPair({ fresh: true });
   tick();
   setInterval(tick, TICK_MS);
   $('app').setAttribute('aria-busy', 'false');
   document.body.dataset.ready = '1';
+  // A #pair= link may ask on the page and wait for the answer: the page is ready meanwhile.
+  await handleAddress();
+  if (storage.kind === 'memory') setStatus('This browser blocks site storage, so the pairing is forgotten when you close the page.', 'bad');
 }
 
 init().catch((e) => {

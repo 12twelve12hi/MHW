@@ -1,4 +1,5 @@
 // A local web server for the tests: an article page, PDFs (with and without CORS), a page over 8 MiB, a link page.
+// A route can be served without Content-Length (chunked: true).
 import http from 'node:http';
 
 export async function startSite({ pdf, bigPdf } = {}) {
@@ -25,8 +26,11 @@ export async function startSite({ pdf, bigPdf } = {}) {
     hits.push(`${req.method} ${u.pathname}`);
     const r = routes.get(u.pathname);
     if (!r) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('not found'); }
-    res.writeHead(200, { 'Content-Type': r.type, 'Content-Length': r.body.length, ...(r.headers ?? {}) });
-    res.end(req.method === 'HEAD' ? undefined : r.body);
+    // chunked: no Content-Length (the body's size shows only while reading it).
+    res.writeHead(200, { 'Content-Type': r.type, ...(r.chunked ? {} : { 'Content-Length': r.body.length }), ...(r.headers ?? {}) });
+    if (req.method === 'HEAD') return res.end();
+    if (r.chunked) { res.on('error', () => {}); res.write(r.body); return res.end(); }
+    res.end(r.body);
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${server.address().port}`;

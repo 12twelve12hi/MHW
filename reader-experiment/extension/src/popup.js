@@ -62,13 +62,22 @@ function show(view) {
 
 // --- pairing --------------------------------------------------------------------------------------------------------
 
-/** The pairing field: when nothing is paired, or from Settings > "Change pairing…" (then with a way back). */
-function renderPair() {
+/**
+ * The pairing field: when nothing is paired, or from Settings > "Change pairing…" (then with a way back). fresh: a new
+ * visit (not a return from the question), which sets Advanced > Relay URL to the relay in use, so that typing the
+ * same Daylight's code again (to rename this browser, say) keeps a self-hosted relay instead of moving to ntfy.sh.
+ */
+function renderPair({ fresh = false } = {}) {
   show('view-pair');
   $('pair-back').hidden = !st?.paired;
   $('pair-error').textContent = '';
   $('from').placeholder = st?.defaultFrom || 'Chrome on Mac';
   if (!$('from').value && st?.from) $('from').value = st.from;
+  if (fresh) {
+    const own = st?.paired && !st.defaultRelay ? st.relay : '';
+    $('relay').value = own;
+    $('advanced').open = !!own;
+  }
   setTimeout(() => $('code').focus(), 50);
 }
 
@@ -359,7 +368,7 @@ async function onUnpair() {
     await call('unpair');
     st = await call('state');
     rows = [];
-    renderPair();
+    renderPair({ fresh: true });
   } catch (e) { b.textContent = e.message; }
 }
 
@@ -378,7 +387,7 @@ async function init() {
   $('pair-back').addEventListener('click', () => renderSend());
   $('confirm-yes').addEventListener('click', () => onConfirm(true));
   $('confirm-no').addEventListener('click', () => onConfirm(false));
-  $('repair').addEventListener('click', () => renderPair());
+  $('repair').addEventListener('click', () => renderPair({ fresh: true }));
   $('send-page').addEventListener('click', () => send(false));
   $('send-link').addEventListener('click', () => send(true));
   $('perm-allow').addEventListener('click', onPermAllow);
@@ -401,7 +410,7 @@ async function init() {
     return;
   }
   call('clearBadge').catch(() => {});
-  if (!st.paired) renderPair();
+  if (!st.paired) renderPair({ fresh: true });
   else {
     await renderSend();
     call('tick').then(() => startPolling(), () => {});

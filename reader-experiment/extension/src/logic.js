@@ -1,6 +1,6 @@
 // Pure helpers shared by the background and the popup. No browser APIs here, so the unit tests run them in node.
 
-import { safeFileName, cleanTitle, webUrl, describeRow, MAX_ITEM } from './daylight-share.js';
+import { safeFileName, cleanTitle, webUrl, describeRow, normalizeRelay, MAX_ITEM, OUTBOX_EXPIRY_MS } from './daylight-share.js';
 
 export const PDF_MIME = 'application/pdf';
 /** The PDF is read out of the page in pieces of this many bytes (each piece crosses the extension boundary as base64). */
@@ -108,6 +108,18 @@ export function defaultDeviceName(target, os = '') {
   return where ? `${browser} on ${where}` : browser;
 }
 
+/** True for a daylightshare:// pairing link (it names its own relay; no r= means ntfy.sh), false for a typed code. */
+export const isPairingLink = (input) => /^daylightshare:/i.test(String(input ?? '').trim());
+
+/**
+ * The relay for a pairing typed or pasted on an app's own pairing screen (PROTOCOL 1.3): a link's own, else the
+ * Advanced > Relay URL field's when it is filled in, else ntfy.sh. -> a normalised relay URL.
+ */
+export function relayForInput(parsed, input, advanced) {
+  if (!isPairingLink(input) && String(advanced ?? '').trim()) return normalizeRelay(advanced);
+  return parsed.relay;
+}
+
 /** The words on a row's button, by describeRow's action. */
 export const ACTION_LABELS = { 'retry-now': 'Retry now', 'try-again': 'Try again' };
 
@@ -167,3 +179,25 @@ export function relativeTime(ms, now = Date.now()) {
 
 /** A row still waiting for something (an ack or a re-send). */
 export const isPending = (row) => row && (row.status === 'sending' || row.status === 'sent' || row.status === 'failed');
+
+/**
+ * How long after a share (`created`) an ack can still arrive: the outbox's 7 days of re-sends, then the 8 days the
+ * Daylight keeps listing ids it received in its acks (DIGEST_WINDOW, CHANGES-v1.1 2.1). An expired row can still be
+ * delivered in that time: the Daylight may come online and pick up the last re-send still on the relay.
+ */
+export const ACK_WINDOW_MS = OUTBOX_EXPIRY_MS + 8 * 86400000;
+
+/** True while an ack is worth reading: some row isn't delivered and was shared less than ACK_WINDOW_MS ago. */
+export const wantsAcks = (rows, now = Date.now()) =>
+  (rows ?? []).some((r) => r && r.status !== 'delivered' && now - (r.created ?? 0) < ACK_WINDOW_MS);
+
+/**
+ * The outbox's acks and re-sends (PROTOCOL 3.3; CHANGES-v1.1 2.4 tick). The library's resendDue always runs: it makes
+ * no request unless something is due, and it ends week-old rows and drops expired rows' content after 14 days
+ * (CONTENT_KEEP). The ack topic is read only while wantsAcks(), so an idle outbox stays off the relay.
+ * sender: a daylight-share Sender; call it under the app's own outbox lock. -> {delivered, resent}
+ */
+export async function maintain(sender, now = Date.now()) {
+  if (wantsAcks(await sender.list(), now)) return sender.tick();
+  return { delivered: 0, resent: (await sender.resendDue()).length };
+}

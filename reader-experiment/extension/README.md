@@ -54,7 +54,9 @@ paste the pairing link (`daylightshare://pair?...`), optionally name this browse
 **Pair**. *Advanced: Relay URL* is only for a Daylight that uses its own ntfy server (a pairing link already carries
 it).
 
-**⋯ › Change pairing…** takes a code again. The same Daylight's code with a new relay (or a new name) applies at once
+**⋯ › Change pairing…** takes a code again, with *Advanced: Relay URL* filled in with the relay in use (so the same
+code typed again, to rename this browser, keeps it; a pasted link always uses its own). The same Daylight's code with a
+new relay (or a new name) applies at once
 (*Pairing updated: now sending through …*) and keeps anything not yet delivered, which then goes through the new
 relay. Another Daylight's code asks first, showing the start of its code (*Code starts E4AY*) and that it replaces the
 current Daylight; **Switch** discards what the old one hasn't picked up yet. These words, like the history's, come from
@@ -96,7 +98,9 @@ the popup asks for permission to download from that one site. Saying no sends th
 hours). The extension checks for the Daylight's confirmation after each send, 30 seconds later, whenever the popup is
 open, and every 15 minutes while the browser runs. Anything unconfirmed is sent again: links and small pages every 11
 hours, files and large pages 3 hours apart twice, then twice a day, for up to a week. An item still undelivered after
-a week shows *Not delivered* with **Try again**.
+a week shows *Not delivered* with **Try again**; its copy is kept for that until two weeks after the share. If the
+Daylight picks up the last re-send late, a confirmation that arrives within about two weeks still turns it into
+*Delivered ✓*. With nothing waiting or still to be confirmed, the extension doesn't contact the relay.
 
 ## Privacy
 

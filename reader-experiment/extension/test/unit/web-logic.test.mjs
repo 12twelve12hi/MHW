@@ -89,3 +89,57 @@ test('the site has every file the page, the manifest and the service worker refe
     for (const m of fs.readFileSync(path.join(w.dir, f), 'utf8').matchAll(/from '\.\/([^']+)'/g)) assert.ok(fs.existsSync(path.join(w.dir, m[1])), `${f} imports ${m[1]}`);
   }
 });
+
+test('sw.js keeps shared files only up to the protocol’s MAX_ITEM', async () => {
+  const ds = await w.load('daylight-share.js');
+  const sw = fs.readFileSync(path.join(w.dir, 'sw.js'), 'utf8');
+  assert.equal(Number(/const MAX_ITEM = (\d+);/.exec(sw)?.[1]), ds.MAX_ITEM);
+});
+
+test('the page’s tick (logic.maintain): an expired copy goes after 14 days, a late ack still delivers, idle is quiet', async () => {
+  const { startMockRelay } = await import('../../../share/js/mock-relay.mjs');
+  const ds = await w.load('daylight-share.js');
+  const L = await w.load('logic.js');
+  let clock = Date.now();
+  const relay = await startMockRelay({ now: () => clock });
+  try {
+    const secret = ds.generateSecret();
+    const pairing = { secret, relay: relay.url, name: 'D' };
+    const storage = new ds.MemoryStorage();
+    const sender = new ds.Sender({ pairing, storage, from: 'test (web)', app: 'web/test', now: () => clock });
+    const receiver = new ds.Receiver({ pairing, storage: new ds.MemoryStorage() });
+    const day = 86400000;
+    const t0 = clock;
+    assert.deepEqual(await L.maintain(sender, clock), { delivered: 0, resent: 0 });
+    assert.equal(relay.state.requests.length, 0, 'an empty outbox makes no request');
+
+    const file = await sender.send({ kind: 'file', name: 'a.txt', mime: 'text/plain', content: ds.utf8('never picked up') });
+    const link = await sender.send({ kind: 'url', url: 'https://example.com/late' });
+    clock = t0 + 7 * day - 30 * 60000;
+    assert.equal((await L.maintain(sender, clock)).resent, 2, 'the last re-sends before the week is up');
+    clock = t0 + 7 * day + 60000;
+    await L.maintain(sender, clock);
+    assert.deepEqual((await sender.list()).map((r) => r.status), ['expired', 'expired']);
+    // The Daylight comes back, finds both re-sends still on the relay and acks them: both are delivered.
+    clock += 3600000;
+    const got = await receiver.pollOnce();
+    assert.deepEqual(got.items.map((i) => i.header.id).sort(), [file.id, link.id].sort());
+    assert.equal((await L.maintain(sender, clock)).delivered, 2);
+    assert.ok((await sender.list()).every((r) => r.status === 'delivered'));
+
+    // A file the Daylight never acks: expired, its copy kept until 14 days after the share, then dropped.
+    const t1 = clock;
+    const lost = await sender.send({ kind: 'file', name: 'b.txt', mime: 'text/plain', content: ds.utf8('lost') });
+    clock = t1 + 8 * day;
+    await L.maintain(sender, clock);
+    assert.equal((await sender.list()).find((r) => r.id === lost.id).status, 'expired');
+    assert.ok(await storage.get(`outbox/${lost.id}`));
+    clock = t1 + 37 * day;
+    const before = relay.state.requests.length;
+    await L.maintain(sender, clock);
+    assert.equal(await storage.get(`outbox/${lost.id}`), undefined, 'dropped (CONTENT_KEEP)');
+    assert.equal(relay.state.requests.length, before, 'past the ack window nothing reads the relay');
+  } finally {
+    await relay.close();
+  }
+});

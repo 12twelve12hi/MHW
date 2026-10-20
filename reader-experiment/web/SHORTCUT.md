@@ -64,7 +64,7 @@ switch back to what you were reading. It works the same from News, Mail and any 
 link.
 
 If Safari has cleared the web sender's data, the first run afterwards asks *Pair with …? Code starts …* before it
-sends: check the code against your Daylight and tap **OK**. Runs after that don't ask.
+sends: check the code against your Daylight and tap **Pair**. Runs after that don't ask.
 
 The Daylight Reader downloads the article from its link, so the Shortcut sends the address, not the page as you see
 it: pages behind a login may arrive as the login page. To send those whole, use the Send to Daylight app or its

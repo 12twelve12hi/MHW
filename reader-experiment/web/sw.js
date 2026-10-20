@@ -3,6 +3,11 @@
 // build.mjs replaces __BUILD__ with a hash of the site, so each release installs fresh files.
 
 const BUILD = '__BUILD__';
+/**
+ * The largest file the page sends (MAX_ITEM in daylight-share.js, protocol 1.1; a unit test keeps them equal). A larger
+ * shared file is never copied: the page gets its name and size and refuses it in the protocol's words.
+ */
+const MAX_ITEM = 9000000;
 const CACHE = `send-to-daylight-${BUILD}`;
 const SHELL = [
   './', 'app.js', 'styles.css', 'daylight-share.js', 'logic.js', 'web-logic.js', 'web-storage.js', 'manifest.webmanifest',
@@ -72,25 +77,39 @@ function openDb() {
   });
 }
 
-/** A share from the Android share sheet: keep it (files too) for the page, then open the page to send it. */
+/** Keeps a share for the page, under a new id. */
+async function keepShare(db, entry, id) {
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction('shared', 'readwrite');
+    tx.objectStore('shared').put(entry, id);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
+/**
+ * A share from the Android share sheet: keep it for the page, then open the page to send it. Files over MAX_ITEM keep
+ * only their name and size (CHANGES-v1.1 2.2: refused before they are read or copied). When the copy doesn't fit (a
+ * storage quota), the names stay with noSpace and the page says this device is out of space.
+ */
 async function receiveShare(req) {
   const scope = self.registration.scope;
   try {
     const form = await req.formData();
     const files = form.getAll('files').filter((f) => f && typeof f === 'object' && typeof f.size === 'number');
-    const entry = {
+    const base = {
       title: String(form.get('title') ?? ''), text: String(form.get('text') ?? ''), url: String(form.get('url') ?? ''),
-      files: files.map((f) => ({ name: f.name || 'document', type: f.type || '', blob: f })), at: Date.now(),
+      at: Date.now(),
     };
+    const about = (f) => ({ name: f.name || 'document', type: f.type || '', size: f.size });
     const id = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('');
     const db = await openDb();
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction('shared', 'readwrite');
-      tx.objectStore('shared').put(entry, id);
-      tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
-    });
+    try {
+      await keepShare(db, { ...base, files: files.map((f) => (f.size > MAX_ITEM ? about(f) : { ...about(f), blob: f })) }, id);
+    } catch {
+      await keepShare(db, { ...base, files: files.map((f) => ({ ...about(f), noSpace: f.size <= MAX_ITEM })) }, id);
+    }
     return Response.redirect(new URL(`./?share=${id}&autosend=1`, scope).href, 303);
   } catch {
     return Response.redirect(new URL('./', scope).href, 303);

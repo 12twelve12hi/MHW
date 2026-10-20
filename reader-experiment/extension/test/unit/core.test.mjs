@@ -29,8 +29,8 @@ function extensionFetch(fb, site, flags) {
   };
 }
 
-async function setup({ target = 'chrome', native, pdfChunkSize, paired = true, contextMenus = true, now, storage } = {}) {
-  const relay = await startMockRelay();
+async function setup({ target = 'chrome', native, pdfChunkSize, paired = true, contextMenus = true, now, storage, relayNow } = {}) {
+  const relay = await startMockRelay(relayNow ? { now: relayNow } : {});
   const site = await startSite({ pdf: PDF, bigPdf: BIG_PDF });
   const fb = fakeBrowser({ native, contextMenus });
   const flags = { relayStatus: 0 };
@@ -74,6 +74,14 @@ test('pairing with a link, a typed code and the Advanced relay', async () => {
     const moved = await s.app.pair({ input: code });
     assert.equal(moved.notice, 'Pairing updated: now sending through ntfy.sh.');
     assert.equal((await s.app.state()).relay, 'https://ntfy.sh');
+    // A pasted link names its own relay: Advanced (which Change pairing… fills with the relay in use) doesn't override it.
+    const back = await s.app.pair({ input: s.link, relay: 'https://ntfy.sh' });
+    assert.equal(back.notice, `Pairing updated: now sending through ${ds.relayHost(s.relay.url)}.`);
+    assert.equal((await s.app.state()).relay, s.relay.url);
+    // The code typed again with Advanced as Change pairing… fills it: the relay stays.
+    assert.equal((await s.app.pair({ input: code, relay: s.relay.url, from: 'Renamed' })).notice, 'Pairing updated.');
+    assert.equal((await s.app.state()).relay, s.relay.url);
+    assert.equal((await s.app.state()).from, 'Renamed');
   } finally { await s.close(); }
 });
 
@@ -315,7 +323,7 @@ test('a relay that is full (413) waits about 3 hours; the third time it is Not d
   } finally { await s.close(); }
 });
 
-test('tick stays off the relay when nothing is waiting; start sets up menus and the alarm', async () => {
+test('start sets up menus and the alarm; with nothing to wait for, a tick makes no request', async () => {
   const s = await setup();
   try {
     await s.app.start();
@@ -325,6 +333,55 @@ test('tick stays off the relay when nothing is waiting; start sets up menus and 
     const before = s.relay.state.requests.length;
     assert.deepEqual(await s.app.tick(), { delivered: 0, resent: 0 });
     assert.equal(s.relay.state.requests.length, before);
+  } finally { await s.close(); }
+});
+
+test('an expired page’s stored copy is dropped 14 days after the share, by the alarm, with nothing else waiting', async () => {
+  let clock = Date.now();
+  const s = await setup({ now: () => clock });
+  try {
+    const t0 = clock;
+    const t = s.fb.addTab({ url: 'https://example.com/never', title: 'Never', html: articleHtml });
+    const r = await s.app.onMessage({ type: 'sendTab', tabId: t });
+    await s.app.tick(); // after the check a send starts, at the time of the send
+    clock = t0 + 7 * 86400000 + 60000;
+    await s.app.onAlarm({ name: core.ALARM_TICK });
+    const row = (await s.rows())[0];
+    assert.deepEqual([row.status, row.errorCode], ['expired', '']);
+    assert.ok(s.fb.local.has(`outbox/${r.row.id}`), 'kept for Try again');
+    clock = t0 + 10 * 86400000;
+    await s.app.onAlarm({ name: core.ALARM_TICK });
+    assert.ok(s.fb.local.has(`outbox/${r.row.id}`), 'still kept on day 10');
+    clock = t0 + 37 * 86400000;
+    const before = s.relay.state.requests.length;
+    await s.app.onAlarm({ name: core.ALARM_TICK });
+    assert.equal(s.fb.local.has(`outbox/${r.row.id}`), false, 'dropped: more than 14 days after the share (CONTENT_KEEP)');
+    assert.equal(s.relay.state.requests.length, before, 'past the ack window (15 days) nothing reads the relay');
+    assert.equal((await s.rows())[0].status, 'expired');
+  } finally { await s.close(); }
+});
+
+test('an expired link is marked delivered when the Daylight comes back and acks the last re-send', async () => {
+  let clock = Date.now();
+  const s = await setup({ now: () => clock, relayNow: () => clock });
+  try {
+    const L = await b.load('logic.js');
+    const t0 = clock;
+    const { row } = await s.app.sendUrl('https://example.com/late', 'Late');
+    await s.app.tick();
+    clock = t0 + 7 * 86400000 - 30 * 60000;
+    assert.equal((await s.app.tick()).resent, 1, 'the last re-send, half an hour before the week is up');
+    clock = t0 + 7 * 86400000 + 60000;
+    await s.app.onAlarm({ name: core.ALARM_TICK });
+    assert.equal((await s.rows())[0].status, 'expired');
+    assert.equal(L.statusInfo((await s.rows())[0], clock).retry, 'Try again');
+    // The Daylight comes online, finds the re-send still on the relay and acks it.
+    clock += 3600000;
+    assert.deepEqual((await s.receive()).map((i) => i.header.id), [row.id]);
+    await s.app.onAlarm({ name: core.ALARM_TICK });
+    const done = (await s.rows())[0];
+    assert.equal(done.status, 'delivered');
+    assert.deepEqual([L.statusInfo(done, clock).label, L.statusInfo(done, clock).retry], ['Delivered ✓', null]);
   } finally { await s.close(); }
 });
 
@@ -413,6 +470,51 @@ test('a 10 MB PDF sends its link with the shared note; a 5 MB one goes as a file
     assert.equal(attachments.length, 3, 'three frames');
     assert.ok(attachments.every((m) => m.attachment.size <= 2_000_000), attachments.map((m) => m.attachment.size).join(', '));
   } finally { await s.close(); }
+});
+
+test('a PDF served without Content-Length is read only until it passes 9 MB, in the page and by the extension; its link goes', async () => {
+  const s = await setup();
+  try {
+    s.site.routes.set('/files/stream.pdf', { type: 'application/pdf', body: Buffer.from(BIG_PDF), chunked: true });
+    s.site.routes.set('/cors/stream.pdf', { type: 'application/pdf', body: Buffer.from(BIG_PDF), chunked: true, headers: { 'Access-Control-Allow-Origin': '*' } });
+    const head = await fetch(`${s.site.url}/files/stream.pdf`);
+    assert.equal(head.headers.get('content-length'), null, 'served without a length');
+    await head.body.cancel();
+    const inPage = s.fb.addTab({ url: `${s.site.url}/files/stream.pdf`, title: 'Stream', contentType: 'application/pdf' });
+    const r1 = await s.app.onMessage({ type: 'sendTab', tabId: inPage });
+    assert.deepEqual([r1.row.kind, r1.note], ['url', 'The PDF is over 9 MB, so its link was sent.']);
+    assert.ok(s.fb.tabCalls(inPage).includes('pdfStart'));
+    assert.equal(s.fb.tabCalls(inPage).filter((c) => c === 'pdfChunk').length, 0, 'nothing was copied out of the page');
+    const byExtension = s.fb.addTab({ url: `${s.site.url}/cors/stream.pdf`, title: 'Stream', scriptable: false });
+    const r2 = await s.app.onMessage({ type: 'sendTab', tabId: byExtension });
+    assert.deepEqual([r2.row.kind, r2.note], ['url', 'The PDF is over 9 MB, so its link was sent.']);
+    // In the page, a 300 MB body: read in pieces only until it passes 9 MB.
+    let pulled = 0;
+    const endless = () => new Response(new ReadableStream({
+      pull(c) { pulled++; c.enqueue(new Uint8Array(1_000_000)); if (pulled === 300) c.close(); },
+    }, { highWaterMark: 0 }), { headers: { 'Content-Type': 'application/pdf' } });
+    const huge = s.fb.addTab({ url: 'https://example.com/huge.pdf', title: 'Huge', contentType: 'application/pdf', fetch: async () => endless() });
+    const r3 = await s.app.onMessage({ type: 'sendTab', tabId: huge });
+    assert.deepEqual([r3.row.kind, r3.note], ['url', 'The PDF is over 9 MB, so its link was sent.']);
+    assert.ok(pulled <= 11, `read ${pulled} MB of 300`);
+  } finally { await s.close(); }
+});
+
+test('readCapped stops reading a body once it is over the limit', async () => {
+  let pulled = 0;
+  let cancelled = false;
+  const body = new ReadableStream({
+    pull(c) { pulled++; c.enqueue(new Uint8Array(1000)); if (pulled === 1000) c.close(); },
+    cancel() { cancelled = true; },
+  }, { highWaterMark: 0 });
+  assert.deepEqual(await core.readCapped(new Response(body), 5500), { tooLarge: true, size: 6000 });
+  assert.ok(pulled <= 7, `read ${pulled} of 1000 pieces`);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(cancelled, true, 'the rest is cancelled');
+  const ok = await core.readCapped(new Response(new Uint8Array([1, 2, 3])), 3);
+  assert.deepEqual([...ok.bytes], [1, 2, 3]);
+  const declared = await core.readCapped(new Response('x', { headers: { 'content-length': '9000001' } }), 9000000);
+  assert.deepEqual(declared, { tooLarge: true, size: 9000001 });
 });
 
 test('Safari asks the app for its pairing when not paired, and ignores errors', async () => {

@@ -32,9 +32,31 @@ export async function pdfStart(url, maxBytes) {
     const res = await fetch(url || location.href, { credentials: 'include' });
     if (!res.ok) return { error: 'HTTP ' + res.status };
     const declared = Number(res.headers.get('content-length'));
-    if (declared > maxBytes) return { tooLarge: true, size: declared };
-    const blob = await res.blob();
-    if (blob.size > maxBytes) return { tooLarge: true, size: blob.size };
+    if (declared > maxBytes) {
+      try { await res.body?.cancel(); } catch { /* nothing to cancel */ }
+      return { tooLarge: true, size: declared };
+    }
+    // Without a Content-Length, read only until it goes over maxBytes (size is then the bytes read: a lower bound).
+    let blob;
+    const reader = res.body?.getReader?.();
+    if (reader) {
+      const parts = [];
+      let size = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.length;
+        if (size > maxBytes) {
+          reader.cancel().catch(() => {});
+          return { tooLarge: true, size };
+        }
+        parts.push(value);
+      }
+      blob = new Blob(parts, { type: res.headers.get('content-type') || '' });
+    } else {
+      blob = await res.blob();
+      if (blob.size > maxBytes) return { tooLarge: true, size: blob.size };
+    }
     const head = new Uint8Array(await blob.slice(0, 1024).arrayBuffer());
     let magic = false;
     for (let i = 0; i + 4 < head.length; i++) {
