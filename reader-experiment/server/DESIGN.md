@@ -6,7 +6,7 @@ the relay alone cannot do, and nothing else:
 1. **Email-in**: a private address for newsletters and documents (needs a domain on Cloudflare; optional).
 2. **Feeds and digests**: RSS/Atom/JSON feeds checked on a schedule, sent one by one or as a daily digest page.
 3. **Large files**: files beyond ntfy.sh's limits. The sending app encrypts them with the pairing key; the server
-   stores and serves only ciphertext it cannot decrypt.
+   stores and serves only ciphertext, which it cannot decrypt unless the user opts into v1 delivery (3.1).
 4. **AI**: summaries, key points, "explain this" and "ask about this document" with Claude, using the user's
    `ANTHROPIC_API_KEY`.
 
@@ -48,7 +48,7 @@ was done with it is in the Critique log at the end. The big changes:
 | Feeds | Stored in D1, checked hourly. Each feed is set to `each` (every new article as a `url` item) or `digest`. There is one daily digest at a chosen hour and time zone (8). |
 | AI | `POST /v1/ai` with `op`. `@anthropic-ai/sdk`, model `claude-opus-5-5`, `client.beta.messages.create` with `betas: ["server-side-fallback-2026-07-01"]`, `fallbacks: "default"`, explicit `output_config.effort`, structured outputs for JSON. PDFs are base64 `document` blocks spliced from validated R2 parts. Worst-case cost is reserved before each call, under deploy-time ceilings (9). |
 | Storage | **D1** for state and for the server's own item frames. **R2** (optional) for hosted large files, raw email and PDF sources. No KV (11). |
-| Deploy | GitHub Actions `rx-server.yml`: always test. Deploy when `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `DAYLIGHT_SERVER_CODE` exist. Secrets are given only to the steps that need them. New secrets apply when the user opens the latest run and chooses **Re-run all jobs** (12). |
+| Deploy | GitHub Actions `rx-server.yml`: always test. Deploy when `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `DAYLIGHT_SERVER_CODE` (or, for v1 delivery, `DAYLIGHT_PAIRING`) exist. Secrets are given only to the steps that need them. New secrets apply when the user opens the latest run and chooses **Re-run all jobs** (12). |
 | CPU budget | Large bodies stream; JavaScript never touches them. Each invocation has a D1-query and subrequest budget. One heavy step per Cron run, with attempt counting. A deploy-time CPU canary tells the user what needs Workers Paid (2). |
 
 ---
@@ -98,10 +98,10 @@ your server") and spend the Anthropic key within its caps. Section 15 covers the
 | Wall-clock time | No limit for an HTTP request while the client stays connected; **15 min** for a Cron run; `waitUntil` ≤ 30 s after the response | AI calls run inside the request (with keepalives, 9.5) or inside a Cron run (jobs); never in `waitUntil`. |
 | Subrequests | **50 external** per invocation; calls to Cloudflare services count separately; 6 simultaneous outgoing connections | Fixed allowances per Cron step, ≤ 40 in total (2.3). Redirects count. |
 | D1 queries | **50 per Worker invocation** (1,000 on Paid). Neither workerd nor Miniflare enforces this. | Every invocation has a budget of 40 statements, counted by a wrapper around `env.DB` that the tests also use (2.3). |
-| Memory | 128 MB per isolate | Bodies stream; the largest buffer is one ≤ 1 MiB server frame or one ≤ 4 MiB PDF part. |
+| Memory | 128 MB per isolate | Bodies stream; the largest buffer is one ≤ 1 MiB server frame or one ≤ 2 MiB PDF part. |
 | Worker size | 3 MB compressed | SDK + postal-mime + our code ≈ 0.5 MB; CI checks the gzipped bundle (12.4). |
 | Cron Triggers | 5 per account | The server uses **one**: `* * * * *`. |
-| Request body | 100 MB (workers.dev) | Largest upload is one hosted-file frame (≤ 12,713,984 bytes) or one PDF part (4 MiB). `Content-Length` is required and checked before reading (3.3). |
+| Request body | 100 MB (workers.dev) | Largest upload is one hosted-file frame (≤ 12,713,984 bytes) or one PDF part (2 MiB). `Content-Length` is required and checked before reading (3.3). |
 | D1 | 5 M rows read / day, 100 k rows written / day, 500 MB per database, **2,000,000 bytes per row**, 10 databases | One database. Server frames are ≤ 1 MiB rows. Writes are ≪ 10 k / day. A guard pauses optional writes past 400 MB (11.1). |
 | R2 | 10 GB-month, 1 M Class A / month, 10 M Class B / month, free egress. **Switching R2 on requires a payment method on file, even for the free tier.** | Optional. Without R2 the deploy leaves out the binding. Large files, email-in and PDF AI then answer `needs-r2`; everything else works (12.0). |
 | KV | 1,000 writes / day; eventually consistent (up to 60 s) | **Not used.** A just-written frame could 404 at another location, and v1 receivers treat 404 as "expired". |
@@ -119,7 +119,7 @@ CPU measured on the build box (Node 22, the same V8 family as workerd; Cloudflar
 | Base64-encode 20 MiB (`Buffer`) / `JSON.stringify` a body holding 27 MB of base64 | 26 ms / **124 ms** |
 | postal-mime parse of a 74 KiB newsletter: cold / warm; 186 KiB warm | **36 ms** / 6.5 ms / 19 ms |
 | Scan 30 MB for `"` and `\`: `Buffer.indexOf` / `Uint8Array.prototype.indexOf` / per-byte table loop | 8.7 ms / **44–56 ms** / 92 ms |
-| Scan one 4 MiB PDF part the same way (worst method) | ≈ 7 ms |
+| Scan one 2 MiB PDF part the same way (`Uint8Array.prototype.indexOf`) | ≈ 3–4 ms |
 | Scan a 69 KiB RSS feed (50 items) | 0.3 ms |
 
 Rules for the implementation:
@@ -127,7 +127,7 @@ Rules for the implementation:
 1. **Large bodies never pass through JavaScript.** Hosted-file frames and raw emails go from the request (or
    `message.raw`) to R2 as streams. They come back from R2 (or from D1 for server frames) as response bodies. Hosted
    frames are checked by the receiver (AES-GCM and SHA-256), never by the server.
-2. **The only scans are small and bounded.** A PDF is uploaded in parts of at most 4 MiB, and each part is scanned in
+2. **The only scans are small and bounded.** A PDF is uploaded in parts of at most 2 MiB, and each part is scanned in
    its own request (9.2). A single 30 MB scan does not fit in 10 ms with typed arrays.
 3. **PDFs reach Claude without `JSON.stringify` touching them.** The SDK builds the request with a short placeholder.
    A custom `fetch` splices the validated parts in as a stream (9.4).
@@ -569,8 +569,10 @@ Without `DAYLIGHT_EMAIL_DOMAIN` the email state is `needs-domain`, the email end
    - `DAYLIGHT_EMAIL_DOMAIN` is unset (a rule left over from an earlier deploy);
    - R2 is missing;
    - the recipient is not the current address.
-2. Read `From`, `Subject`, `Date`, `Message-ID` and the **topmost** `Authentication-Results` header (7.3) from
-   `message.headers`. Read raw header lines; `Headers.get` joins repeated headers with `, `.
+2. Read `From`, `Subject`, `Date` and `Message-ID` from `message.headers`. The **topmost** `Authentication-Results`
+   line (7.3) cannot come from there, because `Headers` joins repeated headers with `, `. So the handler `tee()`s
+   `message.raw`, reads one branch up to the first empty line (at most 64 KiB, the header block), takes that line in
+   order, and cancels the branch. The other branch is used in step 5, or cancelled.
 3. Drop silently (accept, store nothing, add a `mail` row with the reason) when any of these holds:
    - the sender matches the block list;
    - DMARC is `fail` (7.3);
@@ -812,12 +814,12 @@ result stays readable at `GET /v1/ai/jobs/{id}` for 24 h.
 file**. It never holds it whole. It then uploads `PUT /v1/ai/sources/{sourceId}/{i}?n=<parts>`:
 
 - Body `text/plain`, header `X-DLS-Source-Name: <percent-encoded file name>`.
-- Each part except the last is exactly 4,194,304 characters (3,145,728 PDF bytes, so no padding inside). The last is
-  ≤ 4,194,304. At most 8 parts. `sourceId` = the first 32 hex characters of the SHA-256 of the PDF bytes.
+- Each part except the last is exactly 2,097,152 characters (1,572,864 PDF bytes, so no padding inside). The last is
+  ≤ 2,097,152. At most 15 parts. `sourceId` = the first 32 hex characters of the SHA-256 of the PDF bytes.
 - The Worker pipes each part through a `TransformStream` that **rejects the part if any chunk contains `"` (0x22)
-  or `\` (0x5C)**. It uses `indexOf` on each chunk, ≤ 7 ms per part in the worst case measured (2.2). Those are the
-  only bytes that could end the JSON string the part is spliced into (9.4). Anything else that is not base64 makes
-  the API answer 400 (`AI_BAD_INPUT`), with no injection possible.
+  or `\` (0x5C)**. It uses `indexOf` on each chunk, about 3–4 ms per part as measured (2.2). Those are the
+  only bytes that could end the JSON string the part is spliced into (9.4). Any other non-base64 byte makes the API
+  refuse the request (its 400 becomes `AI_BAD_INPUT`), with no injection possible.
 - Accepted parts go to R2 `a/<sourceId>/<i>`, and the part index is added to the source's `validated` list in D1.
 - A source is usable only when all `n` parts are validated. The splice refuses any part that is not.
 - `POST /v1/ai` with a `sourceId` that is unknown or incomplete answers `404 NEED_SOURCE` with `missingParts`. The app
@@ -850,8 +852,9 @@ How it works:
    These are the conservative rates for whichever model serves, including a fallback.
 
    ```sql
-   UPDATE usage SET n = n + 1, reserved_micros = reserved_micros + ?R
-   WHERE day = ?d AND kind = 'ai' AND n < ?maxReq AND usd_micros + reserved_micros + ?R <= ?capMicros
+   -- ?1 = R in micro-dollars, ?2 = UTC day, ?3 = request ceiling, ?4 = today's cap in micro-dollars
+   UPDATE usage SET n = n + 1, reserved_micros = reserved_micros + ?1
+   WHERE day = ?2 AND kind = 'ai' AND n < ?3 AND usd_micros + reserved_micros + ?1 <= ?4
    ```
 
    This runs in a batch after `INSERT OR IGNORE` of the day's row. `meta.changes == 0` → `AI_DAILY_LIMIT` with
@@ -881,9 +884,17 @@ const client = new Anthropic({
   maxRetries: 0,                       // every attempt is reserved and counted (9.3)
   timeout: 240_000,
   fetch: sourceSplicingFetch(env, parts), // 2.2 rule 3: streams the validated PDF parts from R2 into the body
-  // __TESTING__ is a build-time define: false in every deploy bundle, so this line is removed there (12.2)
-  ...(__TESTING__ && env.TEST_ANTHROPIC_BASE_URL ? { baseURL: env.TEST_ANTHROPIC_BASE_URL } : {}),
+  ...testOnlyBaseURL(env),
 });
+
+function testOnlyBaseURL(env: Env) {
+  // __TESTING__ is a build-time define (12.2): false in every deploy bundle, where esbuild drops this `if (false)`
+  // block, so a deployed Worker never reads a test variable whatever is set on it. CI greps the bundle to prove it.
+  if (__TESTING__) {
+    if (env.TEST_ANTHROPIC_BASE_URL) return { baseURL: env.TEST_ANTHROPIC_BASE_URL };
+  }
+  return {};
+}
 
 const SUMMARY_SCHEMA = {
   type: "object",
@@ -1070,7 +1081,7 @@ Fixtures cover:
   | JSON | 64 KiB |
   | `POST /v1/ai` with a `text` source | 1,100,000 bytes |
   | OPML import | 256 KiB |
-  | PDF part | 4,194,304 bytes |
+  | PDF part | 2,097,152 bytes |
   | Hosted-file frame | 12,713,984 bytes |
 
 - **Ids only in paths.** Paths carry only ids, never email addresses or other content. Invocation logs are off anyway
@@ -1209,7 +1220,7 @@ All answer `409 NOT_CONFIGURED` without a domain or R2.
 
 | Method, path | Request | Response |
 |---|---|---|
-| `PUT /v1/ai/sources/{sourceId}/{i}?n=<1–8>[&replace=1]` | base64 part (`text/plain`), `X-DLS-Source-Name` | `201 {"sourceId", "stored": [0, 1], "complete": false, "expires"}`; `400 AI_BAD_INPUT` (a forbidden byte, a wrong part length); `413 TOO_LARGE` |
+| `PUT /v1/ai/sources/{sourceId}/{i}?n=<1–15>[&replace=1]` | base64 part (`text/plain`), `X-DLS-Source-Name` | `201 {"sourceId", "stored": [0, 1], "complete": false, "expires"}`; `422 AI_BAD_INPUT` (a forbidden byte, a wrong part length; the part is not stored); `413 TOO_LARGE` |
 | `POST /v1/ai` | `{"op": "summary" \| "explain" \| "ask", "source"?: {"url"} \| {"text", "title"?, "url"?} \| {"sourceId"}, "mode"?, "length"?, "lang"?: "auto" \| "<BCP 47>", "passage"?, "question"?, "history"?: [{"q", "a"}], "deliver"?: "app" \| "daylight" \| "both", "about"?: {"id"?, "url"?}}` | 9.5 |
 | `POST /v1/ai/jobs` | the same body | `202 {"job": {"id", "state": "queued", "created"}}`; `429 AI_QUEUE_FULL` |
 | `GET /v1/ai/jobs/{id}` | — | `{"job": {"id", "state": "queued" \| "running" \| "done" \| "failed", "result"?, "error"?, "delivered"?}}` |
@@ -1726,7 +1737,7 @@ export const SERVER_API = 1;                         // apps accept api in [SERV
 export const HOSTED_CHUNK = 12_582_912;              // = protocol CHUNK_MAX (6.2)
 export const HOSTED_MAX = 16 * HOSTED_CHUNK;         // 192 MiB encoded
 export const SERVER_CHUNK = 1_048_576;               // server item frames (5)
-export const SOURCE_PART = 4_194_304;                // base64 characters per PDF part (9.2)
+export const SOURCE_PART = 2_097_152;                // base64 characters per PDF part (9.2)
 export const CONFIG_REFRESH_MS = 6 * 3600 * 1000;
 export const STATUS_REFRESH_MS = 10 * 60 * 1000;
 
@@ -1870,8 +1881,8 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
 | `error` | server | The server's `message` for the recorded code (e.g. `AI_KEY_INVALID`). |
 | `OFFLINE` (network) | app | Couldn't reach the Daylight server. Check your connection and try again. |
 
-"Re-run the deploy" in the app links to a one-line help text: "In GitHub › Actions, open the latest 'Reader experiment
-- Daylight server' run and choose Re-run all jobs."
+"Re-run the deploy" in the app links to a one-line help text: "In GitHub › Actions, open the latest
+'Reader experiment - Daylight server' run and choose Re-run all jobs."
 
 ### 14.2 Server messages (`error.message`, shown as is)
 
@@ -1989,7 +2000,7 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
     - **the exact request**: model `claude-opus-5-5`, beta `server-side-fallback-2026-07-01`, `fallbacks:
       "default"`, `output_config.effort` set, `format` for summaries, no `thinking`, the document block before the
       text block, `max_tokens` 16000, no trailing assistant turn, no tools;
-    - the PDF splice produces byte-exact JSON from 8 parts, and **a part containing `"},"max_tokens":128000,…` is
+    - the PDF splice produces byte-exact JSON from 15 parts, and **a part containing `"},"max_tokens":128000,…` is
       refused at upload and never reaches the mock Claude**;
     - `NEED_SOURCE` with `missingParts`;
     - error mapping: refusal → `AI_REFUSED`, 401 → `AI_KEY_INVALID`, 402 `billing_error` → `AI_BILLING`, 429/529 →
@@ -2046,7 +2057,7 @@ accepted, partly accepted, or rejected with a one-line reason.
 |---|---|---|---|
 | S1 | The server holds the master pairing secret (must-fix) | Accepted | The server gets a one-way Server code (3.1–3.2). Server items go on its own topic under its own key for the Lab Inbox, and acks come on its own ack topic (5). Large files are pairing-key frames the server cannot read (6). The pairing code reaches the server only through the explicit `DAYLIGHT_DELIVERY=v1` opt-in, with an honest notice (14.3). §1, §14.3 and §15 are corrected. |
 | S2 | Body hashed before the HMAC check (must-fix) | Accepted | Bearer token compared before anything else. `Content-Length` is required and capped before reading. A test sends a 50 MB body with a bad token (3.3, 16). |
-| S3 | PDF splice allows JSON injection (must-fix) | Accepted, changed | Bytes are validated at upload, in ≤ 4 MiB parts: a 30 MB typed-array `indexOf` scan measured 44–56 ms, not memchr speed. A validated flag, a second guard on Paid only (Free CPU), and an injection test (9.2, 9.4). |
+| S3 | PDF splice allows JSON injection (must-fix) | Accepted, changed | Bytes are validated at upload, in ≤ 2 MiB parts (about 3–4 ms each): a 30 MB typed-array `indexOf` scan measured 44–56 ms, not memchr speed. A validated flag, a second guard on Paid only (Free CPU), and an injection test (9.2, 9.4). |
 | S4 | Held mail opens unsafely (must-fix) | Accepted | Allow-list sanitizer for all server HTML (7.5). The held queue and its viewer are deferred from release 1, and their rules (JS off, CSP, `data:` images, Load images, external links) are fixed in 7.6. Page items keep `https` images that pass `publicUrl`, because a newsletter's images are its content. |
 | S5 | A forged config can pin a hostile server | Accepted | A future `sent` is refused. TOFU pin, confirmation on a move, host shown next to the fingerprint (4.3). |
 | S6 | Junk and `Attach:` URLs on the ack and config topics | Accepted | Attachments ignored, 256 KiB and 200-message caps, stop after 20 junk frames, the server's own poll instead of `RelayClient.poll`. Each Cron step has its own try/catch and allowances (2.3, 4.3, 5.4). |
