@@ -177,10 +177,11 @@ class InboxRepo(private val app: App) {
         val r = receiver()
         val res = r.handleLive(listOf(msg))
         if (res.ackIds.isNotEmpty()) {
-            try {
-                r.publishAcks(res.ackIds)
-            } catch (e: ShareException) {
-                logw("inbox: ack failed: ${e.message}") // the next poll acks again
+            val error = r.publishAcks(res.ackIds)
+            if (error != null) {
+                // The next poll publishes the digest, which carries these ids (PROTOCOL 3.4 step 4).
+                logw("inbox: ack failed: $error")
+                r.ackFailed()
             }
         }
         if (res.items.isNotEmpty()) sync.value = sync.value.copy(lastCheck = System.currentTimeMillis(), error = null)

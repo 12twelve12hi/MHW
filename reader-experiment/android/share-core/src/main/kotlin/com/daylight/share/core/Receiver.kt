@@ -3,21 +3,29 @@ package com.daylight.share.core
 import java.io.File
 
 /**
- * What the receiver remembers between polls (PROTOCOL 3.2): the cursor, the item ids it has (14 days), the ntfy
- * message ids it has handled (2 days) and the earliest message time of each incomplete item (the cursor never passes
- * it).
+ * What the receiver remembers between polls (PROTOCOL 3.2; CHANGES-v1.1 2.6): the cursor, the item ids it has (14 days
+ * after the latest sighting), the ntfy message ids it has handled (2 days), the earliest message time (relay seconds)
+ * of each incomplete item (the cursor never passes it; given up after 24 h), the messages that carried held parts
+ * ([partMsgs]: message id -> item id and when it was seen, kept 2 days) and when the ack digest last went out.
  */
 class ReceiverState(
     var since: String = "all",
     val seenItems: MutableMap<String, Long> = LinkedHashMap(),
     val seenMsgs: MutableMap<String, Long> = LinkedHashMap(),
     val incomplete: MutableMap<String, Long> = LinkedHashMap(),
+    val partMsgs: MutableMap<String, PartMsg> = LinkedHashMap(),
+    var lastDigest: Long = 0,
 ) {
+    /** A message that carried a part of [item], first seen at [seen] (ms). */
+    data class PartMsg(val item: String, val seen: Long)
+
     fun toJson(): Map<String, Any?> = linkedMapOf(
         "since" to since,
         "seenItems" to LinkedHashMap(seenItems),
         "seenMsgs" to LinkedHashMap(seenMsgs),
         "incomplete" to LinkedHashMap(incomplete),
+        "partMsgs" to partMsgs.mapValuesTo(LinkedHashMap()) { (_, p) -> linkedMapOf("item" to p.item, "seen" to p.seen) },
+        "lastDigest" to lastDigest,
     )
 
     companion object {
@@ -25,38 +33,51 @@ class ReceiverState(
             if (m == null) return ReceiverState()
             fun longs(key: String): MutableMap<String, Long> {
                 val out = LinkedHashMap<String, Long>()
-                (m[key] as? Map<*, *>)?.forEach { (k, v) -> if (k is String && v is Double) out[k] = v.toLong() }
+                (m[key] as? Map<*, *>)?.forEach { (k, v) -> if (k is String && v is Number) out[k] = v.toLong() }
                 return out
             }
-            return ReceiverState((m["since"] as? String) ?: "all", longs("seenItems"), longs("seenMsgs"), longs("incomplete"))
+            val parts = LinkedHashMap<String, PartMsg>()
+            (m["partMsgs"] as? Map<*, *>)?.forEach { (k, v) ->
+                val e = v as? Map<*, *>
+                val item = e?.get("item") as? String
+                val seen = (e?.get("seen") as? Number)?.toLong()
+                if (k is String && item != null && seen != null) parts[k] = PartMsg(item, seen)
+            }
+            return ReceiverState(
+                (m["since"] as? String) ?: "all", longs("seenItems"), longs("seenMsgs"), longs("incomplete"), parts,
+                (m["lastDigest"] as? Number)?.toLong() ?: 0L,
+            )
         }
     }
 }
 
-/** Where [ReceiverState] lives. */
+/** Where [ReceiverState] lives. [lock] is shared by every [Receiver] on the same state. */
 interface ReceiverStore {
     fun load(): ReceiverState
     fun save(state: ReceiverState)
+    val lock: Any get() = this
 }
 
-/** [ReceiverStore] in a JSON file, written atomically. */
+/** [ReceiverStore] in a JSON file, written atomically; its lock is per file ([FileLocks]). */
 class FileReceiverStore(private val file: File) : ReceiverStore {
-    @Synchronized
-    override fun load(): ReceiverState = ReceiverState.fromJson(JsonFiles.readObject(file))
+    override val lock: Any = FileLocks.of(file)
 
-    @Synchronized
-    override fun save(state: ReceiverState) = JsonFiles.write(file, state.toJson())
+    override fun load(): ReceiverState = synchronized(lock) { ReceiverState.fromJson(JsonFiles.readObject(file)) }
+
+    override fun save(state: ReceiverState) = synchronized(lock) { JsonFiles.write(file, state.toJson()) }
 }
 
 class MemoryReceiverStore(private var state: ReceiverState = ReceiverState()) : ReceiverStore {
-    override fun load() = ReceiverState.fromJson(state.toJson())
-    override fun save(state: ReceiverState) { this.state = ReceiverState.fromJson(state.toJson()) }
+    override fun load() = synchronized(lock) { ReceiverState.fromJson(state.toJson()) }
+    override fun save(state: ReceiverState) = synchronized(lock) { this.state = ReceiverState.fromJson(state.toJson()) }
 }
 
 /**
- * The Daylight side (PROTOCOL 3.4, steps 1-3): reads the inbox topic, decodes and reassembles items, hands each new
- * complete item to [accept] (which must store it durably, or throw to have it tried again), and acknowledges
- * everything it has. Handing items to the Reader (step 4) is the app's job.
+ * The Daylight side (PROTOCOL 3.4, steps 1-4; the rules of CHANGES-v1.1 2.6): reads the inbox topic, decodes and
+ * reassembles items, hands each new complete item to [accept] (which must store it durably, or throw: then the item's
+ * messages are handled, but its id is not remembered and it is not acked, so it comes back with the sender's next
+ * re-send), acknowledges everything it has, and re-publishes a digest of recent ids every 11 hours and after any
+ * failed ack. Handing items to the Reader (step 5) is the app's job. Every method runs under the state's lock.
  */
 class Receiver(
     val pairing: Pairing,
@@ -68,121 +89,196 @@ class Receiver(
     private val accept: (Reassembler.Completed) -> Unit,
 ) {
     private val keys = pairing.keys
+    private val lock: Any = store.lock
 
-    class Result(val items: List<ItemHeader>, val ackIds: List<String>)
+    /**
+     * [items]: new items, stored. [ackIds]: this poll's ids whose ack was published. [digestIds]: older ids the digest
+     * re-published. [ackError]: why an ack could not be published (null when all went out). [storeError]: why [accept]
+     * failed for an item (null when every item was stored).
+     */
+    class Result(
+        val items: List<ItemHeader>,
+        val ackIds: List<String>,
+        val ackError: String? = null,
+        val storeError: String? = null,
+        val digestIds: List<String> = emptyList(),
+    )
 
-    /** Polls once, handles everything new and publishes the acks. Throws [RelayException] when the relay is unreachable. */
-    @Synchronized
-    fun pollOnce(): Result {
+    /**
+     * Polls once, handles everything new, saves the state, then publishes the acks (and the digest when due). Throws
+     * [RelayException] only when the poll itself fails; acks never throw.
+     */
+    fun pollOnce(): Result = synchronized(lock) {
         val state = store.load()
-        prune(state)
-        val msgs = try {
-            relay.poll(keys.inboxTopic, state.since) { it in state.seenMsgs }
-        } catch (e: RelayException) {
-            // A relay that rejects the cursor (400) is read from the start; dedupe makes that safe.
-            if (e.status == 400 && state.since != "all") relay.poll(keys.inboxTopic, "all") { it in state.seenMsgs } else throw e
-        }
-        val result = handle(msgs, state)
+        val now = clock()
+        prune(state, now)
+        val msgs = relay.poll(keys.inboxTopic, state.since) { id -> handledOrHeld(state, id) }
+        val handled = handle(msgs, state, now)
         store.save(state)
-        publishAcks(result.ackIds)
-        return result
+
+        val acks = handled.ackIds
+        var digest = emptyList<String>()
+        val digestDue = now - state.lastDigest >= Limits.DIGEST_INTERVAL_MS
+        if (digestDue) {
+            val own = acks.toHashSet()
+            digest = state.seenItems.entries
+                .filter { (id, t) -> now - t in 0..Limits.DIGEST_WINDOW_MS && id !in own }
+                .sortedByDescending { it.value }
+                .take(Limits.DIGEST_MAX_IDS)
+                .map { it.key }
+        }
+        val (published, ackError) = publishAcksOrError(acks + digest)
+        if (ackError != null) state.lastDigest = 0
+        else if (digestDue) state.lastDigest = now
+        if (ackError != null || digestDue) store.save(state)
+        val sent = published.toHashSet()
+        Result(handled.items, acks.filter { it in sent }, ackError, handled.storeError, digest.filter { it in sent })
     }
 
     /** The cursor to resume a live stream from. */
     fun since(): String = store.load().since
 
-    /** Whether [msgId] was handled already (the live stream skips downloading it). */
-    fun handled(msgId: String): Boolean = store.load().seenMsgs.containsKey(msgId)
+    /** Whether [msgId] needs no download: handled already, or it carried a part that is still held. */
+    fun handled(msgId: String): Boolean = handledOrHeld(store.load(), msgId)
 
-    /** Handles messages from the live stream; returns the ids to ack (publish them with [publishAcks], batched). */
-    @Synchronized
-    fun handleLive(msgs: List<RelayMessage>): Result {
+    private fun handledOrHeld(state: ReceiverState, msgId: String): Boolean =
+        msgId in state.seenMsgs || state.partMsgs[msgId]?.let { reassembler.isPending(it.item) } == true
+
+    /**
+     * Handles messages from the live stream with the same rules as a poll (download outcomes, holds, cursor). Returns
+     * the ids to ack: publish them with [publishAcks] and call [ackFailed] when that fails.
+     */
+    fun handleLive(msgs: List<RelayMessage>): Result = synchronized(lock) {
         val state = store.load()
-        val result = handle(msgs, state)
+        val r = handle(msgs, state, clock())
         store.save(state)
-        return result
+        r
     }
 
-    private fun handle(msgs: List<RelayMessage>, state: ReceiverState): Result {
-        val now = clock()
+    /** An ack could not be published (the live path): the next poll publishes the digest, which includes it. */
+    fun ackFailed() = synchronized(lock) {
+        val state = store.load()
+        state.lastDigest = 0
+        store.save(state)
+    }
+
+    private fun handle(msgs: List<RelayMessage>, state: ReceiverState, now: Long): Result {
         val items = ArrayList<ItemHeader>()
         val ack = LinkedHashSet<String>()
-        var maxTime = 0L
-        val incompleteHere = HashMap<String, Long>()
+        var newest = 0L
+        var held: Long? = null
+        var storeError: String? = null
+        fun handled(ids: Collection<String>) {
+            for (id in ids) state.seenMsgs[id] = now
+        }
+        /** The messages that carried held parts of [item] (they become handled with it); forgets them as parts. */
+        fun partsOf(item: String): List<String> {
+            val ids = state.partMsgs.filterValues { it.item == item }.keys.toList()
+            ids.forEach { state.partMsgs.remove(it) }
+            return ids
+        }
         for (m in msgs) {
-            maxTime = maxOf(maxTime, m.time)
-            if (m.skipped) continue
-            val frame = m.frame ?: continue // expired attachment or not base64: not handled, the sender re-sends
+            newest = maxOf(newest, m.time)
+            when (m.outcome) {
+                Outcome.SKIPPED -> continue
+                Outcome.RETRY -> {
+                    held = minOf(held ?: m.time, m.time)
+                    continue
+                }
+                Outcome.EXPIRED, Outcome.JUNK -> {
+                    handled(listOf(m.id))
+                    continue
+                }
+                Outcome.FRAME -> Unit
+            }
+            val frame = m.frame ?: run { handled(listOf(m.id)); null } ?: continue
             val opened = try {
                 FrameCodec.open(keys, Purpose.INBOX, frame)
             } catch (e: ShareException) {
-                state.seenMsgs[m.id] = now
+                handled(listOf(m.id))
                 continue
             }
-            val id = opened.header["id"] as? String
-            if (id != null && state.seenItems.containsKey(id)) {
-                state.seenMsgs[m.id] = now
-                ack += id
+            val rawId = opened.header["id"] as? String
+            if (rawId != null && state.seenItems.containsKey(rawId)) {
+                state.seenItems[rawId] = now
+                handled(listOf(m.id))
+                ack += rawId
                 continue
             }
             val done = try {
                 reassembler.add(opened.header, opened.body)
             } catch (e: ShareException) {
-                state.seenMsgs[m.id] = now // invalid header or failed integrity: junk
-                continue
-            }
-            if (done == null) {
-                if (id != null) {
-                    incompleteHere[id] = minOf(incompleteHere[id] ?: m.time, m.time)
-                    state.incomplete[id] = minOf(state.incomplete[id] ?: m.time, m.time)
+                // A bad header, or the item failed its check: its messages are handled and its held parts dropped.
+                handled(listOf(m.id) + (rawId?.let(::partsOf) ?: emptyList()))
+                if (rawId != null) {
+                    reassembler.drop(rawId)
+                    state.incomplete.remove(rawId)
                 }
                 continue
             }
+            if (done == null) {
+                if (rawId != null) {
+                    state.incomplete[rawId] = minOf(state.incomplete[rawId] ?: m.time, m.time)
+                    state.partMsgs[m.id] = ReceiverState.PartMsg(rawId, now)
+                }
+                continue
+            }
+            val id = done.header.id
+            handled(listOf(m.id) + partsOf(id))
+            state.incomplete.remove(id)
             try {
                 accept(done)
             } catch (e: Exception) {
-                // Could not store it (disk full?): not handled; the cursor stays here and it is tried again.
-                incompleteHere[done.header.id] = minOf(incompleteHere[done.header.id] ?: m.time, m.time)
+                // Could not store it (disk full?): not remembered, not acked; it comes back with the next re-send.
+                storeError = e.message ?: e.javaClass.simpleName
                 (done.content as? FileBody)?.file?.delete()
                 continue
             }
-            state.seenMsgs[m.id] = now
-            state.incomplete.remove(done.header.id)
-            state.seenItems[done.header.id] = now
-            ack += done.header.id
+            state.seenItems[id] = now
+            ack += id
             items += done.header
         }
-        // The cursor never passes the earliest part of an item that is still incomplete.
-        var cursor = maxTime
-        for (t in incompleteHere.values) cursor = minOf(cursor, t)
-        for (t in state.incomplete.values) if (t > 0) cursor = minOf(cursor, t)
-        if (cursor > 0) {
-            val next = maxOf(0L, cursor - 5)
-            val prev = state.since.toLongOrNull()
-            // Never move a numeric cursor backwards past what a previous poll already handled, except for incompletes.
-            state.since = if (prev != null && next < prev && incompleteHere.isEmpty() && state.incomplete.isEmpty()) prev.toString() else next.toString()
-        }
-        return Result(items, ack.toList())
+        for (t in state.incomplete.values) held = minOf(held ?: t, t)
+        if (msgs.isNotEmpty()) state.since = RelayClient.nextCursor(state.since, newest, held)
+        return Result(items, ack.toList(), null, storeError)
     }
 
-    /** Publishes acks for [ids], at most 200 per frame. Throws [RelayException]. */
-    fun publishAcks(ids: Collection<String>) {
+    /**
+     * Publishes acks for [ids] in frames of at most [Limits.MAX_ACK_IDS] (always small frames: messages), stopping at
+     * the first failure. Never throws. Returns the error, or null when every frame went out.
+     */
+    fun publishAcks(ids: Collection<String>): String? = publishAcksOrError(ids).second
+
+    private fun publishAcksOrError(ids: Collection<String>): Pair<List<String>, String?> {
         val list = ids.distinct()
+        val published = ArrayList<String>()
         var i = 0
         while (i < list.size) {
             val slice = list.subList(i, minOf(list.size, i + Limits.MAX_ACK_IDS))
-            relay.publish(keys.ackTopic, AckHeader.frame(keys, slice, from, clock()))
+            try {
+                relay.publish(keys.ackTopic, AckHeader.frame(keys, slice, from, clock()))
+            } catch (e: ShareException) {
+                return published to (e.message ?: e.code)
+            } catch (e: RuntimeException) {
+                return published to (e.message ?: e.javaClass.simpleName)
+            }
+            published += slice
             i += Limits.MAX_ACK_IDS
         }
+        return published to null
     }
 
-    private fun prune(state: ReceiverState) {
-        val now = clock()
+    private fun prune(state: ReceiverState, now: Long) {
         state.seenItems.entries.removeAll { now - it.value > Limits.SEEN_TTL_MS }
         state.seenMsgs.entries.removeAll { now - it.value > Limits.SEEN_MSG_TTL_MS }
-        // An item whose parts never all arrived is given up after a day (the relay keeps attachments 3 hours).
-        state.incomplete.entries.removeAll { now / 1000 - it.value > 24 * 3600 }
-        reassembler.prune()
+        state.partMsgs.entries.removeAll { now - it.value.seen > Limits.SEEN_MSG_TTL_MS }
+        // An item whose parts never all arrived is given up a day after its first part (attachments live 3 hours).
+        val givenUp = state.incomplete.filter { (_, t) -> now - t * 1000 > Limits.INCOMPLETE_TTL_MS }.keys
+        for (id in givenUp) {
+            state.incomplete.remove(id)
+            reassembler.drop(id)
+        }
+        for (id in reassembler.prune(Limits.INCOMPLETE_TTL_MS)) state.incomplete.remove(id)
     }
 }
 

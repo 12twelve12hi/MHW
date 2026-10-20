@@ -19,11 +19,18 @@ object FrameCodec {
     val MAGIC = Bytes.utf8("DLS1")
     const val NONCE_BYTES = 12
     const val TAG_BYTES = 16
-    const val MAX_HEADER_BYTES = 64 * 1024
+    const val MAX_HEADER_BYTES = Limits.MAX_HEADER
 
-    /** Low level: seals already-serialised header bytes and a body (the vectors use this). */
+    /** Bytes a frame adds to its header and body: magic, nonce, header length, tag. */
+    const val OVERHEAD = 4 + NONCE_BYTES + 4 + TAG_BYTES
+
+    /**
+     * Low level: seals already-serialised header bytes and a body (the vectors use this). A sender never seals a header
+     * over [MAX_HEADER_BYTES] (receivers ignore such frames): throws [ShareException] "header".
+     */
     fun seal(keys: Keys, purpose: Purpose, headerBytes: ByteArray, body: ByteArray = ByteArray(0), nonce: ByteArray = Bytes.random(NONCE_BYTES)): ByteArray {
         require(nonce.size == NONCE_BYTES) { "nonce must be 12 bytes" }
+        if (headerBytes.size > MAX_HEADER_BYTES) throw ShareException("header", "header of ${headerBytes.size} bytes (at most $MAX_HEADER_BYTES)")
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(keys.keyBytes, "AES"), GCMParameterSpec(TAG_BYTES * 8, nonce))
         cipher.updateAAD(Bytes.utf8(purpose.aad))
@@ -158,7 +165,8 @@ data class ItemHeader(
             var name: String? = null
             if (kind != Kind.URL) {
                 size = h["size"].asSafeLong()
-                if (size == null || size < 0 || size > Limits.MAX_ENCODED * 4) bad("size")
+                val maxSize = if (kind == Kind.PAGE) Limits.MAX_PAGE_HTML else Limits.MAX_DECODED
+                if (size == null || size < 0 || size > maxSize) bad("size")
                 sha = h["sha256"] as? String
                 if (sha == null || !SHA_RE.matches(sha)) bad("sha256")
                 mime = if (kind == Kind.PAGE) "text/html" else cleanMime(h["mime"])
@@ -192,7 +200,7 @@ data class ItemHeader(
     }
 }
 
-/** An ack header (PROTOCOL 2.4). */
+/** An ack header (PROTOCOL 2.4): at most [Limits.MAX_ACK_IDS] ids, so the frame is always a small frame (a message). */
 data class AckHeader(val ids: List<String>, val sent: String, val from: String? = null) {
     fun toJson(): Map<String, Any?> {
         val m = LinkedHashMap<String, Any?>()

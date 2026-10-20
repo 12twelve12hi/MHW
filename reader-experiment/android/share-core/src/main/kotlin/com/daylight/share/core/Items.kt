@@ -83,7 +83,7 @@ class PreparedItem(val header: ItemHeader, val encoded: Body, val chunkSize: Int
         return (FrameCodec.MAGIC.size + FrameCodec.NONCE_BYTES + 4 + headerLen + chunkRange(part).second + FrameCodec.TAG_BYTES).toLong()
     }
 
-    /** True when any frame goes as an attachment (re-sent after 150 minutes instead of 11 hours). */
+    /** True when any frame goes as an attachment (re-sent after 185 minutes or 12 hours instead of 11 hours). */
     val attachment: Boolean = (0 until parts).any { !FrameCodec.isSmall(frameLength(it)) }
 
     fun frame(keys: Keys, part: Int, nonce: ByteArray = Bytes.random(FrameCodec.NONCE_BYTES)): ByteArray {
@@ -106,6 +106,8 @@ object ItemBuilder {
     /**
      * Validates [item], hashes [content] and encodes it (deflate-raw for pages and text types when that is smaller).
      * With a [workDir], a file's encoded form is written there (as `<id>.enc`) instead of held in memory.
+     * Content over [Limits.MAX_ITEM] bytes (before compression) is refused before it is read, with
+     * [Text.tooBigMessage]; a page over [Limits.MAX_PAGE_HTML] with "send the link instead".
      * Throws [ShareException] ("kind", "id", "url", "content", "too-large").
      */
     fun prepare(
@@ -137,6 +139,7 @@ object ItemBuilder {
                 name = Text.safeFileName(item.name, "document")
                 mime = (item.mime?.takeIf { it.isNotEmpty() } ?: "application/octet-stream").lowercase(Locale.ROOT).take(100)
             }
+            if (content.length > Limits.MAX_ITEM) throw ShareException("too-large", Text.tooBigMessage(content.length))
             size = content.length
             sha = Bytes.toHex(sha256Of(content))
             encoded = content
@@ -151,7 +154,6 @@ object ItemBuilder {
                 }
             }
         }
-        if (encoded.length > Limits.MAX_ENCODED) throw ShareException("too-large", "That file is larger than 64 MB.")
         val header = ItemHeader(
             id = item.id, kind = kind, url = url, title = title, name = name, mime = mime, size = size, sha256 = sha,
             enc = enc, sent = item.sent ?: Bytes.isoTime(nowMs), from = Text.cleanName(item.from).ifEmpty { null },
@@ -216,7 +218,7 @@ object ItemBuilder {
 class Reassembler(private val spoolDir: File? = null, private val clock: () -> Long = System::currentTimeMillis) {
     class Completed(val header: ItemHeader, val content: Body)
 
-    private class Pending(val parts: Int, val chunks: MutableMap<Int, ByteArray>, var header: ItemHeader)
+    private class Pending(val parts: Int, val chunks: MutableMap<Int, ByteArray>, var header: ItemHeader, val created: Long)
 
     private val pending = Collections.synchronizedMap(HashMap<String, Pending>())
 
@@ -231,7 +233,7 @@ class Reassembler(private val spoolDir: File? = null, private val clock: () -> L
     private fun addInMemory(h: ItemHeader, body: ByteArray): Completed? {
         var p = pending[h.id]
         if (p == null || p.parts != h.parts) {
-            p = Pending(h.parts, HashMap(), h)
+            p = Pending(h.parts, HashMap(), h, clock())
             pending[h.id] = p
         }
         p.chunks[h.part] = body.copyOf()
@@ -271,16 +273,41 @@ class Reassembler(private val spoolDir: File? = null, private val clock: () -> L
         return Completed(header.copy(part = 0, parts = 1), FileBody(target))
     }
 
-    /** Whether a part of item [id] is waiting for the rest. */
+    /** Whether a part of item [id] is held, waiting for the rest. */
     fun isPending(id: String): Boolean =
-        pending.containsKey(id) || (spoolDir != null && File(spoolDir, "parts/$id").isDirectory)
+        pending.containsKey(id) || (spoolDir != null && ItemHeader.isId(id) && File(spoolDir, "parts/$id").isDirectory)
 
-    /** Forgets incomplete items older than [maxAgeMs] (their parts have long expired on the relay). */
-    fun prune(maxAgeMs: Long = 24L * 3600 * 1000) {
-        val root = spoolDir ?: return
+    /** Forgets item [id]'s held parts (it failed its check, or was given up). */
+    @Synchronized
+    fun drop(id: String) {
+        pending.remove(id)
+        if (spoolDir != null && ItemHeader.isId(id)) File(spoolDir, "parts/$id").deleteRecursively()
+    }
+
+    /** Forgets incomplete items older than [maxAgeMs] (their parts have long expired on the relay). Returns their ids. */
+    @Synchronized
+    fun prune(maxAgeMs: Long = Limits.INCOMPLETE_TTL_MS): List<String> {
         val now = clock()
-        File(root, "parts").listFiles()?.forEach { d -> if (now - d.lastModified() > maxAgeMs) d.deleteRecursively() }
+        val out = ArrayList<String>()
+        synchronized(pending) {
+            val it = pending.entries.iterator()
+            while (it.hasNext()) {
+                val e = it.next()
+                if (now - e.value.created > maxAgeMs) {
+                    it.remove()
+                    out += e.key
+                }
+            }
+        }
+        val root = spoolDir ?: return out
+        File(root, "parts").listFiles()?.forEach { d ->
+            if (now - d.lastModified() > maxAgeMs) {
+                d.deleteRecursively()
+                out += d.name
+            }
+        }
         root.listFiles()?.forEach { f -> if (f.name.endsWith(".content.tmp") && now - f.lastModified() > maxAgeMs) f.delete() }
+        return out
     }
 
     companion object {

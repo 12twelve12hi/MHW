@@ -199,6 +199,205 @@ class VectorsTest {
     @Test
     fun fileNames() {
         for (f in list("fileNames")) assertEquals(f["input"] as String, f["expect"], Text.safeFileName(f["input"] as String))
+        for (f in list("fileNamesUtf16")) {
+            val units = (f["inputUtf16"] as List<Any?>).map { (it as Double).toInt().toChar() }
+            assertEquals(f["name"] as String, f["expect"], Text.safeFileName(String(units.toCharArray())))
+        }
+        // Every result stays within both limits, whole code points only.
+        for (f in list("fileNames")) {
+            val out = Text.safeFileName(f["input"] as String)
+            assertTrue(out, out.length <= 120 && out.toByteArray(Charsets.UTF_8).size <= 200)
+            assertFalse(out, out.isNotEmpty() && Character.isHighSurrogate(out.last()))
+        }
+    }
+
+    @Test
+    fun relays() {
+        for (r in list("relays")) {
+            val input = r["input"] as String
+            if (r["error"] != null) {
+                try {
+                    val got = Relay.normalize(input)
+                    fail("relay ${Json.write(input)}: expected an error, got $got")
+                } catch (e: ShareException) {
+                    assertEquals(input, r["error"], e.code)
+                }
+            } else {
+                assertEquals(Json.write(input), r["expect"], Relay.normalize(input))
+                // Normalising is idempotent, and the Pairing constructor applies it.
+                assertEquals(input, r["expect"], Relay.normalize(r["expect"] as String))
+                assertEquals(input, r["expect"], Pairing(ByteArray(16), input).relay)
+            }
+        }
+    }
+
+    @Test
+    fun urls() {
+        for (u in list("urls")) {
+            val input = u["input"] as String
+            assertEquals(Json.write(input.take(80)), u["expect"], Text.webUrl(input))
+        }
+    }
+
+    /** A body of [n] zero bytes that is never held in memory; [open] fails when [readable] is false. */
+    private fun zeros(n: Long, readable: Boolean = true) = object : Body {
+        override val length = n
+        override fun open(): java.io.InputStream {
+            if (!readable) throw AssertionError("content read before the size check")
+            return object : java.io.InputStream() {
+                var left = n
+                override fun read(): Int = if (left-- > 0) 0 else -1
+                override fun read(b: ByteArray, off: Int, len: Int): Int {
+                    if (left <= 0) return -1
+                    val k = minOf(len.toLong(), left).toInt()
+                    java.util.Arrays.fill(b, off, off + k, 0)
+                    left -= k
+                    return k
+                }
+            }
+        }
+        override fun read(offset: Long, len: Int) = ByteArray(len)
+    }
+
+    @Test
+    fun sizing() {
+        val s = v["sizing"] as Map<String, Any?>
+        assertEquals((s["chunk"] as Double).toInt(), Limits.CHUNK)
+        assertEquals((s["maxItem"] as Double).toLong(), Limits.MAX_ITEM)
+        assertEquals((s["maxHeader"] as Double).toInt(), Limits.MAX_HEADER)
+        assertEquals((s["largestFrame"] as Double).toInt(), Limits.CHUNK + Limits.MAX_HEADER + FrameCodec.OVERHEAD)
+        assertEquals((s["largestFrame"] as Double).toInt(), RelayProbe.PROBE_BYTES)
+        assertEquals(12_713_984L, RelayClient.MAX_ATTACHMENT)
+        for (c in (s["cases"] as List<Any?>).map { it as Map<String, Any?> }) {
+            val size = (c["size"] as Double).toLong()
+            val item = OutgoingItem(Kind.FILE, name = "x.pdf", mime = "application/pdf")
+            if (c["error"] != null) {
+                try {
+                    ItemBuilder.prepare(item, zeros(size, readable = false))
+                    fail("$size: expected ${c["error"]}")
+                } catch (e: ShareException) {
+                    assertEquals("$size", c["error"], e.code)
+                    assertEquals(Text.tooBigMessage(size), e.message)
+                }
+                continue
+            }
+            val p = ItemBuilder.prepare(item, zeros(size), compress = false)
+            assertEquals("$size", (c["parts"] as Double).toInt(), p.parts)
+            for (i in 0 until p.parts) assertTrue("$size part $i", p.frameLength(i) <= (s["largestFrame"] as Double).toLong())
+        }
+        // The limit is on the size before compression: 9,000,001 bytes of text are refused though they compress.
+        try {
+            ItemBuilder.prepare(OutgoingItem(Kind.FILE, name = "a.txt", mime = "text/plain"), zeros(Limits.MAX_ITEM + 1, readable = false))
+            fail("text over 9 MB accepted")
+        } catch (e: ShareException) {
+            assertEquals("too-large", e.code)
+            assertTrue(e.message!!.contains("9.1 MB"))
+        }
+        // A page over 8 MiB keeps its own message (send the link).
+        try {
+            ItemBuilder.prepare(OutgoingItem(Kind.PAGE, url = "https://example.com/"), zeros(Limits.MAX_PAGE_HTML + 1, readable = false))
+            fail("page over 8 MiB accepted")
+        } catch (e: ShareException) {
+            assertEquals("too-large", e.code)
+            assertTrue(e.message!!.contains("link"))
+        }
+    }
+
+    @Test
+    fun invalidItems() {
+        val keys = Keys.derive(s1)
+        for (item in list("invalidItems")) {
+            val name = item["name"] as String
+            for (spool in listOf<File?>(null, kotlin.io.path.createTempDirectory("dls-spool").toFile())) {
+                val r = Reassembler(spool)
+                val frames = (item["framesHex"] as List<Any?>).map { hex(it) }
+                try {
+                    for (f in frames) {
+                        val opened = FrameCodec.open(keys, Purpose.INBOX, f)
+                        r.add(opened.header, opened.body)
+                    }
+                    fail("$name: accepted")
+                } catch (e: ShareException) {
+                    assertEquals(name, item["error"], e.code)
+                }
+                for (f in frames) assertFalse(name, r.isPending(ItemHeader.check(FrameCodec.open(keys, Purpose.INBOX, f).header).id))
+                spool?.let { assertTrue(name, File(it, "parts").listFiles().isNullOrEmpty()); it.deleteRecursively() }
+            }
+            // Decoding never writes more than `size` bytes (the bomb inflates to 1 MiB).
+            val opened = frames(item).map { FrameCodec.open(keys, Purpose.INBOX, it) }
+            val h = ItemHeader.check(opened[0].header)
+            var written = 0L
+            val counter = object : java.io.OutputStream() {
+                override fun write(b: Int) { written++ }
+                override fun write(b: ByteArray, off: Int, len: Int) { written += len }
+            }
+            try {
+                Reassembler.decodeVerify(h, opened.sortedBy { ItemHeader.check(it.header).part }.map { it.body.inputStream() }, counter)
+                fail("$name: decoded")
+            } catch (e: ShareException) {
+                assertEquals("integrity", e.code)
+            }
+            assertTrue("$name wrote $written", written <= h.size!!)
+        }
+    }
+
+    private fun frames(item: Map<String, Any?>) = (item["framesHex"] as List<Any?>).map { hex(it) }
+
+    @Test
+    fun acks() {
+        val keys = Keys.derive(s1)
+        for (a in list("acks")) {
+            val name = a["name"] as String
+            val ids = (a["idLabels"] as List<Any?>).map { Bytes.toHex(Bytes.sha256(Bytes.utf8(it as String))).substring(0, 32) }
+            val from = a["from"] as String
+            val sent = a["sent"] as String
+            val headerJson = a["headerJson"] as String
+            // The serialisation (no escaping of non-ASCII) is the JS one, id for id.
+            val m = linkedMapOf<String, Any?>("v" to 1, "kind" to "ack", "ids" to ids, "sent" to sent, "from" to Text.cleanName(from))
+            assertEquals(name, headerJson, Json.write(m))
+            val frame = FrameCodec.seal(keys, Purpose.ACK, Bytes.utf8(headerJson))
+            assertEquals(name, (a["frameLength"] as Double).toInt(), frame.size)
+            assertEquals(name, a["small"], FrameCodec.isSmall(frame.size.toLong()))
+            // AckHeader cuts at MAX_ACK_IDS, so every ack frame it builds is a small frame.
+            val built = AckHeader(ids, sent, Text.cleanName(from)).toJson()
+            assertEquals(name, ids.take(Limits.MAX_ACK_IDS), built["ids"])
+            if (ids.size <= Limits.MAX_ACK_IDS) assertEquals(name, headerJson, Json.write(built))
+            assertTrue(name, FrameCodec.isSmall(AckHeader.frame(keys, ids, from).size.toLong()))
+        }
+        assertEquals(70, Limits.MAX_ACK_IDS)
+    }
+
+    @Test
+    fun statusText() {
+        for (c in list("statusText")) {
+            val name = c["name"] as String
+            val row = c["row"] as Map<String, Any?>
+            val t = RowText.of(
+                row["status"] as String, row["errorCode"] as String? ?: "", (row["size"] as Double).toLong(),
+                (row["created"] as Double).toLong(), (c["now"] as Double).toLong(),
+            )
+            assertEquals(name, c["label"], t.label)
+            assertEquals(name, c["sentence"], t.sentence)
+            assertEquals(name, c["action"], t.action)
+        }
+        for (f in list("formatMB")) assertEquals(f["expect"], Text.formatMB((f["bytes"] as Double).toLong()))
+        assertEquals("Too big to send. Files can be up to 9 MB; this one is 14.2 MB.", Text.tooBigMessage(14_200_000))
+    }
+
+    @Test
+    fun pairingConfirmation() {
+        fun pairing(m: Any?): Pairing? = (m as Map<String, Any?>?)?.let { Pairing(hex(it["secretHex"]), it["relay"] as String, it["name"] as String) }
+        for (c in list("pairingConfirmation")) {
+            val name = c["name"] as String
+            val source = if (c["source"] == "app") PairingConfirmation.Source.APP else PairingConfirmation.Source.LINK
+            val got = PairingConfirmation.of(pairing(c["current"]), pairing(c["next"])!!, source)
+            val e = c["expect"] as Map<String, Any?>
+            assertEquals(name, e["ask"], got.ask)
+            assertEquals(name, e["title"], got.title)
+            assertEquals(name, e["lines"], got.lines)
+            assertEquals(name, e["button"], got.button)
+            assertEquals(name, e["notice"], got.notice)
+        }
     }
 
     @Test
@@ -208,10 +407,29 @@ class VectorsTest {
         assertNull(Text.findUrl("no link here"))
         assertNull(Text.webUrl("javascript:alert(1)"))
         assertNull(Text.webUrl("https:///nohost"))
+        assertEquals("a b", Text.cleanTitle("a\u2007\u202F b"))
         assertEquals("https://ntfy.sh", Relay.normalize(""))
         assertEquals("https://ntfy.sh", Relay.normalize("ntfy.sh/"))
         assertEquals("http://127.0.0.1:8787", Relay.normalize("http://127.0.0.1:8787/"))
         assertEquals("https://relay.example.org/ntfy", Relay.normalize("HTTPS://Relay.Example.org:443/ntfy/?x=1#y"))
+        assertEquals("relay.example.org:8443", Relay.host("https://Relay.Example.org:8443/ntfy/"))
+        assertEquals("http://[::1]:8080", Relay.origin("http://[::1]:8080/ntfy"))
+        val client = RelayClient("http://127.0.0.1:8787/ntfy")
+        assertTrue(client.allowed("http://127.0.0.1:8787/file/x.bin"))
+        assertTrue(client.allowed("https://elsewhere.example/file/x.bin"))
+        assertFalse(client.allowed("http://127.0.0.1:8788/file/x.bin"))
+        assertFalse(client.allowed("http://localhost:8787/file/x.bin"))
+        assertFalse(client.allowed("ftp://127.0.0.1:8787/file/x.bin"))
+        assertFalse(client.allowed("not a url"))
+        assertEquals("0", RelayClient.nextCursor("all", 1000, null))
+        assertEquals("200", RelayClient.nextCursor("all", 2000, null))
+        assertEquals("500", RelayClient.nextCursor("500", 2000, null)) // never backwards when nothing is held
+        assertEquals("100", RelayClient.nextCursor("500", 2000, 1900)) // held: may go back
+        assertEquals("1300", RelayClient.nextCursor("500", 3100, null))
+        assertTrue(Pairing(ByteArray(16)).sameSecret(Pairing(ByteArray(16), "https://relay.example.org", "x")))
+        assertFalse(Pairing(ByteArray(16)).sameSecret(Pairing(ByteArray(15) + byteArrayOf(1))))
+        assertEquals("Waiting to send. Couldn’t send right now. It will try again by itself.", RowText.of(Status.FAILED, "network", 0, 0, 0).line)
+        assertEquals("Sending…", RowText.of(Status.SENDING, "", 0, 0, 0).line)
         assertTrue(FrameCodec.isSmall(2850))
         assertFalse(FrameCodec.isSmall(2851))
         assertEquals("a b", Text.cleanName("  a\n\t b "))
