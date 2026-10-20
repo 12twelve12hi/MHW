@@ -189,9 +189,10 @@ everything any app sends. So the server never gets it unless the user explicitly
   Server code instead (Lab settings › Daylight server › Copy). Replace the secret's value." So the master secret is
   never uploaded by accident.
 
-`seed` is SHA-256 of the secret, so the secret cannot be recovered from it. A copy of the Server code (from the
-Cloudflare account, the token, the deploy logs, R2 or D1) gives exactly the server's powers. It does not give the
-pairing key, so it cannot read what apps send to the Daylight.
+`seed` is a one-way hash of the secret, so the secret cannot be recovered from it. A copy of the Server code gives
+exactly the server's powers. It might come from the Cloudflare account, the API token (code deployed to read the
+Worker's secrets) or the deploy pipeline. It does not give the pairing key, so it cannot read what apps send to the
+Daylight.
 
 Why not a claim flow: a claim flow lets whoever claims an unclaimed Worker first own it. Gating the claim needs a
 secret anyway. It also needs the server URL in an app first, copied from an Actions log.
@@ -330,9 +331,10 @@ they come from `GET /v1/status` (10.5).
    that has an `attachment`**, and never download one. Open each with `openBox` (AAD `server-config`). Keep
    headers with `kind == "config"`, `v == 1`, an `https:` `server` and `sent` at most 5 minutes ahead of local time.
    Take the newest `sent`.
-2. **Pin on first sight (TOFU).** The first config's `server` origin is stored. A later config naming a different
-   origin is shown for confirmation: "Your Daylight server moved to <host>. Use it?" The app keeps using the pinned
-   origin until the user confirms. The pinned host is shown next to the fingerprint in Lab settings.
+2. **Pin on first sight (TOFU).** The first config's `server` origin is stored with the fingerprint, so the pin is
+   per pairing. A later config with the same fingerprint that names a different origin is shown for confirmation:
+   "Your Daylight server moved to <host>. Use it?" The app keeps using the pinned origin until the user confirms. The
+   pinned host is shown next to the fingerprint in Lab settings.
 3. The last config is kept indefinitely and refreshed when older than 6 h. Feature states come from
    `GET /v1/status`, cached for 10 minutes.
 4. No config found:
@@ -363,7 +365,7 @@ Header fields the server sets:
 | `x-origin` | `"email"`, `"feed"`, `"digest"` or `"ai"` |
 | `x-about` | AI results only: `{"url": "<article>", "id": "<original item id>", "sha256": "<document hash>"}` (whichever are known; `url` only if it passes `publicUrl`) |
 
-Server items are always `enc: identity` when over 1 MiB, and `deflate-raw` only for pages up to 1 MiB.
+Encoding: `deflate-raw` only for pages of at most 1 MiB (cheap enough on Free); everything else is `identity`.
 
 ### 5.1 Delivery modes
 
@@ -499,14 +501,16 @@ itself (`buildHostedFrames`) with share/js `encryptFrame(keys, 'inbox', …)`, `
 - Hosted frames are not stored on ntfy, so ntfy.sh's 2 MB per attachment, 20 MB per sender and 3 h expiry do not
   apply. The attachment-bandwidth count is not touched either, because the bytes come from the Worker. Each part is
   one message out of 250 a day.
-- **To verify on the first CI run** (informational job `live-ntfy-attach`, on the GitHub runner, which can reach
+- **To verify on the first CI run** (informational job `ntfy-attach`, on the GitHub runner, which can reach
   ntfy.sh), with a stand-in https URL:
   - a message published with `Attach:` lists `attachment.url` equal to that URL;
   - it is kept as a message for 12 h;
   - it is not refused for size.
 
-  The ntfy docs say external attachments are not subject to the attachment limits. If ntfy.sh behaved otherwise, the
-  feature state would stay `needs-…`. The fallback would be the Lab Inbox's server lane, which is not needed today.
+  The ntfy docs say external attachments are passed on without being downloaded and are not subject to the
+  attachment limits. Two things rest on this: large files, and server frames over the small-frame size (digests,
+  newsletters, 5.2). If the probe shows otherwise, both are blocked, and this section is revisited before the server
+  ships. Small server items (feed links, short AI results) do not depend on it.
 
 ### 6.5 Retention, storage cap, serving
 
@@ -1707,3 +1711,421 @@ processed on the next Cron runs.
    expired (3.4).
 6. The email address changes unless `DAYLIGHT_EMAIL_LOCAL` is set (7.1).
 
+---
+
+## 13. Client module: `reader-experiment/server/client/daylight-server.js`
+
+One ES module with no dependencies beyond `../../share/js/daylight-share.js`. It runs in browsers, extension service
+workers, Node 22 and the Worker (WebCrypto, fetch). The extension and web sender use it as is. Swift (in
+`DaylightShareKit`) and Kotlin (in `share-core`) follow the same names and pass `server/vectors/server-vectors.json`.
+
+### 13.1 Exports
+
+```js
+export const SERVER_API = 1;                         // apps accept api in [SERVER_API_MIN, SERVER_API]
+export const HOSTED_CHUNK = 12_582_912;              // = protocol CHUNK_MAX (6.2)
+export const HOSTED_MAX = 16 * HOSTED_CHUNK;         // 192 MiB encoded
+export const SERVER_CHUNK = 1_048_576;               // server item frames (5)
+export const SOURCE_PART = 4_194_304;                // base64 characters per PDF part (9.2)
+export const CONFIG_REFRESH_MS = 6 * 3600 * 1000;
+export const STATUS_REFRESH_MS = 10 * 60 * 1000;
+
+/** secret (16 bytes) -> seed (16 bytes) (3.2). Apps only. */
+export async function deriveServerSeed(secret) {}
+/** -> "SERVER-XXXX-…" or "daylightserver://setup?c=…&r=…&k=…" (3.1). */
+export async function formatServerCode(seed, { relay, token } = {}) {}
+/** -> {seed, relay, token}; throws ShareError('server-code') with the "That is your pairing code" message for a pairing code. */
+export async function parseServerCode(input) {}
+/** -> {authToken, boxKey: CryptoKey, configTopic, itemTopic, ackTopic, emailToken, fingerprint, workerName} */
+export async function deriveServerValues(seed, { emailSalt = '' } = {}) {}
+export async function serverItemId(seed, origin) {}
+
+/** Frames under boxKey with their own AADs ('config' | 'item' | 'ack'); never through share/js sealFrame (3.2). */
+export async function sealBox(values, aad, header, body = new Uint8Array(0), nonce) {}
+export async function openBox(values, aad, frame) {}  // -> {header, body}; throws ShareError('frame')
+export async function buildConfigFrame(values, header, nonce) {}
+export function checkConfig(header, { now }) {}        // 4.3 rules, incl. sent ≤ now + 5 min
+/** Server and tests: item -> frames for either delivery mode (5.1), SERVER_CHUNK. */
+export async function buildServerItemFrames(seal, item, opts = {}) {}
+/** Senders: a large file -> ordinary v1 frames under the pairing key, enc identity, HOSTED_CHUNK (6.2). */
+export async function buildHostedFrames(pairingKeys, item, { nonces } = {}) {}
+/** The 9.7 rule: webUrl + WHATWG host checks; -> the URL or null. */
+export function publicUrl(u) {}
+
+export class ServerError extends Error { /* code, status, message (from the server), feature, missing, retryAfter, limit, resetAt, missingParts */ }
+/** Text for the states the app decides itself (14.1): needs-server, pairing-mismatch, server-outdated, app-outdated, OFFLINE. */
+export function localMessage(state) {}
+
+export class DaylightServer {
+  constructor({ pairing, storage, fetch, now = () => Date.now(), from = '', app = '' }) {}
+  /** -> {config, source: 'relay' | 'manual' | 'cache'} or null; applies TOFU (4.3). */
+  async discover({ force = false } = {}) {}
+  async confirmMove() {}                 // accept a changed server origin after the user said yes
+  async setManualUrl(url) {}             // validates with GET /v1/hello, then /v1/status
+  async clearManualUrl() {}
+  /** From the cached config and status: 'ready' | 'needs-server' | 'pairing-mismatch' | 'server-outdated' |
+   *  'app-outdated' | 'locked' | 'needs-key' | 'needs-domain' | 'needs-r2' | 'needs-lab-inbox' | 'needs-paid' | 'error'
+   *  plus the message to show. Refreshes a status older than 10 min (waiting ≤ 5 s on a tap). */
+  async state(feature) {}                // feature: 'ai' | 'pdf' | 'email' | 'feeds' | 'files' | 'deliver'
+  async status() {}
+  /** Bearer request; maps error JSON to ServerError; network failure -> ServerError('OFFLINE'). */
+  async request(method, path, { json, body, query, headers } = {}) {}
+  /** Before re-pairing: POST /v1/admin/lock with the old token (3.4). Never throws. */
+  async lockBeforeRepair() {}
+
+  files = { sendLarge, tick, remove };   // 6.3: upload, publish Attach: messages, hosted outbox, acks, DELETE
+  feeds = { list, add, update, remove, check, importOpml, sendDigestNow };
+  email = { info, block, unblock, recent };
+  ai = { summarize, explain, ask, job, jobStatus };   // summarize(source, {mode, length, lang, deliver, about})
+  settings = { get, update };
+}
+```
+
+Storage keys (the protocol's storage adapter) are:
+
+- `server/config` and `server/configAt`;
+- `server/pin`, holding `{origin, fingerprint}`;
+- `server/status` and `server/statusAt`;
+- `server/manualUrl`, `server/hosted` (the hosted outbox) and `server/hostedAckCursor`;
+- `server/emailAddress` (to detect a change);
+- `server/notices` (`{"ai": true, "email": true, "feeds": true, "files": true}` once shown).
+
+`ai.summarize` with a PDF works like this:
+
+1. Compute `sourceId`.
+2. Call with `{"sourceId"}`.
+3. On `NEED_SOURCE`, upload `missingParts` (streamed base64 from a temp file), then call again.
+
+With a page, send `text` extracted on the device, or else `url`.
+
+### 13.2 What the apps do with it
+
+- **Every server feature in Lab is a normal, enabled control.** On tap the app calls `state(feature)`. If the state
+  is not `ready`, it shows the message (one line, naming the setting) and stops. If it is `ready`, it shows the
+  first-use notice (14.3) if not yet shown, then calls the server.
+- **Sending a file over the relay's largest item.** If `state('files')` is `ready`, call `files.sendLarge`. Otherwise
+  show the message.
+- **Lab settings › Daylight server** shows:
+  - the state (ready, or the message), the server's host and the fingerprint;
+  - the delivery mode, with the v1 notice when it applies (14.3);
+  - the **Server code** with Copy;
+  - the email address, AI usage today with the daily cap (editable up to the ceiling), and "Lab Inbox last seen";
+  - the optional "Server address" field.
+- **Re-pairing** calls `lockBeforeRepair()` first. Afterwards the app shows the new Server code and the re-run
+  instruction (12.7).
+- **Extension.** The pairing secret and the token live **only in the extension's service worker**. Content scripts
+  extract text and send it by `runtime.sendMessage`; the service worker calls the server. It has host permission for
+  the server, so CORS does not apply and no secret ever enters a web page's renderer process. The extension's host
+  permission for `*.workers.dev` is requested at the moment the user first uses a server feature.
+
+### 13.3 Swift, Kotlin and the Lab Inbox
+
+- **Same names everywhere.** Swift and Kotlin use the same names (`DaylightServer`, `deriveServerSeed`,
+  `parseServerCode`, `sealBox`, `publicUrl`, …), the same storage keys and the same local messages.
+- **Order.** iPhone and Mac come first (LAB-DECISIONS), then Chrome, Android phone, web and the DC-1 Inbox. The one
+  exception is the recommendation in 3.1 about the DC-1 server lane.
+- **The DC-1 Lab Inbox's server lane** (5.5) reuses its existing poll loop, Reassembler (disk spooling, bounded
+  inflate) and Reader handoff, with one more topic and key. It needs no large-file code: hosted files arrive on the
+  inbox topic as ordinary attachments.
+
+### 13.4 Vectors
+
+`server/vectors/server-vectors.json` is generated from the JS module with fixed nonces, for the protocol's vector
+secret. It holds:
+
+- **Derived values**: `seed`, the Server code in both forms, `authToken`, the three topics, `emailToken` (with and
+  without a salt), `fingerprint`, `workerName` and two `serverItemId`s.
+- **Server code parsing**: the protocol's vector pairing code given to `parseServerCode`, which must be refused with
+  the pairing-code message, and a server code with a wrong check byte.
+- **Frames**: a config frame, a server item frame (two parts) and a hello/ack frame.
+- **Negative vectors**:
+  - the config frame fails `openBox(item)`, `openBox(ack)` and share/js `decryptFrame(inbox)` and `decryptFrame(ack)`;
+  - a share/js inbox frame fails `openBox(config)`.
+- **Hosted frames**: a hosted file (two small parts under the pairing key). Its expected v1 result is "item
+  received" through share/js's v1.0 `Receiver` with `Attach:` messages on the mock relay. Kotlin and Swift run the
+  same case.
+- **`publicUrl`**: accepted and refused URLs, including every form in 9.7.
+
+---
+
+## 14. User-facing messages
+
+Each message is one or two short sentences that name what is missing and where to add it. LAB-DECISIONS' examples
+are kept, extended only by the re-run step (GitHub does not deploy a new secret by itself).
+
+### 14.1 Feature states (shown on tap; the control still looks available)
+
+| State | Decided by | Message |
+|---|---|---|
+| `needs-server` | app | Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on. |
+| `pairing-mismatch` | app | The Daylight server still has your previous pairing. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy. |
+| `server-outdated` | app | Update the Daylight server to use this: open the latest "Reader experiment - Daylight server" run in GitHub › Actions and choose Re-run all jobs. |
+| `app-outdated` | app | Update this app to use the Daylight server. |
+| `locked` | server | The Daylight server was locked when this device was re-paired. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy. |
+| `needs-key` | server | Needs a Claude API key. Add ANTHROPIC_API_KEY to the Daylight server (GitHub › Settings › Secrets), then re-run the deploy, to turn this on. |
+| `needs-domain` | server | Needs an email domain. Add DAYLIGHT_EMAIL_DOMAIN (a domain on your Cloudflare account) in GitHub › Settings › Secrets, then re-run the deploy. |
+| `needs-r2` | server | Needs R2 storage on your Cloudflare account. Turn on R2 in the Cloudflare dashboard (it asks for a card; the free tier isn't charged), then re-run the deploy. |
+| `needs-lab-inbox` | server | Needs Lab on your Daylight. Turn on Lab in Daylight Share on the Daylight to receive this. |
+| `needs-paid` | server | Email-in needs Cloudflare's Workers Paid plan. Subscribe in the Cloudflare dashboard, set the variable DAYLIGHT_WORKERS_PLAN to paid in GitHub › Settings, then re-run the deploy. |
+| `error` | server | The server's `message` for the recorded code (e.g. `AI_KEY_INVALID`). |
+| `OFFLINE` (network) | app | Couldn't reach the Daylight server. Check your connection and try again. |
+
+"Re-run the deploy" in the app links to a one-line help text: "In GitHub › Actions, open the latest 'Reader experiment
+- Daylight server' run and choose Re-run all jobs."
+
+### 14.2 Server messages (`error.message`, shown as is)
+
+| Code | Message |
+|---|---|
+| `AI_KEY_INVALID` | Claude didn't accept the API key. Check ANTHROPIC_API_KEY in GitHub › Settings › Secrets, then re-run the deploy. |
+| `AI_BILLING` | Your Anthropic account is out of credit. Add credit in the Claude Console to keep using AI. |
+| `AI_DAILY_LIMIT` | Today's AI limit is used up. It resets at {time}, or raise it in Lab settings (up to {ceiling}). |
+| `AI_TOO_LARGE` | This is too long for one AI request (about {tokens} tokens; the limit is {limit}). |
+| `AI_QUEUE_FULL` | Too many AI requests are waiting. Try again in a few minutes. |
+| `AI_REFUSED` | Claude declined to work on this one. |
+| `AI_BUSY` | Claude is busy right now. Try again in a minute. |
+| `AI_TIMEOUT` | Claude took too long to answer. Try again. |
+| `AI_INCOMPLETE` | Claude's answer was cut off. Try a shorter length. |
+| `AI_BAD_INPUT` | Claude couldn't read this document. |
+| `URL_BLOCKED` | The Daylight server can't open that address. |
+| `FETCH_FAILED` | The Daylight server couldn't load that page. |
+| `FEED_INVALID` | That address isn't a feed, and the page doesn't link to one. |
+| `FEED_EXISTS` | You already follow that feed. |
+| `FEED_LIMIT` | You follow the most feeds the server allows ({limit}). Remove one to add another. |
+| `FEED_FLOOD` | This feed was paused because it published too many new items at once. |
+| `TOO_LARGE` | That's larger than the Daylight server takes ({limit}). |
+| `STORAGE_FULL` | The Daylight server's storage is full. Try again once your Daylight has picked up waiting files. |
+| `GONE` | That file has expired on the Daylight server. Send it again. |
+| `RATE_LIMITED` | Too many requests. Try again in a minute. |
+| `BAD_AUTH` | The Daylight server doesn't recognise this device's pairing. Check DAYLIGHT_SERVER_CODE, then re-run the deploy. |
+| `SERVER_LIMIT` | This was too big for the Daylight server on Cloudflare's Free plan. It works on the Workers Paid plan. |
+| `NEEDS_KEY`, `NOT_CONFIGURED`, `NEEDS_LAB_INBOX`, `LOCKED` | The matching 14.1 message |
+| anything else | Something went wrong on the Daylight server ({code}). Try again later. |
+
+### 14.3 Notices (once per feature, with Continue and Cancel; the v1 notice is always shown in Lab settings)
+
+| Feature | Notice |
+|---|---|
+| AI | Not end-to-end encrypted: to use AI, the text or file goes to your Daylight server and to Claude (Anthropic) in readable form. Links, pages and files you send to your Daylight stay end-to-end encrypted. *(With v1 delivery the second sentence is left out.)* |
+| Email | Not end-to-end encrypted: email reaches your Daylight server in readable form, like any email. The server encrypts it before it goes on to your Daylight. |
+| Feeds | Your feed list is kept on your Daylight server in readable form, so it can check feeds while your devices sleep. |
+| Large files (information only) | Large files wait on your Daylight server for up to 14 days, encrypted with your pairing key; the server can't open them. *(With v1 delivery: "…encrypted with your pairing key, which your Daylight server also holds.")* |
+| v1 delivery (Lab settings) | Your Daylight server holds your pairing code, so whoever controls your Cloudflare or GitHub account can read everything sent to this Daylight. |
+
+---
+
+## 15. Security
+
+### 15.1 What we protect
+
+- the pairing secret (it opens everything) and the content of end-to-end items;
+- the plain-text content the server handles (email, the feed list, AI inputs and results);
+- the Anthropic key and the user's money;
+- the free quotas (availability);
+- the Daylight library (no junk or hostile items) and the user's home network (no requests driven from outside).
+
+### 15.2 Threats and mitigations
+
+| Threat | Mitigations |
+|---|---|
+| **A stranger finds or guesses the Worker URL** | The URL is not treated as a secret. It appears in `Attach:` URLs that the relay sees, and Workers are easy to enumerate. Every endpoint that reads or changes anything needs the bearer token. A wrong token is rejected after a constant-time compare, before the body is read or D1 is touched (3.3), and failures are rate-limited per IP. Unauthenticated routes are `hello` (no version), robots, and hosted frames behind 128-bit capability ids, which are ciphertext. There are no stub pages and no id lookups for unknown paths. The Worker name is derived from the seed and rotates with the pairing. Residual risk: a flood could use up the 100,000 requests a day and pause the server until 00:00 UTC. Nothing leaks. |
+| **A copy of the token or Server code** (lost phone, the web sender's storage, a Cloudflare compromise) | It gives the server's powers and no more. It cannot read what apps send to the Daylight under Lab delivery (3.1). Re-pairing locks the old server (3.4) and rotates every derived value. |
+| **Cloudflare account, API token or GitHub repo compromised** | **Lab delivery:** the attacker can deploy code that reads the Server code. That exposes the server-held plaintext (mail being processed, recent mail subjects, the feed list, AI inputs and results for 24 h), lets them forge server items (labelled "From your server" and still passed through the untrusted-input path) and spend within the AI ceilings. App shares and large files stay unreadable. **v1 delivery:** everything sent to the Daylight; the apps say so (14.3). |
+| **Deploy pipeline on a public repo** | 12.4: no secrets during `npm ci`, secrets per step, an Environment limited to the branch (recommended), actions pinned by SHA, no persisted credentials, every derived form masked before it could print, and summaries with no secret-derived values except the 32-bit fingerprint. |
+| **The relay (ntfy.sh), or anyone who knows a topic name** | It sees topic names, sizes, timing, the Worker's hostname and hosted file ids, never content. It cannot forge frames (AES-GCM). It can publish junk, including `Attach:` URLs pointing anywhere: the server and the apps ignore attachments on config and ack topics, cap poll answers at 256 KiB and 200 messages, and stop after 20 junk frames (4.3, 5.4). It can drop or delay messages; re-sends cover that. |
+| **Forged config frame** (by a holder of the pairing secret) | `sent` more than 5 minutes ahead is refused. The server origin is pinned on first sight, and a move needs the user's confirmation, with the new host shown (4.3). |
+| **JSON injection into the Claude request** | PDF parts containing `"` or `\` are refused at upload. Only parts flagged as validated are spliced, and on Paid they are re-scanned while splicing (9.2, 9.4). Tested with an injection payload. |
+| **Cost abuse of AI** | The key exists only as a Worker secret, never in D1, logs, responses or apps. Only token holders can call Claude. The worst case is reserved atomically before every call, and kept when the outcome is unknown. There are no SDK retries. Deploy-time ceilings cannot be raised from an app. `countTokens` runs for any input over 50,000 characters and every PDF. Jobs reserve when queued, and at most 20 can wait. No tools are sent. Email and feeds never trigger AI. Recommended: a dedicated key in a workspace with a monthly spend limit. |
+| **Abuse of email-in** (spam, mail bombs, spoofed senders) | An unguessable address (50 bits; rotate with `DAYLIGHT_EMAIL_SALT`), a block list, and DMARC `fail` dropped, judged only on Cloudflare's own topmost header. Caps per day, per sender and per domain drop mail silently, so newsletters are never unsubscribed by bounces. Each message is at most 25 MiB, and mail over 2 MiB waits for Paid on Free. HTML goes through the allow-list sanitizer (7.5), and the Reader receives it only through its untrusted-input entry points. There are no auto-replies, so no backscatter. |
+| **SSRF through the Worker's fetches** | Workers have no route to private networks. On top of that, `safeFetch` (9.7) checks the WHATWG-normalized host including NAT64 and 6to4, re-checks redirects, caps decoded bytes and time, and sends no credentials. |
+| **Requests into the home LAN through the Reader** | Every URL the server writes into an item or page passes `publicUrl` (9.7). The DC-1 is never told to fetch a private address. |
+| **Hostile content** (feeds, email, AI output) | The allow-list sanitizer and the escaping rule (7.5). Server items pass the same untrusted-input path as any item (`checkItemHeader`, `webUrl`, `safeFileName`, the Reader's own entry points). Decompression bombs are stopped by the receivers' bounded inflate (v1.1 finding 10; the Kotlin Inbox already bounds by `size`). Server items over 1 MiB and hosted files are `identity`. |
+| **D1 exhaustion** (a flooding feed) | 20 new entries per check and 100 per day, metadata only, auto-pause, digest overflow skipped, and optional writes paused past 400 MB (8.2, 11.1). |
+| **Logs** | Invocation logs are off. Our log lines hold codes and request ids only, never exception messages. Paths carry ids only (10.1). |
+| **Supply chain** | Two runtime dependencies (`@anthropic-ai/sdk`, `postal-mime`), pinned in `package-lock.json` and installed with `npm ci` without secrets. The protocol code is this repo's own module. |
+| **Data left behind** | Raw email is deleted after processing. AI sources go after 24 h, outbox frames after their ack, and hosted files after delivery (else 14 days). Lifecycle rules are the backstop. |
+
+---
+
+## 16. Tests (run in CI on every push)
+
+- **Unit** (`node --test`):
+  - derived values, Server code formatting and parsing (a pairing code is refused), and `sealBox`/`openBox` against
+    `server-vectors.json`, including every negative vector (13.4);
+  - config checks (future `sent`, non-https `server`);
+  - `publicUrl` and `safeFetch` host checks (every form in 9.7);
+  - the sanitizer and escaping fixtures (7.5) and the Markdown renderer's escaping;
+  - feed parser fixtures (RSS 2.0, RDF, Atom, JSON Feed, CDATA, entities, DOCTYPE/ENTITY ignored, an entity bomb,
+    broken XML) and the "view in browser" detector, including 10 KB anchor text;
+  - the DMARC header parser (spoofed extra `Authentication-Results`, `dmarc=none`);
+  - every error code has a message.
+- **Worker integration**: Miniflare from the wrangler bundle built with `__TESTING__`, in-memory D1 and R2, and
+  `unsafeTriggerHandlers` for `/cdn-cgi/local/scheduled` and `/cdn-cgi/local/email`. Outbound fetch goes to
+  `test/relay.mjs` (share's mock relay plus `Attach:`), a mock Claude server and a mock feed server; `TEST_NOW` drives
+  the clock. **D1 and fetch are wrapped with counters that fail any invocation over 50 statements or 50 external
+  subrequests.**
+  - **Auth**: a missing or wrong token; a **50 MB body with a bad token is rejected without being read** (the test
+    stream records no pull); a missing `Content-Length` → 411; over the cap → 413; locked → 423.
+  - **Large files**: upload parts in any order, resume, `n` mismatch, the storage cap and expiry. A 30 MB file end to
+    end goes from `files.sendLarge` through `Attach:` messages on the mock relay to share/js's **v1.0 `Receiver`**,
+    which receives and acks it; the hosted outbox then deletes it.
+  - **Email**:
+    - a newsletter with a "View in browser" link, one without, plain text, and a PDF plus "Sent from my iPhone";
+    - a blocked sender, and `dmarc=fail` with a forged second header;
+    - daily, per-sender and per-domain caps (silently dropped, never rejected), and mail over 2 MiB on Free →
+      `waiting-paid`;
+    - escaping fixtures in the subject and sender.
+  - **Feeds and digests**:
+    - adding with autodiscovery, the baseline, `each` caps with overflow into the digest, and digest overflow
+      `skipped`;
+    - the digest at 07:00 in `America/Los_Angeles` and `Europe/Berlin` across a DST change, with no repeats;
+    - a flooding feed (100 fresh GUIDs every hour) → capped, then paused;
+    - LAN links dropped;
+    - OPML import.
+  - **Outbox**: inline and hosted frames, re-send at 11 h, ack handling, both delivery modes, and the ntfy budget.
+    Junk on the ack topic (attachments, 1,000 messages, 300 KiB) is ignored within the caps. The Lab Inbox's hello
+    sets `inbox.lastSeen`.
+  - **AI**:
+    - **the exact request**: model `claude-opus-5-5`, beta `server-side-fallback-2026-07-01`, `fallbacks:
+      "default"`, `output_config.effort` set, `format` for summaries, no `thinking`, the document block before the
+      text block, `max_tokens` 16000, no trailing assistant turn, no tools;
+    - the PDF splice produces byte-exact JSON from 8 parts, and **a part containing `"},"max_tokens":128000,…` is
+      refused at upload and never reaches the mock Claude**;
+    - `NEED_SOURCE` with `missingParts`;
+    - error mapping: refusal → `AI_REFUSED`, 401 → `AI_KEY_INVALID`, 402 `billing_error` → `AI_BILLING`, 429/529 →
+      `AI_BUSY`;
+    - **a timeout keeps the reservation**, and two concurrent requests near the cap → exactly one runs;
+    - jobs reserve on enqueue, and the 21st is refused;
+    - `countTokens` runs above 50,000 characters and for every PDF;
+    - keepalive newlines before the JSON;
+    - a missing key → `NEEDS_KEY`.
+  - **Worst-case Cron**: every step due at once stays within 50 statements and 50 subrequests (2.3).
+- **v1 safety**: hosted frames and server item frames through share/js's v1 `Receiver`. Hosted frames are received.
+  Server items under Lab delivery are ignored: no item, no ack, no exception.
+- **Bundle**: under 3 MB gzipped, with no test variable names.
+- **Live, informational** (GitHub runner): `test/live/ntfy-attach.mjs` (6.4).
+
+---
+
+## 17. Coordination with the protocol v1.1 work
+
+Nothing here changes `share/`. The server and the client module use these share/js exports:
+
+- `parsePairing`, `deriveKeys` and `relayLimits()`;
+- `CHUNK_MAX`;
+- `encryptFrame(keys, 'inbox', …)` and `decryptFrame(keys, 'ack', …)`, used only for pairing-key frames;
+- `checkItemHeader`, `webUrl`, `safeFileName` and `cleanTitle`;
+- the v1.1 ack reader (id cursor) and the `auth=` token rule.
+
+What the server relies on, and asks v1.1 to keep:
+
+1. **External attachments.** Receivers download `attachment.url` from any `https` host, up to 12,713,984 bytes. They
+   must accept a message whose `attachment` has only `name` and `url` (no `size`, `type` or `expires`), which is what
+   ntfy lists for `Attach:` messages. Hosted large files and hosted server frames depend on this (6.4).
+2. **`aadFor` throws on an unknown purpose** instead of falling back to the inbox AAD. The server never relies on the
+   fallback (3.2), but other code could, silently.
+3. Receivers keep accepting chunks up to `CHUNK_MAX` = 12 MiB and items of up to 16 parts and 256 MiB decoded.
+4. Unknown `x-` header fields stay ignored (`x-origin`, `x-about`, `x-inbox`).
+5. **Reserved labels**: `dlshare/v1/server-*` with a trailing `0x00` (3.2), and the AADs `dlshare/v1/server-config`,
+   `-item` and `-ack`.
+6. The `enc` value `x-blob`, reserved in revision 1 of this design, is **released**. Large files no longer use a
+   pointer frame.
+7. If v1.1's `Sender` gains an "acked ids" hook, the hosted outbox will read acks through it instead of polling the
+   ack topic itself.
+
+---
+
+## 18. Critique log
+
+Revision 2 answers two reviews of revision 1: **S** = security, **O** = simplicity/operations. Each point is
+accepted, partly accepted, or rejected with a one-line reason.
+
+### 18.1 Security review
+
+| # | Point (severity) | Verdict | What was done |
+|---|---|---|---|
+| S1 | The server holds the master pairing secret (must-fix) | Accepted | The server gets a one-way Server code (3.1–3.2). Server items go on its own topic under its own key for the Lab Inbox, and acks come on its own ack topic (5). Large files are pairing-key frames the server cannot read (6). The pairing code reaches the server only through the explicit `DAYLIGHT_DELIVERY=v1` opt-in, with an honest notice (14.3). §1, §14.3 and §15 are corrected. |
+| S2 | Body hashed before the HMAC check (must-fix) | Accepted | Bearer token compared before anything else. `Content-Length` is required and capped before reading. A test sends a 50 MB body with a bad token (3.3, 16). |
+| S3 | PDF splice allows JSON injection (must-fix) | Accepted, changed | Bytes are validated at upload, in ≤ 4 MiB parts: a 30 MB typed-array `indexOf` scan measured 44–56 ms, not memchr speed. A validated flag, a second guard on Paid only (Free CPU), and an injection test (9.2, 9.4). |
+| S4 | Held mail opens unsafely (must-fix) | Accepted | Allow-list sanitizer for all server HTML (7.5). The held queue and its viewer are deferred from release 1, and their rules (JS off, CSP, `data:` images, Load images, external links) are fixed in 7.6. Page items keep `https` images that pass `publicUrl`, because a newsletter's images are its content. |
+| S5 | A forged config can pin a hostile server | Accepted | A future `sent` is refused. TOFU pin, confirmation on a move, host shown next to the fingerprint (4.3). |
+| S6 | Junk and `Attach:` URLs on the ack and config topics | Accepted | Attachments ignored, 256 KiB and 200-message caps, stop after 20 junk frames, the server's own poll instead of `RelayClient.poll`. Each Cron step has its own try/catch and allowances (2.3, 4.3, 5.4). |
+| S7 | Allow-list bypass without DMARC; joined `Authentication-Results` | Partly | Release 1 has no allow-list (O13). Topmost Cloudflare header only, with fixtures, from now. The "pass or aligned DKIM" rule and the shared-platform warning are fixed for the deferred allow-list (7.3, 7.6). |
+| S8 | Spam can bounce newsletters, evict held mail, block processing | Accepted | Caps drop silently and never bounce. Per-sender (20) and per-domain (50) caps. Over 2 MiB on Free waits unparsed as `waiting-paid`, and CPU kills never drop mail (7.2, 7.4). The eviction rule is in 7.6. |
+| S9 | Third-party URLs make the Reader fetch LAN addresses | Accepted | `publicUrl` on every URL the server writes, plus fixtures (9.7, 5, 7.4, 8.2, 9.1). |
+| S10 | A hostile feed can fill D1 | Accepted | 20 new entries per check, 100 per day, metadata only (no content stored), digest overflow `skipped`, auto-pause, a 400 MB guard (8.1, 8.2, 11.1). |
+| S11 | Cost-guard gaps | Accepted | A worst-case reservation, kept when the outcome is unknown. `maxRetries: 0`. Deploy-time ceilings. `countTokens` over 50,000 characters and for every PDF. History capped. Jobs reserve on enqueue, at most 20, long input stored as a source. Atomic conditional updates; the in-flight table is gone (9.3). |
+| S12 | "Lab Inbox seen" can be triggered by any client | Accepted, changed | No direct lane (O11). Presence comes only from hello and ack frames that the Inbox's own code path seals on the server ack topic. Delivery never depends on presence (5.5). A per-device registered key is not added: it covers the same holders and adds a key exchange. |
+| S13 | Old key keeps working after a reset | Accepted | `lockBeforeRepair` with the old token. `423` until a new Server code is deployed. The §15 row is corrected (3.4, 12.7). |
+| S14 | Deploy workflow risks on a public repo | Accepted | `npm ci` without secrets, per-step secrets, masks for every form, `$sub` masked, `persist-credentials: false`, SHA-pinned actions, a minimal summary. The Environment is recommended, not required: LAB-DECISIONS names repo secrets, and only the owner can push (12.4). |
+| S15 | The Worker URL leaks or can be guessed | Accepted | Worker name from the seed, rotated, old one deleted. Items use `https://daylight.invalid/i/<id>`. Rate limit on failures. `hello` without a version. No stub routes (3.2, 5, 10.3). |
+| S16 | share/js gives an unknown purpose the inbox AAD | Accepted | Own AES-GCM calls with their own key and AADs (`sealBox`/`openBox`), negative vectors, and a request to v1.1 to make `aadFor` throw (3.2, 13.4, 17). |
+| S17 | Generated HTML interpolates unescaped values | Accepted | Escaping rule, `publicUrl` on every `href`/`src`, sanitizer on all server HTML, fixtures (7.5). |
+| S18 | LabReassembler decompression bomb, 200 MiB in memory | Accepted (moot) | LabReassembler and the pointer format are gone. Hosted files are `identity` ordinary frames, reassembled by the receivers with a bound and spooled to disk (Kotlin today, v1.1 finding 10 for JS), within their 12,713,984-byte per-frame cap (6). |
+| S19 | Secrets in extension content scripts | Accepted | Secret and token live only in the service worker. Content scripts send messages to it. CORS is needed only for the web sender (10.2, 13.2). |
+| S20 | Implicit fetch and parser limits (nit) | Accepted | A decoded-byte counting reader on the input stream; no `.text()`, `.json()` or `.arrayBuffer()`; DTD ignored; WHATWG hostname with NAT64 and 6to4; anchor text cut to 200 characters; fixtures (7.4, 8.2, 9.7). |
+| S21 | Content in logged URLs and errors; runtime test vars (nit) | Accepted | Unblock takes its pattern in the body, paths carry ids only, invocation logs are off, only codes are logged, `__TESTING__` is a build-time define with a bundle check (10.1, 12.2, 12.3). |
+| S22 | Label separators, blob AAD, host in signature, unchecked `sourceId` (nit) | Partly | Labels end in `0x00` and the origin is separated: accepted (3.2). A blob AAD is rejected: hosted frames are genuine inbox items, and server items already have their own key and AAD. The host point is moot (no signatures). `sourceId` cannot be hashed on Free, so `?replace=1` re-uploads after `AI_BAD_INPUT` (9.2). |
+| S23 | `NTFY_TOKEN` scope; weak or stuck email address (nit) | Accepted | The token goes only as v1.1 `auth=` to the relay's origin and can come from the Server code link's `k`. A weak `DAYLIGHT_EMAIL_LOCAL` warns. `DAYLIGHT_EMAIL_SALT` rotates the address (5.3, 7.1). |
+
+### 18.2 Simplicity and operations review
+
+| # | Point (severity) | Verdict | What was done |
+|---|---|---|---|
+| O1 | R2 needs a card, so the first deploy fails (must-fix) | Accepted | R2 is optional. The deploy probes for it and leaves the binding out, and those features show a `needs-r2` state. Server frames live in D1, so feeds, digests and text AI work without R2. Added to the checklist (2.1, 11, 12.0, 12.4). KV is rejected: it is eventually consistent, and v1 receivers treat a 404 as expired. |
+| O2 | "Run workflow" is not offered on this branch (must-fix) | Accepted | Every message and step says "Re-run all jobs", and re-runs deploy (`run_attempt > 1`). No dispatcher is added to the default branch: that is the user's call (12.0, 12.4, 14.1). |
+| O3 | D1 allows 50 queries per invocation, not 1,000 (must-fix) | Accepted | Table fixed. Per-invocation budgets, `json_each` multi-row statements, counting wrappers and a worst-case Cron test (2.1, 2.3, 8.2, 16). |
+| O4 | Single steps exceed 10 ms; email needs Paid (must-fix) | Accepted | Stated plainly, with a CPU canary. `waiting-paid` instead of dropping mail. Digests are capped at 256 KiB on Free: the suggested 1 MiB still measures over 10 ms (2.2). |
+| O5 | A missing or stale pairing shows the wrong message (must-fix) | Accepted | `DAYLIGHT_SERVER_CODE` is part of the deploy gate. `needs-server` names all three secrets. `pairing-mismatch` comes from the pinned origin of an earlier pairing. A Copy button in Lab settings (3.1, 4.3, 14.1). |
+| O6 | Use ntfy `Attach:` for large files | Accepted, changed | The **sender** publishes and re-sends the `Attach:` messages and reads acks, so the server needs neither the pairing key nor the inbox topic. Under Lab delivery the server cannot decrypt the files. Verification job added (6). |
+| O7 | Threshold and chunk constants v1.1 removes | Accepted | Threshold is `relayLimits().maxEncoded`; hosted frames use `CHUNK_MAX`; `CHUNK` is no longer used (6.1, 6.2, 17). |
+| O8 | `NTFY_TOKEN` helps only on a paid tier | Accepted | Wording fixed. Server frames over the small-frame size are hosted with `Attach:`. The Worker sends only small messages, so there is no attachment budget. `announce` publishes and polls from the Worker (4.2, 5.2, 5.3). |
+| O9 | Replace HMAC with a bearer token | Accepted | Signatures, nonces, clock skew and unsigned-payload rules are removed. `pairing-mismatch` is never inferred from `BAD_AUTH` (3.3, 4.3). |
+| O10 | Config frame carries volatile state | Accepted | `{server, api, fingerprint, delivery, sent}`, published by the runner and the Worker, kept indefinitely. States come from `GET /v1/status`, cached 10 min (4, 10.5). |
+| O11 | Direct lane serves a client that comes last | Accepted | Removed. Deliveries go over ntfy with hosted frames. It can return if ntfy proves unreliable from Worker addresses. |
+| O12 | Three AI endpoints, sync timeouts, too many settings | Accepted | `POST /v1/ai` with `op`, newline keepalives then JSON, jobs only for share extensions, no in-flight table, one user setting under deploy ceilings, no `html` source (9). |
+| O13 | Email asks too much for a first release | Accepted | Open policy, block list, recent mail. Held queue deferred (7.6). `DAYLIGHT_EMAIL_ALLOW` dropped. Address-change notice, and `DAYLIGHT_EMAIL_LOCAL` for a stable address. A stored random token is rejected: the deploy must know the address to write the literal routing rule (7). |
+| O14 | Too many per-feed settings | Accepted | One digest time, per-feed `each` or `digest`, fixed interval and caps, overflow into the digest, OPML import only. `send=content` is also deferred (8). |
+| O15 | Setup steps scattered and incomplete | Accepted | Numbered checklist, email zone permissions up front, token check that names a missing permission, `DAYLIGHT_RELAY` dropped (the Server code link carries relay and token), "Next:" line (12.0, 12.4). |
+| O16 | Smoke test on a public repo; deploys on share/js pushes (nit) | Accepted | `$sub` masked, a 5-minute wait that only warns on a first deploy, share/js-only pushes tested but not deployed (12.4). |
+| O17 | Three message tables will drift (nit) | Accepted | Apps show the server's `message`. Local text only for the states an app decides itself, and code handles only the codes that change behaviour (10.4, 14). |
+| O18 | PDF upload round trips; `countTokens` re-sends 30 MB (nit) | Partly | Streaming base64 into a temp file and `NEED_SOURCE` instead of `HEAD`: accepted (9.2, 13.1). Estimating PDF tokens from byte size is rejected: bytes do not bound tokens, and `countTokens` is free (9.3). |
+| O19 | Three stub routes (nit) | Accepted, further | No stub routes at all. Items use the non-resolving `https://daylight.invalid/i/<itemId>` (5). |
+
+### 18.3 Where the reviews met
+
+Two reviews converged on one architecture: a Server code instead of the pairing secret (S1) combined with hosted
+ordinary frames for large files (O6). With the sender publishing the `Attach:` messages, the server needs neither the
+pairing key nor the inbox topic. The one cost is that the server's own items need the Lab Inbox's server lane (5.5),
+or the v1-delivery opt-in until it ships. 3.1 recommends building that lane with the first server release; that is a
+decision for the user.
+
+---
+
+## Sources
+
+- Cloudflare Workers limits: <https://developers.cloudflare.com/workers/platform/limits/>
+- Workers subrequest limits (Feb 2026 change): <https://developers.cloudflare.com/changelog/2026-02-11-subrequests-limit>
+- Error 1102 (CPU): <https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1102/>
+- D1 limits (queries per invocation, row size, bound parameters): <https://developers.cloudflare.com/d1/platform/limits/>
+- D1 pricing: <https://developers.cloudflare.com/d1/platform/pricing/>
+- R2 pricing and enabling R2: <https://developers.cloudflare.com/r2/pricing/>, <https://developers.cloudflare.com/r2/get-started/>
+- Email Routing limits: <https://developers.cloudflare.com/email-routing/limits>
+- Workers rate limiting binding: <https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/>
+- Workers Logs (`invocation_logs`): <https://developers.cloudflare.com/workers/observability/logs/workers-logs/>
+- ntfy attachments from a URL (`X-Attach` / `Attach`): <https://docs.ntfy.sh/publish/#attachments-from-a-url>
+- ntfy.sh as measured: `../share/NTFY-FACTS.md`; protocol revision 1.1: `../share/CHANGES-v1.1.md`
+- GitHub: re-running workflows <https://docs.github.com/actions/managing-workflow-runs/re-running-workflows-and-jobs>;
+  `workflow_dispatch` only on the default branch <https://docs.github.com/actions/using-workflows/events-that-trigger-workflows#workflow_dispatch>;
+  environments <https://docs.github.com/actions/deployment/targeting-different-environments/using-environments-for-deployment>
+- Claude API usage: Anthropic's claude-api skill (TypeScript README: client, errors, refusal handling; model-migration
+  guide: Claude Opus 5 "New API features" for `fallbacks: "default"` with `server-side-fallback-2026-07-01`, and
+  "Migrating to Claude Opus 5.5": always-on adaptive thinking, explicit effort, pricing $4/$20, cache reads $0.20,
+  5-minute cache writes $5); `@anthropic-ai/sdk` 0.135.0 type definitions (`fallbacks`, `output_config`,
+  `BetaPlainTextSource`, error classes and `APIError.type`).
+- Tooling checked locally: wrangler 4.151.2 (`r2 bucket lifecycle add`, `email routing`, `deploy --secrets-file`,
+  `secret bulk`), Miniflare (`/cdn-cgi/local/scheduled`, `/cdn-cgi/local/email`), postal-mime 4.0. Byte-scan timings
+  (2.2) measured with Node 22 on the build box, Oct 20, 2026. Action commit SHAs resolved with `git ls-remote` the same day.
+- Receivers' attachment handling: `share/js/daylight-share.js` (`RelayClient.poll`),
+  `android/share-core/.../Relay.kt` (`download`, `MAX_ATTACHMENT`) and `Items.kt` (`decodeVerify`, disk spooling),
+  `apple/DaylightShareKit/.../RelayClient.swift`.
