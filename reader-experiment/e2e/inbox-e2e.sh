@@ -320,12 +320,22 @@ grep -q "handed to com.daylightcomputer.readerexperiment" "$OUT/inbox-log.txt" &
 echo "relay: $(curl -s "$RELAY_LOCAL/__mock/state" || true)"
 
 # The Inbox's list (reported): "In your Reader ✓" where the Reader confirmed the save (pages, links), "Handed to the
-# Reader" where it cannot (documents).
+# Reader" where it cannot (documents). The list starts below the pairing code, so scroll until it shows.
 adb shell "am start -n $SHARE_PKG/.ui.MainActivity" >/dev/null 2>&1 || true; sleep 4
+labels=""
+for scroll in 0 1 2 3 4 5; do
+  [ "$scroll" = 0 ] || { adb shell input swipe 160 560 160 140 400 >/dev/null 2>&1 || true; sleep 2; }
+  timeout 45 adb shell uiautomator dump /sdcard/e2e-ui.xml >/dev/null 2>&1 || continue
+  adb exec-out cat /sdcard/e2e-ui.xml > "$OUT/41-inbox-items.xml" 2>/dev/null || continue
+  confirmed="$(grep -o 'In your Reader ✓' "$OUT/41-inbox-items.xml" | wc -l)"
+  handed="$(grep -o 'Handed to the Reader' "$OUT/41-inbox-items.xml" | wc -l)"
+  if [ $((confirmed + handed)) -gt 0 ]; then
+    labels="on screen after $scroll scrolls: $confirmed x In your Reader ✓, $handed x Handed to the Reader"
+    break
+  fi
+done
+echo "the Inbox's item labels: ${labels:-not found on screen (41-inbox-items.png)}"
 shot "$OUT/41-inbox-items.png"
-if timeout 45 adb shell uiautomator dump /sdcard/e2e-ui.xml >/dev/null 2>&1 && adb exec-out cat /sdcard/e2e-ui.xml > "$OUT/41-inbox-items.xml" 2>/dev/null; then
-  echo "the Inbox shows, on screen: $(grep -o 'In your Reader ✓' "$OUT/41-inbox-items.xml" | wc -l) x In your Reader ✓, $(grep -o 'Handed to the Reader' "$OUT/41-inbox-items.xml" | wc -l) x Handed to the Reader"
-fi
 adb shell monkey -p "$READER_PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true; sleep 5
 shot "$OUT/40-reader-library.png"
 echo "library after: $(reader_count_line) (before: $before)"
