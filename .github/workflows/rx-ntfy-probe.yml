@@ -1,0 +1,24 @@
+name: Reader experiment - ntfy.sh behaviour probe
+
+# Measures the real ntfy.sh limits and semantics the Daylight Share protocol relies on (attachment size limit,
+# per-visitor total, time stamping, since= semantics, CORS). Informational; read the log.
+on:
+  push:
+    branches: [claude/sweet-goldberg-ej1nb0]
+    paths:
+      - 'reader-experiment/tools/probe-ntfy.mjs'
+      - '.github/workflows/rx-ntfy-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node reader-experiment/tools/probe-ntfy.mjs https://ntfy.sh
