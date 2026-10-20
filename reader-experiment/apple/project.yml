@@ -1,5 +1,9 @@
 # Send to Daylight for iPhone and Mac. Generate the Xcode project with:  brew install xcodegen && xcodegen
 # (from reader-experiment/apple). Signing: Config/Base.xcconfig and Config/Signing.local.xcconfig.
+#
+# App Groups are a build-time choice (Config/Base.xcconfig): the iPhone targets use DAYLIGHT_APP_GROUP; the Mac targets
+# use DAYLIGHT_MAC_APP_GROUP, which is <TEAMID>.com.daylight.share with a DEVELOPMENT_TEAM and nothing at all without
+# one (DAYLIGHT_MAC_ENTITLEMENTS_SUFFIX then picks the entitlements files without the App Group key).
 name: SendToDaylight
 options:
   bundleIdPrefix: com.daylight
@@ -109,7 +113,7 @@ targets:
         PRODUCT_MODULE_NAME: SendToDaylightMac
         PRODUCT_BUNDLE_IDENTIFIER: "$(DAYLIGHT_BUNDLE_ID).mac"
         INFOPLIST_FILE: macOS/App/Info.plist
-        CODE_SIGN_ENTITLEMENTS: macOS/App/SendToDaylight.entitlements
+        CODE_SIGN_ENTITLEMENTS: "macOS/App/SendToDaylight$(DAYLIGHT_MAC_ENTITLEMENTS_SUFFIX).entitlements"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: YES
         COMBINE_HIDPI_IMAGES: YES
@@ -135,7 +139,7 @@ targets:
         PRODUCT_NAME: ShareExtension
         PRODUCT_BUNDLE_IDENTIFIER: "$(DAYLIGHT_BUNDLE_ID).mac.ShareExtension"
         INFOPLIST_FILE: macOS/ShareExtension/Info.plist
-        CODE_SIGN_ENTITLEMENTS: macOS/ShareExtension/ShareExtension.entitlements
+        CODE_SIGN_ENTITLEMENTS: "macOS/ShareExtension/ShareExtension$(DAYLIGHT_MAC_ENTITLEMENTS_SUFFIX).entitlements"
         ENABLE_HARDENED_RUNTIME: YES
         APPLICATION_EXTENSION_API_ONLY: YES
     dependencies:
@@ -159,7 +163,7 @@ targets:
         PRODUCT_NAME: SafariExtension
         PRODUCT_BUNDLE_IDENTIFIER: "$(DAYLIGHT_BUNDLE_ID).mac.SafariExtension"
         INFOPLIST_FILE: macOS/SafariExtension/Info.plist
-        CODE_SIGN_ENTITLEMENTS: macOS/SafariExtension/SafariExtension.entitlements
+        CODE_SIGN_ENTITLEMENTS: "macOS/SafariExtension/SafariExtension$(DAYLIGHT_MAC_ENTITLEMENTS_SUFFIX).entitlements"
         ENABLE_HARDENED_RUNTIME: YES
         APPLICATION_EXTENSION_API_ONLY: YES
     dependencies:

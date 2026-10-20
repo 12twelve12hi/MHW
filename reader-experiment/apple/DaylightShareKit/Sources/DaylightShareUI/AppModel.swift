@@ -3,10 +3,16 @@ import Foundation
 import SwiftUI
 
 /// The state behind the iPhone and Mac apps: pairing, history, sending, and the maintenance timer.
+///
+/// Creating it never waits for storage: `SharedStore` resolves the App Group in the background, and until it is settled
+/// (at most `SharedStore.resolutionTimeout`) the model reads this process's own storage. Writes (pairing, settings,
+/// sending) are applied once storage is settled.
 @MainActor
 public final class AppModel: ObservableObject {
     public static let shared = AppModel()
 
+    /// Where the pairing and history live: resolving, the shared App Group, or this app's own storage.
+    @Published public private(set) var storage: SharedStore.State
     @Published public private(set) var pairing: Pairing?
     @Published public private(set) var rows: [OutboxRow] = []
     @Published public private(set) var deviceName: String = ""
@@ -27,6 +33,7 @@ public final class AppModel: ObservableObject {
 
     public init(store: SharedStore = .shared) {
         self.store = store
+        storage = store.state
         reload()
         observer = NotificationCenter.default.addObserver(forName: .daylightShareChanged, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.reload() }
@@ -39,16 +46,42 @@ public final class AppModel: ObservableObject {
     // MARK: State
 
     public var isPaired: Bool { pairing != nil }
+    /// Whether storage is settled (the App Group resolved, or this app's own storage chosen).
+    public var isStorageReady: Bool { storage != .resolving }
+
+    /// For Settings: whether the extensions see the app's pairing.
+    public var storageSummary: String {
+        switch storage {
+        case .resolving: return "Checking…"
+        case .shared: return "Yes"
+        case .appPrivate: return "No (pair them separately)"
+        }
+    }
     public var daylightName: String { pairing?.displayName ?? "your Daylight" }
     public var defaultDeviceName: String { DaylightShare.defaultDeviceName }
 
     public func reload() {
+        let s = store.state
+        if s != storage { storage = s }
         let p = store.pairing
         if p != pairing { pairing = p }
         let r = OutboxStore(store: store).rows
         if r != rows { rows = r }
         let n = store.deviceName
         if n != deviceName { deviceName = n }
+        writeStatus()
+    }
+
+    /// Runs `body` now if storage is settled, else as soon as it is (on the main actor).
+    private func whenStorageReady(_ body: @escaping @MainActor () -> Void) {
+        if store.isReady {
+            body()
+            return
+        }
+        Task {
+            await store.ready()
+            body()
+        }
     }
 
     public func show(_ text: String, error: Bool = false) {
@@ -63,14 +96,18 @@ public final class AppModel: ObservableObject {
     // MARK: Pairing and settings
 
     /// Pairs from a typed code or a `daylightshare://` link. Returns an error message, or nil on success.
+    /// While storage is still resolving, the pairing is saved as soon as it is settled.
     @discardableResult
     public func pair(_ input: String) -> String? {
         do {
             let p = try Pairing.parse(input)
-            store.pair(p)
-            reload()
-            show("Paired with \(p.displayName).")
-            Task { await refresh() }
+            whenStorageReady { [weak self] in
+                guard let self else { return }
+                self.store.pair(p)
+                self.reload()
+                self.show("Paired with \(p.displayName).")
+                Task { await self.refresh() }
+            }
             return nil
         } catch {
             return (error as? ShareError)?.message ?? error.localizedDescription
@@ -78,13 +115,17 @@ public final class AppModel: ObservableObject {
     }
 
     public func unpair() {
-        store.unpair()
-        reload()
+        whenStorageReady { [weak self] in
+            self?.store.unpair()
+            self?.reload()
+        }
     }
 
     public func setDeviceName(_ name: String) {
-        store.deviceName = name
-        reload()
+        whenStorageReady { [weak self] in
+            self?.store.deviceName = name
+            self?.reload()
+        }
     }
 
     /// Changes the relay of the current pairing (it must match the Daylight's). Returns an error message or nil.
@@ -92,8 +133,11 @@ public final class AppModel: ObservableObject {
         guard var p = pairing else { return "Not paired." }
         do {
             p.relay = try ShareText.normalizeRelay(relay)
-            store.pair(p)
-            reload()
+            let changed = p
+            whenStorageReady { [weak self] in
+                self?.store.pair(changed)
+                self?.reload()
+            }
             return nil
         } catch {
             return (error as? ShareError)?.message ?? error.localizedDescription
@@ -109,6 +153,7 @@ public final class AppModel: ObservableObject {
     /// Sends one item and reports the outcome in the banner. Returns the outbox row.
     @discardableResult
     public func send(_ input: ItemInput, label: String) async -> OutboxRow? {
+        await store.ready()
         guard let sender = sender() else {
             show("Pair with your Daylight first.", error: true)
             return nil
@@ -189,6 +234,8 @@ public final class AppModel: ObservableObject {
 
     /// Handles URLs the app was opened with: `daylightshare://` pairs, files are sent, web links are sent.
     public func handleOpen(_ urls: [URL]) async {
+        // A pairing link followed by a file must pair before the file is sent.
+        await store.ready()
         for url in urls {
             if url.scheme?.lowercased() == "daylightshare" {
                 if let error = pair(url.absoluteString) { show(error, error: true) }
@@ -201,6 +248,7 @@ public final class AppModel: ObservableObject {
     }
 
     public func retry(_ row: OutboxRow) async {
+        await store.ready()
         guard let sender = sender() else { return }
         sendingCount += 1
         defer { sendingCount -= 1 }
@@ -211,22 +259,31 @@ public final class AppModel: ObservableObject {
     }
 
     public func delete(_ row: OutboxRow) {
-        OutboxStore(store: store).remove(row.id)
-        reload()
+        whenStorageReady { [weak self] in
+            guard let self else { return }
+            OutboxStore(store: self.store).remove(row.id)
+            self.reload()
+        }
     }
 
     public func clearFinished() {
-        OutboxStore(store: store).clearFinished()
-        reload()
+        whenStorageReady { [weak self] in
+            guard let self else { return }
+            OutboxStore(store: self.store).clearFinished()
+            self.reload()
+        }
     }
 
     private var launchArgumentsHandled = false
 
     /// Hooks for the CI smoke tests (and handy for debugging): `-DLSPairLink <daylightshare://…>` pairs and
     /// `-DLSSendLink <url>` sends a link, once per launch. Only someone who starts the app can pass them.
+    /// (`-DLSStatusDump` is read by `noteRendered()`.)
     public func handleLaunchArguments(_ args: [String] = ProcessInfo.processInfo.arguments) async {
         guard !launchArgumentsHandled else { return }
         launchArgumentsHandled = true
+        // Pair and send in this order, both on settled storage.
+        await store.ready()
         func value(_ flag: String) -> String? {
             guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
             return args[i + 1]
@@ -239,6 +296,7 @@ public final class AppModel: ObservableObject {
 
     /// Reads acks and re-sends what is due.
     public func refresh() async {
+        await store.ready()
         reload()
         guard let sender = sender() else { return }
         _ = await sender.tick()
@@ -270,5 +328,57 @@ public final class AppModel: ObservableObject {
     public func stopAutoRefresh() {
         timer?.invalidate()
         timer = nil
+    }
+
+    // MARK: Status dump (CI smoke tests and debugging)
+
+    /// When the model was created (about when the app launched).
+    private let createdAt = Date()
+    private var firstRender: Date?
+    private var heartbeat: Timer?
+    /// Where `-DLSStatusDump` writes, or nil when it is off.
+    public private(set) var statusFile: URL?
+
+    /// Call from the root view's `onAppear`. With the launch argument `-DLSStatusDump`, the app then writes its state
+    /// to `debug-status.json` in its own Application Support folder (sandboxed Mac app:
+    /// ~/Library/Containers/<bundle id>/Data/Library/Application Support/DaylightShare/), on its first render, after
+    /// every change, and once a second as a heartbeat that stops when the main thread is blocked.
+    public func noteRendered(arguments: [String] = ProcessInfo.processInfo.arguments) {
+        guard firstRender == nil else { return }
+        firstRender = Date()
+        guard arguments.contains("-DLSStatusDump") else { return }
+        statusFile = SharedStore.privateDirectory().appendingPathComponent("debug-status.json")
+        writeStatus()
+        heartbeat = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.writeStatus() }
+        }
+    }
+
+    /// The state the status dump holds: storage, pairing and each history row with the label the history shows.
+    public func statusSnapshot() -> [String: Any] {
+        func ms(_ d: Date?) -> Any { d.map { Int(($0.timeIntervalSince1970 * 1000).rounded()) as Any } ?? NSNull() }
+        return [
+            "pid": Int(ProcessInfo.processInfo.processIdentifier),
+            "app": DaylightShare.appIdentifier,
+            "modelCreatedAt": ms(createdAt),
+            "firstRenderAt": ms(firstRender),
+            "heartbeatAt": ms(Date()),
+            "storage": storage.description,
+            "storageReady": isStorageReady,
+            "appGroup": store.appGroup.map { $0 as Any } ?? NSNull(),
+            "paired": isPaired,
+            "daylight": pairing.map { $0.displayName as Any } ?? NSNull(),
+            "rows": rows.map { row -> [String: Any] in
+                ["id": row.id, "title": row.displayTitle, "url": row.url, "status": row.status.rawValue,
+                 "label": StatusLabel.text(row), "error": row.error]
+            },
+        ]
+    }
+
+    private func writeStatus() {
+        guard let statusFile else { return }
+        guard let data = try? JSONSerialization.data(withJSONObject: statusSnapshot(), options: [.sortedKeys]) else { return }
+        try? FileManager.default.createDirectory(at: statusFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: statusFile, options: .atomic)
     }
 }

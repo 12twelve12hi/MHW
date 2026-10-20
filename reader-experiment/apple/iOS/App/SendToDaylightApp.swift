@@ -32,6 +32,7 @@ struct SendToDaylightApp: App {
         }
         // PROTOCOL 3.3: read acks and re-send in the background while items wait.
         .backgroundTask(.appRefresh(Self.refreshTask)) {
+            await SharedStore.shared.ready()
             if let sender = try? DaylightShare.sender() {
                 _ = await sender.tick()
                 if sender.hasPending { Self.scheduleRefresh() }
@@ -55,6 +56,9 @@ struct RootView: View {
         ZStack(alignment: .bottom) {
             if model.isPaired {
                 HomeView()
+            } else if !model.isStorageReady {
+                // At most SharedStore.resolutionTimeout, usually a few milliseconds (finding the App Group).
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 PairView()
             }
@@ -64,5 +68,6 @@ struct RootView: View {
         }
         .animation(.default, value: model.banner)
         .animation(.default, value: model.isPaired)
+        .onAppear { model.noteRendered() }
     }
 }

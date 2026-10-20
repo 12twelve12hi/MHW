@@ -167,6 +167,9 @@ public final class ShareExtensionModel: ObservableObject {
 
     @Published public private(set) var phase: Phase = .reading
     @Published public private(set) var summary = ""
+    /// False when this extension keeps its own pairing (no App Group in this build: ad-hoc and unsigned Mac builds),
+    /// so the pairing screen explains that the code is needed here once.
+    @Published public private(set) var sharesPairingWithApp = true
     /// Called when the extension should close (`completeRequest`).
     public var onFinish: () -> Void = {}
     /// Called on Cancel (`cancelRequest`).
@@ -188,6 +191,9 @@ public final class ShareExtensionModel: ObservableObject {
         Task {
             payloads = await SharePayloadReader.read(inputItems)
             summary = Self.describe(payloads)
+            // The App Group is resolved in the background (never on this thread); wait for it before reading the pairing.
+            await store.ready()
+            sharesPairingWithApp = store.isShared
             if payloads.isEmpty {
                 phase = .nothing
             } else if store.pairing == nil {
@@ -201,8 +207,12 @@ public final class ShareExtensionModel: ObservableObject {
     /// From the pairing form: returns an error message or nil.
     public func pair(_ input: String) -> String? {
         do {
-            store.pair(try Pairing.parse(input))
-            Task { await send() }
+            let p = try Pairing.parse(input)
+            Task {
+                await store.ready()
+                store.pair(p)
+                await send()
+            }
             return nil
         } catch {
             return (error as? ShareError)?.message ?? error.localizedDescription
@@ -210,6 +220,7 @@ public final class ShareExtensionModel: ObservableObject {
     }
 
     func send() async {
+        await store.ready()
         guard let sender = try? DaylightShare.sender(store: store) else {
             phase = .needsPairing
             return
@@ -312,6 +323,11 @@ public struct ShareExtensionView: View {
                 Button("Done") { model.done() }.buttonStyle(.borderedProminent)
             case .needsPairing:
                 Text("Pair with your Daylight").font(.headline)
+                if !model.sharesPairingWithApp {
+                    Text(Self.pasteOnceText)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 PairingHelp()
                 PairingForm { model.pair($0) }
                 Button("Cancel", role: .cancel) { model.cancel() }
@@ -320,6 +336,15 @@ public struct ShareExtensionView: View {
         .padding(24)
         .frame(maxWidth: 420)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Shown when this build has no App Group, so the extension cannot read the app's pairing.
+    static var pasteOnceText: String {
+        #if os(macOS)
+        return "This copy of Send to Daylight isn’t signed with a developer team, so the Share menu can’t read the app’s pairing. Paste your pairing code here once; the Share menu remembers it."
+        #else
+        return "This copy of Send to Daylight can’t share the app’s pairing with the share sheet. Paste your pairing code here once; it is remembered."
+        #endif
     }
 
     @ViewBuilder private var summaryText: some View {

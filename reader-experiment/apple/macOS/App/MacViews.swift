@@ -11,6 +11,10 @@ struct MacRootView: View {
         ZStack(alignment: .bottom) {
             if model.isPaired {
                 MacHomeView()
+            } else if !model.isStorageReady {
+                // At most SharedStore.resolutionTimeout (2 s), usually a few milliseconds: rather than flash the
+                // pairing screen while the App Group is being found, show nothing much.
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 MacPairView()
             }
@@ -20,6 +24,7 @@ struct MacRootView: View {
         }
         .frame(minWidth: 440, minHeight: 480)
         .animation(.default, value: model.banner)
+        .onAppear { model.noteRendered() }
     }
 }
 
@@ -228,7 +233,13 @@ struct MacSettingsView: View {
             ExtensionsSection()
             Section {
                 Button("Clear Delivered and Expired") { model.clearFinished() }
-                LabeledContent("Shared with the extensions", value: model.store.isShared ? "Yes" : "No (pair them separately)")
+                LabeledContent("Shared with the extensions", value: model.storageSummary)
+                if case .appPrivate = model.storage {
+                    Text("This build isn’t signed with a developer team, so it has no App Group: the Share menu asks for the pairing code once, and the Safari extension pairs in its own popup.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?")
             } header: {
                 Text("History and app")

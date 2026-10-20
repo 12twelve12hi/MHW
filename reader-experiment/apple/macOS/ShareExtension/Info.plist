@@ -26,7 +26,7 @@
 		<true/>
 	</dict>
 	<key>DaylightAppGroup</key>
-	<string>$(DAYLIGHT_APP_GROUP)</string>
+	<string>$(DAYLIGHT_MAC_APP_GROUP)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSExtension</key>

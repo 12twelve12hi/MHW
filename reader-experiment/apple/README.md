@@ -12,13 +12,36 @@ and travel through an ntfy relay to the **Daylight Share** inbox on the tablet, 
 | **Daylight** share sheet item (iOS Share Extension) | In the share sheet of Safari and other apps for web pages, links and documents. From Safari it sends the page as you see it (its HTML, captured by `GetPage.js`), so paywalled and logged-in articles work; links from other apps go as links; files as files. Shows "Sending to <your Daylight>… → Sent ✓" and closes. If the app isn't paired yet, you can paste the code right there. |
 | **Send to Daylight** Safari extension (iOS) | The shared WebExtension from [`../extension`](../extension) packaged for Safari on iPhone. It reads the pairing from the app, so you pair once. |
 | **Send to Daylight** (Mac, macOS 13+) | A window and a menu bar item. Pair by pasting the code or a `daylightshare://` link. Drop PDFs, documents, `.webloc` files or links on the window or on the Dock icon; "Send Clipboard Link" (⇧⌘L in the menu bar item); history; settings. Re-sends unacknowledged items every minute while it runs. |
-| **Daylight** Share menu item (macOS Share Extension) | Share › Daylight in Safari, Finder, Preview and other apps: links, pages and files. |
+| **Daylight** Share menu item (macOS Share Extension) | Share › Daylight in Safari, Finder, Preview and other apps: links, pages and files. Team-signed builds use the app's pairing; the released (ad-hoc) build asks for the code once and remembers it. |
 | **Send to Daylight** Safari extension (Mac) | The same WebExtension in Safari on the Mac; its native handler answers the extension's `getPairing` message with the app's pairing. |
 | `DaylightShareKit` (Swift package) | The protocol: pairing codes and links, SHA-256 and AES-256-GCM (CryptoKit), raw DEFLATE (Apple's Compression `COMPRESSION_ZLIB`, which is RFC 1951 raw deflate — the tests check it against zlib and the JS vectors), base32/base64, frames, reassembly, the ntfy relay client, the outbox with acks and re-sends, and shared storage. `DaylightShareUI` holds the SwiftUI pieces the apps and extensions share. |
 
-The apps and their extensions share the pairing, settings and outbox through the App Group
-`group.com.daylight.share`. Without it (unsigned or ad-hoc builds, or a sideloading tool that renames the group and
-isn't picked up), each part stores its own pairing: the Share extension then asks for the code the first time.
+### Pairing once: App Groups
+
+The apps and their extensions share the pairing, settings and outbox through an App Group, so pairing in the app also
+pairs the Share menu / share sheet item and the Safari extension. Which group a build uses is decided at build time
+(`Config/Base.xcconfig`, with comments):
+
+| Build | App Group | What you notice |
+|---|---|---|
+| iPhone (any) | `group.com.daylight.share` (`DAYLIGHT_APP_GROUP`; sideloading tools may rename it, the app finds the new name in its provisioning profile) | Pair once in the app. |
+| Mac, signed with your team (`DEVELOPMENT_TEAM` set) | `<TEAMID>.com.daylight.share` (`DAYLIGHT_MAC_APP_GROUP`) | Pair once in the app. No prompt, nothing to register: macOS accepts a Team-ID-prefixed group from a team signature. |
+| Mac, ad-hoc signed or unsigned (the released `Send-to-Daylight-mac.zip`, any build without a team) | none | The app, its Share menu item and its Safari extension each keep their own pairing: paste the code into the Share menu item once (it says so and remembers it), and pair the Safari extension in its popup. Items sent from the Share menu don't show in the app's history. |
+
+**Why the Mac has two cases (macOS 15).** macOS 15 checks App Group access against the code signature. An iOS-style
+`group.` id in an ad-hoc signed app is not authorised, so the first access to its container brings up *"Send to
+Daylight would like to access data from other apps"*, and the access waits for the answer. Version 1.0 did that on
+the main thread at launch, so the app hung (no window, nothing paired or sent) until someone clicked *Allow*. Now:
+
+- ad-hoc and unsigned Mac builds have no App Group at all (no entitlement, empty `DaylightAppGroup` in Info.plist),
+  so nothing can trigger the prompt; CI checks the released app for both;
+- a team-signed build uses the Team-ID-prefixed group, which macOS validates without asking, and the code only opens
+  a group that the process's own entitlements list and its signing team authorises;
+- storage is never resolved on the main thread, in the app or any extension: `SharedStore` starts on the process's
+  own storage, looks for the group on a background queue, and switches to it only if it answers within 2 seconds.
+  The window appears at once; pairing and sending wait (asynchronously) for that decision. A pairing made earlier
+  without the group (say, with an ad-hoc build) moves into the group the first time a team-signed build finds it
+  empty.
 
 ## Install on a Mac
 
@@ -26,17 +49,21 @@ isn't picked up), each part stores its own pairing: the Share extension then ask
    [latest builds](https://github.com/12twelve12hi/MHW/releases/tag/reader-experiment-latest) and open it.
 2. Move **Send to Daylight.app** to **Applications**.
 3. The build is ad-hoc signed, not notarized: the first time, **right-click › Open** and confirm (on macOS 15, if it
-   is still blocked: System Settings › Privacy & Security › *Open Anyway*). If macOS asks whether Send to Daylight may
-   "access data from other apps", allow it: that is the shared App Group with its own extensions.
+   is still blocked: System Settings › Privacy & Security › *Open Anyway*). It never asks to "access data from other
+   apps" (version 1.0 did, and hung until you clicked *Allow*; see [App Groups](#pairing-once-app-groups)).
 4. On the Daylight, open Daylight Share › **This is my Daylight**; paste its code (or the `daylightshare://` link)
    into the app.
 5. **Share menu:** System Settings › General › Login Items & Extensions › Sharing (macOS 15; on 13–14: Privacy &
-   Security › Extensions › Sharing) › turn on **Daylight**.
+   Security › Extensions › Sharing) › turn on **Daylight**. This build has no App Group, so the first time you use
+   Share › Daylight it asks for the pairing code: paste it once and it is remembered. (A build signed with your own
+   team shares the app's pairing instead; see *Or build it yourself* below.)
 6. **Safari extension:** Safari › Settings › Advanced › turn on *Show features for web developers*; then Safari ›
    Settings › **Developer** › *Allow unsigned extensions* (older Safari: Develop menu › Allow Unsigned Extensions).
    Safari forgets this when it quits, so do it again after restarting Safari. Then Safari › Settings › Extensions ›
-   turn on **Send to Daylight**. With a signed build (below) the unsigned-extensions step is not needed. The app's
-   Settings show whether the extension is on and open the right panes.
+   turn on **Send to Daylight**. With a signed build (below) the unsigned-extensions step is not needed. In this build
+   the extension pairs in its own popup (paste the code there); a team-signed build reads the app's pairing. The
+   app's Settings show whether the extension is on, open the right panes, and say whether the extensions share the
+   app's pairing.
 
 ## Install on an iPhone
 
@@ -65,8 +92,11 @@ open SendToDaylight.xcodeproj
 Pick the **SendToDaylight-iOS** scheme and your iPhone, and Run. Xcode's automatic signing registers the bundle ids
 and the App Group in your team (bundle ids and App Group ids are global: if `com.daylight.share` is taken, set your
 own `DAYLIGHT_BUNDLE_ID` and `DAYLIGHT_APP_GROUP` in `Signing.local.xcconfig`). The **SendToDaylight-macOS** scheme
-builds the Mac app the same way. To enable the Safari extension on the iPhone: Settings › Apps › Safari › Extensions
-› Send to Daylight.
+builds the Mac app the same way; with your team set, the Mac app and its extensions share
+`<TEAMID>.com.daylight.share` (no prompt, nothing to register; change it with `DAYLIGHT_MAC_APP_GROUP_TEAM`), so the
+Share menu and the Safari extension use the app's pairing. Without a team ("Sign to Run Locally") the Mac build has
+no App Group, like the released one. To enable the Safari extension on the iPhone: Settings › Apps › Safari ›
+Extensions › Send to Daylight.
 
 ## TestFlight (later)
 
@@ -97,14 +127,28 @@ The Swift tests read the vectors straight from `../share/vectors/test-vectors.js
 committed protocol. The Safari extension targets copy `../extension/dist/safari` into the extension bundle at build
 time (`scripts/copy-web-extension.sh`; run `npm run build` in `../extension` first); without it a placeholder goes in.
 
-CI ([`.github/workflows/rx-apple.yml`](../../.github/workflows/rx-apple.yml)) runs the tests, builds the iPhone app for
-the simulator and for devices, builds the Mac app, smoke-tests both (launch, pair through a `daylightshare://` link in
-the simulator), and publishes `Send-to-Daylight-unsigned.ipa` and `Send-to-Daylight-mac.zip` to the release.
+CI ([`.github/workflows/rx-apple.yml`](../../.github/workflows/rx-apple.yml)) runs the tests, checks the Mac App Group
+build settings with and without a team, builds the iPhone app for the simulator and for devices, builds the Mac app
+(and fails if the ad-hoc build carries an App Group), smoke-tests both, and publishes `Send-to-Daylight-unsigned.ipa`
+and `Send-to-Daylight-mac.zip` to the release. The Mac smoke test gates the release: the app must render within
+10 s and keep a main-thread heartbeat, pair through a `daylightshare://` launch argument, send a link the JavaScript
+receiver gets and acks, and then show that history row as *Delivered ✓*.
+
+`StorageResolutionTests` is the regression test for the 1.0 launch hang: with a container check that takes a second
+(or never answers in time), the app model must be created within 100 ms, the check must run off the main thread, and
+pairing must still work (into the group once found, or into the app's own storage after the 2-second timeout).
+
+Launch arguments for testing and debugging (only whoever starts the app can pass them): `-DLSPairLink <link>` pairs,
+`-DLSSendLink <url>` sends a link, and `-DLSStatusDump` makes the app write `debug-status.json` (storage, pairing,
+history rows with their labels, and a once-a-second heartbeat) to its Application Support folder, on the Mac
+`~/Library/Containers/com.daylight.share.mac/Data/Library/Application Support/DaylightShare/`.
 
 ### Notes
 
 - The Safari extension's native handler answers `{type: "getPairing"}` with
-  `{ok, paired, pairing: {code, link, relay, name}, from}`, `{type: "setPairing", code|link, relay?, name?}` stores a
-  pairing made in the extension for the app too, and `{type: "ping"}` reports the app version.
+  `{ok, paired, pairing: {code, link, relay, name}, from}` (or `{ok, paired: false, shared}`; always `paired: false`
+  at first in a build without an App Group), `{type: "setPairing", code|link, relay?, name?}` stores a pairing made in
+  the extension for the app too (when they share an App Group), and `{type: "ping"}` reports the app version and the
+  storage in use. It answers once storage is settled, never touching the App Group on its own thread.
 - Pairing with a different code or relay drops items still queued for the old Daylight (as the browser extension does).
 - Expired items keep their content for 30 days so *Try again* still works; delivered items keep only a history row.

@@ -11,7 +11,36 @@ DEVELOPMENT_TEAM =
 // <id>.mac, <id>.mac.ShareExtension, <id>.mac.SafariExtension (Mac). Change it if the id is taken in your account.
 DAYLIGHT_BUNDLE_ID = com.daylight.share
 
-// The App Group the apps and their extensions share (pairing, settings, outbox). Must be registered in your team.
+// ---- App Groups: where the app and its extensions share the pairing, settings and outbox ----------------------------
+
+// iPhone: an iOS-style group. Must be registered in your team when you sign it yourself; sideloading tools register
+// (or rename) it when they re-sign, and the app also finds a renamed group in its provisioning profile.
 DAYLIGHT_APP_GROUP = group.com.daylight.share
+
+// Mac: macOS 15 checks App Group access against the code signature. An iOS-style "group." id in an ad-hoc signed app
+// is not authorised, so the first access to its container brings up "Send to Daylight would like to access data from
+// other apps", and the access waits for the answer (the 1.0 build hung at launch on it). A Team-ID-prefixed group
+// (<TEAMID>.com.daylight.share) is authorised by a team signature, with no prompt and nothing to register. So:
+//
+//   DEVELOPMENT_TEAM set    the Mac app and its extensions share <TEAMID>.com.daylight.share (entitlements:
+//                           macOS/*/*-AppGroup.entitlements; Info.plist DaylightAppGroup names it).
+//   DEVELOPMENT_TEAM empty  (CI releases, ad-hoc, "Sign to Run Locally") no App Group at all: entitlements without the
+//                           key and an empty DaylightAppGroup. The app, its Share extension and its Safari extension
+//                           each keep their own pairing: the Share menu asks for the code once, the Safari extension
+//                           pairs in its popup. Nothing ever triggers the prompt.
+//
+// To use another name, set DAYLIGHT_MAC_APP_GROUP_TEAM in Signing.local.xcconfig; it must start with your Team ID.
+DAYLIGHT_MAC_APP_GROUP_TEAM = $(DEVELOPMENT_TEAM).com.daylight.share
+DAYLIGHT_MAC_APP_GROUP_UNSIGNED =
+DAYLIGHT_MAC_ENTITLEMENTS_SUFFIX_TEAM = -AppGroup
+DAYLIGHT_MAC_ENTITLEMENTS_SUFFIX_UNSIGNED =
+
+// How that choice is made (xcconfig has no "if"): DAYLIGHT_SIGNING is TEAM when DEVELOPMENT_TEAM is set and UNSIGNED
+// when it is empty. An empty team looks up DAYLIGHT_SIGNING_NONE (= UNSIGNED); a team id looks up an undefined
+// setting, which is empty, so `default=` gives TEAM. CI checks both cases with `xcodebuild -showBuildSettings`.
+DAYLIGHT_SIGNING_NONE = UNSIGNED
+DAYLIGHT_SIGNING = $(DAYLIGHT_SIGNING_$(DEVELOPMENT_TEAM:default=NONE):default=TEAM)
+DAYLIGHT_MAC_APP_GROUP = $(DAYLIGHT_MAC_APP_GROUP_$(DAYLIGHT_SIGNING))
+DAYLIGHT_MAC_ENTITLEMENTS_SUFFIX = $(DAYLIGHT_MAC_ENTITLEMENTS_SUFFIX_$(DAYLIGHT_SIGNING))
 
 #include? "Signing.local.xcconfig"

@@ -1,5 +1,8 @@
 // Copy to Signing.local.xcconfig (ignored by git) and fill in.
 DEVELOPMENT_TEAM = ABCDE12345
+// With a team, the Mac app and its extensions share the App Group ABCDE12345.com.daylight.share (no prompt on
+// macOS 15, nothing to register), and the iPhone app uses DAYLIGHT_APP_GROUP. See Base.xcconfig.
 // Optional: your own identifiers if com.daylight.share is not available to your team.
 // DAYLIGHT_BUNDLE_ID = com.yourname.sendtodaylight
 // DAYLIGHT_APP_GROUP = group.com.yourname.sendtodaylight
+// DAYLIGHT_MAC_APP_GROUP_TEAM = $(DEVELOPMENT_TEAM).com.yourname.sendtodaylight

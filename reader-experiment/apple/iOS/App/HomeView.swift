@@ -132,7 +132,7 @@ struct SettingsView: View {
                 }
                 Section("About") {
                     LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?")
-                    LabeledContent("Shared with the share extension", value: model.store.isShared ? "Yes" : "No (pair it separately)")
+                    LabeledContent("Shared with the share extension", value: model.storageSummary)
                 }
             }
             .navigationTitle("Settings")
