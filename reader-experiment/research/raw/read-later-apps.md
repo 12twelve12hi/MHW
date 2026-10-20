@@ -144,3 +144,64 @@ Platforms: iPhone/iPad (Instapaper 10, Jul 2026), Android (v6.4/6.5), web (new s
 - Bridges: kobo-pocket-proxy / "Kobo Articles Proxy" (HN https://news.ycombinator.com/item?id=46073689), readeckobo (https://codeberg.org/eleith/readeckobo), kobodeck (syncs unread articles as KEPUB with covers and writes read status back to Readeck; needs stock Nickel firmware; https://pkg.go.dev/github.com/fkaduk/kobodeck) -> they impersonate Instapaper's API so the Kobo's built-in "My Articles" talks to a self-hosted backend. Caveat from readeckobo README: the Kobo periodically re-syncs its config from Kobo's servers, overwriting the custom endpoint, so proxy rules must rewrite the Instapaper URL in the init response.
 - HN: Readeck praised for "readability is superb", fast pages, great API (https://news.ycombinator.com/item?id=44694980).
 
+
+# PART 2: CROSS-CUTTING FINDINGS
+
+## A. Cross-product feature matrix (what each does at capture/delivery time)
+
+| Product | Share sheet iOS | Share target Android | Desktop browser ext | Mac app | Offline reading | Save-time tags/folder | E-reader delivery | Paywalled pages |
+|---|---|---|---|---|---|---|---|---|
+| Instapaper | yes (+Add Link) | yes | Chrome/Arc/Edge, Firefox, Safari (highlights on open web, Kindle send Premium) | Safari ext via macOS app | yes, strong | tags/folder/archive in banner | Kindle digest + single send (Premium since 19 Feb 2026), Kobo native (free) | browser-side HTML (bookmarklet/ext) |
+| Matter | yes (tags, notes, archive-w/o-queue) | NO app | Chrome, Safari (free Mac App Store ext), Firefox | Safari ext only | yes | tags + notes at save | Kindle email (Premium), bulk = one ebook with chapters | yes, "save behind paywalls" |
+| GoodLinks | yes + Quick Save toggle | NO app | Safari + Chrome/Arc/Edge/Opera/Brave, Cmd+Shift+S | native Mac app + Share menu | yes (Article Sync, iCloud, Premium) | editor with tags/lists; Quick Save skips it | none (export PDF/Markdown) | not claimed |
+| Raindrop | yes (enable once) | yes ("Save automatically") | Chrome family, Safari, Firefox, Edge, Opera | Mac app | NO (official) | collection + tags + AI suggestions; Unsorted inbox | none | n/a |
+| Wallabag | via 3rd-party iOS app | official Android app (F-Droid/Play) | yes | n/a | yes (Android app) | tags + auto-tag rules | EPUB export; KOReader plugin; wallabako (Kobo); wallindle (Kindle) | server-side fetch; extension can send content |
+| Karakeep | yes (share ext) | yes (app) | Chrome, Firefox, Safari (May 2026) | n/a | yes (0.33/0.34) | tags (AI) + lists | RSS feed -> KOReader news downloader (DIY) | server crawler (no login); ext SingleFile option |
+| Linkwarden | share sheet (Nov 2025 apps) | share sheet | Chrome/Firefox/Edge ext | n/a | yes ("Save for offline access", 2.15) | collections + tags + AI tags | none | extension required for login-gated pages |
+| Fabric | yes (one tap + comment) | yes | web clipper (shortcut) | desktop app | unknown | AI | none | clipper stores content |
+| Pocket (dead) | yes | yes | yes | retired 2023 | yes (flaky) | tags | Kobo built-in (dead) | - |
+| Omnivore (dead) | yes | yes | yes | yes (poor) | yes | labels | none | - |
+
+## B. What users repeatedly say they love (distilled; all sources above)
+
+1. One-gesture saving that "just works" from everywhere (share sheet + toolbar button + keyboard shortcut) - Pocket's moat was the open API that put "Save to Pocket" inside other apps (45% of saves came from third parties in 2014).
+2. Offline reliability - Instapaper "rock solid for offline reading"; offline failure was Pocket's top complaint ("about half of the articles would not load offline").
+3. A save-time moment to organise (tags/folder/archive, or Quick Save to skip it) - Instapaper banner, Matter share ext, Raindrop collections + AI tag suggestions, GoodLinks Quick Save.
+4. E-reader delivery without friction - Kobo+Pocket was "one of the selling points for Kobo"; Kobo's code-or-QR link flow replicated by Instapaper; Kindle email requires the approved-sender dance but "Just supply Instapaper with your Kindle's email address and you're in business".
+5. Reading experience: clean parsing and typography (Omnivore "best parser and typography"; Matter "near flawless"), good TTS (Matter's HD TTS "best I've ever tested in 16 years"), fonts incl. Atkinson Hyperlegible.
+6. Highlights that leave the app (Obsidian/Readwise/Markdown export) - Omnivore's Obsidian sync, GoodLinks custom Markdown export, Matter -> Notion/Obsidian/Roam/Readwise.
+7. Ownership and exit: open source/self-host/standard export after two shutdowns; one-time purchase (GoodLinks) vs subscriptions; "no server to shut down".
+8. Automation: GoodLinks Shortcuts/URL scheme/CLI/MCP, Raindrop Shortcuts, Instapaper API v2, Karakeep API/CLI/MCP.
+
+## C. Top frustrations (with sources)
+
+1. Free feature turned paid with little warning: Instapaper Send to Kindle -> Premium on 19 Feb 2026 (Android Authority, Pocket-lint, Android Police). Matter HD TTS moved to Premium. GoodLinks article sync is a paid upgrade.
+2. Shutdown/data-deletion deadlines: Omnivore ~2 weeks, export only usable with ElevenReader; Pocket data deleted 8 Oct 2025; users "still bitter" (HN).
+3. Integration gaps on e-readers: Kobo-Instapaper syncs only the main list - no tags, highlights, notes, videos, PDFs, no folders, no emailed-in items (Kobo help; Reviewed; the-ebook-reader); webp images show placeholders (MobileRead); user returned to KOReader+Wallabag after a month.
+4. Digest repeats: free Instapaper Kindle digest "includes the same articles in the daily packages lots of times" (MobileRead, ~Oct 2025). Older: Kindle Touch ToC unusable; can't delete delivered files from device (MobileRead 2011).
+5. Platform exclusion: Matter has no Android (dealbreaker on HN); GoodLinks Apple-only; Readeck no native mobile app.
+6. Needing the internet to save: Raindrop "An internet connection is required to ... save new bookmarks" and no offline reading since 2023 requests.
+7. Server-side fetching can't see what you see (login/paywall): Karakeep headless Chrome copy "can produce a broken snapshot" for logged-in pages; Hook forum on Instapaper/GoodLinks; Linkwarden needs extension.
+8. Share-sheet fragility: Instapaper missing from iOS share sheet until you enable it ("swipe left > More"); Matter's Mac share extension "broken on and off again"; GoodLinks Safari extension disappears (help page workaround needs Terminal); Raindrop "Save automatically" share bug; Instapaper Chrome ext shortcut Ctrl+I clashes with italics (Firefox add-on reviews; add-on removed Jan 2024).
+9. Slow/heavy clients: Pocket web "dog-slow", extension 1.5 cores; Raindrop popup slow to open (Chrome reviews); Linkwarden 500-950 MB RAM.
+10. AI features that disappoint: Raindrop AI suggestions "not useful" (paying subscriber), G2 AI tagging errors; Matter TTS glitches; Karakeep/Linkwarden need Ollama/OpenAI setup.
+11. Self-host burden: wallabag "beyond the skills of ordinary users", Wallabako needs KoboRoot.tgz + config and "fake USB" tap; kobo proxies must rewrite init response because Kobo re-syncs its config.
+12. Sync lag: Matter "occasional delays before new saves appear"; Instapaper Android "slow syncing", PDF sync gaps; GoodLinks "syncing of paid articles often failed" (old).
+13. Parsing failures on complex pages (Matter reviewers; Omnivore pagination; Karakeep "tried hoarder and didn't like list view").
+
+## D. Kindle/Kobo/e-reader delivery patterns worth copying (and not)
+
+- Kindle email: needs the user to (1) find their @kindle.com address, (2) add the sender to Amazon's approved list; digest = compiled doc with TOC; per-article files clutter library (HN: some prefer one Kindle item per article, others like weekly compilation); legacy 3G fee workaround @free.kindle.com. Instapaper says generation is costly (parse, images, ePub, email).
+- Kobo: code/QR pairing (kobo.com/instapaper) + built-in "My Articles" over Wi-Fi; stripped-down features; Instapaper free tier suffices (Kobo users keep it free).
+- KOReader: Wallabag plugin (two-way sync, annotations, EPUB), Instapaper plugin (API token), Readeck OPDS, Karakeep RSS via News Downloader; eReaditLater alpha.
+- Wallabako: marks read state back on finishing; kobodeck writes read status back to Readeck -> bidirectional status is valued by tinkerers.
+- Web-to-EPUB tools (EpubPress, dotepub, Epublifier, Show HN local-first tool): users want local conversion with no limits; bundling many articles into one EPUB is a recurring ask ("Turn your read later folder into a physical book", "I turned my Kindle into my own personal newspaper" https://news.ycombinator.com/item?id=47541969 ; KTool dev: links, newsletters via email forwarding and RSS compiled into one magazine delivered at a specific time).
+
+## E. Things I could NOT verify (so the orchestrator should not treat as fact)
+
+- Any claim requiring opening a page: all product details come via the search tool's summaries, not direct reads. Exact quotes may be paraphrased by the tool even when in quotation marks.
+- Matter Android: no evidence found either way as of Oct 2026 beyond "iPhone, iPad and web only (Aug 2026)".
+- Instapaper official Chrome extension store listing/rating (search returned only third-party extensions even though Instapaper docs say a Chrome extension exists).
+- Whether Instapaper digests (scheduled) specifically became Premium-only on 19 Feb 2026 or only individual sends: eReaders Forum + Pocket-lint say all Kindle delivery incl. scheduled digests; GTM Directory says digests stay free; Instapaper docs list "Kindle Digests" under Premium. Treat as Premium.
+- Fabric independent reviews, Fabric Mac app: the web-search budget (200 per turn, shared across agents) ran out mid-research. Also not done: YouTube transcripts (only found video titles/URLs: Readwise vs Instapaper https://www.youtube.com/watch?v=6nanSmYZP0U ; Best Bookmark Manager 2026 Instapaper vs Raindrop https://www.youtube.com/watch?v=OpnuuvA5iAA ; GoodLinks Made Me Cancel My Readwise Subscription https://www.youtube.com/watch?v=OqEbHuvHSOc ; Matter review (beta) https://www.youtube.com/watch?v=O9zh73Q0M-E ; 5 Best Pocket Alternatives https://www.youtube.com/watch?v=e3PoWO2tnLE), Chrome Web Store/App Store review text beyond what the search tool summarised, Reddit (blocked), HN Algolia API (proxy 403).
+- Readwise Reader is deliberately out of this angle's product list (covered elsewhere presumably) but appears in every migration thread as the top destination.
