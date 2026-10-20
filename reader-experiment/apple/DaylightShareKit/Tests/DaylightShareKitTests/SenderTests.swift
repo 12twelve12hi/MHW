@@ -251,7 +251,7 @@ final class SenderTests: XCTestCase {
                 seen = publishes()
             }
         }
-        XCTAssertEqual(at, [185, 370, 370 + 720, 370 + 1440], "re-sends at 3 h 05, 6 h 10, 18 h 10, 30 h 10")
+        XCTAssertEqual(at, [185, 370, 1090, 1810], "re-sends at 3 h 05, 6 h 10, 18 h 10, 30 h 10")
     }
 
     /// 413: failed/full, nothing before 185 minutes, the third in a row ends the row; Try again starts over.
