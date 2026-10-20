@@ -141,19 +141,25 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
 
         if (role == Role.INBOX) {
             val readers = remember(activity.resumes.intValue) { ReaderApps.installed(activity) }
+            val apps = remember(activity.resumes.intValue) { ReaderApps.candidates(activity) }
             Section("Deliver to") {
-                Text("Which Daylight Reader gets the items.", style = MaterialTheme.typography.bodyMedium)
-                Choice("Automatic${if (readers.isEmpty()) " (no Reader found)" else " (" + ReaderApps.label(activity, readers.first()) + ")"}", deliverTo.isEmpty()) {
+                Text("Which app gets the items. Automatic is the Daylight Reader; any other app that takes saved pages or documents (such as a side-by-side test copy of the Reader) can be chosen here.", style = MaterialTheme.typography.bodyMedium)
+                Choice(
+                    "Automatic",
+                    deliverTo.isEmpty(),
+                    detail = if (readers.isEmpty()) "No Daylight Reader found" else ReaderApps.label(activity, readers.first()),
+                ) {
                     deliverTo = ""
                     app.prefs.deliverTo = ""
                 }
-                for (pkg in readers) {
-                    Choice(ReaderApps.label(activity, pkg), deliverTo == pkg) {
-                        deliverTo = pkg
-                        app.prefs.deliverTo = pkg
+                for (c in apps) {
+                    val takes = listOfNotNull(if (c.savePage) "links and pages" else null, if (c.documents) "documents" else null).joinToString(" and ")
+                    Choice(c.label, deliverTo == c.pkg, detail = "${c.pkg} · takes $takes") {
+                        deliverTo = c.pkg
+                        app.prefs.deliverTo = c.pkg
                     }
                 }
-                if (deliverTo.isNotEmpty() && deliverTo !in readers) Text("$deliverTo is not installed; using Automatic.", style = MaterialTheme.typography.bodySmall)
+                if (deliverTo.isNotEmpty() && apps.none { it.pkg == deliverTo }) Text("$deliverTo is not installed; using Automatic.", style = MaterialTheme.typography.bodySmall)
             }
         }
 
@@ -198,12 +204,15 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
 }
 
 @Composable
-fun Choice(label: String, selected: Boolean, onClick: () -> Unit) {
+fun Choice(label: String, selected: Boolean, detail: String? = null, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RadioButton(selected = selected, onClick = onClick, colors = RadioButtonDefaults.colors(selectedColor = Ink, unselectedColor = Ink))
-        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.widthIn(min = 0.dp).padding(start = 4.dp))
+        Column(Modifier.widthIn(min = 0.dp).padding(start = 4.dp)) {
+            Text(label, style = MaterialTheme.typography.bodyLarge)
+            if (detail != null) Text(detail, style = MaterialTheme.typography.bodySmall)
+        }
     }
 }

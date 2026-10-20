@@ -1,9 +1,9 @@
 package com.daylight.share.ui
 
 import android.Manifest
+import android.app.NotificationManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
@@ -37,11 +37,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.daylight.share.App
 import com.daylight.share.core.Kind
 import com.daylight.share.core.Limits
+import com.daylight.share.inbox.DocumentMode
 import com.daylight.share.inbox.Handoff
 import com.daylight.share.inbox.InboxItem
 import com.daylight.share.inbox.InstantDeliveryService
@@ -60,22 +60,30 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
     val sync by app.inbox.sync.collectAsStateWithLifecycle()
     val live by Live.state.collectAsStateWithLifecycle()
     val resumes = activity.resumes.intValue
-    val readers = remember(resumes) { ReaderApps.installed(activity) }
+    val targets = remember(resumes) { ReaderApps.targets(activity) }
     val overlay = remember(resumes) { Settings.canDrawOverlays(activity) }
     val unrestricted = remember(resumes) {
         activity.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(activity.packageName) == true
     }
-    val notifOk = remember(resumes) {
-        Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-    }
+    val notifOk = remember(resumes) { Handoff.notificationsAllowed(activity) }
+    val channelImportance = remember(resumes) { Handoff.itemsChannelImportance(activity) }
     var instant by remember { mutableStateOf(app.prefs.instantDelivery) }
-    var autoDocs by remember { mutableStateOf(app.prefs.autoDocuments) }
+    var docMode by remember { mutableStateOf(app.prefs.documentMode) }
     var showPairing by remember { mutableStateOf<Boolean?>(null) }
     var confirmReset by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val notice = activity.notice.value
 
     val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { activity.resumes.intValue++ }
+    fun openSettings(action: String, extra: Pair<String, String>? = null, fallback: String) {
+        try {
+            val i = Intent(action).putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)
+            extra?.let { i.putExtra(it.first, it.second) }
+            activity.startActivity(i)
+        } catch (e: ActivityNotFoundException) {
+            activity.notice.value = fallback
+        }
+    }
     LaunchedEffect(Unit) {
         if (!notifOk && !app.prefs.askedNotifications && Build.VERSION.SDK_INT >= 33) {
             app.prefs.askedNotifications = true
@@ -140,7 +148,7 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
 
         item {
             Section("Getting items to the Reader") {
-                if (readers.isEmpty()) {
+                if (targets.isEmpty()) {
                     Text("Daylight Reader isn’t installed. Items stay here; open them with another app.", style = MaterialTheme.typography.bodyMedium)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -180,22 +188,43 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
                         }
                     }
                 } else {
-                    Text("Allowed ✓ Links go to the Reader as they arrive.", style = MaterialTheme.typography.bodyMedium)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Open documents as they arrive", style = MaterialTheme.typography.bodyLarge)
-                            Text("The Reader opens each document it adds, so by default documents wait for a tap.", style = MaterialTheme.typography.bodySmall)
-                        }
-                        Switch(
-                            checked = autoDocs,
-                            onCheckedChange = { autoDocs = it; app.prefs.autoDocuments = it },
-                            colors = SwitchDefaults.colors(checkedTrackColor = Ink, checkedThumbColor = Paper, uncheckedBorderColor = Ink, uncheckedThumbColor = Ink),
-                        )
+                    Text("Allowed ✓ Links and pages go to the Reader as they arrive.", style = MaterialTheme.typography.bodyMedium)
+                }
+                HorizontalDivider(color = Ink)
+                Text("Documents", style = MaterialTheme.typography.bodyLarge)
+                Text("When a PDF or another document arrives while you use another app:", style = MaterialTheme.typography.bodySmall)
+                for (m in DocumentMode.entries) {
+                    Choice(m.label, docMode == m, detail = documentModeDetail(m)) {
+                        docMode = m
+                        app.prefs.documentMode = m
                     }
                 }
+                if (docMode.automatic && !overlay) {
+                    Text("This needs “Display over other apps” (above). Until then, documents wait for a tap on their notification.", style = MaterialTheme.typography.bodySmall)
+                }
                 if (!notifOk) {
+                    Text("Notifications are off, so items that wait for a tap stay here unseen until you open the Inbox.", style = MaterialTheme.typography.bodySmall)
                     SecondaryButton("Allow notifications") {
-                        if (Build.VERSION.SDK_INT >= 33) askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        if (Build.VERSION.SDK_INT >= 33 &&
+                            (!app.prefs.askedNotifications || activity.shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS))
+                        ) {
+                            app.prefs.askedNotifications = true
+                            askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else {
+                            openSettings(Settings.ACTION_APP_NOTIFICATION_SETTINGS, fallback = "Open Settings › Apps › Daylight Share › Notifications.")
+                        }
+                    }
+                } else if (channelImportance != null && channelImportance < NotificationManager.IMPORTANCE_HIGH) {
+                    Text(
+                        if (channelImportance == NotificationManager.IMPORTANCE_NONE) "Notifications for new items are turned off, so items that wait for a tap stay here unseen."
+                        else "Notifications for new items don’t pop up over the Reader. Set “New items” to pop on screen to see them while you read.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    SecondaryButton("Notification settings") {
+                        openSettings(
+                            Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS, Settings.EXTRA_CHANNEL_ID to App.CH_ITEMS,
+                            fallback = "Open Settings › Apps › Daylight Share › Notifications › New items.",
+                        )
                     }
                 }
             }
@@ -212,7 +241,7 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
         if (received.isEmpty()) item {
             Text("Nothing yet. Share a link or a file from a paired phone with “Send to Daylight”.", style = MaterialTheme.typography.bodyMedium)
         }
-        items(received, key = { it.id }) { item -> ItemRow(activity, item, readers.isNotEmpty()) }
+        items(received, key = { it.id }) { item -> ItemRow(activity, item, targets.isNotEmpty()) }
     }
 
     if (confirmReset) {
@@ -230,6 +259,12 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
             dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("Cancel") } },
         )
     }
+}
+
+private fun documentModeDetail(m: DocumentMode): String = when (m) {
+    DocumentMode.ASK -> "A notification pops up with its name; tap it to add the document to the Reader, which opens it."
+    DocumentMode.QUIET -> "Handed over as a batch (several at once go to the library instead of opening). The Daylight Reader still opens a document that arrives on its own."
+    DocumentMode.OPEN -> "The Reader imports each document and opens it, even while you read something else."
 }
 
 @Composable

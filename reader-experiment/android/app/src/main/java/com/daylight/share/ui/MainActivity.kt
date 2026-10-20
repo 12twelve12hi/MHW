@@ -26,6 +26,7 @@ import com.daylight.share.BuildConfig
 import com.daylight.share.Role
 import com.daylight.share.core.Pairing
 import com.daylight.share.core.ShareException
+import com.daylight.share.inbox.DocumentMode
 import com.daylight.share.inbox.Handoff
 import com.daylight.share.inbox.InstantDeliveryService
 import com.daylight.share.inbox.Live
@@ -113,9 +114,9 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Debug builds only, for automated tests:
-     * `daylightshare://setup?role=inbox|sender&c=<code>[&r=<relay>][&n=<name>][&instant=1][&auto=1]`.
+     * `daylightshare://setup?role=inbox|sender&c=<code>[&r=<relay>][&n=<name>][&instant=1][&auto=1][&docs=ask|quiet|open]`.
      * Sets the role and uses that pairing secret (instead of generating one) and relay; `instant` turns on Instant
-     * delivery, `auto` lets the Inbox hand documents over in the background too.
+     * delivery; `docs` sets "Documents" (`auto=1` is `docs=open`, `auto=0` is `docs=ask`).
      */
     private fun debugSetup(link: String) {
         val q = Pairing.parseQuery(link.substringAfter('?', "").substringBefore('#'))
@@ -130,7 +131,8 @@ class MainActivity : ComponentActivity() {
         // No permission prompt over the Inbox in automated runs (grant POST_NOTIFICATIONS with adb if needed).
         app.prefs.askedNotifications = true
         q["instant"]?.let { app.prefs.instantDelivery = it == "1" || it == "true" }
-        q["auto"]?.let { app.prefs.autoDocuments = it == "1" || it == "true" }
+        q["auto"]?.let { app.prefs.documentMode = if (it == "1" || it == "true") DocumentMode.OPEN else DocumentMode.ASK }
+        q["docs"]?.let { v -> DocumentMode.parse(v)?.let { app.prefs.documentMode = it } }
         when (q["role"]) {
             "sender" -> {
                 app.sender.pair(p)
@@ -142,7 +144,7 @@ class MainActivity : ComponentActivity() {
                 app.setRole(Role.INBOX)
             }
         }
-        logi("setup: role=${app.prefs.role} relay=${p.relay} inbox=${p.keys.inboxTopic} instant=${app.prefs.instantDelivery} auto=${app.prefs.autoDocuments}")
+        logi("setup: role=${app.prefs.role} relay=${p.relay} inbox=${p.keys.inboxTopic} instant=${app.prefs.instantDelivery} docs=${app.prefs.documentMode.key}")
         notice.value = "Set up as ${if (app.prefs.role == Role.INBOX) "the Daylight Inbox" else "a sender"} (relay ${p.relay})."
     }
 

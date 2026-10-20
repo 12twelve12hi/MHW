@@ -5,14 +5,17 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import androidx.core.content.FileProvider
 import androidx.test.core.app.ApplicationProvider
 import com.daylight.share.core.Kind
+import com.daylight.share.inbox.DocumentMode
 import com.daylight.share.inbox.InboxItem
 import com.daylight.share.inbox.Path
 import com.daylight.share.inbox.ReaderApps
 import com.daylight.share.inbox.Routes
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -121,5 +124,88 @@ class RoutesTest {
         val multi = Routes.sendMultiple(ctx, "$main.experiment", listOf(item(Kind.FILE, mime = "application/pdf") to f, item(Kind.FILE, mime = "application/epub+zip") to f))
         assertEquals("application/*", multi!!.intent.type)
         assertEquals(2, multi.intent.clipData!!.itemCount)
+    }
+
+    @Test
+    fun quietSendsEvenOneDocumentAsSendMultiple() {
+        install(main, savePage = true, send = true)
+        val f = stored("paper.pdf", "%PDF-1.4")
+        val pdf = item(Kind.FILE, "x/paper.pdf", "application/pdf")
+        val quiet = Routes.forDocuments(ctx, listOf(pdf to f), listOf(main), DocumentMode.QUIET)
+        assertEquals(listOf(Path.SEND_MULTIPLE, Path.SEND_FILE, Path.SEND_FILE_GENERIC), quiet.map { it.path })
+        val multi = quiet[0]
+        assertEquals(main, multi.pkg)
+        assertEquals(listOf(pdf.id), multi.ids)
+        assertEquals(Intent.ACTION_SEND_MULTIPLE, multi.intent.action)
+        assertEquals(main, multi.intent.`package`)
+        assertEquals("application/pdf", multi.intent.type)
+        assertEquals(1, multi.intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)!!.size)
+        assertEquals(1, multi.intent.clipData!!.itemCount)
+        assertTrue(multi.intent.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
+
+        // Asking or opening: one document goes as ACTION_SEND (the Reader imports and opens it).
+        for (mode in listOf(DocumentMode.ASK, DocumentMode.OPEN)) {
+            val r = Routes.forDocuments(ctx, listOf(pdf to f), listOf(main), mode)
+            assertEquals(Path.SEND_FILE, r.first().path)
+            assertEquals(Intent.ACTION_SEND, r.first().intent.action)
+            assertEquals(listOf(pdf.id), r.first().ids)
+        }
+
+        // Several documents go together whatever the mode; then the first alone, for a Reader without SEND_MULTIPLE.
+        val epub = pdf.copy(id = "1".repeat(32), name = "book.epub", mime = "application/epub+zip")
+        for (mode in DocumentMode.entries) {
+            val r = Routes.forDocuments(ctx, listOf(pdf to f, epub to f), listOf(main), mode)
+            assertEquals(Path.SEND_MULTIPLE, r[0].path)
+            assertEquals(listOf(pdf.id, epub.id), r[0].ids)
+            assertEquals(Path.SEND_FILE, r[1].path)
+            assertEquals(listOf(pdf.id), r[1].ids)
+        }
+        assertTrue(Routes.forDocuments(ctx, emptyList(), listOf(main), DocumentMode.QUIET).isEmpty())
+    }
+
+    @Test
+    fun quietFallsBackToSendWhenTheReaderHasNoSendMultiple() {
+        val pm = shadowOf(ctx.packageManager)
+        val cn = ComponentName(main, "$main.ImportActivity")
+        pm.addActivityIfNotPresent(cn)
+        pm.addIntentFilterForActivity(cn, IntentFilter(Intent.ACTION_SEND).apply { addCategory(Intent.CATEGORY_DEFAULT); addDataType("application/pdf") })
+        val f = stored("paper.pdf", "%PDF-1.4")
+        val r = Routes.forDocuments(ctx, listOf(item(Kind.FILE, "x/paper.pdf", "application/pdf") to f), listOf(main), DocumentMode.QUIET)
+        assertEquals(listOf(Path.SEND_FILE), r.map { it.path })
+    }
+
+    @Test
+    fun deliverToListsEveryAppThatTakesPagesOrDocuments() {
+        install(main, savePage = true, send = true)
+        install(ReaderApps.EXPERIMENT, savePage = true, send = false)
+        install("com.example.pdfs", savePage = false, send = true)
+        install(ctx.packageName, savePage = false, send = true) // our own share target is never a choice
+        val textOnly = ComponentName("com.example.notes", "com.example.notes.Share")
+        shadowOf(ctx.packageManager).addActivityIfNotPresent(textOnly)
+        shadowOf(ctx.packageManager).addIntentFilterForActivity(textOnly, IntentFilter(Intent.ACTION_SEND).apply { addCategory(Intent.CATEGORY_DEFAULT); addDataType("text/plain") })
+
+        val apps = ReaderApps.candidates(ctx)
+        assertEquals(main, apps.first().pkg)
+        assertEquals(setOf(main, ReaderApps.EXPERIMENT, "com.example.pdfs"), apps.map { it.pkg }.toSet())
+        val experiment = apps.first { it.pkg == ReaderApps.EXPERIMENT }
+        assertTrue(experiment.savePage)
+        assertFalse(experiment.documents)
+        val pdfs = apps.first { it.pkg == "com.example.pdfs" }
+        assertFalse(pdfs.savePage)
+        assertTrue(pdfs.documents)
+
+        // Automatic stays the Daylight Reader; the side-by-side copy and other apps only when chosen.
+        assertEquals(listOf(main), ReaderApps.installed(ctx))
+        assertEquals(listOf(main), ReaderApps.targets(ctx, ""))
+        assertEquals(listOf(ReaderApps.EXPERIMENT), ReaderApps.targets(ctx, ReaderApps.EXPERIMENT))
+        assertEquals(listOf("com.example.pdfs"), ReaderApps.targets(ctx, "com.example.pdfs"))
+        assertEquals(listOf(main), ReaderApps.targets(ctx, "com.example.notes"))
+        assertEquals(listOf(main), ReaderApps.targets(ctx, "com.example.uninstalled"))
+        assertEquals(listOf(main), ReaderApps.targets(ctx, ctx.packageName))
+
+        // Chosen, the side-by-side copy gets links through its SAVE_PAGE.
+        val routes = Routes.forItem(ctx, item(Kind.URL), null, ReaderApps.targets(ctx, ReaderApps.EXPERIMENT))
+        assertEquals(listOf(Path.SAVE_PAGE to ReaderApps.EXPERIMENT), routes.map { it.path to it.pkg })
+        assertTrue(ReaderApps.label(ctx, ReaderApps.EXPERIMENT).contains(ReaderApps.EXPERIMENT))
     }
 }

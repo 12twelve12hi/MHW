@@ -13,6 +13,7 @@ import android.util.Log
 import com.daylight.share.core.Pairing
 import com.daylight.share.core.Relay
 import com.daylight.share.core.Text
+import com.daylight.share.inbox.DocumentMode
 import com.daylight.share.inbox.InboxRepo
 import com.daylight.share.inbox.InstantDeliveryService
 import com.daylight.share.inbox.Live
@@ -94,8 +95,12 @@ class App : Application() {
     private fun createChannels() {
         if (Build.VERSION.SDK_INT < 26) return
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CH_ARRIVALS, "New items", NotificationManager.IMPORTANCE_DEFAULT).apply {
+        // HIGH, so a new item pops up over the full-screen Reader on the Daylight (DEFAULT only adds a status-bar icon,
+        // which the Reader hides). A channel's importance cannot be raised once created, hence a new id; the old one goes.
+        nm.deleteNotificationChannel(CH_ARRIVALS_OLD)
+        nm.createNotificationChannel(NotificationChannel(CH_ITEMS, "New items", NotificationManager.IMPORTANCE_HIGH).apply {
             description = "Items that arrived and wait for a tap to go to the Reader"
+            setShowBadge(true)
         })
         nm.createNotificationChannel(NotificationChannel(CH_INSTANT, "Instant delivery", NotificationManager.IMPORTANCE_MIN).apply {
             description = "Shown while Instant delivery keeps a connection open"
@@ -108,7 +113,10 @@ class App : Application() {
     }
 
     companion object {
-        const val CH_ARRIVALS = "arrivals"
+        /** New items that wait for a tap (one notification per item, grouped). */
+        const val CH_ITEMS = "new-items"
+        /** Before: the same, at default importance. */
+        private const val CH_ARRIVALS_OLD = "arrivals"
         const val CH_INSTANT = "instant"
         const val CH_SYNC = "sync"
 
@@ -151,10 +159,13 @@ class Prefs(private val context: Context) {
         get() = sp.getBoolean("instant", false)
         set(v) = sp.edit().putBoolean("instant", v).apply()
 
-    /** In the background (with "Display over other apps"), also hand documents to the Reader without a tap. */
-    var autoDocuments: Boolean
-        get() = sp.getBoolean("autoDocs", false)
-        set(v) = sp.edit().putBoolean("autoDocs", v).apply()
+    /**
+     * How documents reach the Reader while the Inbox is in the background ("Documents" on the Inbox screen). Unset:
+     * [DocumentMode.DEFAULT]; the earlier switch "Open documents as they arrive", when on, reads as [DocumentMode.OPEN].
+     */
+    var documentMode: DocumentMode
+        get() = DocumentMode.parse(sp.getString("docMode", null)) ?: if (sp.getBoolean("autoDocs", false)) DocumentMode.OPEN else DocumentMode.DEFAULT
+        set(v) = sp.edit().putString("docMode", v.key).remove("autoDocs").apply()
 
     /** The Reader package to deliver to; empty = automatic. */
     var deliverTo: String

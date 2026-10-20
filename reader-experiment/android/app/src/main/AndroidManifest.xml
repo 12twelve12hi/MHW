@@ -17,14 +17,20 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
-    <!-- The Daylight Reader builds the Inbox hands items to (com.daylightcomputer.reader and suffixed copies). -->
+    <!-- The apps the Inbox hands items to: the Daylight Reader builds (com.daylightcomputer.reader and suffixed copies),
+         the lab's side-by-side copy, and any app that takes SAVE_PAGE or shared documents ("Deliver to"). -->
     <queries>
         <package android:name="com.daylightcomputer.reader" />
+        <package android:name="com.daylightcomputer.readerexperiment" />
         <intent>
             <action android:name="com.daylightcomputer.reader.action.SAVE_PAGE" />
         </intent>
         <intent>
             <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="*/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND_MULTIPLE" />
             <data android:mimeType="*/*" />
         </intent>
         <intent>
