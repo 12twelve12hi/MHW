@@ -204,7 +204,9 @@ final class StorageResolutionTests: XCTestCase {
         earlier.deviceName = "Studio Mac"
         let sender = try ShareSender(pairing: pairing, outbox: OutboxStore(store: earlier), session: FakeRelay.session)
         sender.relay.sleep = { _ in }
-        let row = try await sender.send(.link("https://example.com/kept"))
+        // A file keeps its encoded body in the outbox until delivered (a link is header-only).
+        let row = try await sender.send(.file(Data("kept".utf8), name: "kept.txt"))
+        XCTAssertTrue(row.hasBody)
 
         let groupDefaults = makeDefaults()
         let store = SharedStore(resolver: resolver(delay: 0, probe: Probe(), groupDefaults: groupDefaults),
@@ -213,7 +215,7 @@ final class StorageResolutionTests: XCTestCase {
         XCTAssertTrue(store.isShared)
         XCTAssertEqual(store.pairing, pairing)
         XCTAssertEqual(store.deviceName, "Studio Mac")
-        XCTAssertEqual(OutboxStore(store: store).row(row.id)?.url, "https://example.com/kept")
+        XCTAssertEqual(OutboxStore(store: store).row(row.id)?.name, "kept.txt")
         XCTAssertNotNil(OutboxStore(store: store).readBody(row.id))
         // Moved, not copied: unpairing in the group later must not bring it back.
         XCTAssertNil(own.data(forKey: "dls.pairing"))
