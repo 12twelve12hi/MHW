@@ -145,3 +145,21 @@ test('countTokens goes to the beta count endpoint with the same model, system an
   assert.deepEqual(req.body.messages, p.messages);
   assert.equal(req.body.system, p.system);
 });
+
+test('errors thrown inside our own fetch come back as the APIConnectionError cause: the cause decides, reservation released', async () => {
+  const { ServerError } = await import('../src/errors.ts');
+  const { BudgetError } = await import('../src/env.ts');
+  const need = mapClaudeError(new Anthropic.APIConnectionError({ cause: new ServerError(404, 'NEED_SOURCE', { missingParts: [1] }) }));
+  assert.equal(need.error.code, 'NEED_SOURCE');
+  assert.deepEqual(need.error.extra.missingParts, [1]);
+  assert.equal(need.reservation, 'released');
+  const budget = mapClaudeError(new Anthropic.APIConnectionError({ cause: new BudgetError('subrequests') }));
+  assert.deepEqual([budget.error.code, budget.reservation], ['AI_BUSY', 'released']);
+  const net = mapClaudeError(new Anthropic.APIConnectionError({ cause: new TypeError('network') }));
+  assert.deepEqual([net.error.code, net.reservation], ['AI_BUSY', 'kept'], 'a real connection error may have reached Anthropic');
+  // Through the SDK itself: a fetch that throws a ServerError.
+  const c = makeClient('sk-ant-test', async () => { throw new ServerError(404, 'NEED_SOURCE', { missingParts: [0] }); }, 10_000, BASE);
+  const err = await c.beta.messages.create(buildParams(input('summary'), textDoc)).catch((e) => e);
+  assert.ok(err instanceof Anthropic.APIConnectionError);
+  assert.equal(mapClaudeError(err).error.code, 'NEED_SOURCE');
+});

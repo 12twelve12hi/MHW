@@ -3,7 +3,7 @@
 import { cleanTitle } from '../../share/js/daylight-share.js';
 import { publicUrl } from '../client/daylight-server.js';
 import type { Ctx, Env } from './env.ts';
-import { DAY, iso, logCode, nextUtcMidnight, randomHex, utcDay, flushLog } from './env.ts';
+import { DAY, iso, logCode, nextUtcMidnight, randomHex, utcDay, flushLog, testKillPoint } from './env.ts';
 import type { Identity } from './keys.ts';
 import { ServerError, baseHeaders, json } from './errors.ts';
 import { readJson } from './auth.ts';
@@ -13,7 +13,7 @@ import type { ResolvedSource } from './sources.ts';
 import { checkFetchUrl, checkText, fetchUrlSource, loadSource, newPlaceholder, splicingFetch, storeTextSource } from './sources.ts';
 import { buildItem, storeManyStatements } from './outbox.ts';
 import type { Settings } from './settings.ts';
-import { saveStmt } from './settings.ts';
+import { d1Paused, saveStmt } from './settings.ts';
 import { aiLimits, currentKeyFp } from './status.ts';
 import { esc, hostOf, localParts, renderMarkdown, wrapPage } from './html.ts';
 
@@ -46,6 +46,39 @@ function oneOf<T extends string>(v: unknown, allowed: readonly T[], def: T, fiel
   return v as T;
 }
 
+/** A history question: as long as a question or passage may be. */
+export const HISTORY_Q_MAX = 4000;
+/** A history answer: longer than any answer the server returns (16,000 output tokens), so follow-ups never fail. */
+export const HISTORY_A_MAX = 100_000;
+/** History the server keeps: the most recent turns up to this many characters of JSON (≈ 12,000 tokens). */
+export const HISTORY_KEEP = 48_000;
+
+/**
+ * The most recent turns of `history` whose JSON fits HISTORY_KEEP characters (9.1). Older turns are dropped; when the
+ * newest turn alone is over, its answer is cut to fit, ending in "…". The client can pass history verbatim.
+ */
+export function trimHistory(history: { q: string; a: string }[], keep = HISTORY_KEEP): { q: string; a: string }[] {
+  const out: { q: string; a: string }[] = [];
+  let used = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const size = JSON.stringify(history[i]).length;
+    if (used + size <= keep) { out.unshift(history[i]); used += size; continue; }
+    if (!out.length) {
+      const room = keep - JSON.stringify({ q: history[i].q, a: '…' }).length;
+      let cut = Math.max(0, Math.min(history[i].a.length, room));
+      while (cut > 0 && JSON.stringify(history[i].a.slice(0, cut)).length - 2 > room) cut = Math.floor(cut * 0.8);
+      let a = history[i].a.slice(0, cut);
+      if (/[\ud800-\udbff]$/.test(a)) a = a.slice(0, -1);
+      out.unshift({ q: history[i].q, a: a + '…' });
+    }
+    break;
+  }
+  return out;
+}
+
+/** Size of a JSON value as the server would write it (characters). */
+const jsonSize = (v: unknown) => JSON.stringify(v ?? null).length;
+
 /** Validates the body of POST /v1/ai and POST /v1/ai/jobs (10.9). */
 export function validateAi(body: Record<string, unknown>): AiRequest {
   const op = oneOf<Op>(body.op, ['summary', 'explain', 'ask'], 'summary', 'op');
@@ -59,7 +92,9 @@ export function validateAi(body: Record<string, unknown>): AiRequest {
   let history: { q: string; a: string }[] | undefined;
   if (body.history !== undefined) {
     if (!Array.isArray(body.history) || body.history.length > 10) throw new ServerError(400, 'BAD_REQUEST', { message: 'That request isn’t valid (history).' });
-    history = body.history.map((h: { q?: unknown; a?: unknown }) => ({ q: str(h?.q, 4000, 'history', true)!, a: str(h?.a, 4000, 'history', true)! }));
+    history = trimHistory(body.history.map((h: { q?: unknown; a?: unknown }) => ({
+      q: str(h?.q, HISTORY_Q_MAX, 'history', true)!, a: str(h?.a, HISTORY_A_MAX, 'history', true)!,
+    })));
   }
   const deliver = oneOf(body.deliver, ['app', 'daylight', 'both'] as const, 'app', 'deliver');
   const aboutRaw = (body.about ?? {}) as Record<string, unknown>;
@@ -80,8 +115,6 @@ export function validateAi(body: Record<string, unknown>): AiRequest {
   return { input: { op, mode, length, lang, passage, question, history }, source, deliver, about };
 }
 
-const d1Paused = (s: Settings) => (s.d1Bytes ?? 0) > 400_000_000;
-
 /** Checks that need no network: the key, R2 for PDFs, the Lab Inbox for deliveries, URL shape, the source id. */
 export async function precheck(ctx: Ctx, id: Identity, s: Settings, r: AiRequest): Promise<ResolvedSource | null> {
   if (r.deliver !== 'app' && id.delivery.mode === 'lab' && !s.inbox?.lastSeen) throw new ServerError(409, 'NEEDS_LAB_INBOX', { feature: 'deliver' });
@@ -95,14 +128,14 @@ export async function resolveSource(ctx: Ctx, id: Identity, s: Settings, r: AiRe
   if (pre) return pre;
   if (!r.source) return null;
   if (r.source.kind === 'text') {
-    const sid = await storeTextSource(ctx, id, r.source.text, r.source.title, r.source.url, d1Paused(s));
+    const sid = await storeTextSource(ctx, id, r.source.text, r.source.title, r.source.url, d1Paused(ctx, s));
     return { id: sid, type: 'text', title: r.source.title, url: r.source.url, text: r.source.text };
   }
   if (r.source.kind === 'url') {
     const page = await fetchUrlSource(ctx, id, r.source.url);
     const title = cleanTitle(page.title);
     const url = publicUrl(page.url);
-    const sid = await storeTextSource(ctx, id, page.text, title, url, d1Paused(s));
+    const sid = await storeTextSource(ctx, id, page.text, title, url, d1Paused(ctx, s));
     return { id: sid, type: 'text', title, url, text: page.text };
   }
   return loadSource(ctx, id, r.source.sourceId);
@@ -119,19 +152,38 @@ function testBaseURL(env: Env): string | undefined {
 
 export interface Reservation { day: string; micros: number }
 
-/** Reserves the worst case atomically (9.3). Throws 429 AI_DAILY_LIMIT. */
-export async function reserve(ctx: Ctx, s: Settings, micros: number): Promise<Reservation> {
+/** A job row written in the same batch as its reservation, so one never exists without the other (9.3 rule 4). */
+export type JobWrite =
+  | { kind: 'insert'; id: string; op: string; input: string; expires: number }
+  | { kind: 'update'; id: string };
+
+/**
+ * Reserves the worst case atomically (9.3). Throws 429 AI_DAILY_LIMIT. With `job`, the job row is inserted (or its
+ * reservation recorded) in the same batch and under the same cap condition, so it takes effect exactly when the
+ * reservation does: a run cut short between the two can't leave a reservation nobody will settle.
+ */
+export async function reserve(ctx: Ctx, s: Settings, micros: number, job?: JobWrite): Promise<Reservation> {
   const day = utcDay(ctx.now);
   const l = aiLimits(ctx, s);
+  const max = Math.round(l.dailyUsd * 1e6);
+  const capOk = `EXISTS (SELECT 1 FROM usage WHERE day = ?2 AND kind = 'ai' AND n < ?3 AND usd_micros + reserved_micros + ?1 <= ?4)`;
+  const jobStmt = !job ? [] : job.kind === 'insert'
+    ? [ctx.db.stmt(
+      `INSERT INTO jobs (id, op, state, created, reserved_micros, reserved_day, input, expires)
+       SELECT ?5, ?6, 'queued', ?7, ?1, ?2, ?8, ?9 WHERE ${capOk}`,
+      micros, day, l.maxRequests, max, job.id, job.op, ctx.now, job.input, job.expires,
+    )]
+    : [ctx.db.stmt(`UPDATE jobs SET reserved_micros = ?1, reserved_day = ?2 WHERE id = ?5 AND ${capOk}`, micros, day, l.maxRequests, max, job.id)];
   const res = await ctx.db.batch([
     ctx.db.stmt("INSERT OR IGNORE INTO usage (day, kind) VALUES (?, 'ai')", day),
+    ...jobStmt,
     ctx.db.stmt(
       `UPDATE usage SET n = n + 1, reserved_micros = reserved_micros + ?1
        WHERE day = ?2 AND kind = 'ai' AND n < ?3 AND usd_micros + reserved_micros + ?1 <= ?4`,
-      micros, day, l.maxRequests, Math.round(l.dailyUsd * 1e6),
+      micros, day, l.maxRequests, max,
     ),
   ]);
-  if ((res[1]?.meta?.changes ?? 0) === 0) {
+  if ((res[res.length - 1]?.meta?.changes ?? 0) === 0) {
     throw new ServerError(429, 'AI_DAILY_LIMIT', { limit: l.dailyUsd, resetAt: iso(nextUtcMidnight(ctx.now)), ceilingUsd: l.ceilingUsd });
   }
   return { day, micros };
@@ -146,6 +198,9 @@ export function settleStmt(ctx: Ctx, r: Reservation, actual: number | 'spent', t
     r.micros, cost, tokensIn, tokensOut, r.day,
   );
 }
+
+/** The job's record of its reservation, cleared in the same batch as the settlement. */
+const jobSettledStmt = (ctx: Ctx, jobId: string) => ctx.db.stmt('UPDATE jobs SET reserved_micros = 0 WHERE id = ?', jobId);
 
 export interface AiOutcome {
   result: Record<string, unknown>;
@@ -184,7 +239,7 @@ function clientFor(ctx: Ctx, src: ResolvedSource | null, placeholder: string | n
 /**
  * Counts, reserves (unless `reserved` is given), calls Claude and settles. Errors are ServerErrors with the 9.4 codes.
  */
-export async function runClaude(ctx: Ctx, s: Settings, input: AiInput, src: ResolvedSource | null, reserved?: Reservation): Promise<AiOutcome> {
+export async function runClaude(ctx: Ctx, s: Settings, input: AiInput, src: ResolvedSource | null, reserved?: Reservation, jobId?: string): Promise<AiOutcome> {
   const { doc, placeholder } = docFor(src);
   const params = buildParams(input, doc);
   const client = clientFor(ctx, src, placeholder);
@@ -194,14 +249,17 @@ export async function runClaude(ctx: Ctx, s: Settings, input: AiInput, src: Reso
     if (tokens > ctx.limits.aiInputTokens) {
       throw new ServerError(413, 'AI_TOO_LARGE', { tokens, limit: ctx.limits.aiInputTokens, estimateUsd: Math.round(reserveMicros(tokens) / 1e4) / 100 });
     }
-    reservation = await reserve(ctx, s, reserveMicros(tokens));
+    reservation = await reserve(ctx, s, reserveMicros(tokens), jobId ? { kind: 'update', id: jobId } : undefined);
   }
+  // A job's own record of the reservation is cleared together with the settlement, so a job retried after the run
+  // was cut short can never reuse a reservation that is already settled (9.3).
+  const settledJob = jobId ? [jobSettledStmt(ctx, jobId)] : [];
   let response;
   try {
     response = await client.beta.messages.create(params);
   } catch (e) {
     const m = mapClaudeError(e);
-    const stmts = [settleStmt(ctx, reservation, m.reservation === 'kept' ? 'spent' : 0)];
+    const stmts = [settleStmt(ctx, reservation, m.reservation === 'kept' ? 'spent' : 0), ...settledJob];
     if (m.record) {
       const aiError = { code: m.record, keyFp: await currentKeyFp(ctx.env.ANTHROPIC_API_KEY), at: ctx.now };
       stmts.push(saveStmt(ctx, { aiError }));
@@ -212,7 +270,7 @@ export async function runClaude(ctx: Ctx, s: Settings, input: AiInput, src: Reso
     throw m.error;
   }
   const cost = costMicros(response);
-  const stmts = [settleStmt(ctx, reservation, cost.micros, cost.tokensIn, cost.tokensOut)];
+  const stmts = [settleStmt(ctx, reservation, cost.micros, cost.tokensIn, cost.tokensOut), ...settledJob];
   if (s.aiError) { stmts.push(ctx.db.stmt("DELETE FROM settings WHERE k = 'aiError'")); delete s.aiError; }
   await ctx.db.batchAlways(stmts);
   const read = readResponse(input.op, response);
@@ -289,8 +347,11 @@ function keepaliveResponse(ctx: Ctx, work: () => Promise<unknown>): Response {
 /** POST /v1/ai */
 export async function aiRequest(ctx: Ctx, id: Identity, s: Settings, req: Request): Promise<Response> {
   if (!ctx.env.ANTHROPIC_API_KEY) throw new ServerError(409, 'NEEDS_KEY', { feature: 'ai', missing: ['ANTHROPIC_API_KEY'] });
-  const r = validateAi(await readJson(ctx, req, ctx.limits.aiBody));
-  if (r.source?.kind !== 'text' && Number(req.headers.get('Content-Length')) > ctx.limits.jsonBody) {
+  const body = await readJson(ctx, req, ctx.limits.aiBody);
+  const r = validateAi(body);
+  // Only a text source makes a large body; history may be long too (each answer as long as the server wrote it), so
+  // the 64 KiB rule applies to the rest.
+  if (r.source?.kind !== 'text' && jsonSize({ ...body, history: undefined }) > ctx.limits.jsonBody) {
     throw new ServerError(413, 'TOO_LARGE', { limit: ctx.limits.jsonBody });
   }
   const pre = await precheck(ctx, id, s, r);
@@ -325,20 +386,17 @@ export async function aiJobCreate(ctx: Ctx, id: Identity, s: Settings, req: Requ
   if ((queued?.n ?? 0) >= ctx.limits.aiQueue) throw new ServerError(429, 'AI_QUEUE_FULL', { retryAfter: 300 });
   const pre = await precheck(ctx, id, s, { ...r, deliver: 'app' });
   const src = await resolveSource(ctx, id, s, r, pre);
+  // Every check comes before the reservation, which is written together with the job row.
+  const input = JSON.stringify({ input: r.input, sourceId: src?.id ?? null, about: r.about });
+  if (input.length > ctx.limits.jsonBody) throw new ServerError(413, 'TOO_LARGE', { limit: ctx.limits.jsonBody });
   const { doc, placeholder } = docFor(src);
   const params = buildParams(r.input, doc);
   const tokens = await inputTokens(ctx, clientFor(ctx, src, placeholder), params, src);
   if (tokens > ctx.limits.aiInputTokens) {
     throw new ServerError(413, 'AI_TOO_LARGE', { tokens, limit: ctx.limits.aiInputTokens, estimateUsd: Math.round(reserveMicros(tokens) / 1e4) / 100 });
   }
-  const reservation = await reserve(ctx, s, reserveMicros(tokens));
   const jobId = randomHex(16);
-  const input = JSON.stringify({ input: r.input, sourceId: src?.id ?? null, about: r.about });
-  if (input.length > ctx.limits.jsonBody) throw new ServerError(413, 'TOO_LARGE', { limit: ctx.limits.jsonBody });
-  await ctx.db.run(
-    `INSERT INTO jobs (id, op, state, created, reserved_micros, reserved_day, input, expires) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)`,
-    jobId, r.input.op, ctx.now, reservation.micros, reservation.day, input, ctx.now + ctx.limits.jobTtl,
-  );
+  await reserve(ctx, s, reserveMicros(tokens), { kind: 'insert', id: jobId, op: r.input.op, input, expires: ctx.now + ctx.limits.jobTtl });
   return json(ctx.rid, 202, { job: { id: jobId, state: 'queued', created: iso(ctx.now) } });
 }
 
@@ -361,9 +419,15 @@ export async function processOneJob(ctx: Ctx, id: Identity, s: Settings): Promis
   );
   if (!j) return false;
   let reservation: Reservation | undefined = j.reserved_micros > 0 && j.reserved_day ? { day: j.reserved_day, micros: j.reserved_micros } : undefined;
+  if (reservation && j.attempts > 1) {
+    // An earlier run ended (CPU) between reserving and settling, so whether Claude was called is unknown: the
+    // reservation is kept as spent, like a timeout (9.3), and this attempt reserves anew within the cap.
+    await ctx.db.batchAlways([settleStmt(ctx, reservation, 'spent'), jobSettledStmt(ctx, j.id)]);
+    reservation = undefined;
+  }
   const fail = async (code: string) => {
-    if (reservation) await ctx.db.batchAlways([settleStmt(ctx, reservation, 0)]);
-    await ctx.db.run(`UPDATE jobs SET state = 'failed', error = ?, reserved_micros = 0 WHERE id = ?`, code, j.id);
+    await ctx.db.batchAlways([...(reservation ? [settleStmt(ctx, reservation, 0)] : []),
+      ctx.db.stmt(`UPDATE jobs SET state = 'failed', error = ?, reserved_micros = 0 WHERE id = ?`, code, j.id)]);
     logCode(ctx, code);
     return true;
   };
@@ -376,16 +440,13 @@ export async function processOneJob(ctx: Ctx, id: Identity, s: Settings): Promis
   } catch (e) {
     return fail(e instanceof ServerError ? e.code : 'SERVER_ERROR');
   }
+  testKillPoint(ctx.env, 'job-before-claude');
+  let out: AiOutcome;
   try {
-    const out = await runClaude(ctx, s, saved.input, src, reservation);
-    reservation = undefined;
-    const delivered = await deliverResult(ctx, id, saved.input, out, src, saved.about, j.id);
-    const result = { result: out.result, sourceId: out.sourceId, model: out.model, fallback: out.fallback, usage: out.usage };
-    await ctx.db.run(`UPDATE jobs SET state = 'done', result = ?, delivered = ?, reserved_micros = 0 WHERE id = ?`, JSON.stringify(result), JSON.stringify(delivered), j.id);
-    return true;
+    out = await runClaude(ctx, s, saved.input, src, reservation, j.id);
   } catch (e) {
+    // runClaude settled the reservation (kept or released) and cleared the job's record of it.
     const err = e instanceof ServerError ? e : mapClaudeError(e).error;
-    reservation = undefined; // runClaude settled it (kept or released)
     if (err.code === 'AI_BUSY' && j.attempts < 3) {
       // Each attempt reserves anew on the next run.
       await ctx.db.run(`UPDATE jobs SET state = 'queued', lease = 0, reserved_micros = 0, error = ? WHERE id = ?`, err.code, j.id);
@@ -395,6 +456,12 @@ export async function processOneJob(ctx: Ctx, id: Identity, s: Settings): Promis
     logCode(ctx, err.code);
     return true;
   }
+  // From here on the cost is settled. A run cut short now leaves the job 'running'; its retry reserves anew.
+  testKillPoint(ctx.env, 'job-delivery');
+  const delivered = await deliverResult(ctx, id, saved.input, out, src, saved.about, j.id);
+  const result = { result: out.result, sourceId: out.sourceId, model: out.model, fallback: out.fallback, usage: out.usage };
+  await ctx.db.batchAlways([ctx.db.stmt(`UPDATE jobs SET state = 'done', result = ?, delivered = ?, reserved_micros = 0 WHERE id = ?`, JSON.stringify(result), JSON.stringify(delivered), j.id)]);
+  return true;
 }
 
 /** Hourly: jobs 24 h after expiry. */

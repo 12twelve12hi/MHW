@@ -3,8 +3,10 @@
 //
 //   node scripts/cf-check.mjs                          token, Workers, D1, R2 and (with HAS_EMAIL=true) zone access
 //   node scripts/cf-check.mjs drop-ratelimit <toml>    removes the [[ratelimits]] block (an account that refuses it)
+//   node scripts/cf-check.mjs subdomain                the account's workers.dev subdomain, created only when the
+//                                                      API says there is none; writes SERVER_URL to $GITHUB_ENV
 //
-// Environment: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, HAS_EMAIL.
+// Environment: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, HAS_EMAIL, WORKER_NAME (subdomain).
 
 import fs from 'node:fs';
 
@@ -36,6 +38,59 @@ export function dropRatelimit(toml) {
   return outLines.join('\n');
 }
 
+/**
+ * The account's workers.dev subdomain. A new random one is created only when the API answers that the account has
+ * none (HTTP 404, or 200 without a subdomain). Any other answer (429, 5xx, a network error, 401/403) is retried a few
+ * times and then fails the deploy: creating a subdomain while one exists would rename every workers.dev URL on the
+ * account, including the Daylight server's own address that the apps pinned and hosted /f/ and /o/ links.
+ * -> {subdomain, created}. `fetchFn` and `sleep` are injectable for tests.
+ */
+export async function ensureSubdomain({ account, token, fetchFn = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), random, tries = 4 } = {}) {
+  const url = `${API}/accounts/${account}/workers/subdomain`;
+  const headers = { Authorization: `Bearer ${token}` };
+  let last = '';
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    let res, json = {};
+    try {
+      res = await fetchFn(url, { headers, signal: AbortSignal.timeout(30_000) });
+      json = await res.json().catch(() => ({}));
+    } catch (e) {
+      last = `network error (${e?.name ?? 'error'})`;
+      if (attempt < tries) await sleep(5000 * attempt);
+      continue;
+    }
+    const sub = json?.result?.subdomain;
+    if (res.status === 200 && json?.success !== false && typeof sub === 'string' && sub) return { subdomain: sub, created: false };
+    if (res.status === 404 || (res.status === 200 && json?.success !== false && !sub)) {
+      const name = `dl-${random ?? [...crypto.getRandomValues(new Uint8Array(5))].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+      const put = await fetchFn(url, {
+        method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ subdomain: name }), signal: AbortSignal.timeout(30_000),
+      });
+      const pj = await put.json().catch(() => ({}));
+      if (put.status !== 200 || pj?.success === false) throw new Error(`Creating a workers.dev subdomain failed (HTTP ${put.status}).`);
+      return { subdomain: pj?.result?.subdomain || name, created: true };
+    }
+    last = `HTTP ${res.status}`;
+    if (res.status === 401 || res.status === 403) break;
+    if (attempt < tries) await sleep(5000 * attempt);
+  }
+  throw new Error(`Couldn't read the account's workers.dev subdomain (${last}); nothing was changed. Re-run the deploy.`);
+}
+
+async function subdomainStep() {
+  try {
+    const { subdomain, created } = await ensureSubdomain({ account: env.CLOUDFLARE_ACCOUNT_ID, token: env.CLOUDFLARE_API_TOKEN });
+    const host = `${env.WORKER_NAME}.${subdomain}.workers.dev`;
+    console.log(`::add-mask::${subdomain}`);
+    console.log(`::add-mask::${host}`);
+    if (env.GITHUB_ENV) fs.appendFileSync(env.GITHUB_ENV, `SERVER_URL=https://${host}\n`);
+    console.log(created ? 'Created a workers.dev subdomain for this account.' : 'workers.dev subdomain: ok.');
+  } catch (e) {
+    console.log(`::error title=workers.dev address::${e.message}`);
+    process.exit(1);
+  }
+}
+
 async function check() {
   const acct = env.CLOUDFLARE_ACCOUNT_ID;
   if (!/^[0-9a-f]{32}$/.test(acct ?? '')) fail('CLOUDFLARE_ACCOUNT_ID isn’t an account ID (32 hex characters). Copy it from the Cloudflare dashboard (Workers & Pages › right column).');
@@ -65,6 +120,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const [cmd, file] = process.argv.slice(2);
   if (cmd === 'drop-ratelimit') {
     fs.writeFileSync(file, dropRatelimit(fs.readFileSync(file, 'utf8')));
+  } else if (cmd === 'subdomain') {
+    await subdomainStep();
   } else {
     await check();
   }

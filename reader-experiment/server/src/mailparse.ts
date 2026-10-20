@@ -2,7 +2,7 @@
 // Authentication-Results, the "view in browser" link, subjects and sender addresses.
 
 import { publicUrl } from '../client/daylight-server.js';
-import { decodeEntities, plainText } from './html.ts';
+import { decodeEntities, plainText, scanElements } from './html.ts';
 
 /** Cloudflare Email Routing's authserv-id in the Authentication-Results it prepends. */
 export const CLOUDFLARE_AUTHSERV = 'mx.cloudflare.net';
@@ -45,14 +45,67 @@ export function cleanSubject(s: string | undefined | null): string {
   return t;
 }
 
-/** "Alice <ALICE@Example.com>" -> {address: 'alice@example.com', domain: 'example.com', name: 'Alice'}. */
-export function parseFrom(value: string | null | undefined): { address: string; domain: string; name: string } {
-  const v = String(value ?? '').trim();
-  const angle = /<([^<>@\s]+@[^<>\s]+)>/.exec(v);
-  const bare = /([^\s<>"',;:]+@[^\s<>"',;:]+)/.exec(v);
-  const address = (angle?.[1] ?? bare?.[1] ?? '').toLowerCase();
-  let name = angle ? v.slice(0, angle.index).trim() : '';
-  name = name.replace(/^"(.*)"$/, '$1').replace(/\\(.)/g, '$1').trim();
+const ENCODED_WORD = /=\?[^?\s]+\?[bBqQ]\?[^?\s]*\?=/y;
+
+/**
+ * Display-name text that names no address: angle-bracketed parts and anything with an "@" are removed, so a name
+ * like "service@bank.example" or "Bank <service@bank.example>" cannot pose as the sender's address.
+ */
+export function cleanDisplayName(name: string): string {
+  return name.replace(/<[^<>]*>/g, ' ').replace(/[<>]/g, ' ').replace(/\S*@\S*/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * The first mailbox of a raw (undecoded) From header (RFC 5322). The address is the first angle-addr outside quoted
+ * strings, comments and RFC 2047 encoded-words, or else the first bare addr-spec outside them. Only then is the
+ * display name decoded with `decode`. Decoding first would let an encoded-word like `=?utf-8?q?Bank_<a@bank.example>?=`
+ * in the display name stand in for the real address after it.
+ * "Alice <ALICE@Example.com>" -> {address: 'alice@example.com', domain: 'example.com', name: 'Alice'}.
+ */
+export function parseFrom(value: string | null | undefined, decode: (s: string) => string = (s) => s): { address: string; domain: string; name: string } {
+  const v = String(value ?? '').slice(0, 16 * 1024);
+  // `plain` is `v` with quoted strings, comments and encoded-words blanked out (same length), for the bare-address case.
+  let plain = '';
+  let angle: { start: number; addr: string } | null = null;
+  let i = 0, gt = -1;
+  while (i < v.length) {
+    const c = v[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < v.length && v[j] !== '"') j += v[j] === '\\' ? 2 : 1;
+      j = Math.min(j + 1, v.length);
+      plain += ' '.repeat(j - i); i = j; continue;
+    }
+    if (c === '(') {
+      let j = i + 1, depth = 1;
+      while (j < v.length && depth > 0) {
+        if (v[j] === '\\') { j += 2; continue; }
+        if (v[j] === '(') depth++;
+        else if (v[j] === ')') depth--;
+        j++;
+      }
+      j = Math.min(j, v.length);
+      plain += ' '.repeat(j - i); i = j; continue;
+    }
+    if (c === '=' && v[i + 1] === '?') {
+      ENCODED_WORD.lastIndex = i;
+      const m = ENCODED_WORD.exec(v);
+      if (m) { plain += ' '.repeat(m[0].length); i += m[0].length; continue; }
+    }
+    if (c === '<' && !angle) {
+      if (gt <= i) gt = v.indexOf('>', i + 1);
+      if (gt < 0) gt = v.length;
+      const inside = v.slice(i + 1, gt).trim();
+      if (/^[^<>@\s]+@[^<>\s]+$/.test(inside)) angle = { start: i, addr: inside };
+    }
+    plain += c; i++;
+  }
+  const bare = /([^\s<>"',;:()]+@[^\s<>"',;:()]+)/.exec(plain);
+  const address = (angle?.addr ?? bare?.[1] ?? '').toLowerCase();
+  let name = angle ? v.slice(0, angle.start).trim() : '';
+  if (/^".*"$/s.test(name)) name = name.slice(1, -1).replace(/\\(.)/g, '$1');
+  try { name = decode(name); } catch { /* keep it encoded */ }
+  name = cleanDisplayName(name);
   const domain = address.includes('@') ? address.slice(address.lastIndexOf('@') + 1) : '';
   return { address, domain, name };
 }
@@ -90,15 +143,13 @@ export function stripTracking(u: string): string {
   } catch { return u; }
 }
 
-/** The newsletter's "view in browser" link among its first 60 anchors, or null (7.4). */
+/** The newsletter's "view in browser" link among its first 60 anchors, or null (7.4). Linear in the HTML. */
 export function findViewInBrowser(html: string): string | null {
-  const re = /<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi;
-  let n = 0;
-  for (let m = re.exec(html); m && n < 60; m = re.exec(html), n++) {
-    const hrefM = /\bhref\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(m[1]);
+  for (const m of scanElements(html, 'a', 60, 'word')) {
+    const hrefM = /\bhref\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(m.attrs);
     if (!hrefM) continue;
     const href = decodeEntities(hrefM[2] ?? hrefM[3] ?? hrefM[4] ?? '').trim();
-    const text = plainText(m[2].slice(0, 20_000), 200).toLowerCase();
+    const text = plainText(m.inner.slice(0, 20_000), 200).toLowerCase();
     if (!VIEW_RE.test(text) && !VIEW_EXACT.test(text)) continue;
     if (/unsubscribe|preferences|manage|mailto:/i.test(href)) continue;
     const p = publicUrl(href);

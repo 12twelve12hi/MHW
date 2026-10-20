@@ -135,7 +135,12 @@ Rules for the implementation:
    server item over 256 KiB. Beside it run light steps, each with its own D1 and subrequest allowance (2.3).
 5. **Every queued step counts attempts before it starts.** A step killed for CPU is retried by a later run. After 3
    attempts a job fails with `SERVER_LIMIT`. Mail is not failed: it waits as `waiting-paid` in R2 for up to 7 days,
-   so switching to Workers Paid delivers it.
+   so switching to Workers Paid delivers it. A feed check counts too: before the fetch the feed gets `errors + 1`,
+   its next check backed off and `last_error = "SERVER_LIMIT"`, all replaced by the check's own result. A check cut
+   short therefore backs off like any failure instead of staying first in line on every run, and after 3 failed
+   checks in a row ending in one cut short, the feed is paused with `SERVER_LIMIT` (8.2). A step that stops because
+   the run has no D1 or subrequest room left (a `BudgetError`) did not fail: its work goes back unchanged and the
+   attempt is not counted.
 6. **What needs Workers Paid, plainly.** postal-mime alone takes 36 ms cold, and Cron isolates are often cold. So on
    Free, **email-in is best effort: most real newsletters and every forwarded document will not get through.** Other
    things that tend to exceed 10 ms are digests over 256 KiB (capped on Free) and AI on long URL pages (1 MiB of HTML
@@ -160,13 +165,14 @@ step never fails the others.
 | Config publish | every 6 h, or when the server origin or delivery mode changed | 1 | 1 |
 | Ack poll (5.4) | every 30 min while something awaits an ack | 2 | 1 |
 | Outbox publish | every run with due items | 3 | ≤ 6 |
-| Feeds (8.2) | every run with due feeds | ≤ 14 | ≤ 15 (≤ 3 feeds × ≤ 5 with redirects) |
+| Feeds (8.2) | every run with due feeds | ≤ 13 (the due list, then per feed: the attempt mark, the known keys, ≤ 2 writes) | ≤ 15 (≤ 3 feeds × ≤ 5 with redirects) |
+| `each` items (8.3) | every run with pending entries | ≤ 5 | ≤ 8 (≤ 4 hosts resolved over DNS-over-HTTPS, 9.7) |
 | Digest (8.3) | once a day | ≤ 5 | 0 |
-| One heavy step: an email **or** an AI job | when queued | ≤ 5 | ≤ 3 (R2 is not external; Claude: count + call) |
+| One heavy step: an email **or** an AI job | when queued | ≤ 10; an email's allowance grows to what its frames need (one statement per 1.5 MB), within the invocation's budget | ≤ 3 (R2 is not external; Claude: count + call) |
 | Hourly cleanup | once an hour | ≤ 6 | 0 |
-| **Worst case, everything due** | | **≤ 37** | **≤ 26** |
+| **Worst case, everything due** | | **≈ 43** (on Free the hourly cleanup then waits for the next run) | **≤ 34** |
 
-HTTP requests use ≤ 6 statements each. `email()` uses ≤ 4. The integration tests run the worst-case Cron (every step
+HTTP requests use ≤ 6 statements each. `email()` uses ≤ 3. The integration tests run the worst-case Cron (every step
 due at once) through the counting wrappers. They fail if any invocation passes 50 D1 statements or 50 subrequests.
 
 ---
@@ -323,6 +329,8 @@ they come from `GET /v1/status` (10.5).
 - **At deploy and every 6 hours**, by the Worker (`POST /v1/admin/announce`, then the Cron run at 00:03, 06:03, 12:03
   and 18:03 UTC). ntfy.sh's 12-hour cache therefore always holds one. The announce call also polls the topic once and
   reports whether the frame is listed. That proves the Worker can reach the relay (12.4).
+- **On the first Cron run under a new Server code** (3.4), whatever the slot: the earlier config went to the old
+  pairing's topic.
 
 ### 4.3 How apps use it
 
@@ -569,7 +577,12 @@ Without `DAYLIGHT_EMAIL_DOMAIN` the email state is `needs-domain`, the email end
    - `DAYLIGHT_EMAIL_DOMAIN` is unset (a rule left over from an earlier deploy);
    - R2 is missing;
    - the recipient is not the current address.
-2. Read `From`, `Subject`, `Date` and `Message-ID` from `message.headers`. The **topmost** `Authentication-Results`
+2. Read `From`, `Subject`, `Date` and `Message-ID` from `message.headers`. The sender's address comes from the **raw**
+   `From` header (RFC 5322): the first angle-addr outside quoted strings, comments and RFC 2047 encoded-words, or
+   else the first bare address outside them. Only then is the display name decoded, and anything in it that looks
+   like an address (`<…>`, a word with `@`) is removed. Decoding first would let
+   `=?utf-8?q?Bank_<service@bank.example>?= <spam@evil.example>` pass as `service@bank.example`, past the block
+   list and the caps, while DMARC was judged on `evil.example`. The **topmost** `Authentication-Results`
    line (7.3) cannot come from there, because `Headers` joins repeated headers with `, `. So the handler `tee()`s
    `message.raw`, reads one branch up to the first empty line (at most 64 KiB, the header block), takes that line in
    order, and cancels the branch. The other branch is used in step 5, or cancelled.
@@ -580,19 +593,29 @@ Without `DAYLIGHT_EMAIL_DOMAIN` the email state is `needs-domain`, the email end
 
    Caps never use `setReject`, because providers treat hard bounces as a dead address and unsubscribe it. A flood
    therefore cannot get the user unsubscribed from real newsletters.
+
+   The day's total is a counter (`usage`, kind `email_in`), raised and read in one statement. The per-address and
+   per-domain counts read only that sender's or domain's rows of today through their indexes, and only while the day
+   is under its cap. Rows (`mail`, dropped ones included) are written for the first 400 messages of a day (2 × the
+   cap); after that a message only raises the counter. A flood therefore reads and writes almost nothing: counting
+   all of today's rows for every message made 3,200 junk messages read 5 M rows, D1's whole free daily quota, which
+   would stop every query until 00:00 UTC. Today's counts in `GET /v1/email` and `/v1/status`: received = the counter,
+   delivered = `done` rows, dropped = received − rows kept.
 4. On Free, a message over 2 MiB (`message.rawSize`) is stored as `waiting-paid` without being queued for parsing.
    The apps show "Too large for the Free plan; it will arrive once you switch to Workers Paid" (7.4).
 5. Otherwise stream `message.raw` through a `FixedLengthStream(message.rawSize)` into R2 `m/<mailId>.eml` and insert
    a `queued` row.
+6. Past 400 MB of D1 (11.1) no mail row can be written, so a message is accepted and dropped without one (log code
+   `D1_FULL`).
 
-No parsing happens in the handler: ≤ 4 D1 statements and well under 10 ms.
+No parsing happens in the handler: ≤ 3 D1 statements and well under 10 ms.
 
 ### 7.3 Policy, block list and sender checks
 
 - **Policy `open`** (the only policy in the first release). Every message that passes 7.2 is delivered within the
   daily caps.
 - **Block list** (the `blocked` table): an address (`alice@example.com`, exact, case-insensitive) or a domain
-  (`@example.com`, also matching subdomains), compared with the header `From` address. The apps add entries from
+  (`@example.com`, also matching subdomains), compared with the header `From` address as parsed in 7.2. The apps add entries from
   "Recent mail" (**Block sender**, **Block domain**) and remove them in settings.
 - **DMARC.** Only the topmost `Authentication-Results` header whose authserv-id is Cloudflare's own is parsed. Its
   exact form is pinned by a fixture captured from a real delivery during development. A sender can add its own
@@ -632,10 +655,16 @@ Claim a `queued` row (`attempts + 1`, 15-minute lease), then parse with **postal
   type or extension), at most 10 per email, each ≤ 16 MiB (server items' limit, 5). Others, and larger ones, are
   listed at the end of the page item ("Not delivered: report.zip, 30 MB"). `name` goes through `safeFileName`;
   `title` is the file name without its extension; `url` is omitted.
+- An **HTML** attachment is outside content like the body: it is decoded (the charset its `<meta>` declares, else
+  UTF-8), sanitized (7.5) and wrapped like a page (title = file name), and sent as UTF-8 `text/html`.
 - If the email has a document attachment and its text body is under 300 characters (a forwarded document with "Sent
   from my iPhone"), send **only** the file items. Otherwise send the page item and the file items.
 
-Then build frames (5), mark the row `done` with the item ids, and **delete the raw message** from R2. More than 50
+Then build frames (5), mark the row `done` with the item ids, and **delete the raw message** from R2. Frames are
+stored one statement per 1.5 MB, so a mail with 7 MiB of documents needs about 10; the step's D1 allowance grows to
+what the items need, within the invocation's budget. When the run has no room left, the mail goes back to `queued`
+(reason `BUDGET`) without counting an attempt; one that could never fit an invocation on Free waits as
+`waiting-paid`. More than 50
 delivered items today → the row waits until tomorrow. A parse error after 3 attempts → `failed` with `BAD_EMAIL`. A
 row killed 3 times for CPU (no exception recorded) → `waiting-paid`. It is kept in R2 for up to 7 days and retried
 when `WORKERS_PLAN` becomes `paid`. "Recent mail" lists rows of every state.
@@ -649,7 +678,11 @@ One sanitizer, built on `HTMLRewriter`, for email bodies, digest pages and AI re
   tfoot tr td th caption figure figcaption span div`.
 - **Removed with their content**: `script style template noscript iframe frame frameset object embed applet portal
   svg math form input button select textarea link meta base audio video canvas`, plus any `head` content other than
-  what the wrapper writes.
+  what the wrapper writes. That includes **every element whose content the HTML tokenizer reads as raw text, RCDATA
+  or plain text**: `script style xmp iframe noembed noframes noscript plaintext title textarea`. `HTMLRewriter`
+  hands that content to the handlers as text, so unwrapping one of them would copy it out byte for byte as live
+  markup (`<xmp><script>…</script></xmp>` → `<script>…</script>`). `plaintext` never ends: everything after it
+  goes.
 - **Unwrapped**: every other element (it is removed, and its children are kept).
 - **Attributes kept**: `href` (on `a`), `src` and `alt` (on `img`), `title`, `colspan`, `rowspan`. All others go,
   including every `on*`, `style`, `class`, `id`, `srcset`, `poster`, `formaction` and `xlink:href`.
@@ -668,7 +701,9 @@ Fixtures cover:
 - `"><img src=x onerror=…>` in the subject, sender name, feed title and model title;
 - `javascript:` and `JaVa&#x09;script:` links;
 - `<svg><a xlink:href>`, `<base href>`, `<style>@import url()</style>`, `<meta http-equiv=refresh>`;
-- `srcset`, `formaction`, and `data:text/html` links.
+- `srcset`, `formaction`, and `data:text/html` links;
+- `<xmp>`, `<noembed>`, `<noframes>` and `<plaintext>` holding `<script>` and `<img onerror>`, in a fixture and in an
+  email end to end, and an HTML attachment with a script.
 
 ### 7.6 Deferred: allow-list, held queue and viewer (rules fixed now)
 
@@ -715,15 +750,28 @@ Per feed: `mode` = `each` (every new article as its own `url` item; the Reader d
 
 ### 8.2 Checking (Cron, light)
 
-Each run checks up to 3 feeds whose `next_check` has passed (oldest first), with ≤ 1 MiB of feed text parsed per run:
+Each run checks up to 3 feeds whose `next_check` has passed (oldest first), with ≤ 1 MiB of feed text parsed per run
+on Free:
 
+- **Each check is counted before it starts** (2.2 rule 5): `errors + 1`, `next_check` backed off and
+  `last_error = "SERVER_LIMIT"`, in one conditional statement that also claims the feed against an overlapping run.
+  The check's result replaces all three. A check Cloudflare ends for CPU leaves the feed backed off and showing
+  `SERVER_LIMIT`, so it can't stay first in line and starve digests, email, AI jobs and cleanup on every later run.
+  After 3 failed checks in a row ending in one cut short, the feed is paused (`last_error = "SERVER_LIMIT"`, shown in
+  the apps); un-pausing clears it.
 - Conditional GET (`If-None-Match`, `If-Modified-Since`). A `304` costs no parsing.
-- `safeFetch` with a 2 MiB cap (decoded bytes), a 15 s timeout and
-  `User-Agent: DaylightServer/1 (+https://github.com/12twelve12hi/MHW)`.
+- `safeFetch` with a cap on decoded bytes of 1 MiB on Free and 2 MiB on Paid, a 15 s timeout and
+  `User-Agent: DaylightServer/1 (+https://github.com/12twelve12hi/MHW)`. On Free the cap is also what is left of the
+  run's 1 MiB: a feed over that waits for the next run, where it is checked first, without counting as an error. A
+  feed over 1 MiB fails with `TOO_LARGE` on Free (a well-formed 2 MiB feed takes about 21 ms to parse).
 - Parser: a small dependency-free scanner for RSS/RDF `item` and Atom `entry` with CDATA, and JSON Feed through
   `JSON.parse` (≤ 2 MiB). **It ignores `<!DOCTYPE …>` and `<!ENTITY …>` entirely.** It expands only the five
   predefined XML entities and numeric ones, so there is no entity expansion and no billion-laughs. At most 100
-  entries per document. Measured at 0.3 ms for 50 items.
+  entries per document. Measured at 0.3 ms for 50 items. **Every scan is linear**: `indexOf` with forward-only
+  cursors, and a search that finds no closing tag, comment end or `>` ends the scan, since no later start could
+  succeed either. A lazy regex like `<item[\s\S]*?</item>` rescans to the end of the document for every unclosed
+  tag; 256 KiB of unclosed `<item>` took 4.1 s that way. The same holds for `plainText` (excerpts, email text) and the
+  "view in browser" detector.
 - Entry key: `hex(SHA-256(feedId ‖ 0x00 ‖ (guid or id or link or title + date)))[0:32]`. New keys are found with one
   statement (`… key IN (SELECT value FROM json_each(?))`) and inserted with one (`INSERT OR IGNORE … SELECT … FROM
   json_each(?)`), which keeps within D1's 100 bound parameters. Re-surfaced old items are never sent twice. Keys are
@@ -738,11 +786,14 @@ Each run checks up to 3 feeds whose `next_check` has passed (oldest first), with
 - **Every stored `url` passes `publicUrl`** (9.7). An entry whose link does not pass is stored without one. In `each`
   mode it is not sent; in a digest it appears as text only.
 - Errors: `errors + 1` and back off; the feed shows its last error in the apps.
+- Past 400 MB of D1 (11.1) no feed is checked (the step answers `paused`), and a feed added then is stored without
+  its baseline, which its first check records later.
 
 ### 8.3 Sending
 
 - **`each` mode**: pending entries become `url` items (`origin = feed:<feedId>:<entryKey>`, title from the feed),
-  within the caps in 8.1. Entries over the cap get `digest` state.
+  within the caps in 8.1. Entries over the cap get `digest` state. So does an entry whose host does not resolve, in
+  public DNS, to public addresses only (9.7); up to 4 hosts are resolved per run, and the rest wait.
 - **Digest**: each Cron run checks whether the local time (computed with `Intl.DateTimeFormat`, `timeZone: tz`) is in
   the digest hour and no digest went out for that local date. If so, it builds one `page` item from the digest
   entries. No entries means no digest.
@@ -779,7 +830,7 @@ Each run checks up to 3 feeds whose `next_check` has passed (oldest first), with
 |---|---|---|---|
 | `summary` (`mode`: `summary`, `keypoints`, `both`; `length`: `short` ≈ 80 words, `medium` ≈ 250, `long` ≈ 600; key points 5–8) | a source | JSON (structured outputs): title, summary (Markdown paragraphs), key points, language | `medium` |
 | `explain` | `passage` (≤ 4,000 characters), optional `question` (≤ 2,000), optional source for context | Markdown answer | `low` |
-| `ask` | a source, `question` (≤ 2,000), `history`: ≤ 10 earlier `{q, a}` pairs of ≤ 4,000 characters each | Markdown answer | `medium` |
+| `ask` | a source, `question` (≤ 2,000), `history`: ≤ 10 earlier `{q, a}` pairs, `q` ≤ 4,000 and `a` ≤ 100,000 characters (longer than any answer the server returns, so the client passes history verbatim). The server keeps the most recent turns up to 48,000 characters of JSON (≈ 12,000 tokens) and cuts a single longer answer to fit. | Markdown answer | `medium` |
 
 **Delivery**: `deliver` is `app` (the default: the result is returned), `daylight` (also sent to the Daylight as a
 page item) or `both`. `daylight` needs delivery to be available (`needs-lab-inbox` otherwise, 5.1). The page item:
@@ -796,6 +847,9 @@ page item) or `both`. `daylight` needs delivery to be available (`needs-lab-inbo
 ```
 
 Markdown from the model is rendered with paragraphs, lists, bold and italic only. Everything else is escaped.
+
+Request bodies for `url` and `sourceId` sources are ≤ 64 KiB apart from `history`; a text source makes a body up to
+1.1 MB.
 
 **Async jobs**, only for share extensions that cannot stay open: `POST /v1/ai/jobs` takes the same body. The next Cron
 run (within a minute; its 15-minute wall clock covers the Claude call) does the work and delivers to the Daylight. The
@@ -821,6 +875,8 @@ file**. It never holds it whole. It then uploads `PUT /v1/ai/sources/{sourceId}/
   only bytes that could end the JSON string the part is spliced into (9.4). Any other non-base64 byte makes the API
   refuse the request (its 400 becomes `AI_BAD_INPUT`), with no injection possible.
 - Accepted parts go to R2 `a/<sourceId>/<i>`, and the part index is added to the source's `validated` list in D1.
+  Whether a part starts a fresh source (`?replace=1`, an expired source or a different `n`) is decided inside that
+  statement, from the row as it is then, so parts uploaded at the same time merge instead of resetting each other.
 - A source is usable only when all `n` parts are validated. The splice refuses any part that is not.
 - `POST /v1/ai` with a `sourceId` that is unknown or incomplete answers `404 NEED_SOURCE` with `missingParts`. The app
   uploads those parts and retries. There is no separate `HEAD`.
@@ -867,8 +923,15 @@ How it works:
    **When the outcome is unknown** (timeout, connection lost after sending), `R` is kept as spent. Anthropic may have
    processed and billed the call.
 4. **Jobs reserve when they are enqueued**, so a queue cannot hide spending. They settle when they run. A job input
-   is ≤ 64 KiB of JSON. Longer text is stored first as a text source and referenced by `sourceId`. More than 20
-   queued jobs → `429 AI_QUEUE_FULL`.
+   is ≤ 64 KiB of JSON, checked before anything is counted or reserved. Longer text is stored first as a text source
+   and referenced by `sourceId`. More than 20 queued jobs → `429 AI_QUEUE_FULL`.
+   - The job row is inserted in the same batch as its reservation, under the same cap condition, so neither exists
+     without the other.
+   - The job's record of its reservation (`jobs.reserved_micros`) is cleared in the same batch as the settlement. A
+     run cut short after the settlement (say, while the result is encrypted for delivery) leaves the job `running`
+     with nothing reserved; its retry reserves anew within the cap and never reuses a settled reservation.
+   - A job re-claimed with its reservation still recorded was cut short between reserving and settling, so whether
+     Claude was called is unknown: that reservation is kept as spent, and the attempt reserves anew.
 5. Email and feeds never call Claude on their own. Only an authenticated request from the user's devices does.
 6. The setup guide recommends creating the key in an Anthropic Console workspace with a monthly spend limit.
 
@@ -964,7 +1027,8 @@ Errors are mapped by the SDK's typed classes, checked from most to least specifi
 | SDK error | Server answer | Reservation |
 |---|---|---|
 | `Anthropic.APIConnectionTimeoutError` | `504 AI_TIMEOUT` | kept |
-| `Anthropic.APIConnectionError` | `503 AI_BUSY` (`retryAfter` 30) | kept |
+| `Anthropic.APIConnectionError` whose `cause` is our own refusal from the custom fetch (a `ServerError`: a PDF part missing or changed → `404 NEED_SOURCE` with `missingParts`; a part with a forbidden byte → `422 AI_BAD_INPUT`) or a used-up subrequest budget (→ `503 AI_BUSY`, `retryAfter` 60). The SDK wraps whatever its fetch throws in `APIConnectionError`, with that error as the cause; nothing reached Anthropic. | the cause's answer | released |
+| `Anthropic.APIConnectionError` (any other) | `503 AI_BUSY` (`retryAfter` 30) | kept |
 | `Anthropic.AuthenticationError`, `Anthropic.PermissionDeniedError` | `503 AI_KEY_INVALID`; recorded, so the AI state is `error` with this code | released |
 | `Anthropic.RateLimitError`, `Anthropic.InternalServerError` (incl. 529 overloaded) | `503 AI_BUSY` with `retryAfter` from the `retry-after` header (default 30 s) | released |
 | `Anthropic.BadRequestError` | `422 AI_BAD_INPUT` (unreadable PDF, over 600 pages, invalid base64) | released |
@@ -978,7 +1042,9 @@ Jobs retry `AI_BUSY` on later Cron runs, at most 3 attempts, and each attempt re
 works like this:
 
 1. It finds that quoted placeholder in the (small) JSON string body. It must occur exactly once.
-2. It takes the part list that the handler read from D1 before the call. Every part must be `validated`.
+2. It takes the part list that the handler read from D1 before the call. Every part must be `validated`, and must
+   exist in R2 with that size before a byte is sent (`HEAD`); otherwise `NEED_SOURCE` names the parts. A part that
+   changes while streaming (a `?replace=1` re-upload racing the call) aborts the body, and the same answer comes back.
 3. It sends `prefix ‖ part 0 ‖ … ‖ part n−1 ‖ suffix` through a `FixedLengthStream` of the exact total length, and
    removes any `content-length` header the SDK set.
 4. It re-opens the R2 objects on every call, so `countTokens` and the message call each get a fresh stream.
@@ -1054,6 +1120,15 @@ v1.1 rule), then a WHATWG parse, then `http`/`https` and the host checks above. 
 fails is dropped, and the item falls back as described where it is used. This matters because the Daylight Reader
 fetches `url` items itself, from inside the home network. Without the check, a hostile feed entry like
 `http://192.168.1.1/reboot` would make the DC-1 send requests to the user's router.
+
+`publicUrl` sees only the name, and a public-looking name can resolve to a LAN address (`192.168.1.1.nip.io`), or
+exist only on the home network (`fritz.box`). So before the server writes a `url` item (feed `each` mode), it
+resolves the host over DNS-over-HTTPS (`cloudflare-dns.com`, A and AAAA, 2 subrequests) and writes the item only
+when there is at least one address and every address passes the host checks above. A name that doesn't resolve
+publicly, resolves to a private address, or can't be checked goes to the digest as a link instead. This stops
+static mappings, not everything: DNS rebinding or a split-horizon resolver at home can still answer the DC-1
+differently from Cloudflare's resolver. The server can't rule that out; the Reader should apply the same address
+checks to the address it actually connects to.
 
 The platform is a further line of defence for the Worker's own fetches. A Worker's `fetch` goes out through
 Cloudflare's network and has no route to the user's LAN, loopback or cloud metadata services.
@@ -1169,7 +1244,7 @@ limit), `BAD_EMAIL` and `FEED_FLOOD`.
 | `GET /v1/settings` | — | `{"ai": {"dailyUsd": 3, "ceilingUsd": 10, "maxRequests": 100}, "digest": {"hour": 7, "tz": "Europe/Berlin"}}` |
 | `PATCH /v1/settings` | `{"ai": {"dailyUsd"}}` and/or `{"digest": {"hour", "tz"}}` | The full settings; `400` above the ceiling or for an unknown time zone |
 | `POST /v1/admin/announce` | `{}` | `{"published": 200, "listed": true}`. Publishes the config frame now (at most once a minute) and polls the topic once. |
-| `POST /v1/admin/selftest` | `{}` | `{"ok": true, "ms": {"parse": …, "build": …}}`. The CPU canary (2.2 rule 7), at most once a minute. |
+| `POST /v1/admin/selftest` | `{}` or `{"result": "killed"}` | `{"ok": true, "ms": {"parse": …, "build": …}}`. The CPU canary (2.2 rule 7), at most 3 times a minute (the deploy's three calls). `{"result": "killed"}`, which the deploy sends after its three calls when one was killed, records `canary: "killed"` and is not counted against them. |
 | `POST /v1/admin/lock` | `{}` | `204`. Locks the server (3.4). |
 
 `GET /v1/status` returns:
@@ -1179,7 +1254,8 @@ limit), `BAD_EMAIL` and `FEED_FLOOD`.
 - `"features"`: each of `ai`, `pdf`, `email`, `feeds`, `files` and `deliver` with `{"state", "message"?}` (14.1);
 - `"usage": {"ai": {"requests", "usd", "reservedUsd", "limitUsd", "limitRequests", "resetAt"}, "email": {"received",
   "delivered", "dropped"}, "ntfy": {"messages"}}`;
-- `"storage": {"fileBytes", "limit", "d1Bytes"}`, `"relay": {"lastStatus", "lastPublish"}`, `"cpu": {"canary":
+- `"storage": {"fileBytes", "limit", "d1Bytes", "d1PauseBytes", "paused", "pausedReason"?: "D1_FULL"}`,
+  `"relay": {"lastStatus", "lastPublish"}`, `"cpu": {"canary":
   "ok" | "killed"}`, and `"errors": [{"t", "code"}]` (the last 5).
 
 ### 10.6 Large files (6)
@@ -1229,7 +1305,7 @@ All answer `409 NOT_CONFIGURED` without a domain or R2.
 
 ## 11. Storage
 
-### 11.1 D1 (`migrations/0001_init.sql`)
+### 11.1 D1 (`migrations/0001_init.sql`, `0002_bounded_reads.sql`)
 
 ```sql
 CREATE TABLE settings (k TEXT PRIMARY KEY, v TEXT NOT NULL);                 -- JSON values: digest, ai, lock, cursors, inbox
@@ -1289,13 +1365,18 @@ CREATE TABLE log (t INTEGER NOT NULL, code TEXT NOT NULL);                    --
   attempts=attempts+1 WHERE id=? AND (state='queued' OR (state='running' AND lease<?))`, then a check that
   `meta.changes == 1`. Overlapping Cron runs therefore never do the same work. Every counter that enforces a cap
   (AI, email, ntfy, feeds per day) is raised with a conditional `UPDATE … WHERE n < ?` and checked the same way.
+- **Bounded reads** (`0002_bounded_reads.sql`). D1 Free allows 5 M rows read a day, and every query fails after
+  that until 00:00 UTC. Counts that run often read only the rows they count: `mail(received)` for the cleanup and
+  "Recent mail", `entries(feed_id, state, sent_day)` for a feed's articles sent today (the feed list and `each`
+  sending; without it, opening the feed list with 100 feeds read about 1 M rows), and the email caps of 7.2.
 - **Hourly cleanup.** Expired rows are deleted:
   - outbox rows and their frames (8 days);
   - files, sources and jobs (24 h after expiry);
   - mail rows (30 days), entries (180 days), usage (90 days), and log rows beyond 200.
 - **Size guard.** D1 reports the database size (`meta.size_after`). Past **400 MB** (80 % of 500 MB) the Worker
-  pauses optional writes: new feed entries, text sources and mail rows. `GET /v1/status` says why, while settings,
-  usage and outbox keep working.
+  pauses optional writes: new feed entries (feed checks pause; a new feed is added without its baseline), text
+  sources and mail rows (incoming mail is accepted and dropped). `GET /v1/status` says why (`storage.paused`,
+  `pausedReason: "D1_FULL"`), while settings, usage and outbox keep working.
 
 ### 11.2 R2 (bucket `daylight-server`, optional)
 
@@ -1554,17 +1635,9 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
-          sub=$(curl -fsS -H "$auth" "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" | jq -r '.result.subdomain // empty' || true)
-          if [ -z "$sub" ]; then
-            sub="dl-$(openssl rand -hex 5)"
-            echo "::add-mask::$sub"
-            curl -fsS -X PUT -H "$auth" -H 'Content-Type: application/json' --data "{\"subdomain\":\"$sub\"}" \
-              "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" > /dev/null
-          fi
-          echo "::add-mask::$sub"
-          echo "SERVER_URL=https://$WORKER_NAME.$sub.workers.dev" >> "$GITHUB_ENV"
+        # Creates a subdomain only when the API says the account has none; any other error fails here (after retries)
+        # instead of renaming the account's existing workers.dev subdomain. Masks it and writes SERVER_URL.
+        run: node scripts/cf-check.mjs subdomain
 
       - name: D1 database (create once), R2 bucket and deploy config
         if: steps.gate.outputs.ok == 'true'
@@ -1947,11 +2020,12 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
 | **Forged config frame** (by a holder of the pairing secret) | `sent` more than 5 minutes ahead is refused. The server origin is pinned on first sight, and a move needs the user's confirmation, with the new host shown (4.3). |
 | **JSON injection into the Claude request** | PDF parts containing `"` or `\` are refused at upload. Only parts flagged as validated are spliced, and on Paid they are re-scanned while splicing (9.2, 9.4). Tested with an injection payload. |
 | **Cost abuse of AI** | The key exists only as a Worker secret, never in D1, logs, responses or apps. Only token holders can call Claude. The worst case is reserved atomically before every call, and kept when the outcome is unknown. There are no SDK retries. Deploy-time ceilings cannot be raised from an app. `countTokens` runs for any input over 50,000 characters and every PDF. Jobs reserve when queued, and at most 20 can wait. No tools are sent. Email and feeds never trigger AI. Recommended: a dedicated key in a workspace with a monthly spend limit. |
-| **Abuse of email-in** (spam, mail bombs, spoofed senders) | An unguessable address (50 bits; rotate with `DAYLIGHT_EMAIL_SALT`), a block list, and DMARC `fail` dropped, judged only on Cloudflare's own topmost header. Caps per day, per sender and per domain drop mail silently, so newsletters are never unsubscribed by bounces. Each message is at most 25 MiB, and mail over 2 MiB waits for Paid on Free. HTML goes through the allow-list sanitizer (7.5), and the Reader receives it only through its untrusted-input entry points. There are no auto-replies, so no backscatter. |
+| **Abuse of email-in** (spam, mail bombs, spoofed senders) | An unguessable address (50 bits; rotate with `DAYLIGHT_EMAIL_SALT`), a block list, and DMARC `fail` dropped, judged only on Cloudflare's own topmost header. The sender's address is parsed from the raw `From` header, so an encoded-word display name can't stand in for it (7.2). Caps per day, per sender and per domain drop mail silently, so newsletters are never unsubscribed by bounces; they are counters and indexed counts, and a flood past 400 messages a day writes no rows, so it can't use up D1's daily reads or rows (7.2). Each message is at most 25 MiB, and mail over 2 MiB waits for Paid on Free. HTML goes through the allow-list sanitizer (7.5), and the Reader receives it only through its untrusted-input entry points. There are no auto-replies, so no backscatter. |
 | **SSRF through the Worker's fetches** | Workers have no route to private networks. On top of that, `safeFetch` (9.7) checks the WHATWG-normalized host including NAT64 and 6to4, re-checks redirects, caps decoded bytes and time, and sends no credentials. |
-| **Requests into the home LAN through the Reader** | Every URL the server writes into an item or page passes `publicUrl` (9.7). The DC-1 is never told to fetch a private address. |
-| **Hostile content** (feeds, email, AI output) | The allow-list sanitizer and the escaping rule (7.5). Server items pass the same untrusted-input path as any item (`checkItemHeader`, `webUrl`, `safeFileName`, the Reader's own entry points). Decompression bombs are stopped by the receivers' bounded inflate (v1.1 finding 10; the Kotlin Inbox already bounds by `size`). Server items over 1 MiB and hosted files are `identity`. |
-| **D1 exhaustion** (a flooding feed) | 20 new entries per check and 100 per day, metadata only, auto-pause, digest overflow skipped, and optional writes paused past 400 MB (8.2, 11.1). |
+| **Requests into the home LAN through the Reader** | Every URL the server writes into an item or page passes `publicUrl` (9.7). A `url` item, which the DC-1 fetches on its own, is written only when its host resolves in public DNS to public addresses only (9.7). Residual risk: DNS rebinding or split-horizon DNS on the home network can still give the DC-1 a private address for a name that resolved publicly; only the Reader, checking the address it connects to, can close that. |
+| **Hostile content** (feeds, email, AI output) | The allow-list sanitizer and the escaping rule (7.5), including raw-text elements removed with their content and HTML attachments sanitized. Server items pass the same untrusted-input path as any item (`checkItemHeader`, `webUrl`, `safeFileName`, the Reader's own entry points). Decompression bombs are stopped by the receivers' bounded inflate (v1.1 finding 10; the Kotlin Inbox already bounds by `size`). Server items over 1 MiB and hosted files are `identity`. |
+| **D1 exhaustion** (a flooding feed) | 20 new entries per check and 100 per day, metadata only, auto-pause, digest overflow skipped, and optional writes paused past 400 MB (8.2, 11.1). Reads that run often are bounded by indexes and counters (11.1). |
+| **CPU exhaustion** (a large or hostile feed or email) | Linear scanners (8.2), ≤ 1 MiB of feed text per run on Free, and every heavy step counted before it starts, so one item that keeps getting killed backs off and is paused or parked (2.2 rule 5) instead of stopping every later run. |
 | **Logs** | Invocation logs are off. Our log lines hold codes and request ids only, never exception messages. Paths carry ids only (10.1). |
 | **Supply chain** | Two runtime dependencies (`@anthropic-ai/sdk`, `postal-mime`), pinned in `package-lock.json` and installed with `npm ci` without secrets. The protocol code is this repo's own module. |
 | **Data left behind** | Raw email is deleted after processing. AI sources go after 24 h, outbox frames after their ack, and hosted files after delivery (else 14 days). Lifecycle rules are the backstop. |
@@ -1968,6 +2042,9 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
   - the sanitizer and escaping fixtures (7.5) and the Markdown renderer's escaping;
   - feed parser fixtures (RSS 2.0, RDF, Atom, JSON Feed, CDATA, entities, DOCTYPE/ENTITY ignored, an entity bomb,
     broken XML) and the "view in browser" detector, including 10 KB anchor text;
+  - linear time on 2 MiB of hostile input (unclosed tags, comments, DOCTYPE, PIs, CDATA) for every scanner;
+  - the `From` parser (encoded-words, quoted names and comments never supply the address);
+  - the deploy's workers.dev step creates a subdomain only on "none", never after a transient or auth error;
   - the DMARC header parser (spoofed extra `Authentication-Results`, `dmarc=none`);
   - every error code has a message.
 - **Worker integration**: Miniflare from the wrangler bundle built with `__TESTING__`, in-memory D1 and R2, and
@@ -2006,11 +2083,25 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
     - error mapping: refusal → `AI_REFUSED`, 401 → `AI_KEY_INVALID`, 402 `billing_error` → `AI_BILLING`, 429/529 →
       `AI_BUSY`;
     - **a timeout keeps the reservation**, and two concurrent requests near the cap → exactly one runs;
-    - jobs reserve on enqueue, and the 21st is refused;
+    - jobs reserve on enqueue, and the 21st is refused; a job's size is checked before it reserves; a job retried
+      after its run was cut short never reuses a settled reservation;
+    - a PDF part missing or changed after validation → `NEED_SOURCE`, with the reservation released; parts uploaded
+      at the same time all stay validated;
+    - long `ask` histories are trimmed to the most recent turns, never refused;
     - `countTokens` runs above 50,000 characters and for every PDF;
     - keepalive newlines before the JSON;
     - a missing key → `NEEDS_KEY`.
   - **Worst-case Cron**: every step due at once stays within 50 statements and 50 subrequests (2.3).
+  - **Limits** (`worker-limits.test.mjs`): a feed check is marked before it starts and undone by its result; a check
+    cut short (a test-only kill point) backs off, the next run proceeds, and three failures pause the feed; a hostile
+    feed of unclosed tags parses fast in a real Cron run; the 1 MiB-per-run feed budget; `each` url items only for
+    hosts that resolve publicly; the D1 size guard; rows read stay bounded with 20,000 mail rows and with 100 feeds ×
+    10,800 sent entries; a mail flood writes rows for 2 × the cap only; the canary's three calls plus the `killed`
+    report; mail killed three times → `waiting-paid`, then delivered on Paid; a job claimed three times →
+    `SERVER_LIMIT` without a leaked reservation; the 51st email item waits a day; an 8 MiB PDF on Paid; a mail
+    without D1 room goes back to the queue without counting an attempt.
+  - **Re-pairing** on the same D1: the old lock doesn't hold the new Server code, and the next Cron run publishes the
+    new config.
 - **v1 safety**: hosted frames and server item frames through share/js's v1 `Receiver`. Hosted frames are received.
   Server items under Lab delivery are ignored: no item, no ack, no exception.
 - **Bundle**: under 3 MB gzipped, with no test variable names.

@@ -1,8 +1,10 @@
 // A small dependency-free feed scanner (DESIGN.md 8.2): RSS 2.0, RSS 1.0 (RDF), Atom 1.0 and JSON Feed 1.x.
 // <!DOCTYPE> and <!ENTITY> are ignored entirely; only the five predefined XML entities and numeric references are
-// expanded, so there is no entity expansion and no billion-laughs. At most 100 entries per document.
+// expanded, so there is no entity expansion and no billion-laughs. At most 100 entries per document. Every scan is
+// linear in the document (indexOf with forward-only cursors, never a lazy regex over the document), so a hostile feed
+// of unclosed tags or comments costs no more CPU than a well-formed one.
 
-import { plainText } from './html.ts';
+import { lowerAscii, plainText, removeSpans, scanElements, startTags } from './html.ts';
 
 export interface FeedEntry {
   id: string;
@@ -50,27 +52,54 @@ export function xmlDecode(s: string): string {
   });
 }
 
-/** Removes the DOCTYPE (with its internal subset), comments and processing instructions. */
+/** Removes `<!DOCTYPE …>` with its internal subset `[…]` (an unterminated one, and the rest, stay). Linear. */
+function removeDoctypes(s: string): string {
+  const low = lowerAscii(s);
+  let out = '', pos = 0;
+  for (;;) {
+    const i = low.indexOf('<!doctype', pos);
+    if (i < 0) break;
+    let k = i + 9;
+    while (k < s.length && s[k] !== '[' && s[k] !== '>') k++;
+    let end = -1;
+    if (s[k] === '>') end = k + 1;
+    else if (s[k] === '[') {
+      for (let m = k + 1; ;) {
+        const b = s.indexOf(']', m);
+        if (b < 0) break;
+        let e = b + 1;
+        while (/\s/.test(s[e] ?? '')) e++;
+        if (s[e] === '>') { end = e + 1; break; }
+        m = b + 1;
+      }
+    }
+    if (end < 0) break;
+    out += s.slice(pos, i);
+    pos = end;
+  }
+  return pos ? out + s.slice(pos) : s;
+}
+
+/** Removes the DOCTYPE (with its internal subset), entity declarations, comments and processing instructions. */
 export function stripProlog(xml: string): string {
-  return xml
-    .replace(/<!DOCTYPE[^[>]*(\[[\s\S]*?\])?\s*>/gi, '')
-    .replace(/<!ENTITY[\s\S]*?>/gi, '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<\?[\s\S]*?\?>/g, '');
+  let s = removeDoctypes(xml);
+  s = removeSpans(s, '<!ENTITY', '>', true);
+  s = removeSpans(s, '<!--', '-->');
+  return removeSpans(s, '<?', '?>');
 }
 
 /** Inner text of an element's content: CDATA unwrapped, XML entities decoded. */
 function textOf(inner: string): string {
   let out = '';
-  let rest = inner;
+  let pos = 0;
   for (;;) {
-    const i = rest.indexOf('<![CDATA[');
-    if (i < 0) { out += xmlDecode(rest); break; }
-    out += xmlDecode(rest.slice(0, i));
-    const j = rest.indexOf(']]>', i + 9);
-    if (j < 0) { out += rest.slice(i + 9); break; }
-    out += rest.slice(i + 9, j);
-    rest = rest.slice(j + 3);
+    const i = inner.indexOf('<![CDATA[', pos);
+    if (i < 0) { out += xmlDecode(inner.slice(pos)); break; }
+    out += xmlDecode(inner.slice(pos, i));
+    const j = inner.indexOf(']]>', i + 9);
+    if (j < 0) { out += inner.slice(i + 9); break; }
+    out += inner.slice(i + 9, j);
+    pos = j + 3;
   }
   return out;
 }
@@ -78,19 +107,16 @@ function textOf(inner: string): string {
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function element(xml: string, names: string[]): { attrs: string; inner: string } | null {
+  const low = lowerAscii(xml);
   for (const n of names) {
-    const re = new RegExp(`<${esc(n)}(\\s[^>]*)?(/>|>([\\s\\S]*?)</${esc(n)}\\s*>)`, 'i');
-    const m = re.exec(xml);
-    if (m) return { attrs: m[1] ?? '', inner: m[3] ?? '' };
+    const [m] = scanElements(xml, n, 1, 'xml', low);
+    if (m) return { attrs: m.attrs, inner: m.inner };
   }
   return null;
 }
 
 function elements(xml: string, name: string, max: number): { attrs: string; inner: string }[] {
-  const re = new RegExp(`<${esc(name)}(\\s[^>]*)?(/>|>([\\s\\S]*?)</${esc(name)}\\s*>)`, 'gi');
-  const out: { attrs: string; inner: string }[] = [];
-  for (let m = re.exec(xml); m && out.length < max; m = re.exec(xml)) out.push({ attrs: m[1] ?? '', inner: m[3] ?? '' });
-  return out;
+  return scanElements(xml, name, max).map((m) => ({ attrs: m.attrs, inner: m.inner }));
 }
 
 export function attr(attrs: string, name: string): string | null {
@@ -204,13 +230,12 @@ function parseJsonFeed(body: string, baseUrl: string): ParsedFeed | null {
 /** <link rel="alternate" type="application/rss+xml|atom+xml|feed+json" href> in an HTML page, resolved. */
 export function discoverFeed(html: string, baseUrl: string): string | null {
   const head = html.slice(0, 512 * 1024);
-  const re = /<link\b([^>]*)>/gi;
-  for (let m = re.exec(head); m; m = re.exec(head)) {
-    const rel = (attr(m[1], 'rel') ?? '').toLowerCase().split(/\s+/);
-    const type = (attr(m[1], 'type') ?? '').toLowerCase();
+  for (const a of startTags(head, 'link', 10_000)) {
+    const rel = (attr(a, 'rel') ?? '').toLowerCase().split(/\s+/);
+    const type = (attr(a, 'type') ?? '').toLowerCase();
     if (!rel.includes('alternate')) continue;
     if (!/^application\/(rss\+xml|atom\+xml|feed\+json)$/.test(type)) continue;
-    const href = attr(m[1], 'href');
+    const href = attr(a, 'href');
     const u = resolve(href ? href.replace(/&amp;/g, '&') : null, baseUrl);
     if (u) return u;
   }
@@ -220,12 +245,11 @@ export function discoverFeed(html: string, baseUrl: string): string | null {
 /** OPML -> [{url, title}] from outline xmlUrl attributes. */
 export function parseOpml(xml: string): { url: string; title: string }[] {
   const out: { url: string; title: string }[] = [];
-  const re = /<outline\b([^>]*)>/gi;
-  const clean = stripProlog(xml);
-  for (let m = re.exec(clean); m && out.length < 1000; m = re.exec(clean)) {
-    const url = attr(m[1], 'xmlUrl') ?? attr(m[1], 'xmlurl');
+  for (const a of startTags(stripProlog(xml), 'outline', 100_000)) {
+    if (out.length >= 1000) break;
+    const url = attr(a, 'xmlUrl') ?? attr(a, 'xmlurl');
     if (!url) continue;
-    out.push({ url: url.trim(), title: clip(attr(m[1], 'title') ?? attr(m[1], 'text') ?? '', 300) });
+    out.push({ url: url.trim(), title: clip(attr(a, 'title') ?? attr(a, 'text') ?? '', 300) });
   }
   return out;
 }

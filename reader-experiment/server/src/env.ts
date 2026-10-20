@@ -98,6 +98,22 @@ export class BudgetError extends Error {
   constructor(what: string) { super(`budget: ${what}`); this.name = 'BudgetError'; }
 }
 
+const testKilled = new Set<string>();
+
+/**
+ * Test bundle only: the first time execution reaches the point named by the `kill` knob, the invocation stops there
+ * as if Cloudflare had ended it (an error no step records), so tests can check what a CPU kill leaves behind.
+ * Deploy bundles drop the body (__TESTING__ is false).
+ */
+export function testKillPoint(env: Env, point: string): void {
+  if (__TESTING__) {
+    if (knobs(env).kill === point && !testKilled.has(point)) {
+      testKilled.add(point);
+      throw new Error(`test: killed at ${point}`);
+    }
+  }
+}
+
 /**
  * Counts D1 statements and external subrequests for one invocation (2.3). Every statement in a batch counts. Steps
  * get their own allowances; when one is used up the step stops cleanly and leaves its work for the next run.
@@ -127,41 +143,51 @@ export class Budget {
     this.stepD1 = d1; this.stepSub = sub;
   }
   endStep() { this.stepD1 = Infinity; this.stepSub = Infinity; }
+  /** Raises the current step's D1 allowance so that `n` more statements fit, within the invocation's budget. */
+  extendStep(n: number) {
+    if (this.d1 + n > this.d1Limit) throw new BudgetError('d1');
+    this.stepD1 = Math.max(this.stepD1, this.d1 - this.stepBaseD1 + n);
+  }
   d1Left() { return Math.min(this.d1Limit - this.d1, this.stepD1 - (this.d1 - this.stepBaseD1)); }
 }
 
 type Param = string | number | null | ArrayBuffer | Uint8Array;
 
-/** env.DB behind the statement counter. */
+/** env.DB behind the statement counter. It also adds up D1's rows read (`meta.rows_read`), which the tests check. */
 export class Db {
   private db: D1Database;
   private budget: Budget;
+  rowsRead = 0;
   constructor(db: D1Database, budget: Budget) { this.db = db; this.budget = budget; }
   stmt(sql: string, ...params: Param[]): D1PreparedStatement {
     return this.db.prepare(sql).bind(...params);
   }
+  private count<R extends D1Result | D1Result[]>(r: R): R {
+    for (const x of Array.isArray(r) ? r : [r]) this.rowsRead += Number((x?.meta as { rows_read?: number } | undefined)?.rows_read ?? 0) || 0;
+    return r;
+  }
   async first<T = Record<string, unknown>>(sql: string, ...params: Param[]): Promise<T | null> {
     this.budget.useD1(1);
-    return this.stmt(sql, ...params).first<T>();
+    return (this.count(await this.stmt(sql, ...params).all<T>()).results ?? [])[0] ?? null;
   }
   async all<T = Record<string, unknown>>(sql: string, ...params: Param[]): Promise<T[]> {
     this.budget.useD1(1);
-    return (await this.stmt(sql, ...params).all<T>()).results ?? [];
+    return this.count(await this.stmt(sql, ...params).all<T>()).results ?? [];
   }
   async run(sql: string, ...params: Param[]): Promise<D1Result> {
     this.budget.useD1(1);
-    return this.stmt(sql, ...params).run();
+    return this.count(await this.stmt(sql, ...params).run());
   }
   async batch(stmts: D1PreparedStatement[]): Promise<D1Result[]> {
     if (!stmts.length) return [];
     this.budget.useD1(stmts.length);
-    return this.db.batch(stmts);
+    return this.count(await this.db.batch(stmts));
   }
   /** Counted but never refused: bookkeeping that must not be skipped (settling AI spend, storing a paid-for result). */
   async batchAlways(stmts: D1PreparedStatement[]): Promise<D1Result[]> {
     if (!stmts.length) return [];
     this.budget.d1 += stmts.length;
-    return this.db.batch(stmts);
+    return this.count(await this.db.batch(stmts));
   }
 }
 

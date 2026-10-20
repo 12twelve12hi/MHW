@@ -147,18 +147,9 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
-          sub=$(curl -fsS -H "$auth" "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" | jq -r '.result.subdomain // empty' || true)
-          if [ -z "$sub" ]; then
-            sub="dl-$(openssl rand -hex 5)"
-            echo "::add-mask::$sub"
-            curl -fsS -X PUT -H "$auth" -H 'Content-Type: application/json' --data "{\"subdomain\":\"$sub\"}" \
-              "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" > /dev/null
-          fi
-          echo "::add-mask::$sub"
-          echo "::add-mask::$WORKER_NAME.$sub.workers.dev"
-          echo "SERVER_URL=https://$WORKER_NAME.$sub.workers.dev" >> "$GITHUB_ENV"
+        # Creates a subdomain only when the API says the account has none; any other error fails here (after retries)
+        # instead of renaming the account's existing workers.dev subdomain. Masks it and writes SERVER_URL.
+        run: node scripts/cf-check.mjs subdomain
 
       - name: D1 database (create once), R2 bucket and deploy config
         if: steps.gate.outputs.ok == 'true'

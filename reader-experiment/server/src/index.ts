@@ -80,11 +80,13 @@ function match(method: string, path: string): { route: Route; p: string[] } | nu
 }
 
 let lastCron: CronReport | null = null;
+let lastEmail: { d1: number; rowsRead: number } | null = null;
 
 /** Test-only routes that run workerd-only code (HTMLRewriter, postal-mime) for unit tests. Not in deploy bundles. */
 async function testRoute(ctx: Ctx, req: Request, path: string): Promise<Response> {
   if (__TESTING__) {
     if (path === '/__test/last-cron') return json(ctx.rid, 200, lastCron ?? {});
+    if (path === '/__test/last-email') return json(ctx.rid, 200, lastEmail ?? {});
     const body = new Uint8Array(await req.arrayBuffer());
     if (path === '/__test/sanitize') {
       const j = JSON.parse(new TextDecoder().decode(body));
@@ -104,7 +106,7 @@ async function testRoute(ctx: Ctx, req: Request, path: string): Promise<Response
       const items = await itemsForEmail(email, 'm'.repeat(32), { name: '', address: '' }, Number(new URL(req.url).searchParams.get('now')) || Date.now());
       return json(ctx.rid, 200, items.map((i) => ({
         ...i, content: undefined,
-        text: i.kind === 'page' ? String(i.content) : undefined,
+        text: i.kind === 'page' ? String(i.content) : i.mime?.startsWith('text/') && i.content instanceof Uint8Array ? new TextDecoder().decode(i.content) : undefined,
         size: typeof i.content === 'string' ? new TextEncoder().encode(i.content).byteLength : i.content?.byteLength ?? 0,
       })));
     }
@@ -127,6 +129,7 @@ function finalize(ctx: Ctx, res: Response): Response {
     h.set('X-DLS-Test-D1', String(ctx.budget.d1));
     h.set('X-DLS-Test-Sub', String(ctx.budget.sub));
     h.set('X-DLS-Test-Body-Read', ctx.bodyRead ? '1' : '0');
+    h.set('X-DLS-Test-Rows-Read', String(ctx.db.rowsRead));
   }
   return new Response(res.body, { status: res.status, headers: h });
 }
@@ -204,6 +207,7 @@ export default {
       logCode(ctx, e instanceof BudgetError ? 'BUDGET' : 'EMAIL_STORE_FAILED');
     }
     await flushLog(ctx);
+    if (__TESTING__) lastEmail = { d1: ctx.budget.d1, rowsRead: ctx.db.rowsRead };
   },
 } satisfies ExportedHandler<Env>;
 

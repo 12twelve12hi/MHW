@@ -34,9 +34,133 @@ export function decodeEntities(s: string): string {
   });
 }
 
-/** Tags removed, entities decoded, whitespace collapsed. For excerpts and anchor text. */
+// ---- Linear scanners. Feeds and email bodies are hostile input of up to a few MiB, and a lazy regex such as
+// /<item[\s\S]*?<\/item>/ rescans to the end of the document for every unclosed tag (quadratic). These helpers use
+// indexOf with forward-only cursors: every search that fails ends the scan, because no later start can succeed.
+
+/** ASCII-only lowercase, so every index stays valid (toLowerCase changes the length of some non-ASCII text). */
+export const lowerAscii = (s: string) => s.replace(/[A-Z]+/g, (m) => m.toLowerCase());
+
+const isSpace = (c: string | undefined) => c === ' ' || c === '\n' || c === '\t' || c === '\r' || c === '\f';
+const isWord = (c: string | undefined) => c !== undefined && /[A-Za-z0-9_]/.test(c);
+
+/** Removes every `open … close` span (the first `close` after each `open`); an unclosed `open` and the rest stay. */
+export function removeSpans(s: string, open: string, close: string, ignoreCase = false, replacement = ''): string {
+  const low = ignoreCase ? lowerAscii(s) : s;
+  const o = ignoreCase ? open.toLowerCase() : open;
+  const c = ignoreCase ? close.toLowerCase() : close;
+  let out = '', pos = 0;
+  for (;;) {
+    const i = low.indexOf(o, pos);
+    if (i < 0) break;
+    const j = low.indexOf(c, i + o.length);
+    if (j < 0) break;
+    out += s.slice(pos, i) + replacement;
+    pos = j + c.length;
+  }
+  return pos ? out + s.slice(pos) : s;
+}
+
+export interface Scanned { attrs: string; inner: string; start: number; end: number }
+
+/**
+ * Elements `<name …>inner</name>` (case-insensitive, the first closing tag after the start tag, `</name >` allowed),
+ * and `<name …/>` with empty inner, in document order, at most `max`. `boundary` 'xml': the name ends at whitespace,
+ * `/` or `>`; 'word': at any non-word character (like the regex `\b`). `attrs` keeps its leading whitespace.
+ */
+export function scanElements(src: string, name: string, max: number, boundary: 'xml' | 'word' = 'xml', low = lowerAscii(src)): Scanned[] {
+  const open = '<' + name.toLowerCase();
+  const close = '</' + name.toLowerCase();
+  const out: Scanned[] = [];
+  let pos = 0, closeFrom = 0;
+  while (out.length < max) {
+    const i = low.indexOf(open, pos);
+    if (i < 0) break;
+    const after = i + open.length;
+    const c = src[after];
+    if (boundary === 'xml' ? !(c === '>' || c === '/' || isSpace(c)) : isWord(c)) { pos = after; continue; }
+    const gt = src.indexOf('>', after);
+    if (gt < 0) break;
+    if (src[gt - 1] === '/' && boundary === 'xml') {
+      out.push({ attrs: src.slice(after, gt - 1), inner: '', start: i, end: gt + 1 });
+      pos = gt + 1;
+      continue;
+    }
+    let k = Math.max(gt + 1, closeFrom), at = -1, end = -1;
+    for (;;) {
+      const j = low.indexOf(close, k);
+      if (j < 0) break;
+      let e = j + close.length;
+      while (isSpace(src[e])) e++;
+      if (src[e] === '>') { at = j; end = e + 1; break; }
+      k = j + close.length;
+    }
+    if (at < 0) break;
+    closeFrom = end;
+    out.push({ attrs: src.slice(after, gt), inner: src.slice(gt + 1, at), start: i, end });
+    pos = end;
+  }
+  return out;
+}
+
+/** The attribute text of start tags `<name …>` (name ending at a non-word character), at most `max`. */
+export function startTags(src: string, name: string, max: number): string[] {
+  const low = lowerAscii(src);
+  const open = '<' + name.toLowerCase();
+  const out: string[] = [];
+  let pos = 0;
+  while (out.length < max) {
+    const i = low.indexOf(open, pos);
+    if (i < 0) break;
+    const after = i + open.length;
+    if (isWord(src[after])) { pos = after; continue; }
+    const gt = src.indexOf('>', after);
+    if (gt < 0) break;
+    out.push(src.slice(after, gt));
+    pos = gt + 1;
+  }
+  return out;
+}
+
+/** `<script>…</script>` and `<style>…</style>` replaced by a space (an unclosed one stays, as text). */
+function dropScriptsAndStyles(html: string): string {
+  const low = lowerAscii(html);
+  const names = ['script', 'style'];
+  const next = new Map<string, number>(names.map((n) => [n, -2]));
+  const closeAt = new Map<string, number>(names.map((n) => [n, 0]));
+  let out = '', pos = 0, from = 0;
+  for (;;) {
+    let i = -1, name = '';
+    for (const n of names) {
+      let k = next.get(n)!;
+      if (k === -1) continue;
+      if (k < from) { k = low.indexOf('<' + n, from); next.set(n, k); }
+      if (k >= 0 && (i < 0 || k < i)) { i = k; name = n; }
+    }
+    if (i < 0) break;
+    const after = i + 1 + name.length;
+    if (isWord(html[after])) { from = after; continue; }
+    let k = Math.max(after, closeAt.get(name)!), end = -1;
+    for (;;) {
+      const j = low.indexOf('</' + name, k);
+      if (j < 0) break;
+      let e = j + 2 + name.length;
+      while (isSpace(html[e]) || html[e] === '\v') e++;
+      if (html[e] === '>') { end = e + 1; break; }
+      k = j + 2 + name.length;
+    }
+    if (end < 0) { next.set(name, -1); from = after; continue; }
+    closeAt.set(name, end);
+    out += html.slice(pos, i) + ' ';
+    pos = end;
+    from = end;
+  }
+  return pos ? out + html.slice(pos) : html;
+}
+
+/** Tags removed, entities decoded, whitespace collapsed. For excerpts and anchor text. Linear in the input. */
 export function plainText(html: string, max = Infinity): string {
-  const noTags = html.replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, ' ').replace(/<[^>]*>/g, ' ');
+  const noTags = removeSpans(dropScriptsAndStyles(html), '<', '>', false, ' ');
   const t = decodeEntities(noTags).replace(/\s+/g, ' ').trim();
   return t.length > max ? [...t].slice(0, max).join('') : t;
 }

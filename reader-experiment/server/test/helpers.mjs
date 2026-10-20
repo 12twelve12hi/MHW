@@ -20,7 +20,7 @@ export { RELAY_ORIGIN };
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(here, '..');
 export const BUNDLE = path.join(ROOT, '.build-test', 'index.js');
-export const MIGRATION = path.join(ROOT, 'migrations', '0001_init.sql');
+export const MIGRATIONS = path.join(ROOT, 'migrations');
 
 /** Builds the test bundle unless scripts/test.mjs already did. */
 export function ensureBundle() {
@@ -38,8 +38,11 @@ export function ensureBundle() {
   });
 }
 
+/** Every migration's statements, in file order (as `wrangler d1 migrations apply` runs them). */
 export function migrationStatements() {
-  return fs.readFileSync(MIGRATION, 'utf8').replace(/--[^\n]*/g, '').split(';').map((s) => s.trim()).filter(Boolean);
+  return fs.readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql')).sort()
+    .flatMap((f) => fs.readFileSync(path.join(MIGRATIONS, f), 'utf8').replace(/--[^\n]*/g, '').split(';'))
+    .map((s) => s.trim()).filter(Boolean);
 }
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -63,12 +66,28 @@ export async function setup(opts = {}) {
   const pairingLink = await ds.pairingLink({ secret, relay: RELAY_ORIGIN });
   const claude = mockClaude();
   const web = opts.web ?? new Map();
+  // DNS-over-HTTPS (the Worker resolves hosts before writing url items, 9.7): host -> {A, AAAA} | 'nxdomain' | 'fail'.
+  // Unlisted names resolve to one public address.
+  const dns = opts.dns ?? new Map();
+  const dnsLog = [];
+  const doh = (req) => {
+    const u = new URL(req.url);
+    const name = u.searchParams.get('name');
+    const type = u.searchParams.get('type');
+    dnsLog.push(`${type} ${name}`);
+    const rec = dns.get(name) ?? { A: ['93.184.215.14'], AAAA: [] };
+    if (rec === 'fail') return new Response('busy', { status: 503 });
+    if (rec === 'nxdomain') return Response.json({ Status: 3, Answer: [] });
+    const code = type === 'AAAA' ? 28 : 1;
+    return Response.json({ Status: 0, Answer: (rec[type] ?? []).map((data) => ({ name, type: code, TTL: 60, data })) });
+  };
   const outboundLog = [];
   const outbound = async (req) => {
     const u = new URL(req.url);
     outboundLog.push(`${req.method} ${u.origin}${u.pathname}`);
     if (u.origin === RELAY_ORIGIN) return relay.handle(req);
     if (u.origin === CLAUDE) return claude.handle(req);
+    if (u.origin === 'https://cloudflare-dns.com') return doh(req);
     const h = web.get(u.host);
     if (h) return h(req);
     return new Response('no route in the test harness', { status: 502 });
@@ -84,17 +103,19 @@ export async function setup(opts = {}) {
     ...vars,
   };
   for (const [k, v] of Object.entries(bindings)) if (v === undefined || v === null) delete bindings[k];
-  const mf = new Miniflare(convertV4MiniflareOptions({
+  const dbName = `db-${Math.random().toString(16).slice(2)}`;
+  const options = (b) => convertV4MiniflareOptions({
     unsafeTriggerHandlers: true,
     modules: true, scriptPath: BUNDLE, compatibilityDate: '2026-10-01', compatibilityFlags: ['nodejs_compat'],
-    d1Databases: { DB: `db-${Math.random().toString(16).slice(2)}` },
+    d1Databases: { DB: dbName },
     ...(r2 ? { r2Buckets: { FILES: 'files' } } : {}),
     ratelimits: { FAILS: { namespace_id: '7301', simple: { limit: 30, period: 60 } } },
-    bindings,
+    bindings: b,
     outboundService: outbound,
-  }));
-  const env = await mf.getBindings();
-  const db = env.DB;
+  });
+  const mf = new Miniflare(options(bindings));
+  let env = await mf.getBindings();
+  let db = env.DB;
   await db.batch(migrationStatements().map((s) => db.prepare(s)));
 
   const dispatch = (url, init = {}) => mf.dispatchFetch(url, init);
@@ -142,6 +163,21 @@ export async function setup(opts = {}) {
     const rcpt = to ?? `daylight-${values.emailToken}@${emailDomain}`;
     const r = await dispatch(`${serverUrl}/cdn-cgi/local/email?from=${encodeURIComponent(from)}&to=${encodeURIComponent(rcpt)}&format=json`, { method: 'POST', body: raw });
     return r.json();
+  }
+
+  /** The last email() invocation's D1 statements and rows read. */
+  async function lastEmail() { return (await dispatch(`${serverUrl}/__test/last-email`)).json(); }
+
+  /**
+   * Redeploys the same Worker on the same D1 and R2 with changed bindings (e.g. {WORKERS_PLAN: 'paid'}, or a new
+   * DAYLIGHT_SERVER_CODE). Keys set to undefined are removed.
+   */
+  async function restart(changes = {}) {
+    const b = { ...bindings, ...changes };
+    for (const [k, v] of Object.entries(b)) if (v === undefined || v === null) delete b[k];
+    await mf.setOptions(options(b));
+    env = await mf.getBindings();
+    db = env.DB;
   }
 
   const receiver = new ds.Receiver({ pairing, storage: new ds.MemoryStorage(), fetch: nodeFetch, retryDelaysMs: [0, 0, 0] });
@@ -222,8 +258,8 @@ export async function setup(opts = {}) {
 
   return {
     raw,
-    mf, env, db, relay, claude, web, values, keys, seed, secret, pairing, serverCode, pairingLink, outboundLog,
-    api, cron, email, dispatch, nodeFetch, receiver, client, lane, serverUrl,
+    mf, get env() { return env; }, get db() { return db; }, relay, claude, web, values, keys, seed, secret, pairing, serverCode, pairingLink, outboundLog,
+    api, cron, email, lastEmail, restart, dispatch, nodeFetch, receiver, client, lane, serverUrl, dns, dnsLog, dbName,
     emailAddress: `daylight-${values.emailToken}@${emailDomain}`,
     async close() { await mf.dispose(); await relay.close(); },
     async rows(sql, ...params) { return (await db.prepare(sql).bind(...params).all()).results; },

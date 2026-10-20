@@ -97,3 +97,45 @@ test('the rate-limit binding can be dropped from the deploy config', () => {
   assert.match(dropped, /\[vars\]/);
   assert.match(dropped, /\[\[d1_databases\]\]/);
 });
+
+test('workers.dev subdomain: kept when it exists, created only on "none", never after a transient or auth error', async () => {
+  const { ensureSubdomain } = await import('../scripts/cf-check.mjs');
+  const calls = [];
+  const api = (answers) => async (url, init = {}) => {
+    calls.push(init.method ?? 'GET');
+    const a = answers.shift();
+    if (a === 'network') throw new TypeError('fetch failed');
+    return new Response(JSON.stringify(a.body), { status: a.status, headers: { 'Content-Type': 'application/json' } });
+  };
+  const sleep = async () => {};
+  const base = { account: 'a'.repeat(32), token: 't', sleep, random: '0123456789' };
+  calls.length = 0;
+  assert.deepEqual(await ensureSubdomain({ ...base, fetchFn: api([{ status: 200, body: { success: true, result: { subdomain: 'mine' } } }]) }), { subdomain: 'mine', created: false });
+  assert.deepEqual(calls, ['GET']);
+  calls.length = 0;
+  const none = { status: 404, body: { success: false, errors: [{ code: 10007, message: 'workers.api.error.not_found' }] } };
+  const made = await ensureSubdomain({ ...base, fetchFn: api([none, { status: 200, body: { success: true, result: { subdomain: 'dl-0123456789' } } }]) });
+  assert.deepEqual(made, { subdomain: 'dl-0123456789', created: true });
+  assert.deepEqual(calls, ['GET', 'PUT']);
+  for (const transient of [{ status: 500, body: {} }, { status: 429, body: {} }, { status: 503, body: { success: false } }, 'network']) {
+    calls.length = 0;
+    const answers = [transient, transient, transient, transient];
+    await assert.rejects(ensureSubdomain({ ...base, fetchFn: api(answers) }), /nothing was changed/);
+    assert.ok(!calls.includes('PUT'), `no PUT after ${JSON.stringify(transient)}`);
+    assert.equal(calls.length, 4, 'retried');
+  }
+  calls.length = 0;
+  await assert.rejects(ensureSubdomain({ ...base, fetchFn: api([{ status: 403, body: { success: false } }]) }), /HTTP 403/);
+  assert.deepEqual(calls, ['GET'], 'an auth error is not retried and never creates');
+  calls.length = 0;
+  const later = await ensureSubdomain({ ...base, fetchFn: api([{ status: 502, body: {} }, { status: 200, body: { success: true, result: { subdomain: 'mine' } } }]) });
+  assert.deepEqual(later, { subdomain: 'mine', created: false }, 'a transient error, then the real answer');
+  assert.ok(!calls.includes('PUT'));
+});
+
+test('the deploy workflow reads the subdomain through cf-check (no swallowed errors before a PUT)', () => {
+  const wf = fs.readFileSync(path.join(root, '..', '..', '.github', 'workflows', 'rx-server.yml'), 'utf8');
+  const step = wf.slice(wf.indexOf('- name: workers.dev address'), wf.indexOf('- name: D1 database'));
+  assert.match(step, /node scripts\/cf-check\.mjs subdomain/);
+  assert.doesNotMatch(step, /\|\| true|-X PUT/);
+});

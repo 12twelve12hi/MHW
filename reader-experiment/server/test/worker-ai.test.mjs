@@ -304,3 +304,129 @@ test('without ANTHROPIC_API_KEY: needs-key everywhere and 409 NEEDS_KEY before a
     assert.equal(st.state, 'needs-key');
   } finally { await nokey.close(); }
 });
+
+// ---- Review findings (October 2026)
+
+test('ask follow-ups: a long earlier answer is accepted, and long histories keep their most recent turns', async () => {
+  const sid = createHash('sha256').update('Paragraph one of a shared article.\n\nParagraph two.').digest('hex').slice(0, 32);
+  await ai({ op: 'summary', source: { text: 'Paragraph one of a shared article.\n\nParagraph two.' } });
+  t.claude.clear();
+  const one = await ai({ op: 'ask', source: { sourceId: sid }, question: 'And then?', history: [{ q: 'What?', a: 'A'.repeat(4500) }] });
+  assert.equal(one.status, 200, one.text.slice(0, 300));
+  assert.ok(one.json.result, one.text.slice(0, 300));
+  // Ten rounds of long answers by sourceId: over the 64 KiB body rule without history, which no longer applies to it.
+  const history = Array.from({ length: 10 }, (_, i) => ({ q: `Q${i} ` + 'q'.repeat(3990), a: `A${i} ` + 'a'.repeat(7990) }));
+  const ten = await ai({ op: 'ask', source: { sourceId: sid }, question: 'Last?', history });
+  assert.equal(ten.status, 200);
+  assert.ok(ten.json.result, ten.text.slice(0, 300));
+  const msgs = t.claude.messageRequests()[1].body.messages;
+  assert.equal(msgs.length, 7, 'the 3 most recent turns fit 48,000 characters, then the question');
+  assert.ok(msgs[1].content.startsWith('A7 ') && msgs[5].content.startsWith('A9 '));
+  // One answer longer than the whole allowance is cut, not refused.
+  const huge = await ai({ op: 'ask', source: { sourceId: sid }, question: 'Huh?', history: [{ q: 'Long?', a: 'z'.repeat(90_000) }] });
+  assert.ok(huge.json.result, huge.text.slice(0, 300));
+  const cut = t.claude.messageRequests()[2].body.messages[1].content;
+  assert.ok(cut.length < 48_000 && cut.endsWith('…'), String(cut.length));
+  assert.equal((await ai({ op: 'ask', source: { sourceId: sid }, question: 'x', history: [{ q: 'q', a: 'a'.repeat(100_001) }] })).status, 400);
+});
+
+test('POST /v1/ai/jobs checks the job size before it reserves: a 413 leaves the daily cap untouched', async () => {
+  const small = await setup({ knobs: { jsonBody: 3000 } });
+  try {
+    await small.lane.hello();
+    await small.cron(Date.now());
+    const r = await small.api('POST', '/v1/ai/jobs', { json: { op: 'ask', source: { text: 'A document.' }, question: 'q'.repeat(1900), history: [{ q: 'x'.repeat(900), a: 'y'.repeat(900) }] } });
+    assert.equal(r.status, 413);
+    assert.equal(r.json.error.code, 'TOO_LARGE');
+    const [u] = await small.rows("SELECT n, reserved_micros FROM usage WHERE kind = 'ai'");
+    assert.ok(!u || (u.n === 0 && u.reserved_micros === 0), JSON.stringify(u));
+    assert.equal((await small.rows('SELECT * FROM jobs')).length, 0);
+  } finally { await small.close(); }
+});
+
+test('a job retried after its run was cut short (after Claude answered) never reuses the settled reservation', async () => {
+  const k = await setup({ knobs: { kill: 'job-delivery' } });
+  try {
+    await k.lane.hello();
+    const T = Date.now();
+    await k.cron(T);
+    const j = await k.api('POST', '/v1/ai/jobs', { json: { op: 'explain', passage: 'E = mc^2' }, now: T });
+    assert.equal(j.status, 202);
+    await k.cron(T + 60_000); // Claude answers; the run is cut short before the result is stored
+    let [job] = await k.rows('SELECT state, reserved_micros FROM jobs WHERE id = ?', j.json.job.id);
+    assert.deepEqual(job, { state: 'running', reserved_micros: 0 }, 'cleared together with the settlement');
+    let [u] = await k.rows("SELECT n, usd_micros, reserved_micros FROM usage WHERE kind = 'ai'");
+    assert.deepEqual(u, { n: 1, usd_micros: 8000, reserved_micros: 0 });
+    // The cap is now used up: the retry must reserve anew, and that fails within the cap instead of calling Claude.
+    assert.equal((await k.api('PATCH', '/v1/settings', { json: { ai: { dailyUsd: 0.3 } } })).status, 200);
+    await k.cron(T + 25 * 60_000);
+    [job] = await k.rows('SELECT state, error, reserved_micros FROM jobs WHERE id = ?', j.json.job.id);
+    assert.deepEqual(job, { state: 'failed', error: 'AI_DAILY_LIMIT', reserved_micros: 0 });
+    assert.equal(k.claude.messageRequests().length, 1, 'Claude was called once');
+    [u] = await k.rows("SELECT usd_micros, reserved_micros FROM usage WHERE kind = 'ai'");
+    assert.deepEqual(u, { usd_micros: 8000, reserved_micros: 0 });
+  } finally { await k.close(); }
+});
+
+test('a job whose run was cut short before settling keeps that reservation as spent and reserves anew', async () => {
+  const k = await setup({ knobs: { kill: 'job-before-claude' } });
+  try {
+    await k.lane.hello();
+    const T = Date.now();
+    await k.cron(T);
+    const j = await k.api('POST', '/v1/ai/jobs', { json: { op: 'explain', passage: 'E = mc^2' }, now: T });
+    const [{ reserved_micros: R }] = await k.rows('SELECT reserved_micros FROM jobs WHERE id = ?', j.json.job.id);
+    assert.ok(R > 400_000);
+    await k.cron(T + 60_000); // cut short between reserving and settling
+    await k.cron(T + 25 * 60_000);
+    const [job] = await k.rows('SELECT state, reserved_micros, attempts FROM jobs WHERE id = ?', j.json.job.id);
+    assert.deepEqual(job, { state: 'done', reserved_micros: 0, attempts: 2 });
+    const [u] = await k.rows("SELECT n, usd_micros, reserved_micros FROM usage WHERE kind = 'ai'");
+    assert.deepEqual(u, { n: 2, usd_micros: R + 8000, reserved_micros: 0 }, 'unknown outcome kept as spent, nothing left reserved');
+    assert.equal(k.claude.messageRequests().length, 1);
+  } finally { await k.close(); }
+});
+
+test('a PDF part missing or changed after validation: NEED_SOURCE with the part, and the reservation released', async () => {
+  const p = await setup();
+  try {
+    await p.lane.hello();
+    await p.cron(Date.now());
+    const pdf = new Uint8Array(randomBytes(srv.SOURCE_PART_BYTES + 5000));
+    const b64 = Buffer.from(pdf).toString('base64');
+    const sid = createHash('sha256').update(pdf).digest('hex').slice(0, 32);
+    const put = (i) => p.api('PUT', `/v1/ai/sources/${sid}/${i}?n=2`, { body: b64.slice(i * srv.SOURCE_PART, (i + 1) * srv.SOURCE_PART), headers: { 'Content-Type': 'text/plain' } });
+    assert.equal((await put(0)).status, 201);
+    assert.equal((await put(1)).json.complete, true);
+    await p.env.FILES.delete(`a/${sid}/1`);
+    const r = await p.api('POST', '/v1/ai', { json: { op: 'summary', source: { sourceId: sid } } });
+    assert.equal(r.json.error?.code, 'NEED_SOURCE', r.text.slice(0, 300));
+    assert.deepEqual(r.json.error.missingParts, [1]);
+    assert.equal(p.claude.requests.length, 0, 'nothing reached Claude');
+    // A job: reserved at enqueue; the part changes size before the Cron runs it.
+    assert.equal((await put(1)).status, 201);
+    const j = await p.api('POST', '/v1/ai/jobs', { json: { op: 'summary', source: { sourceId: sid } } });
+    assert.equal(j.status, 202, j.text);
+    await p.env.FILES.put(`a/${sid}/1`, 'QUFB');
+    await p.cron(Date.now() + 60_000);
+    const [job] = await p.rows('SELECT state, error FROM jobs WHERE id = ?', j.json.job.id);
+    assert.deepEqual(job, { state: 'failed', error: 'NEED_SOURCE' });
+    const [u] = await p.rows("SELECT usd_micros, reserved_micros FROM usage WHERE kind = 'ai'");
+    assert.deepEqual(u, { usd_micros: 0, reserved_micros: 0 }, 'released, not booked as spent');
+    assert.equal(p.claude.messageRequests().length, 0);
+  } finally { await p.close(); }
+});
+
+test('parts of a new PDF source uploaded at the same time all stay validated', async () => {
+  for (let k = 0; k < 5; k++) {
+    const pdf = new Uint8Array(randomBytes(2 * srv.SOURCE_PART_BYTES + 100));
+    const b64 = Buffer.from(pdf).toString('base64');
+    const sid = createHash('sha256').update(pdf).digest('hex').slice(0, 32);
+    const put = (i) => t.api('PUT', `/v1/ai/sources/${sid}/${i}?n=3`, { body: b64.slice(i * srv.SOURCE_PART, (i + 1) * srv.SOURCE_PART), headers: { 'Content-Type': 'text/plain' } });
+    const rs = await Promise.all([put(0), put(1), put(2)]);
+    assert.deepEqual(rs.map((r) => r.status), [201, 201, 201]);
+    const [row] = await t.rows('SELECT validated FROM sources WHERE id = ?', sid);
+    const sizes = JSON.parse(row.validated);
+    assert.ok(sizes.every((v) => v > 0), `round ${k}: ${row.validated}`);
+  }
+});

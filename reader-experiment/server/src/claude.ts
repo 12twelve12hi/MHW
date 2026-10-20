@@ -194,6 +194,14 @@ function retryAfterOf(e: InstanceType<typeof Anthropic.APIError>): number {
 export function mapClaudeError(e: unknown): MappedError {
   if (e instanceof ServerError) return { error: e, reservation: 'released' };
   if (e instanceof Anthropic.APIConnectionTimeoutError) return { error: new ServerError(504, 'AI_TIMEOUT'), reservation: 'kept' };
+  if (e instanceof Anthropic.APIConnectionError) {
+    // The SDK wraps whatever its fetch throws in APIConnectionError, with that error as the cause. Our own fetch
+    // refuses before or while sending (a PDF part missing or changed, a used-up subrequest budget), so nothing
+    // reached Anthropic: the answer is the cause's, and the reservation is released.
+    const cause = (e as { cause?: unknown }).cause;
+    if (cause instanceof ServerError) return { error: cause, reservation: 'released' };
+    if ((cause as Error)?.name === 'BudgetError') return { error: new ServerError(503, 'AI_BUSY', { retryAfter: 60 }), reservation: 'released' };
+  }
   if (e instanceof Anthropic.APIConnectionError) return { error: new ServerError(503, 'AI_BUSY', { retryAfter: 30 }), reservation: 'kept' };
   if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) {
     return { error: new ServerError(503, 'AI_KEY_INVALID'), reservation: 'released', record: 'AI_KEY_INVALID' };

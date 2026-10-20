@@ -6,7 +6,8 @@ import { iso, nextUtcMidnight, utcDay } from './env.ts';
 import type { Identity } from './keys.ts';
 import { ServerError, json } from './errors.ts';
 import type { Settings } from './settings.ts';
-import { DEFAULT_AI_USD, digestSettings, saveStmt, validTz } from './settings.ts';
+import { DEFAULT_AI_USD, d1Paused, digestSettings, saveStmt, validTz } from './settings.ts';
+import { mailCounts, mailCountsSql } from './email.ts';
 
 export interface FeatureState { state: string; message?: string }
 
@@ -67,10 +68,9 @@ export async function status(ctx: Ctx, id: Identity, s: Settings): Promise<Respo
   const dayStart = Date.parse(day + 'T00:00:00Z');
   const rows = await ctx.db.all<Record<string, number | string | null>>(
     `SELECT 'usage' AS r, kind, n, usd_micros, reserved_micros, NULL AS t, NULL AS code, NULL AS x FROM usage WHERE day = ?1
-     UNION ALL SELECT 'misc', NULL, (SELECT COALESCE(SUM(bytes), 0) FROM files WHERE expires > ?2),
-       (SELECT COUNT(*) FROM mail WHERE received >= ?3), (SELECT COUNT(*) FROM mail WHERE received >= ?3 AND state = 'done'),
-       (SELECT COUNT(*) FROM mail WHERE received >= ?3 AND state = 'dropped'), NULL,
-       (SELECT json_group_array(json_array(t, code)) FROM (SELECT t, code FROM log ORDER BY t DESC LIMIT 5))`,
+     UNION ALL SELECT 'misc', NULL, (SELECT COALESCE(SUM(bytes), 0) FROM files WHERE expires > ?2), b, c, d, NULL,
+       (SELECT json_group_array(json_array(t, code)) FROM (SELECT t, code FROM log ORDER BY t DESC LIMIT 5))
+     FROM (SELECT ${mailCountsSql('?3', '?1')})`,
     day, ctx.now, dayStart,
   );
   const misc = rows.find((r) => r.r === 'misc');
@@ -91,10 +91,14 @@ export async function status(ctx: Ctx, id: Identity, s: Settings): Promise<Respo
         requests: Number(ai?.n ?? 0), usd: Number(ai?.usd_micros ?? 0) / 1e6, reservedUsd: Number(ai?.reserved_micros ?? 0) / 1e6,
         limitUsd: limits.dailyUsd, limitRequests: limits.maxRequests, resetAt: iso(nextUtcMidnight(ctx.now)),
       },
-      email: { received: Number(misc?.usd_micros ?? 0), delivered: Number(misc?.reserved_micros ?? 0), dropped: Number(misc?.t ?? 0) },
+      email: mailCounts(misc?.usd_micros, misc?.reserved_micros, misc?.t),
       ntfy: { messages: Number(usage('ntfy_msgs')?.n ?? 0) },
     },
-    storage: { fileBytes: Number(misc?.n ?? 0), limit: ctx.limits.fileStorage, d1Bytes: s.d1Bytes ?? null },
+    // Past 400 MB of D1, new feed entries, text sources and mail rows are paused (11.1).
+    storage: {
+      fileBytes: Number(misc?.n ?? 0), limit: ctx.limits.fileStorage, d1Bytes: s.d1Bytes ?? null, d1PauseBytes: ctx.limits.d1PauseBytes,
+      paused: d1Paused(ctx, s), ...(d1Paused(ctx, s) ? { pausedReason: 'D1_FULL' } : {}),
+    },
     relay: { lastStatus: s.relay?.lastStatus ?? null, lastPublish: s.relay?.lastPublish ? iso(s.relay.lastPublish) : null },
     cpu: { canary: s.canary ?? null },
     errors: logRows.map(([t, code]) => ({ t: iso(Number(t)), code })),

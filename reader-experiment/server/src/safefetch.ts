@@ -101,6 +101,45 @@ export async function safeFetch(fetchFn: FetchFn, url: string, opts: SafeFetchOp
   }
 }
 
+/** Cloudflare's DNS-over-HTTPS resolver (JSON API). Workers can't fetch an IP address, so this is the name. */
+export const DOH_URL = 'https://cloudflare-dns.com/dns-query';
+
+/**
+ * True when `host` resolves, in public DNS, to public addresses only (every A and AAAA record passes isPublicHost and
+ * there is at least one). A name that doesn't resolve publicly (NXDOMAIN; a LAN-only name like fritz.box), one that
+ * resolves to a private address (192.168.1.1.nip.io) and one that can't be checked (resolver error) is not public.
+ * An IP literal is judged by isPublicHost alone. Costs 2 subrequests. It can't see split-horizon answers or DNS
+ * rebinding on the home network, which is why the Reader should check the address it connects to as well (9.7).
+ */
+export async function resolvesPublic(fetchFn: FetchFn, host: string, timeoutMs = 5000): Promise<boolean> {
+  const h = host.toLowerCase().replace(/\.$/, '');
+  if (!isPublicHost(h)) return false;
+  if (h.startsWith('[') || /^[0-9.]+$/.test(h)) return true;
+  let found = false;
+  for (const [type, code] of [['A', 1], ['AAAA', 28]] as const) {
+    let res: Response;
+    try {
+      res = await fetchFn(`${DOH_URL}?name=${encodeURIComponent(h)}&type=${type}`, {
+        headers: { Accept: 'application/dns-json' }, signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (e) {
+      if ((e as Error)?.name === 'BudgetError') throw e;
+      return false;
+    }
+    if (res.status !== 200) { try { await res.body?.cancel(); } catch { /* ignore */ } return false; }
+    let j: { Status?: number; Answer?: { type?: number; data?: string }[] };
+    try { j = JSON.parse(new TextDecoder().decode(await readCappedBody(res.body, 64 * 1024))); } catch { return false; }
+    if (j.Status !== 0) return false;
+    for (const a of j.Answer ?? []) {
+      if (a.type !== code) continue;
+      const addr = String(a.data ?? '');
+      if (!isPublicHost(code === 28 ? `[${addr}]` : addr)) return false;
+      found = true;
+    }
+  }
+  return found;
+}
+
 /** Visible text of an HTML page for AI (9.2): p, h1–h6, li, blockquote, pre, td, figcaption; never script, style,
  *  nav, footer, aside or form. -> {title, text}. */
 export async function extractText(html: string): Promise<{ title: string; text: string }> {

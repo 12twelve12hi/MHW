@@ -15,7 +15,7 @@ import { sourcesCleanup } from './sources.ts';
 import type { Settings } from './settings.ts';
 import { isLocked, loadCronSettings, saveStmt } from './settings.ts';
 
-export interface CronReport { steps: Record<string, string>; d1: number; sub: number }
+export interface CronReport { steps: Record<string, string>; d1: number; sub: number; rowsRead: number }
 
 async function step(ctx: Ctx, report: CronReport, name: string, d1: number, sub: number, fn: () => Promise<unknown>) {
   ctx.budget.step(d1, sub);
@@ -39,10 +39,11 @@ async function rekey(ctx: Ctx, fp: string, s: Settings) {
     ctx.db.stmt(`DELETE FROM frames WHERE item_id IN (SELECT id FROM outbox WHERE fp != ?)`, fp),
     ctx.db.stmt(`UPDATE files SET expires = 0 WHERE fp != ?`, fp),
     ctx.db.stmt(`UPDATE sources SET expires = 0 WHERE fp != ?`, fp),
-    saveStmt(ctx, { fp, ackSince: 'all' }),
+    // The config frame went to the old pairing's topic: this run publishes it for the new one (4.2).
+    saveStmt(ctx, { fp, ackSince: 'all', config: null }),
   ];
   await ctx.db.batch(stmts);
-  s.fp = fp; s.ackSince = 'all';
+  s.fp = fp; s.ackSince = 'all'; delete s.config;
 }
 
 function ackDue(id: Identity, s: Settings, now: number): boolean {
@@ -75,7 +76,7 @@ async function cleanup(ctx: Ctx, id: Identity, s: Settings) {
 }
 
 export async function runCron(ctx: Ctx, id: Identity): Promise<CronReport> {
-  const report: CronReport = { steps: {}, d1: 0, sub: 0 };
+  const report: CronReport = { steps: {}, d1: 0, sub: 0, rowsRead: 0 };
   const fp = id.values.fingerprint;
   let s: Settings = {};
   await step(ctx, report, 'settings', 6, 0, async () => {
@@ -88,8 +89,10 @@ export async function runCron(ctx: Ctx, id: Identity): Promise<CronReport> {
     if (configDue(id, s, ctx.now) && !backingOff) await step(ctx, report, 'config', 2, 1, () => publishConfig(ctx, id, s).then((c) => c.status));
     if (ackDue(id, s, ctx.now)) await step(ctx, report, 'acks', 3, 1, () => pollAcks(ctx, id, s).then((r) => r.delivered));
     if ((s._due ?? 0) > 0 && !backingOff) await step(ctx, report, 'outbox', 5, ctx.limits.messagesPerRun, () => publishDue(ctx, id, s));
-    if ((s._feeds ?? 0) > 0) await step(ctx, report, 'feeds', 10, 15, () => checkDueFeeds(ctx, id, s));
-    if ((s._pending ?? 0) > 0) await step(ctx, report, 'each', 5, 0, () => sendEachItems(ctx, id, s));
+    // Feeds: the due list, then per feed (≤ 3) the attempt mark, the known-keys lookup and ≤ 2 writes.
+    if ((s._feeds ?? 0) > 0) await step(ctx, report, 'feeds', 13, 15, () => checkDueFeeds(ctx, id, s));
+    // 'each': ≤ 4 hosts resolved over DNS-over-HTTPS (2 subrequests each) before url items are written (9.7).
+    if ((s._pending ?? 0) > 0) await step(ctx, report, 'each', 5, 8, () => sendEachItems(ctx, id, s));
     if (digestDue(s, ctx.now).due) await step(ctx, report, 'digest', 7, 0, () => runDigest(ctx, id, s));
     let heavy = ctx.caps.heavySteps;
     let preferJobs = Math.floor(ctx.now / MIN) % 2 === 0;
@@ -109,5 +112,6 @@ export async function runCron(ctx: Ctx, id: Identity): Promise<CronReport> {
   await flushLog(ctx);
   report.d1 = ctx.budget.d1;
   report.sub = ctx.budget.sub;
+  report.rowsRead = ctx.db.rowsRead;
   return report;
 }

@@ -134,22 +134,26 @@ export async function putSourcePart(ctx: Ctx, id: Identity, req: Request, source
     await r2.delete(`a/${sourceId}/${i}`).catch(() => {});
     throw new ServerError(422, 'AI_BAD_INPUT');
   }
-  const fresh = !row || replace || row.expires <= ctx.now;
-  const created = fresh ? ctx.now : row!.created;
+  // Whether this part starts a fresh source is decided inside the statement, from the row as it is then: parts
+  // uploaded at the same time (each seeing no row in its SELECT) merge instead of resetting each other (9.2).
   const init = JSON.stringify(Array(n).fill(null));
-  const res = await ctx.db.first<{ validated: string; expires: number }>(
+  const res = await ctx.db.first<{ validated: string; expires: number; created: number }>(
     `INSERT INTO sources (id, fp, type, name, n, validated, bytes, created, expires)
-     VALUES (?1, ?2, 'pdf', ?3, ?4, json_set(?5, '$[' || CAST(?6 AS INTEGER) || ']', ?7), ?7, ?8, ?9)
+     VALUES (?1, ?2, 'pdf', ?3, ?4, json_set(?5, '$[' || CAST(?6 AS INTEGER) || ']', ?7), ?7, ?8, ?8 + ?9)
      ON CONFLICT(id) DO UPDATE SET
-       validated = CASE WHEN ?10 THEN json_set(?5, '$[' || CAST(?6 AS INTEGER) || ']', ?7) ELSE json_set(sources.validated, '$[' || CAST(?6 AS INTEGER) || ']', ?7) END,
-       bytes = CASE WHEN ?10 THEN ?7 ELSE sources.bytes + ?7 END, n = ?4, fp = ?2, name = ?3,
-       created = ?8, expires = ?9
-     RETURNING validated, expires`,
-    sourceId, id.values.fingerprint, name, n, init, i, len, created, created + ctx.limits.sourceTtl, fresh ? 1 : 0,
+       validated = CASE WHEN ?10 OR sources.expires <= ?8 OR sources.n != ?4 OR sources.type != 'pdf'
+         THEN json_set(?5, '$[' || CAST(?6 AS INTEGER) || ']', ?7)
+         ELSE json_set(sources.validated, '$[' || CAST(?6 AS INTEGER) || ']', ?7) END,
+       bytes = CASE WHEN ?10 OR sources.expires <= ?8 OR sources.n != ?4 OR sources.type != 'pdf' THEN ?7 ELSE sources.bytes + ?7 END,
+       created = CASE WHEN ?10 OR sources.expires <= ?8 OR sources.n != ?4 OR sources.type != 'pdf' THEN ?8 ELSE sources.created END,
+       expires = CASE WHEN ?10 OR sources.expires <= ?8 OR sources.n != ?4 OR sources.type != 'pdf' THEN ?8 ELSE sources.created END + ?9,
+       n = ?4, fp = ?2, name = ?3, type = 'pdf'
+     RETURNING validated, expires, created`,
+    sourceId, id.values.fingerprint, name, n, init, i, len, ctx.now, ctx.limits.sourceTtl, replace ? 1 : 0,
   );
   const sizes: (number | null)[] = JSON.parse(res?.validated ?? init);
   const stored = sizes.map((v, k) => (Number(v) > 0 ? k : -1)).filter((k) => k >= 0);
-  return json(ctx.rid, 201, { sourceId, stored, complete: stored.length === n, expires: iso(res?.expires ?? created + ctx.limits.sourceTtl) });
+  return json(ctx.rid, 201, { sourceId, stored, complete: stored.length === n, expires: iso(res?.expires ?? ctx.now + ctx.limits.sourceTtl) });
 }
 
 /**
@@ -159,47 +163,61 @@ export async function putSourcePart(ctx: Ctx, id: Identity, req: Request, source
  * again as it streams.
  */
 export function splicingFetch(ctx: Ctx, base: FetchLike, source: ResolvedSource, placeholder: string): FetchLike {
+  // Everything this fetch throws reaches mapClaudeError as the cause of the SDK's APIConnectionError. Its refusals are
+  // ServerErrors, so the app gets NEED_SOURCE (and re-uploads the parts named) instead of "Claude is busy", and the
+  // reservation is released: nothing reached Anthropic.
   return async (input, init) => {
     const body = init?.body;
     if (typeof body !== 'string') return base(input, init);
     const needle = JSON.stringify(placeholder);
     const at = body.indexOf(needle);
     if (at < 0) return base(input, init);
-    if (body.indexOf(needle, at + 1) >= 0) throw new Error('placeholder occurs twice');
+    if (body.indexOf(needle, at + 1) >= 0) throw new ServerError(500, 'SERVER_ERROR');
     const r2 = requireR2(ctx);
     const enc = new TextEncoder();
     const prefix = enc.encode(body.slice(0, at + 1));
     const suffix = enc.encode(body.slice(at + needle.length - 1));
     const sizes = source.sizes ?? [];
-    if (!sizes.length || sizes.some((s) => !(s > 0))) throw new Error('source not validated');
+    if (!sizes.length || sizes.some((s) => !(s > 0))) throw new ServerError(404, 'NEED_SOURCE', { missingParts: [...sizes.keys()] });
+    // Every part must exist with the size it was validated at before a byte is sent (a ?replace=1 re-upload may race).
+    const heads = await Promise.all(sizes.map((_, i) => r2.head(`a/${source.id}/${i}`)));
+    const missing = heads.map((h, i) => (h && h.size === sizes[i] ? -1 : i)).filter((i) => i >= 0);
+    if (missing.length) throw new ServerError(404, 'NEED_SOURCE', { missingParts: missing });
     const total = prefix.byteLength + sizes.reduce((a, b) => a + b, 0) + suffix.byteLength;
     const { readable, writable } = new FixedLengthStream(total);
     const rescan = ctx.plan === 'paid';
+    let failure: ServerError | null = null;
     const pump = (async () => {
       const w = writable.getWriter();
       try {
         await w.write(prefix);
         for (let i = 0; i < sizes.length; i++) {
           const obj = await r2.get(`a/${source.id}/${i}`);
-          if (!obj || obj.size !== sizes[i]) throw new Error('part missing');
+          if (!obj || obj.size !== sizes[i]) throw new ServerError(404, 'NEED_SOURCE', { missingParts: [i] });
           const reader = obj.body.getReader();
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
-            if (rescan && (value.indexOf(0x22) >= 0 || value.indexOf(0x5c) >= 0)) throw new Error('forbidden byte');
+            if (rescan && (value.indexOf(0x22) >= 0 || value.indexOf(0x5c) >= 0)) throw new ServerError(422, 'AI_BAD_INPUT');
             await w.write(value);
           }
         }
         await w.write(suffix);
         await w.close();
       } catch (e) {
+        failure = e instanceof ServerError ? e : new ServerError(404, 'NEED_SOURCE', { missingParts: [...sizes.keys()] });
         await w.abort(e).catch(() => {});
       }
     })();
     ctx.waitUntil(pump);
     const headers = new Headers(init?.headers);
     headers.delete('content-length');
-    return base(input, { ...init, headers, body: readable });
+    try {
+      return await base(input, { ...init, headers, body: readable });
+    } catch (e) {
+      if (failure) throw failure;
+      throw e;
+    }
   };
 }
 

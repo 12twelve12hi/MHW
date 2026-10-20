@@ -18,7 +18,7 @@ export interface Settings {
   ackSince?: string;
   ackAt?: number;
   inbox?: InboxSeen;
-  config?: ConfigState;
+  config?: ConfigState | null;
   relay?: RelayState;
   cleanupAt?: number;
   canary?: 'ok' | 'killed';
@@ -93,6 +93,11 @@ export function saveStmt(ctx: Ctx, values: Partial<Settings>): D1PreparedStateme
 export async function saveSettings(ctx: Ctx, values: Partial<Settings>): Promise<void> {
   if (!Object.keys(values).length) return;
   await ctx.db.batch([saveStmt(ctx, values)]);
+}
+
+/** Past 400 MB of D1 (80 % of 500 MB) optional writes pause: new feed entries, text sources and mail rows (11.1). */
+export function d1Paused(ctx: Ctx, s: Pick<Settings, 'd1Bytes'>): boolean {
+  return (Number(s.d1Bytes) || 0) > ctx.limits.d1PauseBytes;
 }
 
 export function isLocked(s: Settings, fingerprint: string): boolean {

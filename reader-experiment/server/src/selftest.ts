@@ -34,14 +34,18 @@ export function newsletterFixture(kib = 150): string {
   ].join('\r\n');
 }
 
-/** POST /v1/admin/selftest: {} runs the canary; {"result": "killed"} records a canary Cloudflare killed. */
+/**
+ * POST /v1/admin/selftest: {} runs the canary, at most 3 times a minute (the deploy's three calls); {"result":
+ * "killed"} records a canary Cloudflare killed. That report comes right after the three calls, so it is not counted
+ * against them: it only writes one setting.
+ */
 export async function selftest(ctx: Ctx, id: Identity, s: Settings, body: Record<string, unknown>): Promise<Response> {
-  const st = s.selftest && ctx.now - s.selftest.at < MIN ? s.selftest : { at: ctx.now, n: 0 };
-  if (st.n >= 3) throw new ServerError(429, 'RATE_LIMITED', { retryAfter: 60 });
   if (body.result === 'killed') {
-    await ctx.db.batch([saveStmt(ctx, { canary: 'killed', selftest: { at: st.at, n: st.n + 1 } })]);
+    await ctx.db.batch([saveStmt(ctx, { canary: 'killed' })]);
     return json(ctx.rid, 200, { ok: true, canary: 'killed' });
   }
+  const st = s.selftest && ctx.now - s.selftest.at < MIN ? s.selftest : { at: ctx.now, n: 0 };
+  if (st.n >= 3) throw new ServerError(429, 'RATE_LIMITED', { retryAfter: 60 });
   const t0 = Date.now();
   const email = await PostalMime.parse(newsletterFixture(150), { attachmentEncoding: 'arraybuffer', maxNestingDepth: 32 });
   const t1 = Date.now();

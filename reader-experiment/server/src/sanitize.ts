@@ -1,7 +1,7 @@
 // The allow-list sanitizer for every HTML page the server makes from outside content (DESIGN.md 7.5), on HTMLRewriter.
 
 import { publicUrl } from '../client/daylight-server.js';
-import { decodeEntities } from './html.ts';
+import { decodeEntities, removeSpans } from './html.ts';
 
 const KEEP = new Set([
   'p', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'em', 'strong', 'b', 'i',
@@ -9,10 +9,20 @@ const KEEP = new Set([
   'figcaption', 'span', 'div',
 ]);
 
-const DROP = new Set([
-  'script', 'style', 'template', 'noscript', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet', 'portal', 'svg',
-  'math', 'form', 'input', 'button', 'select', 'textarea', 'link', 'meta', 'base', 'audio', 'video', 'canvas', 'title',
-  'xml', 'param', 'source', 'track', 'dialog',
+/**
+ * Elements whose content the HTML tokenizer (and so HTMLRewriter) reads as raw text, RCDATA or plain text, not markup.
+ * Their content reaches the rewriter as text and would be copied out byte for byte if the element were only unwrapped
+ * (`<xmp><script>…</script></xmp>` -> a live `<script>`), so each one is removed with its content. `plaintext` never
+ * ends: everything after it goes.
+ */
+export const RAW_TEXT = [
+  'script', 'style', 'xmp', 'iframe', 'noembed', 'noframes', 'noscript', 'plaintext', 'title', 'textarea',
+] as const;
+
+const DROP = new Set<string>([
+  ...RAW_TEXT,
+  'template', 'frame', 'frameset', 'object', 'embed', 'applet', 'portal', 'svg', 'math', 'form', 'input', 'button',
+  'select', 'link', 'meta', 'base', 'audio', 'video', 'canvas', 'xml', 'param', 'source', 'track', 'dialog',
 ]);
 
 const DATA_IMAGE = /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=\s]+$/i;
@@ -32,7 +42,7 @@ function smallDimension(v: string | null): boolean {
 
 /** Sanitized HTML (no doctype, no head content). */
 export async function sanitize(html: string, opts: SanitizeOptions = {}): Promise<string> {
-  const input = String(html ?? '').replace(/<!doctype[^>]*>/gi, '').replace(/<\?xml[^>]*>/gi, '');
+  const input = removeSpans(removeSpans(String(html ?? ''), '<!doctype', '>', true), '<?xml', '>', true);
   const rewriter = new HTMLRewriter()
     .on('*', {
       element(el) {

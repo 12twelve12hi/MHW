@@ -194,3 +194,59 @@ test('the digest page: escaped, public links only, size-capped, in the reader’
   assert.ok(new TextEncoder().encode(capped.html).length <= 32 * 1024);
   assert.equal(buildDigestHtml(many, Date.now(), 'UTC', 10 * 1024 * 1024, 60).used.length, 60);
 });
+
+// ---- Review findings (October 2026): linear-time scanning and the From header.
+
+/** Runs fn and returns its time in ms. */
+const timed = (fn) => { const t0 = performance.now(); fn(); return performance.now() - t0; };
+
+test('hostile input costs linear time: unclosed tags, comments, doctypes and PIs (a lazy regex took seconds per 256 KiB)', () => {
+  const MiB2 = 2 * 1024 * 1024;
+  const fill = (unit) => unit.repeat(Math.ceil(MiB2 / unit.length));
+  const cases = [
+    ['unclosed <item>', () => parseFeed('<rss><channel><title>x</title>' + fill('<item><title>t</title>'), 'https://f.example/')],
+    ['unclosed <entry>', () => parseFeed('<feed><title>x</title>' + fill('<entry><id>1</id>'), 'https://f.example/')],
+    ['unclosed <!--', () => parseFeed('<rss><channel>' + fill('<!--x'), 'https://f.example/')],
+    ['unclosed <!DOCTYPE [', () => stripProlog(fill('<!DOCTYPE x [ ]x'))],
+    ['unclosed <!ENTITY', () => stripProlog('<rss>' + fill('<!ENTITY x '))],
+    ['unclosed <?', () => stripProlog('<rss>' + fill('<?x '))],
+    ['unclosed CDATA', () => parseFeed('<rss><channel><item><title>' + fill('<![CDATA[x') + '</title></item></channel></rss>', 'https://f.example/')],
+    ['plainText: unclosed <script', () => plainText(fill('<script>x'))],
+    ['plainText: unclosed <style and <script', () => plainText(fill('<style>x<script>y'))],
+    ['plainText: lone <', () => plainText(fill('<a'))],
+    ['findViewInBrowser: unclosed <a', () => findViewInBrowser(fill('<a href="https://x.example/">'))],
+    ['discoverFeed: unclosed <link', () => discoverFeed(fill('<link rel="alternate" '), 'https://f.example/')],
+    ['parseOpml: unclosed <outline', () => parseOpml(fill('<outline xmlUrl="https://f.example/" '))],
+    ['many </item lookalikes', () => parseFeed('<rss><channel>' + fill('<item>a</itemx></item >'), 'https://f.example/')],
+  ];
+  for (const [name, fn] of cases) {
+    const ms = timed(fn);
+    assert.ok(ms < 1500, `${name}: ${Math.round(ms)} ms for 2 MiB (quadratic would take minutes)`);
+  }
+});
+
+test('the linear scanner keeps the regex semantics: first closing tag, case, attributes, self-closing, CDATA', () => {
+  const f = parseFeed(`<?xml version="1.0"?><!DOCTYPE rss [<!ENTITY e "<item><link>http://192.168.1.1/</link></item>">]><!-- <item>no</item> -->
+<RSS><Channel><Title>T</Title><Item ><title>One</title><LINK>https://a.example/1</LINK><guid isPermaLink="false">g1</guid></Item >
+<item><title><![CDATA[Two <b>]]></title><link>https://a.example/2</link></item><item/><itemx><title>no</title></itemx></Channel></RSS>`, 'https://a.example/');
+  assert.equal(f.format, 'rss');
+  assert.deepEqual(f.entries.map((e) => [e.title, e.url, e.id]), [['One', 'https://a.example/1', 'g1'], ['Two', 'https://a.example/2', ''], ['', null, '']]);
+  const atom = parseFeed('<feed><title>A</title><link href="https://a.example/" /><entry><link rel="self" href="https://a.example/s"/><link href="https://a.example/e1"/><id>1</id></entry></feed>', 'https://a.example/');
+  assert.equal(atom.site, 'https://a.example/');
+  assert.equal(atom.entries[0].url, 'https://a.example/e1');
+  assert.equal(plainText('a<SCRIPT type="x">evil()</SCRIPT >b<style>c</style>d<scripts>e</scripts>'), 'a b d e');
+  assert.equal(plainText('x < y and z'), 'x < y and z', 'a < with no > is text');
+  assert.equal(stripProlog('<!--a--><b/><!--c'), '<b/><!--c');
+});
+
+test('From: the address comes from the raw header; encoded-words and quoted strings in the name never supply it', () => {
+  const decode = (s) => s.replace(/=\?utf-8\?q\?([^?]*)\?=/gi, (_, t) => t.replace(/_/g, ' ').replace(/=([0-9A-F]{2})/gi, (__, h) => String.fromCharCode(parseInt(h, 16))));
+  assert.deepEqual(parseFrom('=?utf-8?q?PayPal_<service@paypal.com>?= <spam@evil.example>', decode),
+    { address: 'spam@evil.example', domain: 'evil.example', name: 'PayPal' });
+  assert.deepEqual(parseFrom('"service@paypal.com" <spam@evil.example>', decode), { address: 'spam@evil.example', domain: 'evil.example', name: '' });
+  assert.deepEqual(parseFrom('"PayPal <service@paypal.com>" <spam@evil.example>'), { address: 'spam@evil.example', domain: 'evil.example', name: 'PayPal' });
+  assert.deepEqual(parseFrom('spam@evil.example (PayPal <service@paypal.com>)'), { address: 'spam@evil.example', domain: 'evil.example', name: '' });
+  assert.deepEqual(parseFrom('=?utf-8?q?Zo=C3=AB?= <zoe@ok.example>', decode), { address: 'zoe@ok.example', domain: 'ok.example', name: 'ZoÃ«' });
+  assert.deepEqual(parseFrom('Weekly <News@Example.com>'), { address: 'news@example.com', domain: 'example.com', name: 'Weekly' });
+  assert.equal(parseFrom('<<<<' + '<'.repeat(20000)).address, '', 'no address, no quadratic scan');
+});

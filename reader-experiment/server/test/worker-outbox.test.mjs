@@ -203,29 +203,22 @@ test('re-pairing: the old token locks the server; a new Server code expires data
   assert.equal(await t.client.lockBeforeRepair(), false, 'never throws');
   const st = await t.client.state('ai');
   assert.equal(st.state, 'locked');
-  // Deploy a new Server code: same D1, new identity.
+  // Deploy a new Server code on the same D1 and R2, as the real deploy does (12.7): the lock row is still there.
   const secret = ds.generateSecret();
   const seed = await srv.deriveServerSeed(secret);
   const code = await srv.formatServerCode(seed, { relay: RELAY_ORIGIN });
-  await t.mf.setOptions((await import('miniflare')).convertV4MiniflareOptions({
-    unsafeTriggerHandlers: true, modules: true, scriptPath: (await import('./helpers.mjs')).BUNDLE, compatibilityDate: '2026-10-01',
-    compatibilityFlags: ['nodejs_compat'], d1Databases: { DB: 'repair-db' }, r2Buckets: { FILES: 'files' },
-    bindings: { SERVER_URL: SERVER, DAYLIGHT_SERVER_CODE: code, TEST_KNOBS: '{}' },
-    outboundService: (req) => t.relay.handle(req),
-  }));
-  const env = await t.mf.getBindings();
-  // A fresh database for this instance: apply the migration, then copy the old row to check it is expired.
-  const { migrationStatements } = await import('./helpers.mjs');
-  await env.DB.batch(migrationStatements().map((s) => env.DB.prepare(s)));
-  await env.DB.prepare(`INSERT INTO outbox (id, token, fp, origin, kind, parts, bytes, state, created) VALUES (?, ?, ?, 'x', 'url', 1, 0, 'queued', ?)`)
-    .bind(id, 'a'.repeat(32), t.values.fingerprint, Date.now()).run();
-  await env.DB.prepare(`INSERT INTO settings (k, v) VALUES ('fp', ?)`).bind(JSON.stringify(t.values.fingerprint)).run();
-  const r = await (await t.mf.dispatchFetch(`${SERVER}/cdn-cgi/local/scheduled?time=${Date.now()}&format=json`)).text();
-  assert.ok(r);
-  const rows = (await env.DB.prepare('SELECT state FROM outbox WHERE id = ?').bind(id).all()).results;
+  assert.equal((await t.rows("SELECT k FROM settings WHERE k = 'lock'")).length, 1);
+  await t.restart({ DAYLIGHT_SERVER_CODE: code });
+  // Earlier tests in this file left the relay backing off at their (later) test clock.
+  await t.db.prepare("DELETE FROM settings WHERE k = 'relay'").run();
+  const report = await t.cron(Date.now());
+  assert.equal(report.steps.config, '200', `the new server announces itself: ${JSON.stringify(report.steps)}`);
+  const rows = await t.rows('SELECT state FROM outbox WHERE id = ?', id);
   assert.equal(rows[0].state, 'expired');
   const newValues = await srv.deriveServerValues(seed);
-  const status = await t.mf.dispatchFetch(`${SERVER}/v1/status`, { headers: { Authorization: `Bearer ${newValues.authToken}` } });
+  const status = await t.dispatch(`${SERVER}/v1/status`, { headers: { Authorization: `Bearer ${newValues.authToken}` } });
   assert.equal(status.status, 200, 'the lock belonged to the old fingerprint');
+  const old = await t.dispatch(`${SERVER}/v1/status`, { headers: { Authorization: `Bearer ${t.values.authToken}` } });
+  assert.equal(old.status, 401, 'the old token is no longer valid at all');
   assert.equal((await status.json()).fingerprint, newValues.fingerprint);
 });
