@@ -78,7 +78,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020    # v4.4.0
         with:
           node-version: 22
-      - run: node reader-experiment/server/test/live/ntfy-attach.mjs >> "$GITHUB_STEP_SUMMARY"
+      - run: node reader-experiment/server/test/live/ntfy-attach.mjs | tee -a "$GITHUB_STEP_SUMMARY"
 
   deploy:
     name: Deploy to Cloudflare (when the secrets exist)
