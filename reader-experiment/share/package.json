@@ -1,9 +1,9 @@
 {
   "name": "daylight-share-protocol",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
-  "description": "Daylight Share protocol v1: JavaScript reference implementation, mock ntfy relay and test vectors",
+  "description": "Daylight Share protocol v1 (revision 1.1): JavaScript reference implementation, mock ntfy relay and test vectors",
   "scripts": {
     "test": "node --test js/test/*.test.mjs",
     "vectors": "node vectors/generate.mjs",

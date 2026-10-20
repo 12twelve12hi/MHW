@@ -1,24 +1,45 @@
-// Daylight Share protocol v1: the JavaScript reference implementation (see ../PROTOCOL.md).
+// Daylight Share protocol, version 1 (revision 1.1): the JavaScript reference implementation (see ../PROTOCOL.md).
 // One ES module with no dependencies. Runs in browsers, extension service workers and Node 22+ (WebCrypto,
 // CompressionStream, fetch). The Chrome and Safari extensions and the web sender use it as is; the Kotlin and Swift
 // implementations are checked against the vectors this module generates (../vectors/test-vectors.json).
+// Why each rule is the way it is: ../CHANGES-v1.1.md.
 
 export const PROTOCOL_VERSION = 1;
 export const DEFAULT_RELAY = 'https://ntfy.sh';
 export const MAGIC = 'DLS1';
-export const CHUNK = 12 * 1024 * 1024;
-export const MAX_PARTS = 16;
-export const MAX_ENCODED = 64 * 1024 * 1024;
+
+// Sizes (PROTOCOL 2.3, 3.5, 4). All in bytes.
+export const CHUNK = 1900544; // 29 × 64 KiB: a frame is at most CHUNK + MAX_HEADER + 36 = 1,966,116 bytes
+export const MAX_PARTS = 16; // accepted; a sender needs at most 5
+export const MAX_ITEM = 9000000; // the largest content (`size`, before compression) a sender sends
+export const MAX_DECODED = 268435456; // the largest file `size` a receiver accepts
+export const MAX_HEADER = 65536; // header JSON
+export const MAX_ATTACHMENT = 12713984; // attachment downloads (v1.0 senders' 12 MiB chunks + 128 KiB)
+export const MAX_POLL_RESPONSE = 67108864; // a poll answer
 export const MAX_PAGE_HTML = 8 * 1024 * 1024;
 export const MAX_URL = 4096;
 export const MAX_TITLE = 300;
 export const MAX_NAME = 60;
-export const MAX_ACK_IDS = 200;
+export const MAX_ACK_IDS = 70; // every ack frame stays a small frame, whatever `from`
 export const SMALL_FRAME_B64_MAX = 3800;
-export const RESEND_ATTACHMENT_MS = 150 * 60 * 1000;
-export const RESEND_MESSAGE_MS = 11 * 60 * 60 * 1000;
-export const OUTBOX_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
-export const SEEN_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+// Times (PROTOCOL 3.2-3.4).
+export const CURSOR_OVERLAP_S = 1800;
+export const RESEND_MESSAGE_MS = 11 * 3600000;
+export const ATTACHMENT_WAIT_MS = 185 * 60000;
+export const RESEND_FAST_WINDOW_MS = 6 * 3600000;
+export const RESEND_SLOW_MS = 12 * 3600000;
+export const SLOW_FAIL_LIMIT = 3;
+export const SENDING_STALE_MS = 15 * 60000;
+export const OUTBOX_EXPIRY_MS = 7 * 86400000;
+export const CONTENT_KEEP_MS = 14 * 86400000;
+export const OUTBOX_MAX_ROWS = 200;
+export const SEEN_TTL_MS = 14 * 86400000;
+export const SEEN_MSG_TTL_MS = 2 * 86400000;
+export const INCOMPLETE_TTL_MS = 86400000;
+export const TIMEOUT_SHORT_MS = 60000; // polls and message publishes
+export const TIMEOUT_LONG_MS = 1800000; // attachment uploads and downloads
+
 export const PURPOSE_INBOX = 'inbox';
 export const PURPOSE_ACK = 'ack';
 
@@ -29,8 +50,15 @@ const PAIR_SCHEME = 'daylightshare:';
 const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const TEXT_MIMES = /^(text\/|application\/(xhtml\+xml|json|xml|javascript|x-markdown))/i;
 
+/**
+ * Every error the library throws. `code` says what failed: for relay publishes 'network', 'full' (413) or 'refused'
+ * (another 4xx), with `status` the HTTP status (0 when there was no answer).
+ */
 export class ShareError extends Error {
-  constructor(code, message, reason = '') { super(message); this.name = 'ShareError'; this.code = code; this.reason = reason; }
+  constructor(code, message, reason = '', status = 0) {
+    super(message);
+    this.name = 'ShareError'; this.code = code; this.reason = reason; this.status = status;
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -42,8 +70,11 @@ const dec = new TextDecoder('utf-8', { fatal: true });
 export const utf8 = (s) => enc.encode(s);
 export const fromUtf8 = (b) => dec.decode(b);
 
-export function concat(...parts) {
-  const total = parts.reduce((n, p) => n + p.length, 0);
+export function concat(...parts) { return concatList(parts); }
+
+function concatList(parts) {
+  let total = 0;
+  for (const p of parts) total += p.length;
   const out = new Uint8Array(total);
   let o = 0;
   for (const p of parts) { out.set(p, o); o += p.length; }
@@ -67,17 +98,17 @@ const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 const B64_INV = (() => { const t = new Int16Array(128).fill(-1); for (let i = 0; i < 64; i++) t[B64.charCodeAt(i)] = i; return t; })();
 
 export function toBase64(bytes) {
-  let out = '';
+  const out = [];
   let i = 0;
   for (; i + 2 < bytes.length; i += 3) {
     const n = (bytes[i] << 16) | (bytes[i + 1] << 8) | bytes[i + 2];
-    out += B64[n >> 18] + B64[(n >> 12) & 63] + B64[(n >> 6) & 63] + B64[n & 63];
+    out.push(B64[n >> 18] + B64[(n >> 12) & 63] + B64[(n >> 6) & 63] + B64[n & 63]);
   }
   if (i < bytes.length) {
     const n = (bytes[i] << 16) | ((i + 1 < bytes.length ? bytes[i + 1] : 0) << 8);
-    out += B64[n >> 18] + B64[(n >> 12) & 63] + (i + 1 < bytes.length ? B64[(n >> 6) & 63] : '=') + '=';
+    out.push(B64[n >> 18] + B64[(n >> 12) & 63] + (i + 1 < bytes.length ? B64[(n >> 6) & 63] : '=') + '=');
   }
-  return out;
+  return out.join('');
 }
 
 /** Strict standard base64 (padding optional, no whitespace inside). Throws on anything else. */
@@ -92,7 +123,7 @@ export function fromBase64(s) {
     const c = clean.charCodeAt(i);
     const v = c < 128 ? B64_INV[c] : -1;
     if (v < 0) throw new ShareError('base64', 'bad base64 character');
-    buf = (buf << 6) | v; bits += 6;
+    buf = ((buf << 6) | v) & 0xffffff; bits += 6;
     if (bits >= 8) { bits -= 8; out[o++] = (buf >> bits) & 0xff; }
   }
   return out.subarray(0, o);
@@ -135,13 +166,29 @@ export async function sha256(bytes) {
   return new Uint8Array(await subtle().digest('SHA-256', bytes));
 }
 
-async function pipe(bytes, transform) {
-  const stream = new Blob([bytes]).stream().pipeThrough(transform);
+export async function deflateRaw(bytes) {
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-export const deflateRaw = (bytes) => pipe(bytes, new CompressionStream('deflate-raw'));
-export const inflateRaw = (bytes) => pipe(bytes, new DecompressionStream('deflate-raw'));
+/**
+ * Inflates raw DEFLATE as a stream and stops with ShareError('integrity') as soon as the output is longer than
+ * `limit`, so a small frame can never make the receiver hold more than `limit` bytes (PROTOCOL 2.3).
+ */
+export async function inflateRaw(bytes, limit = Infinity) {
+  const reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+  const out = [];
+  let total = 0;
+  for (;;) {
+    let r;
+    try { r = await reader.read(); } catch { throw new ShareError('integrity', 'bad deflate data'); }
+    if (r.done) break;
+    total += r.value.length;
+    if (total > limit) { await reader.cancel().catch(() => {}); throw new ShareError('integrity', 'size mismatch'); }
+    out.push(r.value);
+  }
+  return concatList(out);
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // Pairing (PROTOCOL 1)
@@ -170,15 +217,51 @@ export async function parseCode(input) {
   return secret;
 }
 
+/**
+ * The relay URL rule (PROTOCOL 1.3; vectors > relays). Textual, the same in every language:
+ * trim; empty -> https://ntfy.sh; a scheme other than http(s) is an error (never turned into https://…), no scheme ->
+ * https://; drop the query, fragment and user info; the host is required, lowercased, ASCII letters, digits, '-' and
+ * '.' or a bracketed IPv6 address; a port is digits and the default one is dropped; no '.' or '..' path segments;
+ * trailing slashes removed. Throws ShareError('relay').
+ */
 export function normalizeRelay(relay) {
-  let r = String(relay ?? '').trim();
-  if (!r) return DEFAULT_RELAY;
-  if (!/^https?:\/\//i.test(r)) r = 'https://' + r;
-  let u;
-  try { u = new URL(r); } catch { throw new ShareError('relay', 'That relay address isn’t a valid URL.'); }
-  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new ShareError('relay', 'The relay must be http(s).');
-  return (u.origin + u.pathname).replace(/\/+$/, '');
+  const bad = (message = 'That relay address isn’t valid.') => { throw new ShareError('relay', message); };
+  let s = String(relay ?? '').trim();
+  if (!s) return DEFAULT_RELAY;
+  let scheme = 'https';
+  const m = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(s);
+  if (m) {
+    scheme = m[1].toLowerCase();
+    if (scheme !== 'http' && scheme !== 'https') bad('The relay must be an http(s) address.');
+    s = s.slice(m[0].length);
+  }
+  const end = s.search(/[/?#]/);
+  const authority = end < 0 ? s : s.slice(0, end);
+  let path = end < 0 ? '' : s.slice(end).split(/[?#]/, 1)[0];
+  const hostport = authority.slice(authority.lastIndexOf('@') + 1);
+  let host, port = '';
+  if (hostport.startsWith('[')) {
+    const close = hostport.indexOf(']');
+    if (close < 0) bad();
+    host = hostport.slice(0, close + 1).toLowerCase();
+    const after = hostport.slice(close + 1);
+    if (after && !/^:[0-9]*$/.test(after)) bad();
+    port = after.slice(1);
+    if (!/^\[[0-9a-f:.]+\]$/.test(host)) bad();
+  } else {
+    const colon = hostport.indexOf(':');
+    host = (colon < 0 ? hostport : hostport.slice(0, colon)).toLowerCase();
+    if (colon >= 0) port = hostport.slice(colon + 1);
+    if (!/^[0-9]*$/.test(port)) bad();
+    if (!/^[a-z0-9.-]+$/.test(host)) bad();
+  }
+  if ((scheme === 'https' && port === '443') || (scheme === 'http' && port === '80')) port = '';
+  if (path.split('/').some((seg) => seg === '.' || seg === '..')) bad();
+  path = path.replace(/\/+$/, '');
+  return `${scheme}://${host}${port ? ':' + port : ''}${path}`;
 }
+
+const relayHost = (relay) => new URL(normalizeRelay(relay)).host;
 
 export function cleanName(name) {
   const s = String(name ?? '').replace(/[\p{Cc}\s]+/gu, ' ').trim();
@@ -208,6 +291,38 @@ export async function parsePairing(input) {
   return { secret, relay: DEFAULT_RELAY, name: '', code: await formatCode(secret) };
 }
 
+/** True when two pairings ({secret: Uint8Array, …}) share the same secret: the outbox stays (PROTOCOL 3.3 step 6). */
+export function samePairingSecret(a, b) {
+  const sa = a?.secret, sb = b?.secret;
+  if (!(sa instanceof Uint8Array) || !(sb instanceof Uint8Array) || sa.length !== sb.length) return false;
+  for (let i = 0; i < sa.length; i++) if (sa[i] !== sb[i]) return false;
+  return true;
+}
+
+/**
+ * What an app does with a pairing that arrives (PROTOCOL 1.3 "Confirmation"; vectors > pairingConfirmation).
+ * current: the pairing in use, or null. next: the parsed pairing. source: 'link' (a QR code scanned with the camera,
+ * a tapped link, the web sender's #pair=) or 'app' (typed, pasted or scanned on the app's own pairing screen).
+ * -> {ask, title, lines, button, notice}: when `ask`, show title, lines and the buttons `button` and "Cancel", and pair
+ * only on `button`; otherwise pair at once and show `notice` when it is not null.
+ */
+export function pairingConfirmation(current, next, { source = 'link' } = {}) {
+  const nextRelay = normalizeRelay(next?.relay);
+  if (current && samePairingSecret(current, next)) {
+    const moved = normalizeRelay(current.relay) !== nextRelay;
+    return { ask: false, title: null, lines: [], button: null,
+      notice: moved ? `Pairing updated: now sending through ${relayHost(nextRelay)}.` : 'Pairing updated.' };
+  }
+  const replaces = !!current?.secret;
+  if (source === 'app' && !replaces) return { ask: false, title: null, lines: [], button: null, notice: null };
+  const lines = [`Code starts ${toBase32(next.secret).slice(0, 4)}. Check it matches the code on your Daylight.`];
+  if (nextRelay !== DEFAULT_RELAY) lines.push(`Sends through ${relayHost(nextRelay)}.`);
+  if (replaces) {
+    lines.push(`This replaces ${cleanName(current.name) || 'your current Daylight'}. Items not yet delivered to it will not be sent.`);
+  }
+  return { ask: true, title: `Pair with ${cleanName(next.name) || 'a Daylight'}?`, lines, button: replaces ? 'Switch' : 'Pair', notice: null };
+}
+
 /** The derived values (PROTOCOL 1.4). `key` is a non-extractable WebCrypto AES-GCM key. */
 export async function deriveKeys(secret) {
   const keyBytes = await sha256(concat(utf8(LABEL_KEY), secret));
@@ -222,7 +337,7 @@ export async function deriveKeys(secret) {
 
 const aadFor = (purpose) => utf8(purpose === PURPOSE_ACK ? LABEL_ACK : LABEL_INBOX);
 
-/** Low level: seal already-serialised header bytes and a body. Used by the vectors. */
+/** Low level: seal already-serialised header bytes and a body (no header size check). Used by the vectors. */
 export async function sealFrame(keys, purpose, headerBytes, body = new Uint8Array(0), nonce = randomBytes(12)) {
   if (nonce.length !== 12) throw new ShareError('nonce', 'nonce must be 12 bytes');
   const len = new Uint8Array(4);
@@ -233,8 +348,11 @@ export async function sealFrame(keys, purpose, headerBytes, body = new Uint8Arra
   return concat(utf8(MAGIC), nonce, ct);
 }
 
+/** Seals a header object and a body. A sender never seals a header longer than MAX_HEADER bytes. */
 export async function encryptFrame(keys, purpose, header, body, nonce) {
-  return sealFrame(keys, purpose, utf8(JSON.stringify(header)), body, nonce);
+  const headerBytes = utf8(JSON.stringify(header));
+  if (headerBytes.length > MAX_HEADER) throw new ShareError('header', `header of ${headerBytes.length} bytes (at most ${MAX_HEADER})`);
+  return sealFrame(keys, purpose, headerBytes, body, nonce);
 }
 
 /** Frame bytes -> {header, body}. Throws ShareError('frame', ...) for anything that is not a valid frame. */
@@ -251,7 +369,7 @@ export async function decryptFrame(keys, purpose, frame) {
   }
   if (plain.length < 4) throw new ShareError('frame', 'short plaintext');
   const hlen = new DataView(plain.buffer, plain.byteOffset, plain.byteLength).getUint32(0, false);
-  if (hlen > plain.length - 4 || hlen > 64 * 1024) throw new ShareError('frame', 'bad header length');
+  if (hlen > plain.length - 4 || hlen > MAX_HEADER) throw new ShareError('frame', 'bad header length');
   let header;
   try { header = JSON.parse(fromUtf8(plain.subarray(4, 4 + hlen))); } catch { throw new ShareError('frame', 'bad header'); }
   if (!header || typeof header !== 'object' || Array.isArray(header) || header.v !== PROTOCOL_VERSION) {
@@ -266,13 +384,32 @@ export async function decryptFrame(keys, purpose, frame) {
 export function newItemId() { return toHex(randomBytes(16)); }
 export const nowIso = (ms = Date.now()) => new Date(ms).toISOString();
 
-/** An absolute http(s) URL of at most MAX_URL characters with a host, or null. */
+/**
+ * The web URL rule (PROTOCOL 4 "Web URL"; vectors > urls): the trimmed input unchanged, or null. Textual, so every
+ * language decides the same way: no whitespace or control characters, at most 4096 UTF-16 units, http:// or https://
+ * (any case), a non-empty host that does not start with '.' and has none of < > ^ | \, and a port of digits only.
+ */
 export function webUrl(raw) {
   const s = String(raw ?? '').trim();
   if (!s || s.length > MAX_URL || /[\s\p{Cc}]/u.test(s)) return null;
-  let u;
-  try { u = new URL(s); } catch { return null; }
-  if ((u.protocol !== 'http:' && u.protocol !== 'https:') || !u.hostname) return null;
+  const head = s.slice(0, 8).toLowerCase();
+  if (!head.startsWith('http://') && !head.startsWith('https://')) return null;
+  const rest = s.slice(s.indexOf('://') + 3);
+  const authority = rest.split(/[/?#]/, 1)[0];
+  const hostport = authority.slice(authority.lastIndexOf('@') + 1);
+  let host;
+  if (hostport.startsWith('[')) {
+    const close = hostport.indexOf(']');
+    if (close < 0) return null;
+    host = hostport.slice(0, close + 1);
+    const after = hostport.slice(close + 1);
+    if (after && !/^:[0-9]*$/.test(after)) return null;
+  } else {
+    const colon = hostport.indexOf(':');
+    host = colon < 0 ? hostport : hostport.slice(0, colon);
+    if (colon >= 0 && !/^[0-9]*$/.test(hostport.slice(colon + 1))) return null;
+  }
+  if (!host || host.startsWith('.') || /[<>^|\\]/.test(host)) return null;
   return s;
 }
 
@@ -287,32 +424,66 @@ export function cleanTitle(t) {
   return s ? [...s].slice(0, MAX_TITLE).join('') : '';
 }
 
+const utf8Length = (s) => enc.encode(s).length;
+
+/** Removes UTF-16 code units D800-DFFF that are not part of a surrogate pair. */
+function dropLoneSurrogates(s) {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const d = s.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) { out += s[i] + s[i + 1]; i++; }
+    } else if (c < 0xdc00 || c > 0xdfff) {
+      out += s[i];
+    }
+  }
+  return out;
+}
+
 /**
- * A safe file name for an untrusted one (PROTOCOL 5): split on / and \, in each segment turn control characters and
- * : * ? " < > | into spaces, collapse whitespace, trim, drop leading dots, drop empty segments; join with one space;
- * empty -> fallback; longer than 120 characters -> cut, keeping an extension of up to 10 characters.
+ * A safe file name for an untrusted one (PROTOCOL 5; vectors > fileNames, fileNamesUtf16): remove lone surrogates;
+ * split on runs of / and \; in each segment turn each run of control characters and : * ? " < > | into one space,
+ * each run of whitespace into one space, drop leading dots and whitespace, trim; drop empty segments; join with one
+ * space; empty -> fallback. Over 120 UTF-16 units or 200 UTF-8 bytes: keep the extension (from the last '.', if that
+ * is not the first character and 1-10 units follow it) and remove whole code points from the end of the rest until
+ * both limits hold.
  */
 export function safeFileName(name, fallback = 'document') {
-  const segs = String(name ?? '').split(/[\\/]+/)
-    .map((seg) => seg.replace(/[\p{Cc}:*?"<>|]+/gu, ' ').replace(/\s+/g, ' ').trim().replace(/^\.+/, '').trim())
+  const segs = dropLoneSurrogates(String(name ?? '')).split(/[\\/]+/)
+    .map((seg) => seg.replace(/[\p{Cc}:*?"<>|]+/gu, ' ').replace(/\s+/g, ' ').replace(/^[\s.]+/, '').trim())
     .filter(Boolean);
-  let s = segs.join(' ');
-  if (!s) s = fallback;
-  if (s.length > 120) {
-    const dot = s.lastIndexOf('.');
-    const ext = dot > 0 && s.length - dot <= 10 ? s.slice(dot) : '';
-    s = s.slice(0, 120 - ext.length) + ext;
+  const s = segs.join(' ') || fallback;
+  if (s.length <= 120 && utf8Length(s) <= 200) return s;
+  const dot = s.lastIndexOf('.');
+  const ext = dot > 0 && s.length - dot - 1 >= 1 && s.length - dot - 1 <= 10 ? s.slice(dot) : '';
+  const base = [...s.slice(0, s.length - ext.length)];
+  let units = base.reduce((n, cp) => n + cp.length, 0) + ext.length;
+  let bytes = utf8Length(base.join('')) + utf8Length(ext);
+  while (base.length && (units > 120 || bytes > 200)) {
+    const cp = base.pop();
+    units -= cp.length; bytes -= utf8Length(cp);
   }
-  return s;
+  return base.join('') + ext;
 }
+
+/** Sizes for people: ceil(bytes / 100,000) / 10 without a trailing ".0" (9,000,001 -> "9.1", 12,000,000 -> "12"). */
+export function formatMB(bytes) {
+  const tenths = Math.ceil(Number(bytes) / 100000);
+  return tenths % 10 ? `${Math.floor(tenths / 10)}.${tenths % 10}` : String(tenths / 10);
+}
+
+/** The sentence for content over MAX_ITEM, at share time and on an expired / too-large row. */
+export const tooBigMessage = (size) => `Too big to send. Files can be up to 9 MB; this one is ${formatMB(size)} MB.`;
 
 const shouldCompress = (mime) => TEXT_MIMES.test(mime || '');
 
 /**
  * Builds the frames for one item.
  * item: {kind: 'url'|'page'|'file', url?, title?, name?, mime?, content?: Uint8Array|string, from?, app?, id?, sent?}
- * opts: {compress?: boolean (default: text types only), chunkSize?, nonces?: Uint8Array[] (tests)}
+ * opts: {compress?: boolean (default: text types only), chunkSize? (tests), nonces?: Uint8Array[] (tests)}
  * -> {id, header (of part 0), frames: Uint8Array[], encodedLength, attachment: boolean}
+ * Throws ShareError('too-large', tooBigMessage(size)) for content over MAX_ITEM bytes (before compression).
  */
 export async function buildItemFrames(keys, item, opts = {}) {
   const kind = item.kind;
@@ -337,6 +508,7 @@ export async function buildItemFrames(keys, item, opts = {}) {
       header.name = safeFileName(item.name, 'document');
       header.mime = String(item.mime || 'application/octet-stream').toLowerCase().slice(0, 100);
     }
+    if (content.length > MAX_ITEM) throw new ShareError('too-large', tooBigMessage(content.length));
     header.size = content.length;
     header.sha256 = toHex(await sha256(content));
   }
@@ -347,7 +519,6 @@ export async function buildItemFrames(keys, item, opts = {}) {
     const z = await deflateRaw(content);
     if (z.length < content.length) { encoded = z; header.enc = 'deflate-raw'; }
   }
-  if (encoded.length > MAX_ENCODED) throw new ShareError('too-large', 'That file is larger than 64 MB.');
 
   header.sent = item.sent ?? nowIso();
   const from = cleanName(item.from);
@@ -369,6 +540,7 @@ export async function buildItemFrames(keys, item, opts = {}) {
   return { id, header, frames, encodedLength: encoded.length, attachment };
 }
 
+/** An ack frame for at most MAX_ACK_IDS ids (the rest are cut: callers slice into frames of MAX_ACK_IDS). */
 export async function buildAckFrame(keys, ids, { from = 'Daylight', sent = nowIso(), nonce } = {}) {
   const header = { v: PROTOCOL_VERSION, kind: 'ack', ids: ids.slice(0, MAX_ACK_IDS), sent };
   const f = cleanName(from);
@@ -387,7 +559,8 @@ export function checkItemHeader(h) {
   const title = cleanTitle(h.title);
   if (title) out.title = title;
   if (h.kind !== 'url') {
-    if (!Number.isSafeInteger(h.size) || h.size < 0 || h.size > MAX_ENCODED * 4) bad('size');
+    const maxSize = h.kind === 'page' ? MAX_PAGE_HTML : MAX_DECODED;
+    if (!Number.isSafeInteger(h.size) || h.size < 0 || h.size > maxSize) bad('size');
     if (typeof h.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(h.sha256)) bad('sha256');
     out.size = h.size; out.sha256 = h.sha256;
     out.mime = h.kind === 'page' ? 'text/html' : String(h.mime || 'application/octet-stream').toLowerCase().slice(0, 100);
@@ -406,25 +579,62 @@ export function checkItemHeader(h) {
   return out;
 }
 
-/** Collects parts. add() returns {header, content} once an item is complete and verified, else null. */
+/**
+ * Collects parts. add() returns {header, content, msgIds} once an item is complete and verified, else null.
+ * meta: {time (relay seconds, default now), msgId} of the message that carried the part; a pending item remembers its
+ * earliest time and its message ids. On an integrity failure the item is dropped and the thrown ShareError carries
+ * `msgIds`. A deflate-raw stream runs across parts, so parts are joined before decoding (PROTOCOL 2.3).
+ */
 export class Reassembler {
-  constructor() { this.pending = new Map(); }
+  constructor({ now = () => Date.now() } = {}) { this.pending = new Map(); this.now = now; }
 
-  async add(rawHeader, body) {
+  isPending(id) { return this.pending.has(id); }
+
+  /** Forgets a pending item. -> the message ids of its held parts. */
+  drop(id) {
+    const p = this.pending.get(id);
+    this.pending.delete(id);
+    return p ? [...p.msgIds] : [];
+  }
+
+  /** Drops pending items whose first part is older than maxAgeMs. -> their ids. */
+  prune(maxAgeMs) {
+    const now = this.now();
+    const out = [];
+    for (const [id, p] of this.pending) if (now - p.first * 1000 > maxAgeMs) { this.pending.delete(id); out.push(id); }
+    return out;
+  }
+
+  async add(rawHeader, body, { time, msgId } = {}) {
     const h = checkItemHeader(rawHeader);
-    if (h.kind === 'url') return { header: h, content: new Uint8Array(0) };
+    const t = Number.isFinite(time) ? time : Math.floor(this.now() / 1000);
+    if (h.kind === 'url') {
+      const { part, parts, ...header } = h;
+      return { header, content: new Uint8Array(0), msgIds: msgId ? [msgId] : [] };
+    }
     let p = this.pending.get(h.id);
-    if (!p || p.parts !== h.parts) { p = { parts: h.parts, chunks: new Map(), header: h }; this.pending.set(h.id, p); }
+    if (!p || p.parts !== h.parts) {
+      p = { parts: h.parts, chunks: new Map(), header: h, first: t, msgIds: new Set() };
+      this.pending.set(h.id, p);
+    }
+    p.first = Math.min(p.first, t);
+    if (msgId) p.msgIds.add(msgId);
     p.chunks.set(h.part, body.slice());
     if (h.part === 0) p.header = h;
     if (p.chunks.size < p.parts) return null;
     this.pending.delete(h.id);
-    const encoded = concat(...Array.from({ length: p.parts }, (_, i) => p.chunks.get(i)));
-    const content = p.header.enc === 'deflate-raw' ? await inflateRaw(encoded) : encoded;
-    if (content.length !== p.header.size) throw new ShareError('integrity', 'size mismatch');
-    if (toHex(await sha256(content)) !== p.header.sha256) throw new ShareError('integrity', 'sha256 mismatch');
-    const { part, parts, ...header } = p.header;
-    return { header, content };
+    const msgIds = [...p.msgIds];
+    try {
+      const encoded = concatList(Array.from({ length: p.parts }, (_, i) => p.chunks.get(i)));
+      const content = p.header.enc === 'deflate-raw' ? await inflateRaw(encoded, p.header.size) : encoded;
+      if (content.length !== p.header.size) throw new ShareError('integrity', 'size mismatch');
+      if (toHex(await sha256(content)) !== p.header.sha256) throw new ShareError('integrity', 'sha256 mismatch');
+      const { part, parts, ...header } = p.header;
+      return { header, content, msgIds };
+    } catch (e) {
+      if (e instanceof ShareError) e.msgIds = msgIds;
+      throw e;
+    }
   }
 }
 
@@ -433,69 +643,164 @@ export class Reassembler {
 
 export const isSmallFrame = (frame) => Math.ceil(frame.length / 3) * 4 <= SMALL_FRAME_B64_MAX;
 
+export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** A timer that aborts a request and rejects race()d promises, even for a fetch that ignores its signal. */
+function deadline(ms) {
+  const ctrl = new AbortController();
+  let fail;
+  const expired = new Promise((_, reject) => { fail = reject; });
+  expired.catch(() => {});
+  const timer = setTimeout(() => {
+    const e = new ShareError('network', `timed out after ${ms} ms`, 'timeout');
+    ctrl.abort(e); fail(e);
+  }, ms);
+  return { signal: ctrl.signal, race: (p) => Promise.race([p, expired]), clear: () => clearTimeout(timer) };
+}
+
+const discard = (res) => { try { res.body?.cancel?.()?.catch?.(() => {}); } catch { /* already used */ } };
+
+/** Reads a response body up to `cap` bytes. -> the bytes, or null when it is longer (the read stops there). */
+async function readCapped(res, cap) {
+  const len = res.headers?.get?.('content-length');
+  if (len != null && len !== '' && Number(len) > cap) { discard(res); return null; }
+  if (!res.body?.getReader) {
+    const b = new Uint8Array(await res.arrayBuffer());
+    return b.length > cap ? null : b;
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > cap) { reader.cancel().catch(() => {}); return null; }
+    chunks.push(value);
+  }
+  return concatList(chunks);
+}
+
+/** The cursor after a poll (PROTOCOL 3.2): max(0, min(newest, held) - 1800); never backwards when nothing is held. */
+function nextCursor(since, newest, held) {
+  const c = Math.max(0, Math.min(newest, held) - CURSOR_OVERLAP_S);
+  return held === Infinity && typeof since === 'number' && since > c ? since : c;
+}
+
 export class RelayClient {
-  constructor({ relay = DEFAULT_RELAY, fetch: f } = {}) {
+  /**
+   * timeouts: {short (polls, message publishes), long (attachment uploads and downloads)} in ms.
+   * retryDelaysMs: waits before the in-call retries of a publish after a network error, 408 or 5xx.
+   */
+  constructor({ relay = DEFAULT_RELAY, fetch: f, timeouts = {}, retryDelaysMs = [1000, 2000, 4000] } = {}) {
     this.relay = normalizeRelay(relay);
+    this.origin = new URL(this.relay).origin;
     this.fetch = f ?? ((...a) => globalThis.fetch(...a));
+    this.timeouts = { short: timeouts.short ?? TIMEOUT_SHORT_MS, long: timeouts.long ?? TIMEOUT_LONG_MS };
+    this.retryDelaysMs = retryDelaysMs;
   }
 
-  /** Publishes one frame. -> {id, time, attachment} */
-  async publish(topic, frame, { retries = 3 } = {}) {
+  async _request(url, init, ms, read) {
+    const d = deadline(ms);
+    try {
+      const res = await d.race(this.fetch(url, { ...init, signal: d.signal }));
+      const body = await d.race(read(res));
+      return { res, body };
+    } finally { d.clear(); }
+  }
+
+  /**
+   * Publishes one frame (PROTOCOL 3.1). -> {id, time, attachment}. Throws ShareError with code 'network' (no answer,
+   * timeout, 408 or 5xx after the in-call retries; or 429, never retried here), 'full' (413) or 'refused' (any other
+   * 4xx), and `status` (0 when there was no answer).
+   */
+  async publish(topic, frame, { retries = this.retryDelaysMs.length } = {}) {
     const small = isSmallFrame(frame);
     const init = small
       ? { method: 'POST', headers: { 'Content-Type': 'text/plain', Firebase: 'no', Cache: 'yes' }, body: toBase64(frame) }
       : { method: 'PUT', headers: { Filename: 'dls1.bin', Message: 'dls1', Firebase: 'no', Cache: 'yes' }, body: frame };
+    const ms = small ? this.timeouts.short : this.timeouts.long;
     for (let attempt = 0; ; attempt++) {
-      let res;
+      let res, body;
       try {
-        res = await this.fetch(`${this.relay}/${topic}`, init);
+        ({ res, body } = await this._request(`${this.relay}/${topic}`, init, ms,
+          async (r) => (r.ok ? r.json().catch(() => ({})) : (discard(r), null))));
       } catch (e) {
-        if (attempt >= retries) throw new ShareError('network', `Couldn’t reach the relay (${e.message ?? e}).`);
-        await sleep(1000 * 2 ** attempt);
+        if (attempt < retries) { await sleep(this.retryDelaysMs[attempt] ?? 0); continue; }
+        throw new ShareError('network', `network error: ${e?.message ?? e}`, 'network', 0);
+      }
+      if (res.ok) return { id: body?.id ?? null, time: body?.time ?? null, attachment: !small };
+      const s = res.status;
+      if (s === 429) throw new ShareError('network', 'HTTP 429', 'rate-limited', s);
+      if (s === 413) throw new ShareError('full', 'HTTP 413', 'full', s);
+      if (s >= 400 && s < 500 && s !== 408) throw new ShareError('refused', `HTTP ${s}`, 'refused', s);
+      if (attempt < retries) {
+        const ra = Number(res.headers?.get?.('Retry-After'));
+        await sleep(Number.isFinite(ra) && ra > 0 ? Math.min(ra, 60) * 1000 : this.retryDelaysMs[attempt] ?? 0);
         continue;
       }
-      if (res.ok) {
-        const j = await res.json().catch(() => ({}));
-        return { id: j.id ?? null, time: j.time ?? null, attachment: !small };
-      }
-      if (res.status === 413) throw new ShareError('too-large', 'The relay refused the file as too large.');
-      if ((res.status === 429 || res.status >= 500) && attempt < retries) {
-        const ra = Number(res.headers.get('Retry-After'));
-        await sleep(Number.isFinite(ra) && ra > 0 ? Math.min(ra, 60) * 1000 : 10000 * (attempt + 1));
-        continue;
-      }
-      throw new ShareError('relay', `The relay answered ${res.status}.`);
+      throw new ShareError('network', `HTTP ${s}`, 'server', s);
     }
   }
 
-  /** Polls cached messages. since: 'all' | unix seconds. -> [{id, time, frame|null}] (frame null = unusable). */
+  /** Downloads one attachment under the download rule (PROTOCOL 3.2). -> {outcome, frame?, status?} */
+  async _download(url) {
+    let u;
+    try { u = new URL(url); } catch { return { outcome: 'junk' }; }
+    if (u.protocol !== 'https:' && u.origin !== this.origin) return { outcome: 'junk' };
+    try {
+      const { res, body } = await this._request(u.href, { method: 'GET' }, this.timeouts.long,
+        async (r) => (r.ok ? readCapped(r, MAX_ATTACHMENT) : (discard(r), null)));
+      if (res.ok) return body ? { outcome: 'frame', frame: body, status: res.status } : { outcome: 'junk', status: res.status };
+      if (res.status === 404 || res.status === 410) return { outcome: 'expired', status: res.status };
+      return { outcome: 'retry', status: res.status };
+    } catch {
+      return { outcome: 'retry', status: 0 };
+    }
+  }
+
+  /**
+   * Polls cached messages (PROTOCOL 3.2). since: 'all' | unix seconds. skip(msgId): true for handled messages.
+   * -> [{id, time, attachment, outcome, frame}], one per message line, where outcome is
+   *    'frame' (frame holds the bytes), 'skipped', 'expired' (404/410), 'junk' (not base64, a URL that is not https
+   *    or the relay's origin, or over MAX_ATTACHMENT) or 'retry' (429, 5xx, any other status, network error,
+   *    timeout; after a 429 every later attachment entry is 'retry' without a request).
+   * Throws ShareError: 'network' (no answer, status 0), 'relay' (an error status, or an answer over 64 MiB).
+   */
   async poll(topic, since = 'all', { skip = () => false } = {}) {
-    const res = await this.fetch(`${this.relay}/${topic}/json?poll=1&since=${encodeURIComponent(since)}`, { method: 'GET' });
-    if (!res.ok) throw new ShareError('relay', `The relay answered ${res.status}.`);
-    const text = await res.text();
+    let res, body;
+    try {
+      ({ res, body } = await this._request(`${this.relay}/${topic}/json?poll=1&since=${encodeURIComponent(since)}`,
+        { method: 'GET' }, this.timeouts.short, async (r) => (r.ok ? readCapped(r, MAX_POLL_RESPONSE) : (discard(r), null))));
+    } catch (e) {
+      throw new ShareError('network', `Couldn’t reach the relay (${e?.message ?? e}).`, 'network', 0);
+    }
+    if (!res.ok) throw new ShareError('relay', `The relay answered ${res.status}.`, 'status', res.status);
+    if (!body) throw new ShareError('relay', 'The relay’s answer is too long.', 'too-long', res.status);
     const out = [];
-    for (const line of text.split('\n')) {
+    let stopDownloads = false;
+    for (const line of new TextDecoder().decode(body).split('\n')) {
       if (!line.trim()) continue;
       let m;
       try { m = JSON.parse(line); } catch { continue; }
-      if (m.event !== 'message' || typeof m.id !== 'string') continue;
-      const entry = { id: m.id, time: Number(m.time) || 0, frame: null };
+      if (!m || m.event !== 'message' || typeof m.id !== 'string') continue;
+      const entry = { id: m.id, time: Number(m.time) || 0, attachment: !!m.attachment, outcome: 'junk', frame: null };
       out.push(entry);
-      if (skip(m.id)) { entry.skipped = true; continue; }
-      if (m.attachment && typeof m.attachment.url === 'string') {
-        try {
-          const r = await this.fetch(m.attachment.url, { method: 'GET' });
-          if (r.ok) entry.frame = new Uint8Array(await r.arrayBuffer());
-        } catch { /* expired or unreachable: the sender re-sends */ }
+      if (skip(m.id)) { entry.outcome = 'skipped'; continue; }
+      if (m.attachment) {
+        if (typeof m.attachment.url !== 'string') continue;
+        if (stopDownloads) { entry.outcome = 'retry'; continue; }
+        const d = await this._download(m.attachment.url);
+        entry.outcome = d.outcome;
+        if (d.frame) entry.frame = d.frame;
+        if (d.status === 429) stopDownloads = true;
       } else if (typeof m.message === 'string') {
-        try { entry.frame = fromBase64(m.message); } catch { /* not ours */ }
+        try { entry.frame = fromBase64(m.message); entry.outcome = 'frame'; } catch { /* junk */ }
       }
     }
     return out;
   }
 }
-
-export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------------------------------------------------------
 // Storage adapters: {get(key) -> value|undefined, set(key, value), remove(key)}; values are JSON-serialisable.
@@ -518,192 +823,408 @@ export async function loadPairing(storage) {
   return { secret: await parseCode(p.code), relay: normalizeRelay(p.relay), name: p.name ?? '', code: p.code };
 }
 
+// One promise chain per storage object and role, so two Senders (or Receivers) on the same storage take turns.
+const LOCKS = new WeakMap();
+function locked(storage, role, fn) {
+  if (storage === null || (typeof storage !== 'object' && typeof storage !== 'function')) return fn();
+  let l = LOCKS.get(storage);
+  if (!l) { l = {}; LOCKS.set(storage, l); }
+  const run = (l[role] ?? Promise.resolve()).then(() => fn());
+  l[role] = run.then(() => {}, () => {});
+  return run;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Status and copy (CHANGES-v1.1 2.5; vectors > statusText): the same words on every surface.
+
+/**
+ * -> {label, sentence, action} for an outbox row: sentence is null or one sentence to show under the label; action is
+ * null, 'retry-now' (button "Retry now") or 'try-again' (button "Try again"). Every row can also be removed.
+ */
+export function describeRow(row, now = Date.now()) {
+  const out = (label, sentence = null, action = null) => ({ label, sentence, action });
+  const code = row?.errorCode ?? '';
+  switch (row?.status) {
+    case 'sending': return out('Sending…');
+    case 'sent':
+      return out('Sent · waiting for your Daylight', now - (row.created ?? 0) < 86400000 ? null
+        : 'Your Daylight hasn’t picked this up yet. It is sent again twice a day.');
+    case 'delivered': return out('Delivered ✓', 'Saved on your Daylight.');
+    case 'failed':
+      if (code === 'full') return out('Waiting to send', 'A lot has been sent from this network in the last few hours. It will send by itself in about 3 hours.');
+      if (code === 'refused') return out('Waiting to send', 'The relay set on your Daylight turned this down. It will try again in about 3 hours.');
+      return out('Waiting to send', 'Couldn’t send right now. It will try again by itself.', 'retry-now');
+    case 'expired':
+      if (code === 'full') return out('Not delivered', 'Too much was sent from this network for hours, so it stopped trying. Try again later.', 'try-again');
+      if (code === 'refused') return out('Not delivered', 'The relay set on your Daylight keeps turning this down. Check that setting on your Daylight, then try again.', 'try-again');
+      if (code === 'too-large') return out('Not delivered', tooBigMessage(row.size ?? 0));
+      if (code === 'gone') return out('Not delivered', 'This is no longer stored on this device. Share it again.');
+      return out('Not delivered', 'Your Daylight didn’t pick this up within a week. Is it on and online?', 'try-again');
+    default: return out('');
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Sender (PROTOCOL 3.3)
 
+const PENDING = new Set(['sending', 'sent', 'failed']);
+const SLOW_CODES = new Set(['full', 'refused']);
+
+/** A stored row with every v1.1 field (rows saved by v1.0 lack errorCode, slowFails and attemptStarted). */
+function normRow(r) {
+  return {
+    ...r,
+    title: r.title ?? '', url: r.url ?? '', name: r.name ?? '', mime: r.mime ?? '', size: r.size ?? 0, sent: r.sent ?? '',
+    created: r.created ?? 0, errorCode: r.errorCode ?? '', attempts: r.attempts ?? 0, slowFails: r.slowFails ?? 0,
+    lastPublish: r.lastPublish ?? 0, attemptStarted: r.attemptStarted ?? 0, attachment: !!r.attachment,
+    error: r.error ?? '', delivered: r.delivered ?? 0,
+  };
+}
+
 /**
- * The outbox lives in storage under 'outbox' (a list of small rows, newest first) and 'outbox/<id>' (the content,
- * base64, kept until delivered so the item can be re-sent). Row status: sending | sent | delivered | failed | expired.
+ * The outbox lives in storage under 'outbox' (a list of small rows, newest first), 'outbox/<id>' (the content, base64,
+ * kept until delivered, removed or 14 days after the share) and 'ackSince' (the ack cursor).
+ * Row: {id, kind, title, url, name, mime, size, sent, created, status, errorCode, attempts, slowFails, lastPublish,
+ *       attemptStarted, attachment, error, delivered}
+ * status: sending | sent | delivered | failed | expired. errorCode, for failed and expired: '' | 'network' | 'full' |
+ * 'refused' | 'too-large' | 'gone'. `error` is technical detail for logs; show describeRow(row) instead.
+ * Every public method runs under a lock shared by all Senders on the same storage object.
  */
 export class Sender {
-  constructor({ pairing, storage, from = '', app = '', fetch: f, now = () => Date.now(), chunkSize } = {}) {
+  constructor({ pairing, storage, from = '', app = '', fetch: f, now = () => Date.now(), chunkSize, timeouts, retryDelaysMs } = {}) {
     if (!pairing?.secret) throw new ShareError('pairing', 'Not paired yet.');
     this.pairing = pairing;
     this.storage = storage;
     this.from = from; this.app = app; this.now = now; this.chunkSize = chunkSize;
-    this.relay = new RelayClient({ relay: pairing.relay, fetch: f });
+    this.relay = new RelayClient({ relay: pairing.relay, fetch: f, timeouts, retryDelaysMs });
     this._keys = null;
   }
 
   async keys() { return (this._keys ??= await deriveKeys(this.pairing.secret)); }
 
-  async list() { return (await this.storage.get('outbox')) ?? []; }
+  _lock(fn) { return locked(this.storage, 'sender', fn); }
 
-  async _saveRow(row) {
-    const rows = (await this.list()).filter((r) => r.id !== row.id);
-    rows.unshift(row);
-    rows.sort((a, b) => b.created - a.created);
-    await this.storage.set('outbox', rows.slice(0, 200));
+  async list() { return ((await this.storage.get('outbox')) ?? []).map(normRow); }
+
+  async _content(id) {
+    const b64 = await this.storage.get(`outbox/${id}`);
+    if (typeof b64 !== 'string') return null;
+    try { return fromBase64(b64); } catch { return null; }
   }
 
-  /** Shares one item now. -> the outbox row. Throws ShareError for bad input; relay failures mark the row failed. */
-  async send(item) {
+  async _dropContent(id) { try { await this.storage.remove(`outbox/${id}`); } catch { /* nothing to drop */ } }
+
+  /** Writes the rows: every pending row, then the newest finished rows up to OUTBOX_MAX_ROWS; drops the rest's content. */
+  async _writeRows(rows) {
+    rows.sort((a, b) => b.created - a.created);
+    const finished = rows.filter((r) => !PENDING.has(r.status));
+    const room = Math.max(0, OUTBOX_MAX_ROWS - (rows.length - finished.length));
+    const dropped = new Set(finished.slice(room));
+    await this.storage.set('outbox', rows.filter((r) => !dropped.has(r)));
+    for (const r of dropped) await this._dropContent(r.id);
+  }
+
+  async _saveRow(row) {
+    const rows = await this.list();
+    const i = rows.findIndex((r) => r.id === row.id);
+    if (i >= 0) rows[i] = row; else rows.unshift(row); // a row keeps its place among rows shared at the same ms
+    await this._writeRows(rows);
+  }
+
+  /** Shares one item now. -> the outbox row. Throws ShareError for bad input (nothing is stored); relay failures mark the row. */
+  send(item) { return this._lock(() => this._send(item)); }
+
+  async _send(item) {
     const keys = await this.keys();
     const built = await buildItemFrames(keys, { ...item, from: item.from ?? this.from, app: item.app ?? this.app },
       { chunkSize: this.chunkSize });
-    const content = typeof item.content === 'string' ? utf8(item.content) : item.content;
+    const now = this.now();
     const row = {
       id: built.id, kind: item.kind, title: built.header.title ?? '', url: built.header.url ?? '',
       name: built.header.name ?? '', mime: built.header.mime ?? '', size: built.header.size ?? 0,
-      sent: built.header.sent, created: this.now(), status: 'sending', lastPublish: 0, attachment: built.attachment,
-      attempts: 0, error: '',
+      sent: built.header.sent, created: now, status: 'sending', errorCode: '', attempts: 0, slowFails: 0,
+      lastPublish: 0, attemptStarted: now, attachment: built.attachment, error: '', delivered: 0,
     };
     await this._saveRow(row);
-    if (content && content.length) await this.storage.set(`outbox/${row.id}`, toBase64(content));
-    return this._publish(row, built.frames);
-  }
-
-  async _publish(row, frames) {
-    try {
-      for (const f of frames) await this.relay.publish(keysTopic(await this.keys()), f);
-      row.status = 'sent'; row.error = '';
-    } catch (e) {
-      row.status = 'failed'; row.error = e.message ?? String(e);
+    if (row.kind !== 'url') {
+      const content = typeof item.content === 'string' ? utf8(item.content) : item.content;
+      try {
+        await this.storage.set(`outbox/${row.id}`, toBase64(content));
+      } catch (e) {
+        // A browser storage quota: publish once anyway; when a re-send comes due the row becomes expired / gone.
+        globalThis.console?.warn?.('Send to Daylight: could not keep a copy for re-sending', e);
+      }
     }
-    row.lastPublish = this.now(); row.attempts += 1;
-    await this._saveRow(row);
-    return row;
+    return (await this._attempt(row, built.frames)).row;
   }
 
-  /** Reads the ack topic and marks delivered rows. -> number of rows newly delivered. */
-  async checkAcks() {
+  /** One attempt: publishes the frames in part order and records the outcome (CHANGES-v1.1 2.4). -> {row, error} */
+  async _attempt(row, frames) {
+    const keys = await this.keys();
+    row.status = 'sending'; row.attemptStarted = this.now();
+    await this._saveRow(row);
+    let error = null;
+    try {
+      for (let i = 0; i < frames.length; i++) {
+        await this.relay.publish(keys.inboxTopic, frames[i]);
+        if (i < frames.length - 1) { row.attemptStarted = this.now(); await this._saveRow(row); }
+      }
+    } catch (e) { error = e; }
+    if (!error) {
+      Object.assign(row, { status: 'sent', errorCode: '', attempts: 0, slowFails: 0, error: '' });
+    } else {
+      const code = ['network', 'full', 'refused'].includes(error.code) ? error.code : 'network';
+      row.status = 'failed'; row.errorCode = code; row.attempts += 1;
+      row.slowFails = SLOW_CODES.has(code) ? row.slowFails + 1 : 0;
+      if (row.slowFails >= SLOW_FAIL_LIMIT) row.status = 'expired';
+      row.error = String(error?.message ?? error);
+    }
+    row.lastPublish = this.now();
+    await this._saveRow(row);
+    return { row, error };
+  }
+
+  /** Re-sends a row from its stored content, or ends it (no content: gone; over MAX_ITEM: too-large). */
+  async _attemptStored(row) {
+    const end = async (errorCode, dropContent) => {
+      row.status = 'expired'; row.errorCode = errorCode;
+      await this._saveRow(row);
+      if (dropContent) await this._dropContent(row.id);
+      return { row, error: null, attempted: false };
+    };
+    let content = new Uint8Array(0);
+    if (row.kind !== 'url') {
+      content = await this._content(row.id);
+      if (!content) return end('gone', false);
+    }
+    if (row.size > MAX_ITEM) return end('too-large', true);
+    let built;
+    try {
+      built = await buildItemFrames(await this.keys(), {
+        id: row.id, kind: row.kind, url: row.url || undefined, title: row.title, name: row.name, mime: row.mime,
+        content, sent: row.sent, from: this.from, app: this.app,
+      }, { chunkSize: this.chunkSize });
+    } catch (e) {
+      return e?.code === 'too-large' ? end('too-large', true) : end('gone', false);
+    }
+    row.attachment = built.attachment;
+    return { ...(await this._attempt(row, built.frames)), attempted: true };
+  }
+
+  _due(row, now) {
+    switch (row.status) {
+      case 'sending': return now - (row.attemptStarted || row.lastPublish || row.created) >= SENDING_STALE_MS;
+      case 'sent':
+        if (!row.attachment) return now - row.lastPublish >= RESEND_MESSAGE_MS;
+        return now - row.lastPublish >= (row.lastPublish - row.created < RESEND_FAST_WINDOW_MS ? ATTACHMENT_WAIT_MS : RESEND_SLOW_MS);
+      case 'failed':
+        if (SLOW_CODES.has(row.errorCode)) return now - row.lastPublish >= ATTACHMENT_WAIT_MS;
+        return now - row.lastPublish >= 60000 * Math.min(60, 2 ** row.attempts);
+      default: return false;
+    }
+  }
+
+  /** Reads the ack topic and marks delivered rows. -> number of rows newly delivered. Throws when the poll fails. */
+  checkAcks() { return this._lock(() => this._checkAcks()); }
+
+  async _checkAcks() {
     const keys = await this.keys();
     const since = (await this.storage.get('ackSince')) ?? 'all';
-    const msgs = await this.relay.poll(keys.ackTopic, since);
+    const entries = await this.relay.poll(keys.ackTopic, since);
     const acked = new Set();
-    let maxTime = 0;
-    for (const m of msgs) {
-      maxTime = Math.max(maxTime, m.time);
-      if (!m.frame) continue;
+    let newest = 0, held = Infinity;
+    for (const m of entries) {
+      newest = Math.max(newest, m.time);
+      if (m.outcome === 'retry') held = Math.min(held, m.time);
+      if (m.outcome !== 'frame') continue;
       try {
         const { header } = await decryptFrame(keys, PURPOSE_ACK, m.frame);
         if (header.kind === 'ack' && Array.isArray(header.ids)) header.ids.forEach((id) => typeof id === 'string' && acked.add(id));
       } catch { /* junk */ }
     }
-    if (maxTime) await this.storage.set('ackSince', Math.max(0, maxTime - 5));
-    let n = 0;
-    for (const row of await this.list()) {
-      if (row.status !== 'delivered' && acked.has(row.id)) {
-        row.status = 'delivered'; row.delivered = this.now(); n++;
-        await this._saveRow(row);
-        await this.storage.remove(`outbox/${row.id}`);
-      }
-    }
-    return n;
-  }
-
-  /** Re-sends undelivered items whose relay copy is about to expire; expires week-old ones. -> rows re-sent. */
-  async resendDue() {
+    if (entries.length) await this.storage.set('ackSince', nextCursor(since, newest, held));
+    const rows = await this.list();
     const now = this.now();
-    const out = [];
-    for (const row of await this.list()) {
-      if (row.status === 'delivered' || row.status === 'expired') continue;
-      if (now - row.created > OUTBOX_EXPIRY_MS) {
-        row.status = 'expired'; await this._saveRow(row); await this.storage.remove(`outbox/${row.id}`); continue;
+    const delivered = [];
+    for (const row of rows) {
+      if (row.status !== 'delivered' && acked.has(row.id)) {
+        Object.assign(row, { status: 'delivered', delivered: now, errorCode: '' });
+        delivered.push(row.id);
       }
-      const wait = row.status === 'failed' ? 60 * 1000 * Math.min(60, 2 ** row.attempts)
-        : row.attachment ? RESEND_ATTACHMENT_MS : RESEND_MESSAGE_MS;
-      if (now - row.lastPublish < wait) continue;
-      out.push(await this.retry(row.id));
     }
-    return out.filter(Boolean);
+    if (delivered.length) {
+      await this._writeRows(rows);
+      for (const id of delivered) await this._dropContent(id);
+    }
+    return delivered.length;
   }
 
-  /** Publishes an outbox item again (same id, fresh nonces). */
-  async retry(id) {
+  /**
+   * One re-send pass, oldest row first (PROTOCOL 3.3 steps 3-4). Expires week-old rows, drops expired rows' content
+   * after 14 days, re-sends rows that are due; after a 429 it publishes nothing more and after a 413 no attachment.
+   * -> the rows it attempted.
+   */
+  resendDue() { return this._lock(() => this._resendDue()); }
+
+  async _resendDue() {
+    const pass = { stopAll: false, stopAttachments: false };
+    const out = [];
+    const rows = (await this.list()).reverse().sort((a, b) => a.created - b.created); // oldest first
+    for (const row of rows) {
+      const now = this.now();
+      if (row.status === 'delivered') continue;
+      if (row.status === 'expired') {
+        if (now - row.created > CONTENT_KEEP_MS) await this._dropContent(row.id);
+        continue;
+      }
+      if (now - row.created > OUTBOX_EXPIRY_MS) {
+        row.status = 'expired'; row.errorCode = '';
+        await this._saveRow(row);
+        continue;
+      }
+      if (!this._due(row, now)) continue;
+      if (pass.stopAll || (pass.stopAttachments && row.attachment)) continue;
+      const r = await this._attemptStored(row);
+      if (r.attempted) out.push(r.row);
+      if (r.error?.status === 429) pass.stopAll = true;
+      else if (r.error?.code === 'full') pass.stopAttachments = true;
+    }
+    return out;
+  }
+
+  /**
+   * "Retry now" (a failed row) and "Try again" (an expired row, with errorCode '', 'full' or 'refused'): publishes it
+   * again with the same id and header. Any other row is left as it is. -> the row, or null when there is none.
+   */
+  retry(id) { return this._lock(() => this._retry(id)); }
+
+  async _retry(id) {
     const row = (await this.list()).find((r) => r.id === id);
     if (!row) return null;
-    const b64 = await this.storage.get(`outbox/${id}`);
-    const content = b64 ? fromBase64(b64) : new Uint8Array(0);
-    if (row.kind !== 'url' && !b64) { row.status = 'expired'; await this._saveRow(row); return row; }
-    if (row.status === 'expired') row.created = this.now();
-    const built = await buildItemFrames(await this.keys(), {
-      id: row.id, kind: row.kind, url: row.url || undefined, title: row.title, name: row.name, mime: row.mime,
-      content, sent: row.sent, from: this.from, app: this.app,
-    }, { chunkSize: this.chunkSize });
-    return this._publish(row, built.frames);
+    if (row.status === 'failed') return (await this._attemptStored(row)).row;
+    if (row.status === 'expired' && ['', 'full', 'refused'].includes(row.errorCode)) {
+      Object.assign(row, { created: this.now(), attempts: 0, slowFails: 0, errorCode: '' });
+      return (await this._attemptStored(row)).row;
+    }
+    return row;
   }
 
-  /** One maintenance pass: acks, then re-sends. Call on start, after a share, and from timers/alarms. */
-  async tick() {
-    let delivered = 0;
-    try { delivered = await this.checkAcks(); } catch { /* offline */ }
-    const resent = await this.resendDue();
-    return { delivered, resent: resent.length };
+  /** Removes a row and its content. -> true when there was such a row. */
+  remove(id) {
+    return this._lock(async () => {
+      const rows = await this.list();
+      const left = rows.filter((r) => r.id !== id);
+      if (left.length !== rows.length) await this.storage.set('outbox', left);
+      await this._dropContent(id);
+      return left.length !== rows.length;
+    });
+  }
+
+  /** One maintenance pass: acks (errors ignored), then re-sends. Call on start, after a share, and from timers. */
+  tick() {
+    return this._lock(async () => {
+      let delivered = 0;
+      try { delivered = await this._checkAcks(); } catch { /* offline: re-send anyway */ }
+      const resent = await this._resendDue();
+      return { delivered, resent: resent.length };
+    });
   }
 }
 
-const keysTopic = (keys) => keys.inboxTopic;
-
 // ---------------------------------------------------------------------------------------------------------------
-// Receiver (PROTOCOL 3.4). The Daylight Inbox is the Android app; this one serves tests, demos and the web inbox.
+// Receiver (PROTOCOL 3.2, 3.4). The Daylight Inbox is the Android app; this one serves tests, demos and the web inbox.
+// It keeps held parts in memory (and downloads them again after a restart); the digest is the Inbox's alone.
 
 export class Receiver {
-  constructor({ pairing, storage, fetch: f, from = 'Daylight', now = () => Date.now() }) {
-    this.pairing = pairing; this.storage = storage; this.from = from; this.now = now;
-    this.relay = new RelayClient({ relay: pairing.relay, fetch: f });
-    this.reassembler = new Reassembler();
+  /**
+   * accept: async ({header, content}) => void stores an item durably; it runs before the id is remembered or acked.
+   * When it throws, the item's messages are handled but its id is not remembered and it is not acked: it comes back
+   * with the sender's next re-send, and pollOnce returns `storeError`.
+   */
+  constructor({ pairing, storage, fetch: f, from = 'Daylight', now = () => Date.now(), accept = async () => {}, timeouts, retryDelaysMs }) {
+    this.pairing = pairing; this.storage = storage; this.from = from; this.now = now; this.accept = accept;
+    this.relay = new RelayClient({ relay: pairing.relay, fetch: f, timeouts, retryDelaysMs });
+    this.reassembler = new Reassembler({ now });
     this._keys = null;
   }
 
   async keys() { return (this._keys ??= await deriveKeys(this.pairing.secret)); }
 
-  /** Polls once. -> {items: [{header, content}] (new complete items), acked: [ids]} */
-  async pollOnce() {
+  /**
+   * Polls once. -> {items: [{header, content}] (new items, stored), acked: [ids whose ack was published],
+   * ackError: string|null, storeError: string|null}. Throws only when the poll itself fails; acks never throw.
+   */
+  pollOnce() { return locked(this.storage, 'receiver', () => this._pollOnce()); }
+
+  async _pollOnce() {
     const keys = await this.keys();
     const now = this.now();
-    const seen = (await this.storage.get('seenItems')) ?? {};
-    const seenMsgs = (await this.storage.get('seenMsgs')) ?? {};
+    const get = async (k) => (await this.storage.get(k)) ?? {};
+    const seen = await get('seenItems');
+    const seenMsgs = await get('seenMsgs');
+    const incomplete = await get('incomplete');
     for (const [k, t] of Object.entries(seen)) if (now - t > SEEN_TTL_MS) delete seen[k];
-    for (const [k, t] of Object.entries(seenMsgs)) if (now - t > 2 * 24 * 3600 * 1000) delete seenMsgs[k];
+    for (const [k, t] of Object.entries(seenMsgs)) if (now - t > SEEN_MSG_TTL_MS) delete seenMsgs[k];
+    for (const [k, t] of Object.entries(incomplete)) {
+      if (now - t * 1000 > INCOMPLETE_TTL_MS) { delete incomplete[k]; this.reassembler.drop(k); }
+    }
+    for (const k of this.reassembler.prune(INCOMPLETE_TTL_MS)) delete incomplete[k];
+
     const since = (await this.storage.get('inboxSince')) ?? 'all';
-    const msgs = await this.relay.poll(keys.inboxTopic, since, { skip: (id) => id in seenMsgs });
+    const entries = await this.relay.poll(keys.inboxTopic, since, { skip: (id) => Object.hasOwn(seenMsgs, id) });
     const items = [];
     const ack = new Set();
-    let maxTime = 0;
-    const partTimes = new Map(); // item id -> {time, msgIds} for parts of items not complete yet
-    for (const m of msgs) {
-      maxTime = Math.max(maxTime, m.time);
-      if (m.skipped || !m.frame) continue;
+    const handled = (ids) => { for (const id of ids) seenMsgs[id] = now; };
+    let newest = 0, held = Infinity, storeError = null;
+    for (const m of entries) {
+      newest = Math.max(newest, m.time);
+      if (m.outcome === 'skipped') continue;
+      if (m.outcome === 'retry') { held = Math.min(held, m.time); continue; }
+      if (m.outcome !== 'frame') { handled([m.id]); continue; }
       let frame;
-      try { frame = await decryptFrame(keys, PURPOSE_INBOX, m.frame); } catch { seenMsgs[m.id] = now; continue; }
-      const id = frame.header.id;
-      if (typeof id === 'string' && id in seen) { seenMsgs[m.id] = now; ack.add(id); continue; }
+      try { frame = await decryptFrame(keys, PURPOSE_INBOX, m.frame); } catch { handled([m.id]); continue; }
+      const rawId = typeof frame.header.id === 'string' ? frame.header.id : null;
+      if (rawId !== null && Object.hasOwn(seen, rawId)) { seen[rawId] = now; handled([m.id]); ack.add(rawId); continue; }
       let done;
-      try { done = await this.reassembler.add(frame.header, frame.body); } catch { seenMsgs[m.id] = now; continue; }
-      if (!done) {
-        const p = partTimes.get(id) ?? { time: m.time, msgIds: [] };
-        p.time = Math.min(p.time, m.time); p.msgIds.push(m.id);
-        partTimes.set(id, p);
+      try {
+        done = await this.reassembler.add(frame.header, frame.body, { time: m.time, msgId: m.id });
+      } catch (e) {
+        handled([m.id, ...(e?.msgIds ?? []), ...(rawId !== null ? this.reassembler.drop(rawId) : [])]);
+        if (rawId !== null) delete incomplete[rawId];
         continue;
       }
-      seenMsgs[m.id] = now;
-      for (const mid of partTimes.get(id)?.msgIds ?? []) seenMsgs[mid] = now;
-      partTimes.delete(id);
+      if (!done) { incomplete[rawId] = Math.min(incomplete[rawId] ?? m.time, m.time); continue; }
+      handled([m.id, ...done.msgIds]);
+      delete incomplete[done.header.id];
+      try {
+        await this.accept({ header: done.header, content: done.content });
+      } catch (e) {
+        storeError = String(e?.message ?? e);
+        continue;
+      }
       seen[done.header.id] = now;
       ack.add(done.header.id);
-      items.push(done);
+      items.push({ header: done.header, content: done.content });
     }
-    // The cursor never passes the first part of an item that is still incomplete (its other parts may come later).
-    let cursor = maxTime;
-    for (const p of partTimes.values()) cursor = Math.min(cursor, p.time);
-    if (cursor) await this.storage.set('inboxSince', Math.max(0, cursor - 5));
+    for (const t of Object.values(incomplete)) held = Math.min(held, t);
+    if (entries.length) await this.storage.set('inboxSince', nextCursor(since, newest, held));
     await this.storage.set('seenItems', seen);
     await this.storage.set('seenMsgs', seenMsgs);
+    await this.storage.set('incomplete', incomplete);
+
     const ids = [...ack];
+    const acked = [];
+    let ackError = null;
     for (let i = 0; i < ids.length; i += MAX_ACK_IDS) {
-      await this.relay.publish(keys.ackTopic, await buildAckFrame(keys, ids.slice(i, i + MAX_ACK_IDS), { from: this.from }));
+      const batch = ids.slice(i, i + MAX_ACK_IDS);
+      try {
+        await this.relay.publish(keys.ackTopic, await buildAckFrame(keys, batch, { from: this.from, sent: nowIso(now) }));
+        acked.push(...batch);
+      } catch (e) {
+        ackError = String(e?.message ?? e);
+        break;
+      }
     }
-    return { items, acked: ids };
+    return { items, acked, ackError, storeError };
   }
 }
