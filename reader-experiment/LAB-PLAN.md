@@ -53,7 +53,8 @@ work, section 6 the schedule and the user's open decisions, and section 7 the cr
 3. **Wire rule.** `v` stays `1`. Lab adds only `x-` header fields, ack-topic frames whose `ids` is empty, and new
    derived topics with their own AAD (2.1). Every v1.0 and v1.1 peer keeps working, and CI proves it (2.8).
 4. **One task, one folder** (6.1). A task edits only the folders its card names. Shared files follow 6.3.
-5. **Platform names.** *iPhone* (and *iPad*: the same app) = `apple/iOS` + `apple/Shared`. *Mac* = `apple/macOS`.
+5. **Platform names.** *iPhone* (and *iPad*: the same app) = `apple/iOS`. *Mac* = `apple/macOS`. Both compile
+   `apple/Shared` (`GetPage.js` and the Safari extension handler), which the kit lane owns (6.1).
    *Chrome* and *Safari* = the extension in `extension/` (Safari's build ships inside the Apple apps). *Web* =
    `web/`. *Android phone* and *DC-1 Inbox* = `android/app` in its two roles. *Windows* = `windows/`. *JS reference* =
    `share/js`. *Lab Reader* = the side-by-side Reader copy on the lab tablet (section 5).
@@ -636,7 +637,8 @@ the Reader" with no mark, because the Reader did not confirm it. Steps are joine
 
 - Every row shows its title and label.
 - The sentence and the step line show on the **newest row**, and on every row that is **not final**. `final` is true
-  for `reader`, `queued` and `handed`. Rows from rules 1 to 4 (v1.1's `describeRow`) keep v1.1's layout exactly.
+  for `reader`, `queued` and `handed`. Rows from rules 2 and 3 are in flight or failed, so they are never final. Rows
+  from rules 1 and 4 are v1.1's `describeRow`, with no step line, and keep v1.1's layout exactly.
 - Everywhere else they are in the row's details (tap the row).
 - The row's accessibility label is `{label}. {sentence}`, whether the sentence is shown or not. It has no step count.
   The step line is hidden from screen readers, because the label says it. The marks are glyphs and words, never
@@ -1018,7 +1020,7 @@ W0 builds set `LAB_NOTE_ENABLED = false` (1.2).
 - e2e (`rx-e2e.yml`): `inbox-e2e.sh` reads Lab frames with `e2e/sender.mjs` and asserts `reader` for the page and
   `handed` for the PDF.
 
-#### F27 Accessibility baseline, plus a Lab comfort mode
+#### F27 Accessibility baseline, with Comfort (not a Lab feature since revision 2)
 
 **Baseline (not Lab, every build).** It lands in each app's P0 close-out, before the Lab-off baselines are recorded
 (0.2, 1.7).
@@ -1983,7 +1985,7 @@ Order: S0, then F02, then F37, F19 and F36, each on iPhone and Mac first. SV0 (W
 
 | Feature | Needs | Depends on | What it takes |
 |---|---|---|---|
-| S0 The Inbox's server lane | server | K0, the server deployed | DESIGN 5.5, with Kotlin ports of `sealBox`, `openBox` and `buildServerItemFrames` (tests):<br>• poll `itemTopic` with `openBox('item')`;<br>• ack on the server ack topic with `sealBox('ack')`, batched to at most one ack frame every 15 minutes (2.2.7);<br>• hello with `x-inbox` exactly as `buildInboxInfo` makes it for the pairing lane, `lab: 0` included;<br>• tag server items `lane = "server"`, so LabReporter records nothing for them (2.2.4).<br>After a handover (5.3.4), the server lane stays with Daylight Share, which hands server items to the main Reader, until the Lab Reader's hello carries the cap `server`. On the server side (server lane): `pollAcks` treats `x-inbox.lab === 0` as the end of presence (DESIGN 5.5 updated), and `app` is clamped to 60 characters as Lab does. An integration test puts Lab frames (`ids: []`, `x-st`, `lab: 0`) on the server ack topic in Lab mode. DESIGN 14.1's `needs-lab-inbox` text takes 1.6's. Recommended first (DESIGN 3.1), so that v1 delivery stays an exception. |
+| S0 The Inbox's server lane | server | K0, the server deployed | DESIGN 5.5, with Kotlin ports of `sealBox`, `openBox` and `buildServerItemFrames` (tests):<br>• poll `itemTopic` with `openBox('item')`;<br>• ack on the server ack topic with `sealBox('ack')`, batched to at most one ack frame every 15 minutes (2.2.7);<br>• hello with `x-inbox` exactly as `buildInboxInfo` makes it for the pairing lane, `lab: 0` included;<br>• tag server items `lane = "server"`, so LabReporter records nothing for them (2.2.4).<br>After a handover (5.3.4), the server lane stays with Daylight Share, which hands server items to the main Reader, until the Lab Reader's hello carries the cap `server`. On the server side (server lane): `pollAcks` treats `x-inbox.lab === 0` as the end of presence (DESIGN 5.5 updated), and it keeps its 60-character `app` clamp, which Lab now uses too (2.2.1). An integration test puts Lab frames (`ids: []`, `x-st`, `lab: 0`) on the server ack topic in Lab mode. DESIGN 14.1's `needs-lab-inbox` text takes 1.6's. Recommended first (DESIGN 3.1), so that v1 delivery stays an exception. |
 | F02 Files over 9 MB | server + R2 | F04's `BackgroundPublisher` (iPhone) | `files.sendLarge` with the hosted outbox. The iPhone uploads from files with a background session; Chrome uploads from an extension page, never from the service worker. `files.tick` reads acks through the Sender's `onAckHeader` (DESIGN 17.7) instead of its own `server/hostedAckCursor`, so acks are polled once. `LabLedger.prune` keeps hosted ids, so large files show timeline states. The W1 entry point then sends at once. Second in Wave S, iPhone and Mac first: it is the DC-1 owner's first "finally". |
 | F37 Summaries with Claude | server + `ANTHROPIC_API_KEY` | W0 gate | `ai.summarize`, `explain` and `ask` UI, iPhone and Mac first (Swift port of `ai`), then the extension and web (the module as it is), then Android. The first-use notice. The AI cap editable in the server section. |
 | F19 Email-in | server + R2 + domain (Workers Paid in practice) | W0 gate | The address with Copy; Recent mail; block and unblock. |
@@ -2428,3 +2430,64 @@ Only Q1 holds anything back: F11's share-sheet paths. Nothing else blocks W0 or 
    - (c) keeping the Daylight Share item id with what it saves (for F18)?
 
    The Lab Reader work proves each one on Rooted 2 first.
+
+---
+
+## 7. Critique log
+
+Revision 2 answers two reviews of revision 1: a product review (21 points) and an engineering review (20 points).
+Every point was accepted. Where a review offered alternatives, or a point needed something beyond this file, the
+last column says what was chosen and why, in one line.
+
+### 7.1 Product review
+
+| # | Point (section, severity) | Decision | What changed, or why not as suggested |
+|---|---|---|---|
+| P1 | 12-word excerpt rule (F11, F16; must-fix) | Accepted | `classifyShare` makes an excerpt only for a selection, a text fragment, text with no URL, or ≥ 40 words / 3 sentences that aren't the title; headline + link vectors (F11, F16, 2.8). |
+| P2 | Share in place hides late failures (F04, F01; must-fix) | Accepted | Opt-out failure notification on iPhone, Mac and Android; optional "In your Reader ✓" notice; F04.6 forces a 413 after close. |
+| P3 | Weak first run with Lab on (1.4, 1.6, W0; must-fix) | Accepted | Short states, one server group, sentences only on tap, F00.7. The one-time note is held instead of the release, so W0 builds still reach testers. |
+| P4 | `needs-server` too long (1.6; should-fix) | Accepted | The user's short sentence under controls, with Copy Server code; the long texts and secret names live in the Daylight server section (1.6, 2.6). |
+| P5 | `needs-reader-lab` dead end (1.6, F17; should-fix) | Accepted | State removed from W0/W1; the Reader step is not interactive; the `handed` sentence explains itself (2.5). |
+| P6 | "Never on JP4R03005" scope (0.6; should-fix) | Accepted | 0.6 limits the rule to the Lab Reader and agent installs; 6.5 Q7 asks the user to confirm. |
+| P7 | W0/W1 miss the "finally" list (3.1, 4.1; should-fix) | Accepted | W2 ordered with F06 and F13 first; the F02 entry point in W1; 3.1 explains the order. FEATURES.md is outside this file, so 3.1 records its F06 correction and hands it to the research lane. |
+| P8 | Mac-first ships the ad-hoc path (3.1, F04; should-fix) | Accepted | Mac acceptance runs on the ad-hoc build, with its own Share-menu Lab switch and a line on what it lacks. F23's Print menu entry and F29's menu-bar drop join Mac W1. F33 reuses the existing command. A signed release is 6.5 Q6, not a precondition, because it needs the user's Apple account. |
+| P9 | Excerpts interrupt the tablet (F11, 6.5 Q1; should-fix) | Accepted | Q1 must be answered before A4, A5 and K4 build F11's share-sheet paths; until then only explicit paths; one-time send line and grouped notices. |
+| P10 | Hold vs Later (F15; should-fix) | Accepted | Two actions: Add to Reader and Keep for later (`held`); a swipe also records `held`; `held` ranks above `waiting`. |
+| P11 | Dense timeline rows (2.5; should-fix) | Accepted | Three steps in the user's words, no "Relay" or "→"; sentence and step line only on the newest and unfinished rows; no step count in the label; new F01 sentence. |
+| P12 | Comfort lost with Lab off; timed send (F27, F04; should-fix) | Accepted | Comfort moves to the baseline. Options shows without a countdown under Comfort, a screen reader, switch access or a setting; that removes the timer rather than stretching it to 5 s. |
+| P13 | One switch for many behaviours (1.1; should-fix) | Accepted in part | "Always show Options before sending" added. Per-row "Use" switches go to the user (6.5 Q5), because they may bend the one-switch rule. |
+| P14 | Unmeasurable checks (3.2–3.3; should-fix) | Accepted | F04.1, F09.2, F15.1, F27.4, F10.4 and F01.4 rewritten; real-world conditions in F01.1, F26.1 and 6.4; a five-task usability pass at W0 and W1. |
+| P15 | No ask for main-Reader fixes (6.5; should-fix) | Accepted | 6.5 Q8 lists R0, a quiet reporting import and keeping the item id. |
+| P16 | `needs-inbox` vs `needs-lab-inbox` (1.6; nit) | Accepted | Both texts replaced as suggested; S0 brings DESIGN 14.1 in line. |
+| P17 | Link-only hint fires everywhere (F03; nit) | Accepted | Once per device on Android and iPhone, then in Setup check; the Android text no longer points to Safari. |
+| P18 | "Turn on" and blind paste (F09, F33; nit) | Accepted | "Open setting" button; every clipboard button shows the host before Send. The hotkeys still send at once, as today, and their notice names the host. |
+| P19 | Copy inconsistencies (nit) | Accepted | One F04 card string; Comfort footer; "Optional · …" server row; "Sender sees" in details; test-article line; "final for W0/W1". |
+| P20 | Always-visible Send-as control (F10; nit) | Accepted | "Send as: Page ▾", switching to Selection by itself. |
+| P21 | Windows ships first; iOS 16 untested (6.2, F04.1; nit) | Accepted | Extension, web and Windows releases wait for the iPhone and Mac; iOS 16 added to F04.1. |
+| — | Verdict: Lab-on first run and the DC-1 "finally" gap | Accepted | P3 and P7 above. |
+
+### 7.2 Engineering review
+
+| # | Point (section, severity) | Decision | What changed, or why not as suggested |
+|---|---|---|---|
+| E1 | No household message budget (2.2.4, 2.8; must-fix) | Accepted | 2.2.7 budget (≤ 144 of 150 a day); Lab frames give way, are spaced 30 s and capped; soak in both modes behind one address. The cap is 30, not 40, to stay under 150. |
+| E2 | `x-cap`/`x-orig` dropped by the validators (2.3; must-fix) | Accepted | `extras` from `checkItemHeader`/`ItemHeader.check` in L0, K0 (A0 for parity), carried to `InboxItem` (K5); `labHeaderExtras` vectors. |
+| E3 | Ambiguous parse rules (2.2.5; must-fix) | Accepted | Exact algorithm with vectors. Integers are judged by value (1.0 = 1), since no JSON parser here keeps the source form. |
+| E4 | Ledger assumes one Inbox (2.2.6; should-fix) | Accepted | Entries per publisher, ties at ≥, 36 h staleness plus 48 h of `lab: 0` repeats, `poll` clamped; vectors for ties and handover. |
+| E5 | Server presence vs Lab frames (4.2, 2.6; should-fix) | Accepted | S0's hello is `buildInboxInfo`; `lab: 0` ends presence on the server lane; the server lane stays with Daylight Share after a handover; server tests in SV0 and S0. |
+| E6 | 5 s not enforced; private cache key (2.6, 2.7.2; should-fix) | Accepted | `labGate`'s own deadline; `noteError` added by the new SV0 card; `serverState` and `labGate` vectors; `server/pendingMove` in DESIGN 13.1. |
+| E7 | `flushNetwork` limits (2.7.1, F07; should-fix) | Accepted | Caps on frames and attachment bytes, v1.1's pass rules, 3-minute spacing; F07.3 with 70 links and 10 × 9 MB. |
+| E8 | One-pass `BackgroundPublisher` impossible (F04; should-fix) | Accepted | Two passes; `isDiscretionary = false`; re-send timed from the first part, at once past 170 min; test for parts 3 h apart. |
+| E9 | Lanes less independent than claimed (6.1, 6.3; should-fix) | Accepted | Capture code moves to `share/js/capture` with `sync.mjs`; the kit lane owns `apple/Shared`; CI job blocks with owners; K4's workers in `sender/`. |
+| E10 | P0 ports without tasks (0.2, 6.2; should-fix) | Accepted | The ports are on the branch now; P0 close-out cards per lane finish them, land the F27 baseline and record the Lab-off baselines. |
+| E11 | `GetPage.js` cannot read Lab (F03, F10; should-fix) | Accepted | It returns v1.1's `html` plus `lab` extras and the native side chooses; size caps; F04.2 with an 8 MiB page; F03.5. |
+| E12 | Server-lane states pollute the digest (2.2.4, K1; should-fix) | Accepted | Pairing-lane items only; `lane` tag; `LabReporterTest` case. |
+| E13 | Return-lane semantics (2.4; should-fix) | Accepted | `x-dev`, delivery per device, a storage prefix per lane, manifests replaced and hourly on change; budget rows. |
+| E14 | R1 dependencies, visibility, timing (5.3, 5.7; should-fix) | Accepted | R1 needs K0 + R0 only; `<queries>` on both sides and a safe resume rule; R1.1 timing; in-process import; the package id is confirmed and pinned. |
+| E15 | Missing tests; brittle parity tools (2.8, 1.7; should-fix) | Accepted | A v1.0 peer, two-publisher and handover cases, server tests; `ariaSnapshot()` and an `XCUIElement` walk. |
+| E16 | True worst-case size (2.2.1; nit) | Accepted | Lone surrogates pinned (2,572 / 2,608 / 3,480 with `app` 60); `flush()` halves a refused batch. |
+| E17 | Long `x-orig` (2.3; nit) | Accepted | Left out over 1,024 characters or when it would make the frame large; vector. |
+| E18 | State mapping gaps (2.2.3; nit) | Accepted | Unknown status → `handed`; `held` above `waiting`; `LabInbox.record` uses the merge rule; test. |
+| E19 | F02 loose ends (2.6, 4.2; nit) | Accepted | `files.tick` reads acks through `onAckHeader`; hosted ids kept by prune; `app` clamped to 60 everywhere, the server's existing value. |
+| E20 | CLI concurrency and re-sends (F09; nit) | Accepted | `O_EXCL` lock file and atomic renames; `tick()` on every run; documented. |
+| — | Verdict: wire design sound; budget, extras, parsing, ledger, server integration, lanes, R1, tests | Accepted | E1–E20 above. |
