@@ -38,7 +38,7 @@ const EV_WAKE: &str = "dls://wake";
 const EV_TICK: &str = "dls://tick";
 const EV_AUTOSTART: &str = "dls://autostart";
 const TICK_EVERY: Duration = Duration::from_secs(15 * 60);
-/// daylight-share.js refuses items over 64 MB.
+/// Never read more than this into memory for the page (the page asks for less: the protocol's own limit).
 const MAX_FILE: u64 = 64 * 1024 * 1024;
 
 /// Work for the page, queued until it asks for it (so nothing is lost while it is still loading).
@@ -173,8 +173,9 @@ fn take_actions(app: AppHandle) -> Vec<Action> {
 }
 
 /// Reads a file named on a command line (the page can't open files by path itself). -> its bytes (an ArrayBuffer).
+/// A file over `max` bytes isn't read: the answer is the error "too-large:<size>", which the page words.
 #[tauri::command]
-async fn read_file(app: AppHandle, path: String) -> Result<tauri::ipc::Response, String> {
+async fn read_file(app: AppHandle, path: String, max: Option<u64>) -> Result<tauri::ipc::Response, String> {
     let p = PathBuf::from(&path);
     if !state(&app).readable.lock().unwrap().contains(&p) {
         return Err("That file wasn’t offered to Send to Daylight.".into());
@@ -184,8 +185,8 @@ async fn read_file(app: AppHandle, path: String) -> Result<tauri::ipc::Response,
         if meta.is_dir() {
             return Err("Folders can’t be sent; send the files inside.".into());
         }
-        if meta.len() > MAX_FILE {
-            return Err("That file is larger than 64 MB.".into());
+        if meta.len() > max.unwrap_or(MAX_FILE).min(MAX_FILE) {
+            return Err(format!("too-large:{}", meta.len()));
         }
         std::fs::read(&p).map_err(|e| format!("Couldn’t read it ({e})."))
     })
@@ -241,8 +242,8 @@ fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<bool, String> {
     let al = app.autolaunch();
     let r = if enabled { al.enable() } else { al.disable() };
     if enabled && r.is_ok() {
-        if let Err(e) = quote_autostart_entry() {
-            diag(app, format!("couldn't quote the start-at-login entry: {e}"));
+        if let Err(e) = autostart_per_user() {
+            diag(app, format!("start at login: {e}"));
         }
     }
     let now = al.is_enabled().unwrap_or(false);
@@ -253,22 +254,31 @@ fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<bool, String> {
     r.map(|_| now).map_err(|e| e.to_string())
 }
 
-/// The plugin writes `C:\...\Send to Daylight\send-to-daylight.exe --autostart` to the Run key without quotes, and the
-/// install folder has spaces: quote the path, so Windows can't mistake `...\Send` for the program.
+/// Start at login is per user, like the install: the plugin writes the Run entry for every user (HKLM) when the app
+/// runs elevated, which the per-user uninstaller wouldn't remove, and leaves the path unquoted though the install
+/// folder has spaces. So keep one quoted entry in this user's Run key.
 #[cfg(windows)]
-fn quote_autostart_entry() -> Result<(), String> {
-    let key = windows_registry::CURRENT_USER
-        .create(r"Software\Microsoft\Windows\CurrentVersion\Run")
+fn autostart_per_user() -> Result<(), String> {
+    use windows_registry::{CURRENT_USER, LOCAL_MACHINE};
+    const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+    const APPROVED: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    CURRENT_USER
+        .create(RUN)
+        .and_then(|k| k.set_string(PRODUCT, format!("\"{}\" --autostart", exe.display())))
         .map_err(|e| e.to_string())?;
-    if key.get_string(PRODUCT).is_ok() {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        key.set_string(PRODUCT, format!("\"{}\" --autostart", exe.display())).map_err(|e| e.to_string())?;
+    for path in [RUN, APPROVED] {
+        if let Ok(k) = LOCAL_MACHINE.options().read().write().open(path) {
+            if k.get_value(PRODUCT).is_ok() {
+                let _ = k.remove_value(PRODUCT);
+            }
+        }
     }
     Ok(())
 }
 
 #[cfg(not(windows))]
-fn quote_autostart_entry() -> Result<(), String> {
+fn autostart_per_user() -> Result<(), String> {
     Ok(())
 }
 

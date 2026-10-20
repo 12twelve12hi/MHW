@@ -15,8 +15,16 @@ export const SOON_MS = 30 * 1000;
 export const TICK_MS = 15 * 60 * 1000;
 /** Opening the window checks for acks, at most this often. */
 export const SHOW_TICK_MS = 10 * 1000;
-/** Files larger than this aren't even read (the protocol library has its own, lower limits and says so). */
-export const MAX_FILE = 64 * 1024 * 1024;
+/**
+ * The largest file this app sends: the protocol library's limit (MAX_ITEM, 9 MB since protocol revision 1.1), else
+ * 64 MB. Larger files aren't even read (PROTOCOL 3.3: refuse at once, before reading where possible).
+ */
+export const MAX_FILE = Number.isFinite(ds.MAX_ITEM) ? ds.MAX_ITEM : 64 * 1024 * 1024;
+
+/** The library's sentence for a file over MAX_FILE. */
+export function tooBig(size) {
+  return typeof ds.tooBigMessage === 'function' ? ds.tooBigMessage(size) : 'That file is larger than 64 MB.';
+}
 
 /** Runs async functions one at a time, in call order (the outbox is read-modify-write). */
 export function serial() {
@@ -39,7 +47,7 @@ export function watchedStorage(storage, onChange) {
 }
 
 /**
- * bridge: {notify(title, body), showWindow(), readFile(path) -> Uint8Array}
+ * bridge: {notify(title, body), showWindow(), readFile(path, max) -> Uint8Array (rejects "too-large:<size>" over max)}
  * storage: a daylight-share storage adapter (get/set/remove of JSON values).
  */
 export function createApp({
@@ -181,7 +189,17 @@ export function createApp({
     const results = [];
     for (const p of paths) {
       const name = nameFromPath(p) || 'document';
-      results.push(await settle(name, async () => sendFile({ name, bytes: await bridge.readFile(p) })));
+      results.push(await settle(name, async () => {
+        let bytes;
+        try {
+          bytes = await bridge.readFile(p, MAX_FILE);
+        } catch (e) {
+          const big = /^too-large:(\d+)$/.exec(String(e?.message ?? e));
+          if (big) throw new ds.ShareError('too-large', tooBig(Number(big[1])));
+          throw e;
+        }
+        return sendFile({ name, bytes });
+      }));
     }
     return results;
   }

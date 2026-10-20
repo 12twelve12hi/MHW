@@ -37,7 +37,7 @@ export const bridge = {
   /** Things to do that arrived from outside: files (Send To), pairing links, the clipboard (hotkey or tray). */
   takeActions: () => invoke('take_actions'),
   /** A file offered on the command line (Send To): Rust answers with raw bytes (an ArrayBuffer). */
-  readFile: async (path) => new Uint8Array(await invoke('read_file', { path })),
+  readFile: async (path, max) => new Uint8Array(await invoke('read_file', { path, max })),
   notify: (title, body) => invoke('notify', { title, body }),
   showWindow: () => invoke('show_window'),
   hideWindow: () => invoke('hide_window'),

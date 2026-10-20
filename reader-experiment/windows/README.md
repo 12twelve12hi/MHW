@@ -50,18 +50,21 @@ pair again. Unpairing or switching discards anything the old Daylight hasn't pic
   window do the same. Change or turn off the hotkey in **⋯ › Settings** (click **Change…**, then press the new
   combination; it needs Ctrl, Alt or Win).
 
-**Size limit, for now:** the free relay (ntfy.sh) takes files up to 2 MB, and about 20 MB per sender at a time. Until
-the protocol fix for this lands, files over about 1.5 MB may not go through: they show *Not delivered* with the
-relay's reason in the history.
+**Sizes:** files can be up to 9 MB. The free relay (ntfy.sh) takes attachments of up to 2 MB, so larger files travel in
+pieces that fit, and it holds about 20 MB per sender at a time, so after a burst of big files the rest waits a few
+hours (the history says so). These rules come with the protocol library; a bigger file is refused at once, with its
+size.
 
 ## History and retries
 
-The window lists what you sent, newest first:
+The window lists what you sent, newest first, in the same words as the other Send to Daylight apps:
 
-- **Sent**: on its way; the Daylight hasn't picked it up yet (it may be asleep).
+- **Sent · waiting for your Daylight**: on its way; the Daylight hasn't picked it up yet (it may be asleep).
 - **Delivered ✓**: the Daylight confirmed it.
-- **Not delivered**, with the reason and a **Retry** button: the relay couldn't be reached or refused it, or the
-  Daylight didn't pick it up within a week.
+- **Waiting to send**: the relay couldn't be reached or is busy; it tries again by itself (**Retry now** to try at
+  once).
+- **Not delivered**, with the reason, and **Try again** where trying again can help: for example the Daylight didn't
+  pick it up within a week.
 
 While the app runs (in the notification area is enough) it checks for the Daylight's confirmations when it starts,
 right after each send and again about 30 seconds later, every 15 minutes, and when you open the window; and it
@@ -139,12 +142,12 @@ relay (`../share/js/mock-relay.mjs`), with a `Receiver` from `daylight-share.js`
 1. installs `Send-to-Daylight-windows-setup.exe` silently and checks the Send to shortcut and the link scheme;
 2. starts the installed app in test mode, `--e2e-pair <daylightshare link> --e2e-status <file>`: it pairs without
    showing anything and writes its outbox as JSON whenever it changes (both options do nothing unless given);
-3. starts the app again with a PDF and a text file as arguments, as Send to does, and checks that the Daylight gets
-   both intact;
+3. starts the app again with files as arguments, as Send to does: a PDF, a text file and a 3 MB file arrive intact (the
+   last in pieces under the relay's 2 MB limit), and a file over the size limit is refused with the library's sentence;
 4. puts a link on the clipboard and starts the app with `--e2e-hotkey`, a test hook that takes the hotkey's code path
    (pressing a global hotkey on a CI machine isn't practical); only an app started in test mode honours the hooks;
-5. waits until the status file shows all three **Delivered**;
-6. turns on start at login with `--e2e-autostart` (what the tray menu's switch does) and checks the Run entry;
+5. waits until the status file shows all four **Delivered**;
+6. turns on start at login with `--e2e-autostart` (what the tray menu's switch does) and checks this user's Run entry;
 7. opens the window (screenshot), quits and uninstalls, and checks that the shortcut, the link scheme and the
    start-at-login entry are gone.
 
@@ -154,5 +157,4 @@ and the test output (status file, screenshot) are kept as workflow artifacts.
 ## Not yet
 
 - **Code signing.** Unsigned, hence the SmartScreen warning; signing needs a certificate.
-- **Files over ~1.5 MB** wait for the protocol fix (see *Size limit* above); the app adds no chunking of its own.
 - **Updates** are manual: install the new build over the old one (pairing and history are kept).

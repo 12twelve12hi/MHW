@@ -6,10 +6,11 @@
 //   2. deletes the shortcut, then starts the installed app in test mode (--e2e-pair <link> --e2e-status <file>): it
 //      pairs without showing anything, writes its outbox to the status file as it changes, and (first run) puts the
 //      Send to shortcut back;
-//   3. starts the app a second time with two files as arguments, exactly as the Send to shortcut does (the running app
-//      gets them through the single-instance plugin);
+//   3. starts the app a second time with files as arguments, exactly as the Send to shortcut does (the running app
+//      gets them through the single-instance plugin): a PDF, a text file, a 3 MB file (over the relay's 2 MB
+//      attachment limit) and one over the protocol's size limit, which is refused with the library's sentence;
 //   4. puts a link on the clipboard and starts the app with --e2e-hotkey, which takes the hotkey's code path;
-//   5. checks that the Receiver got all three items intact and the status file shows them Delivered;
+//   5. checks that the Receiver got the four items intact and the status file shows them Delivered;
 //   6. turns on start at login with --e2e-autostart (what the tray menu's switch does) and checks the Run entry;
 //   7. starts it once more without arguments (the window opens; screenshot), quits it, uninstalls silently and checks
 //      that the shortcut, the link scheme and the start-at-login entry are gone.
@@ -39,6 +40,7 @@ const SENDTO = path.join(APPDATA, 'Microsoft', 'Windows', 'SendTo', 'Daylight.ln
 const DATA_DIR = path.join(APPDATA, 'com.daylight.share.windows');
 const SCHEME_KEY = 'HKCU\\Software\\Classes\\daylightshare\\shell\\open\\command';
 const RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
+const MACHINE_RUN_KEY = 'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 const CLIP_URL = 'https://example.com/e2e/clipboard?from=windows&n=1';
 
 if (process.platform !== 'win32') { console.error('This test runs on Windows.'); process.exit(2); }
@@ -188,24 +190,38 @@ async function main() {
   check(regValue(SCHEME_KEY)?.toLowerCase().includes(EXE.toLowerCase()), 'daylightshare: links open the app');
 
   // --- 3. Send To: a second launch with file arguments ---------------------------------------------------------------
-  step('Send to > Daylight: the app started again with two files as arguments');
+  step('Send to > Daylight: the app started again with files as arguments');
   const pdfPath = path.join(work, 'Quiet paper – draft.pdf');
   const txtPath = path.join(work, 'Field notes ✓.txt');
+  const bigPath = path.join(work, 'Scan 3 MB.pdf');
+  const hugePath = path.join(work, 'Too big.pdf');
   const pdf = tinyPdf(120_000);
   const txt = Buffer.from('Field notes from Windows ✓ ünïcödé\r\n'.repeat(300), 'utf8');
+  // Over the free relay's 2 MB attachment limit: protocol 1.1 sends it in pieces that fit.
+  const big = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.from(ds.randomBytes(3 * 1024 * 1024))]);
+  // Over the protocol's own limit: refused before it is read, in the library's words.
+  const limit = Number.isFinite(ds.MAX_ITEM) ? ds.MAX_ITEM : 64 * 1024 * 1024;
+  const hugeSize = limit + 1000;
+  const tooBigText = typeof ds.tooBigMessage === 'function' ? ds.tooBigMessage(hugeSize) : 'That file is larger than 64 MB.';
   fs.writeFileSync(pdfPath, pdf);
   fs.writeFileSync(txtPath, txt);
-  launchAgain([pdfPath, txtPath], 'Send To');
-  const files = await waitFor('the Daylight to receive both files', () => {
+  fs.writeFileSync(bigPath, big);
+  fs.writeFileSync(hugePath, Buffer.alloc(hugeSize, 7));
+  launchAgain([pdfPath, txtPath, bigPath, hugePath], 'Send To');
+  const files = await waitFor('the Daylight to receive three files', () => {
     const f = received.filter((i) => i.header.kind === 'file');
-    return f.length >= 2 && f;
-  }, { timeout: 90000 });
+    return f.length >= 3 && f;
+  }, { timeout: 120000 });
   const gotPdf = files.find((i) => i.header.name === 'Quiet paper – draft.pdf');
   const gotTxt = files.find((i) => i.header.name === 'Field notes ✓.txt');
+  const gotBig = files.find((i) => i.header.name === 'Scan 3 MB.pdf');
   check(gotPdf && Buffer.from(gotPdf.content).equals(pdf), 'the PDF arrives intact', gotPdf ? `${gotPdf.content.length} bytes, ${gotPdf.header.mime}` : `got ${files.map((f) => f.header.name)}`);
   check(gotPdf?.header.mime === 'application/pdf' && gotPdf?.header.title === 'Quiet paper – draft', 'with its name, type and title');
   check(gotTxt && Buffer.from(gotTxt.content).equals(txt), 'the text file arrives intact', gotTxt ? `${gotTxt.content.length} bytes, enc ${gotTxt.header.enc}` : '');
+  check(gotBig && Buffer.from(gotBig.content).equals(big), 'a 3 MB file arrives intact (over the relay’s 2 MB attachment limit)', gotBig ? `${gotBig.content.length} bytes` : '');
   check(gotPdf?.header.from === 'Windows PC' && /^windows\//.test(gotPdf?.header.app ?? ''), 'sent from "Windows PC"', `${gotPdf?.header.from} ${gotPdf?.header.app}`);
+  const refused = await waitFor('the too-big file to be refused', () => (readStatus()?.log ?? []).find((l) => l.includes('not sent Too big.pdf')), { timeout: 30000 }).catch(() => '');
+  check(refused.endsWith(tooBigText), 'a file over the protocol’s limit is refused, saying why', refused.replace(/^\S+ /, ''));
 
   // --- 4. the clipboard hotkey's path ------------------------------------------------------------------------------
   step('Clipboard hotkey: a link on the clipboard, then the hotkey path (test hook --e2e-hotkey)');
@@ -217,15 +233,15 @@ async function main() {
   check(url.header.url === CLIP_URL, 'the clipboard link arrives', url.header.url);
 
   // --- 5. acks: Delivered ✓ ------------------------------------------------------------------------------------------
-  step('Acks: the status file shows all three Delivered');
-  const done = await waitFor('Delivered for all three items', () => {
+  step('Acks: the status file shows all four Delivered');
+  const done = await waitFor('Delivered for all four items', () => {
     const s = readStatus();
     const rows = s?.rows ?? [];
-    return rows.length >= 3 && rows.every((r) => r.status === 'delivered') && s;
+    return rows.length >= 4 && rows.every((r) => r.status === 'delivered') && s;
   }, { timeout: 150000, every: 1000 });
   for (const r of done.rows) check(r.status === 'delivered', `Delivered: ${r.kind} ${r.name || r.url}`);
-  check(done.rows.length === 3, 'exactly three items in the history', String(done.rows.length));
-  check(received.length === 3, 'the Daylight got each item once', String(received.length));
+  check(done.rows.length === 4, 'exactly four items in the history (the refused one isn’t)', String(done.rows.length));
+  check(received.length === 4, 'the Daylight got each item once', String(received.length));
 
   // --- 6. start at login ------------------------------------------------------------------------------------------
   step('Start at login: the tray menu’s switch (test hook --e2e-autostart)');
@@ -233,7 +249,8 @@ async function main() {
   launchAgain(['--e2e-autostart'], 'start-at-login hook');
   const run = await waitFor('the start-at-login entry', () => regValue(RUN_KEY, 'Send to Daylight'), { timeout: 20000 }).catch(() => '');
   const runLine = run.trim().split('\n').pop().trim();
-  check(runLine.toLowerCase().endsWith(`"${EXE}" --autostart`.toLowerCase()), 'the Run entry starts the app quietly, its path quoted', runLine);
+  check(runLine.toLowerCase().endsWith(`"${EXE}" --autostart`.toLowerCase()), 'this user’s Run entry starts the app quietly, its path quoted', runLine);
+  check(!regValue(MACHINE_RUN_KEY, 'Send to Daylight'), 'not for every user (the runner is elevated, where the plugin alone writes HKLM)');
   const heard = await waitFor('the window to show it on', () => readStatus()?.autostart === true, { timeout: 15000 }).catch(() => false);
   check(heard, 'Settings shows Start at login on');
 
@@ -263,7 +280,7 @@ async function main() {
     await waitFor('the Send to shortcut to go', () => !fs.existsSync(SENDTO), { timeout: 30000 }).catch(() => {});
     check(!fs.existsSync(SENDTO), 'Send to > Daylight is removed');
     check(!regValue(SCHEME_KEY), 'the daylightshare: scheme is removed');
-    check(!regValue(RUN_KEY, 'Send to Daylight'), 'no start-at-login entry is left');
+    check(!regValue(RUN_KEY, 'Send to Daylight') && !regValue(MACHINE_RUN_KEY, 'Send to Daylight'), 'no start-at-login entry is left');
   }
 }
 

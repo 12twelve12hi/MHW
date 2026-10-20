@@ -29,10 +29,14 @@ function fakeBridge(files = {}) {
   const b = { notes: [], shown: 0, reads: [] };
   b.notify = async (title, body) => { b.notes.push({ title, body }); };
   b.showWindow = async () => { b.shown++; };
-  b.readFile = async (p) => {
-    b.reads.push(p);
+  b.readFile = async (p, max) => {
+    b.reads.push({ p, max });
     if (!(p in files)) throw new Error('Couldn’t open it (not found).');
-    return files[p];
+    // {size} stands for a file too big to hold in a test: Rust answers "too-large:<size>" without reading it.
+    const f = files[p];
+    const size = f.size ?? f.length;
+    if (max != null && size > max) throw `too-large:${size}`;
+    return f;
   };
   return b;
 }
@@ -130,6 +134,34 @@ test('clipboard without a link, unreadable files and folders say why', async () 
   assert.equal(missing[0].name, 'gone.pdf');
   assert.equal(bridge.notes.at(-1).title, 'Couldn’t send gone.pdf');
   assert.equal((await app.rows()).length, 0);
+});
+
+test('Send To refuses a file over the protocol’s limit before reading it, in the library’s words', async () => {
+  const d = await daylight();
+  const size = core.MAX_FILE + 1;
+  const { app, bridge } = newApp({ bridge: fakeBridge({ 'C:\\Scans\\big.pdf': { size } }) });
+  await app.pair(d.link);
+  const [r] = await app.handleAction({ type: 'files', paths: ['C:\\Scans\\big.pdf'] });
+  assert.equal(r.code, 'too-large');
+  assert.equal(r.error, core.tooBig(size));
+  assert.equal(bridge.reads[0].max, core.MAX_FILE);
+  assert.deepEqual(bridge.notes.at(-1), { title: 'Couldn’t send big.pdf', body: core.tooBig(size) });
+  assert.equal((await app.rows()).length, 0);
+});
+
+test('a 3 MB file arrives intact through the relay’s attachment limit', async () => {
+  const d = await daylight();
+  const { app } = newApp();
+  await app.pair(d.link);
+  const bytes = ds.randomBytes(3 * 1024 * 1024);
+  const row = await app.sendFile({ name: 'scan.pdf', bytes });
+  assert.equal(row.status, 'sent', row.error);
+  let got = [];
+  for (let i = 0; i < 5 && !got.length; i++) got = (await d.receiver.pollOnce()).items;
+  assert.equal(got.length, 1);
+  assert.deepEqual(got[0].content, bytes);
+  await app.tick();
+  assert.equal((await app.rows())[0].status, 'delivered');
 });
 
 test('an Internet Shortcut (.url) sends its address', async () => {

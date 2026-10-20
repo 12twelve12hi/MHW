@@ -3,7 +3,7 @@
 // to the tray) for days: this page keeps running, handles Send To and the hotkey, and keeps the outbox moving.
 
 import { bridge, appStorage } from './bridge.js';
-import { createApp, serial, MAX_FILE } from './core.js';
+import { createApp, serial, MAX_FILE, tooBig } from './core.js';
 import { ShareError } from './daylight-share.js';
 import {
   rowView, kindLabel, displayTitle, relativeTime, sendSummary, linkFromDrop, accelFromEvent, describeAccel,
@@ -144,7 +144,7 @@ async function sendFiles(files) {
   try {
     for (const f of files) {
       results.push(await app.settle(f.name, async () => {
-        if (f.size > MAX_FILE) throw new ShareError('too-large', 'That file is larger than 64 MB.');
+        if (f.size > MAX_FILE) throw new ShareError('too-large', tooBig(f.size));
         let bytes;
         try { bytes = new Uint8Array(await f.arrayBuffer()); } catch { throw new ShareError('read', 'Couldn’t read it. Folders can’t be sent; drop the files inside.'); }
         return app.sendFile({ name: f.name, bytes, mime: f.type });
