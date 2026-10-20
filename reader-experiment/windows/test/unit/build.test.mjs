@@ -96,7 +96,7 @@ test('versions are pinned', () => {
   assert.ok(fs.existsSync(path.join(root, 'package-lock.json')));
 });
 
-test('appStorage keeps JSON values in Rust’s files; the re-send copy is best effort', async () => {
+test('appStorage keeps JSON values in Rust’s files and reports every failed write', async () => {
   const files = new Map();
   const calls = [];
   globalThis.__TAURI__ = {
@@ -124,7 +124,8 @@ test('appStorage keeps JSON values in Rust’s files; the re-send copy is best e
     await s.set('pairing', { code: 'X', name: 'Ünï ✓' });
     assert.deepEqual(await s.get('pairing'), { code: 'X', name: 'Ünï ✓' });
     assert.equal(files.get('pairing'), '{"code":"X","name":"Ünï ✓"}');
-    await s.set('outbox/abc', 'A'.repeat(200)); // fails quietly
+    // A failed re-send copy is reported too: the protocol library catches it and sends the item once.
+    await assert.rejects(s.set('outbox/abc', 'A'.repeat(200)), /disk full/);
     assert.equal(await s.get('outbox/abc'), undefined);
     const real = globalThis.__TAURI__.core.invoke;
     globalThis.__TAURI__.core.invoke = async () => { throw new Error('disk full'); };

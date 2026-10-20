@@ -10,11 +10,12 @@
 //      the Send to shortcut back;
 //   3. opens the same link again while it runs (a second launch, forwarded by the single-instance plugin), and answers
 //      Pair (--e2e-confirm);
-//   4. starts the app again with files as arguments, exactly as the Send to shortcut does: a PDF, a text file, a 3 MB
-//      file (over the relay's 2 MB attachment limit) and one over the protocol's size limit, which is refused with the
-//      library's sentence;
+//   4. starts the app again with files as arguments, exactly as the Send to shortcut does: a PDF, a text file, a 5 MB
+//      file (over the relay's 2 MB attachment limit: it must travel in three pieces under it) and one over the
+//      protocol's 9 MB limit, which is refused with the library's sentence;
 //   5. puts a link on the clipboard and starts the app with --e2e-hotkey, which takes the hotkey's code path;
-//   6. checks that the Receiver got the four items intact and the status file shows them Delivered;
+//   6. checks that the Receiver got the four items intact and the status file shows them Delivered, in the protocol
+//      library's words (describeRow: "Delivered ✓", "Saved on your Daylight.");
 //   7. opens another Daylight's link with the same name: the question names the other code and says it replaces this
 //      one; Cancel keeps the pairing and the history;
 //   8. opens the paired Daylight's link with a new relay and name: applied without asking ("Pairing updated: now
@@ -268,16 +269,17 @@ async function main() {
   step('Send to > Daylight: the app started again with files as arguments');
   const pdfPath = path.join(work, 'Quiet paper – draft.pdf');
   const txtPath = path.join(work, 'Field notes ✓.txt');
-  const bigPath = path.join(work, 'Scan 3 MB.pdf');
+  const bigPath = path.join(work, 'Scan 5 MB.pdf');
   const hugePath = path.join(work, 'Too big.pdf');
   const pdf = tinyPdf(120_000);
   const txt = Buffer.from('Field notes from Windows ✓ ünïcödé\r\n'.repeat(300), 'utf8');
   // Over the free relay's 2 MB attachment limit: protocol 1.1 sends it in pieces that fit.
-  const big = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.from(ds.randomBytes(3 * 1024 * 1024))]);
-  // Over the protocol's own limit: refused before it is read, in the library's words.
-  const limit = Number.isFinite(ds.MAX_ITEM) ? ds.MAX_ITEM : 64 * 1024 * 1024;
-  const hugeSize = limit + 1000;
-  const tooBigText = typeof ds.tooBigMessage === 'function' ? ds.tooBigMessage(hugeSize) : 'That file is larger than 64 MB.';
+  const big = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.from(ds.randomBytes(5_000_000))]);
+  // Over the protocol's own limit (9 MB): refused before it is read, in the library's words.
+  const hugeSize = ds.MAX_ITEM + 1000;
+  const tooBigText = ds.tooBigMessage(hugeSize);
+  const largeFrames = () => [...relay.state.topics.values()].flat().filter((m) => m.attachment?.size > 1_000_000);
+  const largeBefore = largeFrames().length;
   fs.writeFileSync(pdfPath, pdf);
   fs.writeFileSync(txtPath, txt);
   fs.writeFileSync(bigPath, big);
@@ -293,7 +295,10 @@ async function main() {
   check(gotPdf && Buffer.from(gotPdf.content).equals(pdf), 'the PDF arrives intact', gotPdf ? `${gotPdf.content.length} bytes, ${gotPdf.header.mime}` : `got ${files.map((f) => f.header.name)}`);
   check(gotPdf?.header.mime === 'application/pdf' && gotPdf?.header.title === 'Quiet paper – draft', 'with its name, type and title');
   check(gotTxt && Buffer.from(gotTxt.content).equals(txt), 'the text file arrives intact', gotTxt ? `${gotTxt.content.length} bytes, enc ${gotTxt.header.enc}` : '');
-  check(gotBig && Buffer.from(gotBig.content).equals(big), 'a 3 MB file arrives intact (over the relay’s 2 MB attachment limit)', gotBig ? `${gotBig.content.length} bytes` : '');
+  check(gotBig && Buffer.from(gotBig.content).equals(big), 'a 5 MB file arrives intact (over the relay’s 2 MB attachment limit)', gotBig ? `${gotBig.content.length} bytes` : '');
+  const pieces = largeFrames().slice(largeBefore);
+  check(pieces.length === 3 && pieces.every((m) => m.attachment.size <= 2_000_000), 'in three pieces, each under the relay’s 2 MB',
+    pieces.map((m) => m.attachment.size).join(', '));
   check(files.every((f) => f.via === 1), 'through the paired relay');
   check(gotPdf?.header.from === 'Windows PC' && /^windows\//.test(gotPdf?.header.app ?? ''), 'sent from "Windows PC"', `${gotPdf?.header.from} ${gotPdf?.header.app}`);
   const refused = await waitFor('the too-big file to be refused', () => (readStatus()?.log ?? []).find((l) => l.includes('not sent Too big.pdf')), { timeout: 30000 }).catch(() => '');
@@ -313,6 +318,9 @@ async function main() {
   const done = await waitStatus('Delivered for all four items', (s) => (s.rows ?? []).length >= 4 && s.rows.every((r) => r.status === 'delivered'),
     { timeout: 150000, every: 1000 });
   for (const r of done.rows) check(r.status === 'delivered', `Delivered: ${r.kind} ${r.name || r.url}`);
+  const words = ds.describeRow({ status: 'delivered', created: Date.now() });
+  check(done.rows.every((r) => r.label === words.label && r.sentence === words.sentence && r.action === null),
+    'the history says so in the protocol library’s words', `${done.rows[0]?.label} / ${done.rows[0]?.sentence}`);
   check(done.rows.length === 4, 'exactly four items in the history (the refused one isn’t)', String(done.rows.length));
   check(received.length === 4, 'the Daylight got each item once', String(received.length));
   const ids = done.rows.map((r) => r.id);

@@ -9,8 +9,6 @@ const ds = await load('daylight-share.js');
 const core = await load('core.js');
 const L = await load('logic.js');
 
-/** What the history shows under a row: the protocol library's words (v1.1) or the relay's reason (v1.0). */
-const reason = (row) => (L.libraryWords() ? ds.describeRow(row).sentence : row.error);
 
 let relay;
 before(async () => { relay = await startMockRelay(); });
@@ -78,11 +76,11 @@ test('pairs from a link, sends Send To files and a clipboard link; the Daylight 
   const files = await app.handleAction({ type: 'files', paths: ['C:\\Docs\\Quiet paper – draft.pdf', 'C:\\Docs\\notes.txt'] });
   assert.equal(files.length, 2);
   assert.ok(files.every((f) => f.row?.status === 'sent'), JSON.stringify(files));
-  assert.deepEqual(bridge.notes.at(-1), { title: 'Sent 2 items', body: 'On their way to your Daylight.' });
+  assert.deepEqual(bridge.notes.at(-1), { title: '2 items', body: 'Sent · waiting for your Daylight.' });
 
   const clip = await app.handleAction({ type: 'clipboard', text: 'see https://www.example.com/story?id=7 now', error: '' });
   assert.equal(clip[0].row.url, 'https://www.example.com/story?id=7');
-  assert.deepEqual(bridge.notes.at(-1), { title: 'Sent example.com', body: 'On its way to your Daylight.' });
+  assert.deepEqual(bridge.notes.at(-1), { title: 'example.com', body: 'Sent · waiting for your Daylight.' });
 
   const got = (await d.receiver.pollOnce()).items;
   assert.equal(got.length, 3);
@@ -106,6 +104,7 @@ test('pairs from a link, sends Send To files and a clipboard link; the Daylight 
   assert.equal(snap.name, 'Desk Daylight');
   assert.equal(snap.rows.length, 3);
   assert.ok(snap.rows.every((x) => x.status === 'delivered'));
+  assert.ok(snap.rows.every((x) => x.label === 'Delivered ✓' && x.sentence === 'Saved on your Daylight.' && x.action === null));
   assert.equal(snap.rows.find((x) => x.kind === 'url').url, 'https://www.example.com/story?id=7');
 });
 
@@ -150,13 +149,17 @@ test('Send To refuses a file over the protocol’s limit before reading it, in t
   assert.equal((await app.rows()).length, 0);
 });
 
-test('a 3 MB file arrives intact through the relay’s attachment limit', async () => {
+test('a 5 MB file arrives intact in three pieces, each under the relay’s 2 MB per attachment', async () => {
   const d = await daylight();
   const { app } = newApp();
   await app.pair(d.link);
-  const bytes = ds.randomBytes(3 * 1024 * 1024);
+  const bytes = ds.randomBytes(5_000_000);
+  const before = [...relay.state.topics.values()].flat().filter((m) => m.attachment).length;
   const row = await app.sendFile({ name: 'scan.pdf', bytes });
   assert.equal(row.status, 'sent', row.error);
+  const frames = [...relay.state.topics.values()].flat().filter((m) => m.attachment).slice(before);
+  assert.equal(frames.length, 3);
+  assert.ok(frames.every((m) => m.attachment.size <= 2_000_000), frames.map((m) => m.attachment.size).join(', '));
   let got = [];
   for (let i = 0; i < 5 && !got.length; i++) got = (await d.receiver.pollOnce()).items;
   assert.equal(got.length, 1);
@@ -356,54 +359,79 @@ test('tick skips the relay when nothing is waiting', async () => {
   assert.equal(relay.state.requests.length, before);
 });
 
-test('relay trouble: the row says why, in the module’s words; Retry sends the same item', async () => {
+test('a relay that can’t be reached: Waiting to send with Retry now, in the module’s words; Retry now sends the same item', async () => {
   const d = await daylight();
-  let refuse = true;
-  const fetch = (url, init) => (refuse && init?.method !== 'GET' ? Promise.resolve(new Response('{}', { status: 400 })) : globalThis.fetch(url, init));
-  const { app } = newApp({ extra: { fetch } });
+  let busy = true;
+  const fetch = (url, init) => (busy && init?.method !== 'GET' ? Promise.resolve(new Response('{}', { status: 429 })) : globalThis.fetch(url, init));
+  const { app, bridge } = newApp({ extra: { fetch }, bridge: fakeBridge({ 'C:\\a.txt': ds.utf8('busy relay') }) });
   await app.pair(d.link);
   const row = await app.sendLink('https://example.com/offline');
-  assert.equal(row.status, 'failed');
-  assert.ok(row.error, 'the module recorded what went wrong');
-  const v = L.rowView(row);
-  assert.ok(v.sentence);
-  assert.equal(v.sentence, reason(row));
-  if (!L.libraryWords()) {
-    assert.equal(v.label, 'Not delivered');
-    assert.equal(v.retry, true);
-  }
-  refuse = false;
+  assert.deepEqual([row.status, row.errorCode], ['failed', 'network']);
+  assert.deepEqual(L.rowView(row), {
+    label: 'Waiting to send', tone: 'busy', sentence: 'Couldn’t send right now. It will try again by itself.',
+    action: 'retry-now', retry: true, retryLabel: 'Retry now',
+  });
+  await app.handleAction({ type: 'files', paths: ['C:\\a.txt'] });
+  assert.deepEqual(bridge.notes.at(-1), { title: 'a', body: 'Waiting to send. Couldn’t send right now. It will try again by itself.' });
+  busy = false;
   const again = await app.retry(row.id);
   assert.equal(again.id, row.id);
   assert.equal(again.status, 'sent');
   const items = (await d.receiver.pollOnce()).items;
-  assert.equal(items.length, 1);
-  assert.equal(items[0].header.id, row.id);
+  assert.ok(items.some((i) => i.header.id === row.id));
   await app.tick();
-  assert.equal((await app.rows())[0].status, 'delivered');
+  assert.equal((await app.rows()).find((r) => r.id === row.id).status, 'delivered');
 });
 
-test('a file the relay refuses as too large shows the module’s message; Retry re-sends the same item', async () => {
-  // ntfy.sh answers 413 to attachments over 2 MB (share/NTFY-FACTS.md); this relay refuses any frame over 1.5 MB.
-  const LIMIT = 1.5 * 1024 * 1024;
-  const fetch = (url, init) => (init?.method === 'PUT' && init.body.length > LIMIT
+test('a full relay (413): Waiting to send for about 3 hours; the third time Not delivered with Try again', async () => {
+  let clock = Date.now();
+  let full = true;
+  const fetch = (url, init) => (full && init?.method === 'PUT'
     ? Promise.resolve(new Response('{"code":41301,"http":413,"error":"too large"}', { status: 413 }))
     : globalThis.fetch(url, init));
   const d = await daylight('Small');
-  const { app } = newApp({ extra: { fetch } });
+  const { app } = newApp({ extra: { fetch, now: () => clock } });
   await app.pair(d.link);
-  const row = await app.sendFile({ name: 'scan.pdf', bytes: ds.randomBytes(2 * 1024 * 1024 + 50_000) });
-  assert.equal(row.status, 'failed');
-  const shown = (await app.rows())[0];
-  assert.equal(L.rowView(shown).sentence, reason(shown));
-  if (!L.libraryWords()) assert.equal(L.rowView(shown).sentence, 'The relay refused the file as too large.');
+  const row = await app.sendFile({ name: 'scan.pdf', bytes: ds.randomBytes(2_500_000) });
+  assert.deepEqual([row.status, row.errorCode], ['failed', 'full']);
+  assert.deepEqual(L.rowView(row, clock), {
+    label: 'Waiting to send', tone: 'busy', action: null, retry: false, retryLabel: '',
+    sentence: 'A lot has been sent from this network in the last few hours. It will send by itself in about 3 hours.',
+  });
+  const ok = await app.sendFile({ name: 'small.txt', bytes: ds.utf8('a small note') });
+  assert.equal(ok.status, 'sent', 'a small file still goes (a message, not an attachment)');
+  for (let i = 0; i < 2; i++) { clock += 185 * 60000; await app.tick(); }
+  const ended = (await app.rows()).find((r) => r.id === row.id);
+  assert.deepEqual([ended.status, ended.errorCode, ended.slowFails], ['expired', 'full', 3]);
+  const v = L.rowView(ended, clock);
+  assert.deepEqual([v.label, v.retryLabel, v.sentence], ['Not delivered', 'Try again', 'Too much was sent from this network for hours, so it stopped trying. Try again later.']);
+  full = false;
+  const tried = await app.retry(row.id);
+  assert.equal(tried.id, row.id);
+  assert.equal(tried.status, 'sent', 'Try again sends the same item');
+});
 
-  const ok = await app.sendFile({ name: 'small.pdf', bytes: ds.randomBytes(100_000) });
-  assert.equal(ok.status, 'sent');
-  const again = await app.retry(row.id);
-  assert.equal(again.id, row.id);
-  assert.equal(again.status, 'failed');
-  assert.equal(again.attempts, 2);
+test('Remove drops a row and its stored content', async () => {
+  const d = await daylight();
+  const { app, storage } = newApp();
+  await app.pair(d.link);
+  const row = await app.sendFile({ name: 'x.txt', bytes: ds.utf8('remove me') });
+  assert.ok(await storage.get(`outbox/${row.id}`));
+  assert.equal(await app.remove(row.id), true);
+  assert.deepEqual(await app.rows(), []);
+  assert.equal(await storage.get(`outbox/${row.id}`), undefined);
+  assert.equal(await app.remove(row.id), false);
+});
+
+test('a re-send copy that can’t be stored: the item is still sent once', async () => {
+  const d = await daylight();
+  const base = new ds.MemoryStorage();
+  const storage = { get: (k) => base.get(k), remove: (k) => base.remove(k), async set(k, v) { if (k.startsWith('outbox/')) throw new Error('disk full'); return base.set(k, v); } };
+  const { app } = newApp({ storage });
+  await app.pair(d.link);
+  const row = await app.sendFile({ name: 'x.txt', bytes: ds.utf8('sent once') });
+  assert.equal(row.status, 'sent');
+  assert.equal((await d.receiver.pollOnce()).items[0].header.id, row.id);
 });
 
 test('watchedStorage reports outbox, pairing and settings changes only', async () => {

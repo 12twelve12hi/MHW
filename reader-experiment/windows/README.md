@@ -48,10 +48,11 @@ this PC**, discards anything the old Daylight hasn't picked up yet.
 - **Drag and drop** files (PDF, EPUB, Word, text, Markdown, HTML…) or a link (from the browser's address bar or a
   page) onto the window. **Choose files…** does the same from a file dialog, and works from the keyboard.
 - **File Explorer:** select one or more files, right-click, **Send to › Daylight** (on Windows 11: **Show more
-  options** first, or Shift + right-click). A notification says *Sent &lt;name&gt;*, or why not. The app needn't be open;
+  options** first, or Shift + right-click). A notification names the file and says how it went (*Sent · waiting for
+  your Daylight.*), or why it couldn't be sent. The app needn't be open;
   it starts if it isn't running. Internet shortcuts (`.url` files) send their web address.
-- **The clipboard's link:** copy a web address anywhere and press **Ctrl + Alt + D**. A notification says
-  *Sent &lt;site&gt;*, or that there was no link to send. The tray menu's **Send clipboard link** and the button in the
+- **The clipboard's link:** copy a web address anywhere and press **Ctrl + Alt + D**. A notification names the site
+  and says how it went, or that there was no link to send. The tray menu's **Send clipboard link** and the button in the
   window do the same. Change or turn off the hotkey in **⋯ › Settings** (click **Change…**, then press the new
   combination; it needs Ctrl, Alt or Win).
 
@@ -66,10 +67,13 @@ The window lists what you sent, newest first, in the same words as the other Sen
 
 - **Sent · waiting for your Daylight**: on its way; the Daylight hasn't picked it up yet (it may be asleep).
 - **Delivered ✓**: the Daylight confirmed it.
-- **Waiting to send**: the relay couldn't be reached or is busy; it tries again by itself (**Retry now** to try at
-  once).
-- **Not delivered**, with the reason, and **Try again** where trying again can help: for example the Daylight didn't
-  pick it up within a week.
+- **Waiting to send**, with why: the relay couldn't be reached or is busy and it tries again by itself (**Retry now**
+  to try at once), or the relay is full or turned the item down and it tries again in about 3 hours.
+- **Not delivered**, with why, and **Try again** where trying again can help: for example the Daylight didn't pick it
+  up within a week.
+
+Every row has **Remove**, which drops it and the copy kept for re-sending. The labels, sentences and buttons come from
+the protocol library (Daylight Share protocol 1.1, `describeRow`), so every Send to Daylight app says the same.
 
 While the app runs (in the notification area is enough) it checks for the Daylight's confirmations when it starts,
 right after each send and again about 30 seconds later, every 15 minutes, and when you open the window; and it
@@ -155,10 +159,11 @@ none of these options does anything. The test:
 2. starts the app the way a clicked link does when it isn't running, `send-to-daylight.exe "daylightshare://pair?…"`:
    it must ask in the protocol's words, pair nothing before the answer, and stay unpaired on Cancel;
 3. hands it the same link again while it runs (a second launch, as a browser does) and answers Pair;
-4. starts the app again with files as arguments, as Send to does: a PDF, a text file and a 3 MB file arrive intact (the
-   last in pieces under the relay's 2 MB limit), and a file over the size limit is refused with the library's sentence;
+4. starts the app again with files as arguments, as Send to does: a PDF, a text file and a 5 MB file arrive intact (the
+   last in three pieces, each under the relay's 2 MB limit), and a file over 9 MB is refused with the library's
+   sentence;
 5. puts a link on the clipboard and starts the app with `--e2e-hotkey`;
-6. waits until the status file shows all four **Delivered**;
+6. waits until the status file shows all four **Delivered**, in the library's words;
 7. opens another Daylight's link with the same name: the question shows the other code and **Switch**; Cancel keeps
    everything;
 8. opens the paired Daylight's link with a new relay and name: no question, *Pairing updated…*, the history kept, and

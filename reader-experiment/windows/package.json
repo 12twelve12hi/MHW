@@ -1,6 +1,6 @@
 {
   "name": "send-to-daylight-windows",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Send to Daylight for Windows: a Tauri tray app that sends files and links to a Daylight DC-1",

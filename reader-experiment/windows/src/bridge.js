@@ -41,15 +41,9 @@ export function appStorage(log = console, onBad = () => {}) {
       // A row that isn't an object can't be shown or sent: leave it out (the next write drops it).
       return key === 'outbox' ? v.filter((r) => r && typeof r === 'object' && typeof r.id === 'string') : v;
     },
-    async set(key, value) {
-      try {
-        await invoke('kv_set', { key, value: JSON.stringify(value) });
-      } catch (e) {
-        // The copy of an item's content kept for re-sends is best effort: without it the item is still sent once.
-        if (String(key).startsWith('outbox/')) { log.warn?.('Send to Daylight: could not keep a copy for re-sending', e); return; }
-        throw e;
-      }
-    },
+    // Every failed write is reported: for the re-send copy ('outbox/<id>') the protocol library catches it and sends
+    // the item once; anything else must fail loudly.
+    async set(key, value) { await invoke('kv_set', { key, value: JSON.stringify(value) }); },
     async remove(key) { await invoke('kv_remove', { key }); },
   };
 }

@@ -184,13 +184,13 @@ function setBusy(busy) {
   $('app').setAttribute('aria-busy', busy ? 'true' : 'false');
 }
 
+/** After a share (CHANGES-v1.1 2.5): the row's label, then its sentence; for several, what each one did. */
 function showResults(results) {
   if (!results?.length) return;
-  for (const r of results) note(r.row ? `sent ${r.row.kind} ${r.row.id} (${r.row.status}${r.row.error ? ': ' + r.row.error : ''})` : `not sent ${r.name}: ${r.error}`);
+  for (const r of results) note(r.row ? `sent ${r.row.kind} ${r.row.id} (${r.row.status}${r.row.errorCode ? '/' + r.row.errorCode : ''}${r.row.error ? ': ' + r.row.error : ''})` : `not sent ${r.name}: ${r.error}`);
   if (results.length === 1 && results[0].code === 'no-link') { setStatus(`No link on the clipboard. ${results[0].error}`, true); return; }
   const s = sendSummary(results);
-  const bad = results.some((r) => !r.row || r.row.status === 'failed');
-  setStatus(`${bad ? '' : '✓ '}${s.title}. ${s.body}`, bad);
+  setStatus(results.length === 1 && results[0].row ? s.body : `${s.title}: ${s.body.replace(/\n/g, ' ')}`, s.bad);
 }
 
 async function sendFiles(files) {
@@ -280,6 +280,11 @@ async function retry(id, button) {
   try { showResults([{ row: await app.retry(id) }]); } catch (e) { setStatus(e.message, true); }
 }
 
+async function remove(id, button) {
+  button.disabled = true;
+  try { await app.remove(id); note(`removed ${id}`); } catch (e) { setStatus(e.message, true); button.disabled = false; }
+}
+
 // --- actions from outside the window (Rust's queue) ----------------------------------------------------------------
 
 const drainRun = serial();
@@ -317,18 +322,26 @@ function renderHistory() {
     const title = el('span', 'item-title', displayTitle(row));
     title.title = row.url || row.name || '';
     line.append(el('span', 'kind', kindLabel(row)), title);
+    // The protocol library's words (describeRow): the same label, sentence and button in every Send to Daylight app.
     const v = rowView(row);
     const meta = el('div', 'item-meta');
     meta.append(el('span', `st ${v.tone}`, v.label), el('span', 'when', `· ${relativeTime(row.created)}`));
+    const acts = el('span', 'acts');
     if (v.retry) {
       const b = el('button', 'retry', v.retryLabel);
       b.type = 'button';
       b.setAttribute('aria-label', `${v.retryLabel}: ${displayTitle(row)}`);
       b.addEventListener('click', () => retry(row.id, b));
-      meta.append(b);
+      acts.append(b);
     }
+    const rm = el('button', 'remove', 'Remove');
+    rm.type = 'button';
+    rm.setAttribute('aria-label', `Remove: ${displayTitle(row)}`);
+    rm.addEventListener('click', () => remove(row.id, rm));
+    acts.append(rm);
+    meta.append(acts);
     li.append(line, meta);
-    if (v.sentence) li.append(el('p', `note${v.tone === 'bad' ? ' bad' : ''}`, v.sentence));
+    if (v.sentence) li.append(el('p', `note sentence${v.tone === 'bad' ? ' bad' : ''}`, v.sentence));
     list.append(li);
   }
 }

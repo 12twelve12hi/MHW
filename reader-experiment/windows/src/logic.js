@@ -2,7 +2,7 @@
 
 import * as ds from './daylight-share.js';
 
-const { webUrl, findUrl, safeFileName, cleanTitle } = ds;
+const { webUrl, findUrl, safeFileName, cleanTitle, describeRow } = ds;
 
 export const DEFAULT_HOTKEY = 'Ctrl+Alt+D';
 export const PDF_MIME = 'application/pdf';
@@ -75,37 +75,28 @@ export function hostOf(url) {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; }
 }
 
-/** How a history row reads. */
-export function statusInfo(row) {
-  switch (row?.status) {
-    case 'sending': return { label: 'Sending…', tone: 'busy', retry: false };
-    case 'sent': return { label: 'Sent', tone: 'sent', retry: false, hint: 'Waiting for your Daylight to pick it up' };
-    case 'delivered': return { label: 'Delivered ✓', tone: 'ok', retry: false };
-    case 'expired': return { label: 'Not delivered', tone: 'bad', retry: true, hint: 'Your Daylight didn’t pick it up within a week' };
-    case 'failed': return { label: 'Not delivered', tone: 'bad', retry: true, hint: row.error || 'Couldn’t reach the relay' };
-    default: return { label: String(row?.status ?? ''), tone: 'sent', retry: false };
-  }
-}
-
-/** True when the protocol library words the history itself (describeRow, protocol revision 1.1 and later). */
-export const libraryWords = () => typeof ds.describeRow === 'function';
+const TONES = { sending: 'busy', failed: 'busy', sent: 'sent', delivered: 'ok', expired: 'bad' };
+const BUTTONS = { 'retry-now': 'Retry now', 'try-again': 'Try again' };
 
 /**
- * How a history row reads: {label, tone, sentence, retry, retryLabel}. The protocol library's own words when it has
- * them (the same on every Send to Daylight app); otherwise Sent / Delivered ✓ / Not delivered with the relay's reason.
+ * How a history row reads, in the words every Send to Daylight app uses (CHANGES-v1.1 2.5, from the protocol library's
+ * describeRow): {label, tone, sentence, action, retry, retryLabel}. sentence is '' when there is none; retry is true
+ * when the row has a button, whose words are retryLabel ("Retry now" or "Try again"). Every row can also be removed.
  */
 export function rowView(row, now = Date.now()) {
-  if (libraryWords()) {
-    const d = ds.describeRow(row, now);
-    const tone = { sending: 'busy', sent: 'sent', delivered: 'ok', failed: 'busy', expired: 'bad' }[row?.status] ?? 'sent';
-    return {
-      label: d.label, tone, sentence: row?.status === 'delivered' ? '' : d.sentence ?? '', retry: !!d.action,
-      retryLabel: d.action === 'try-again' ? 'Try again' : 'Retry now',
-    };
-  }
-  const s = statusInfo(row);
-  const sentence = row?.status === 'failed' || row?.status === 'expired' ? row.error || s.hint || '' : '';
-  return { label: s.label, tone: s.tone, sentence, retry: s.retry, retryLabel: 'Retry' };
+  const d = describeRow(row, now);
+  return {
+    label: d.label, tone: TONES[row?.status] ?? 'sent', sentence: d.sentence ?? '', action: d.action,
+    retry: !!d.action, retryLabel: BUTTONS[d.action] ?? '',
+  };
+}
+
+/** What to say after a share (CHANGES-v1.1 2.5): the row's label, then its sentence when it has one. */
+export function rowMessage(row, now = Date.now()) {
+  const d = describeRow(row, now);
+  if (!d.label) return '';
+  const label = /[.…✓]$/.test(d.label) ? d.label : `${d.label}.`;
+  return d.sentence ? `${label} ${d.sentence}` : label;
 }
 
 export function kindLabel(row) {
@@ -145,24 +136,24 @@ export function relativeTime(ms, now = Date.now()) {
 export const isPending = (row) => !!row && (row.status === 'sending' || row.status === 'sent' || row.status === 'failed');
 
 /**
- * The notification after sending: {title, body}. results: [{row} | {name, error}] in the order sent.
- * One item: "Sent <title or host>" (or why not); several: a count, then what failed.
+ * The notification after sending: {title, body, bad}. results: [{row} | {name, error}] in the order sent. bad: one of
+ * them isn't sent and won't be by itself (an error, or Not delivered).
+ * One item: its name, then the row's label and sentence (CHANGES-v1.1 2.5), or "Couldn’t send <name>" and why. Several:
+ * a count, then one line when they all ended alike, else what each one did.
  */
 export function sendSummary(results) {
-  const ok = results.filter((r) => r.row && r.row.status !== 'failed');
-  const failed = results.filter((r) => !r.row || r.row.status === 'failed');
-  const why = (r) => (r.row ? rowView(r.row).sentence || r.row.error : r.error) || 'Something went wrong.';
+  const say = (r) => (r.row ? rowMessage(r.row) : r.error || 'Something went wrong.');
   const nameOf = (r) => (r.row ? shortName(r.row) : r.name || 'it');
+  const bad = results.some((r) => !r.row || r.row.status === 'expired');
   if (results.length === 1) {
     const r = results[0];
-    if (ok.length) return { title: `Sent ${nameOf(r)}`, body: 'On its way to your Daylight.' };
-    const retrying = r.row?.status === 'failed' && !libraryWords();
-    return { title: `Couldn’t send ${nameOf(r)}`, body: why(r) + (retrying ? ' It will try again.' : '') };
+    return r.row ? { title: nameOf(r), body: say(r), bad } : { title: `Couldn’t send ${nameOf(r)}`, body: say(r), bad };
   }
-  if (!failed.length) return { title: `Sent ${ok.length} items`, body: 'On their way to your Daylight.' };
-  const lines = failed.slice(0, 3).map((r) => `${nameOf(r)}: ${why(r)}`);
-  if (failed.length > 3) lines.push(`and ${failed.length - 3} more`);
-  return { title: ok.length ? `Sent ${ok.length} of ${results.length} items` : `Couldn’t send ${results.length} items`, body: lines.join('\n') };
+  const said = [...new Set(results.map(say))];
+  if (said.length === 1 && results.every((r) => r.row)) return { title: `${results.length} items`, body: said[0], bad };
+  const lines = results.slice(0, 4).map((r) => `${nameOf(r)}: ${say(r)}`);
+  if (results.length > 4) lines.push(`and ${results.length - 4} more`);
+  return { title: `${results.length} items`, body: lines.join('\n'), bad };
 }
 
 // --- the clipboard hotkey -------------------------------------------------------------------------------------------

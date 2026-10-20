@@ -4,7 +4,7 @@
 import * as ds from './daylight-share.js';
 import {
   fileNameFor, mimeFor, titleFromName, nameFromPath, isInternetShortcut, urlFromInternetShortcut, isPending,
-  sendSummary, hostOf,
+  sendSummary, hostOf, rowView,
 } from './logic.js';
 
 /** How items show as sent on the Daylight. */
@@ -16,15 +16,13 @@ export const TICK_MS = 15 * 60 * 1000;
 /** Opening the window checks for acks, at most this often. */
 export const SHOW_TICK_MS = 10 * 1000;
 /**
- * The largest file this app sends: the protocol library's limit (MAX_ITEM, 9 MB since protocol revision 1.1), else
- * 64 MB. Larger files aren't even read (PROTOCOL 3.3: refuse at once, before reading where possible).
+ * The largest file this app sends: the protocol's one limit for every relay (MAX_ITEM, 9 MB, protocol 1.1). Larger
+ * files aren't even read (PROTOCOL 3.3: refuse at once, before reading).
  */
-export const MAX_FILE = Number.isFinite(ds.MAX_ITEM) ? ds.MAX_ITEM : 64 * 1024 * 1024;
+export const MAX_FILE = ds.MAX_ITEM;
 
-/** The library's sentence for a file over MAX_FILE. */
-export function tooBig(size) {
-  return typeof ds.tooBigMessage === 'function' ? ds.tooBigMessage(size) : 'That file is larger than 64 MB.';
-}
+/** The library's sentence for a file over MAX_FILE: "Too big to send. Files can be up to 9 MB; this one is … MB." */
+export const tooBig = (size) => ds.tooBigMessage(size);
 
 /** Runs async functions one at a time, in call order (the outbox is read-modify-write). */
 export function serial() {
@@ -245,11 +243,18 @@ export function createApp({
     return results;
   }
 
+  /** "Retry now" (a failed row) and "Try again" (an expired one), as the library allows. -> the row */
   async function retry(id) {
     const s = await requireSender();
     const row = await run(() => s.retry(id));
     afterSend();
     return row;
+  }
+
+  /** "Remove": the row and its stored content. -> true when there was such a row */
+  async function remove(id) {
+    const s = await getSender();
+    return s ? run(() => s.remove(id)) : false;
   }
 
   // --- acks and re-sends ----------------------------------------------------------------------------------------------
@@ -297,16 +302,20 @@ export function createApp({
       at: new Date(now()).toISOString(),
       ...(await state()),
       waiting: waiting.length,
-      rows: (await rows()).map((r) => ({
-        id: r.id, kind: r.kind, title: r.title, name: r.name, url: r.url, mime: r.mime, size: r.size,
-        status: r.status, error: r.error, attempts: r.attempts,
-      })),
+      rows: (await rows()).map((r) => {
+        const v = rowView(r, now());
+        return {
+          id: r.id, kind: r.kind, title: r.title, name: r.name, url: r.url, mime: r.mime, size: r.size,
+          status: r.status, errorCode: r.errorCode ?? '', error: r.error, attempts: r.attempts,
+          label: v.label, sentence: v.sentence, action: v.action,
+        };
+      }),
     };
   }
 
   return {
     storage, preparePairing, applyPairing, pair, unpair, state, rows, getSettings, setSettings, sendLink, sendFile, sendPaths,
-    sendClipboard, handleAction, retry, tick, tickIfStale, start, stop, snapshot, settle,
+    sendClipboard, handleAction, retry, remove, tick, tickIfStale, start, stop, snapshot, settle,
     onChange: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
   };
 }

@@ -39,16 +39,8 @@ test('linkFromDrop prefers text/uri-list, skips comments, falls back to text', (
   assert.equal(L.linkFromDrop({}), null);
 });
 
-test('statusInfo: Sent, Delivered ✓, Not delivered with Retry', () => {
-  assert.deepEqual(
-    [L.statusInfo({ status: 'sent' }).label, L.statusInfo({ status: 'delivered' }).label, L.statusInfo({ status: 'failed' }).label],
-    ['Sent', 'Delivered ✓', 'Not delivered'],
-  );
-  assert.equal(L.statusInfo({ status: 'failed', error: 'The relay refused the file as too large.' }).hint, 'The relay refused the file as too large.');
-  assert.equal(L.statusInfo({ status: 'failed' }).retry, true);
-  assert.equal(L.statusInfo({ status: 'expired' }).retry, true);
-  assert.equal(L.statusInfo({ status: 'delivered' }).retry, false);
-  assert.equal(L.statusInfo({ status: 'sending' }).label, 'Sending…');
+test('isPending', () => {
+  assert.equal(L.isPending({ status: 'sending' }), true);
   assert.equal(L.isPending({ status: 'sent' }), true);
   assert.equal(L.isPending({ status: 'failed' }), true);
   assert.equal(L.isPending({ status: 'delivered' }), false);
@@ -66,36 +58,46 @@ test('kindLabel, displayTitle, shortName', () => {
   assert.equal([...L.shortName({ title: 'x'.repeat(100) })].length, 60);
 });
 
-test('sendSummary: "Sent <title or host>" or why not', () => {
-  const sent = { row: { status: 'sent', title: '', url: 'https://www.example.com/a' } };
-  const failed = { row: { status: 'failed', name: 'big.pdf', title: 'big', error: 'The relay refused the file as too large.' } };
-  assert.deepEqual(L.sendSummary([sent]), { title: 'Sent example.com', body: 'On its way to your Daylight.' });
-  const failedBody = L.libraryWords() ? ds.describeRow(failed.row).sentence : 'The relay refused the file as too large. It will try again.';
-  assert.deepEqual(L.sendSummary([failed]), { title: 'Couldn’t send big', body: failedBody });
-  assert.deepEqual(L.sendSummary([{ name: 'folder', error: 'Folders can’t be sent.' }]), { title: 'Couldn’t send folder', body: 'Folders can’t be sent.' });
-  assert.equal(L.sendSummary([sent, sent]).title, 'Sent 2 items');
-  const mixed = L.sendSummary([sent, failed]);
-  assert.equal(mixed.title, 'Sent 1 of 2 items');
-  assert.ok(mixed.body.startsWith('big: '), mixed.body);
+test('sendSummary: the item, then its label and sentence (CHANGES-v1.1 2.5); several: what each one did', () => {
+  const now = Date.now();
+  const sent = { row: { status: 'sent', title: '', url: 'https://www.example.com/a', created: now } };
+  const waiting = { row: { status: 'failed', errorCode: 'full', name: 'big.pdf', title: 'big', error: 'HTTP 413', created: now } };
+  const gone = { row: { status: 'expired', errorCode: 'too-large', name: 'huge.pdf', title: 'huge', size: 14_200_000, created: now } };
+  assert.deepEqual(L.sendSummary([sent]), { title: 'example.com', body: 'Sent · waiting for your Daylight.', bad: false });
+  assert.deepEqual(L.sendSummary([waiting]), {
+    title: 'big', bad: false,
+    body: 'Waiting to send. A lot has been sent from this network in the last few hours. It will send by itself in about 3 hours.',
+  });
+  assert.deepEqual(L.sendSummary([gone]), { title: 'huge', body: `Not delivered. ${ds.tooBigMessage(14_200_000)}`, bad: true });
+  assert.deepEqual(L.sendSummary([{ name: 'folder', error: 'Folders can’t be sent.' }]), { title: 'Couldn’t send folder', body: 'Folders can’t be sent.', bad: true });
+  assert.deepEqual(L.sendSummary([sent, sent]), { title: '2 items', body: 'Sent · waiting for your Daylight.', bad: false });
+  const mixed = L.sendSummary([sent, waiting, { name: 'x.pdf', error: ds.tooBigMessage(9_000_001) }]);
+  assert.equal(mixed.title, '3 items');
+  assert.equal(mixed.bad, true);
+  assert.deepEqual(mixed.body.split('\n'), [
+    'example.com: Sent · waiting for your Daylight.',
+    'big: Waiting to send. A lot has been sent from this network in the last few hours. It will send by itself in about 3 hours.',
+    'x.pdf: Too big to send. Files can be up to 9 MB; this one is 9.1 MB.',
+  ]);
+  const many = L.sendSummary(Array.from({ length: 6 }, (_, i) => (i % 2 ? sent : waiting)));
+  assert.equal(many.body.split('\n').at(-1), 'and 2 more');
 });
 
-test('rowView: the library’s own words when it has them, else Sent / Delivered ✓ / Not delivered + the reason', () => {
-  const now = Date.now();
-  const rows = ['sending', 'sent', 'delivered', 'failed', 'expired'].map((status) => ({
-    id: 'a'.repeat(32), kind: 'file', name: 'x.pdf', status, created: now, error: 'The relay refused the file as too large.', errorCode: '',
-  }));
-  for (const row of rows) {
-    const v = L.rowView(row, now);
-    const expected = L.libraryWords() ? ds.describeRow(row, now).label : L.statusInfo(row).label;
-    assert.equal(v.label, expected, row.status);
-    if (row.status === 'delivered') { assert.match(v.label, /Delivered ✓/); assert.equal(v.sentence, ''); assert.equal(v.retry, false); }
-    if (row.status === 'failed' || row.status === 'expired') assert.ok(v.sentence, `${row.status} says why`);
-  }
-  if (!L.libraryWords()) {
-    assert.deepEqual(L.rowView(rows[3]), { label: 'Not delivered', tone: 'bad', sentence: 'The relay refused the file as too large.', retry: true, retryLabel: 'Retry' });
-    assert.equal(L.rowView(rows[1]).label, 'Sent');
-  } else {
-    assert.equal(L.rowView(rows[3]).retry, !!ds.describeRow(rows[3]).action);
+test('rowView follows describeRow for every row of CHANGES-v1.1 2.5 (vectors > statusText)', async () => {
+  const fs = await import('node:fs');
+  const V = JSON.parse(fs.readFileSync(new URL('../../../share/vectors/test-vectors.json', import.meta.url), 'utf8'));
+  assert.ok(V.statusText.length >= 12);
+  const tones = { sending: 'busy', failed: 'busy', sent: 'sent', delivered: 'ok', expired: 'bad' };
+  for (const c of V.statusText) {
+    const v = L.rowView(c.row, c.now);
+    assert.equal(v.label, c.label, c.name);
+    assert.equal(v.sentence, c.sentence ?? '', c.name);
+    assert.equal(v.action, c.action, c.name);
+    assert.equal(v.retry, !!c.action, c.name);
+    assert.equal(v.retryLabel, { 'retry-now': 'Retry now', 'try-again': 'Try again' }[c.action] ?? '', c.name);
+    assert.equal(v.tone, tones[c.row.status], c.name);
+    const label = /[.…✓]$/.test(c.label) ? c.label : `${c.label}.`;
+    assert.equal(L.rowMessage(c.row, c.now), c.sentence ? `${label} ${c.sentence}` : label, c.name);
   }
 });
 

@@ -144,11 +144,18 @@ details[open] summary { color: var(--ink); }
 .st { font-weight: 600; color: var(--ink); }
 .st.busy { color: var(--muted); }
 .st.bad { color: var(--bad); }
+.acts { margin-left: auto; display: flex; gap: 6px; align-items: center; }
 .retry {
-  margin-left: auto; font: inherit; font-size: 13px; font-weight: 600; color: var(--ink); background: transparent;
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--ink); background: transparent;
   border: 1px solid var(--rule-strong); border-radius: 7px; padding: 2px 12px; cursor: pointer;
 }
 .retry:hover { border-color: var(--ink); }
+.remove {
+  font: inherit; font-size: 12.5px; color: var(--muted); background: transparent; border: 0; padding: 2px 4px;
+  cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
+}
+.remove:hover { color: var(--ink); }
+.retry:disabled, .remove:disabled { opacity: .45; cursor: default; }
 .note { margin: 3px 0 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
 .note.bad { color: var(--bad); }
 

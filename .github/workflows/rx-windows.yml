@@ -68,7 +68,7 @@ jobs:
 
       - name: Build the app and the installer (NSIS)
         # The CLI's JavaScript entry point, so the JSON reaches it without a trip through cmd.exe.
-        run: node node_modules/@tauri-apps/cli/tauri.js build --bundles nsis --config "{\"version\":\"1.0.${GITHUB_RUN_NUMBER}\"}"
+        run: node node_modules/@tauri-apps/cli/tauri.js build --bundles nsis --config "{\"version\":\"1.1.${GITHUB_RUN_NUMBER}\"}"
 
       - name: Collect Send-to-Daylight-windows-setup.exe and the bare exe
         run: |
