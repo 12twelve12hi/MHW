@@ -147,7 +147,8 @@ test('ack vectors: 70 ids with the worst `from` stay a small frame', async () =>
 });
 
 test('status text vectors: describeRow and formatMB', () => {
-  assert.equal(V.statusText.length, 12);
+  assert.equal(V.statusText.length, 14, 'the 12 rows of CHANGES-v1.1 2.5, plus failed and expired rows saved by v1.0');
+  assert.ok(V.statusText.filter((s) => !('errorCode' in s.row)).length === 2, 'two v1.0 rows without errorCode');
   for (const s of V.statusText) {
     assert.deepEqual(ds.describeRow(s.row, s.now), { label: s.label, sentence: s.sentence, action: s.action }, s.name);
   }
@@ -164,6 +165,23 @@ test('pairing confirmation vectors', () => {
   assert.ok(ds.samePairingSecret({ secret: a }, { secret: a.slice() }));
   assert.ok(!ds.samePairingSecret({ secret: a }, { secret: ds.generateSecret() }));
   assert.ok(!ds.samePairingSecret(null, { secret: a }));
+  for (const i of [0, 8, 15]) {
+    const b = a.slice(); b[i] ^= 1;
+    assert.ok(!ds.samePairingSecret({ secret: a }, { secret: b }), `all 16 bytes are compared (byte ${i})`);
+  }
+  const last = a.slice(); last[15] ^= 1;
+  const conf = ds.pairingConfirmation({ secret: a, relay: '', name: 'Old' }, { secret: last, relay: '', name: 'New' });
+  assert.equal(conf.ask, true);
+  assert.equal(conf.button, 'Switch');
+});
+
+test('relayHost names a relay by its normalised host and port, as text', () => {
+  assert.equal(ds.relayHost(''), 'ntfy.sh');
+  assert.equal(ds.relayHost('https://Relay.Example.org:8443/ntfy/'), 'relay.example.org:8443');
+  assert.equal(ds.relayHost('https://relay.example.org:443/ntfy'), 'relay.example.org');
+  assert.equal(ds.relayHost('http://[::1]:8080/'), '[::1]:8080');
+  assert.equal(ds.relayHost('https://relay.example.org:0443'), 'relay.example.org:0443');
+  assert.throws(() => ds.relayHost('ftp://x'), (e) => e.code === 'relay');
 });
 
 test('base32/base64 round trips at every length', () => {
@@ -188,7 +206,8 @@ test('url helpers', () => {
 });
 
 test('normalizeRelay refuses what is not an http(s) relay', () => {
-  for (const bad of ['ftp://x', 'ws://relay.example.org', 'https://', 'https://relay.example.org/../x', 'https://réseau.example', 'https://relay.example.org:x1']) {
+  for (const bad of ['ftp://x', 'ws://relay.example.org', 'https://', 'https://relay.example.org/../x', 'https://réseau.example', 'https://relay.example.org:x1',
+    'https://relay.example.org/a\tb', 'https://relay.example.org/\u2028x', 'http://[fe80::1%en0]/', 'https://[::1]x/', 'https://.', 'https://-x.example/']) {
     assert.throws(() => ds.normalizeRelay(bad), (e) => e.code === 'relay', bad);
   }
 });
@@ -233,10 +252,8 @@ test('a deflate-raw stream split across parts reassembles (finding 23)', async (
   assert.equal(ds.fromUtf8(done.content), content);
 });
 
-test('inflateRaw stops at the limit: a deflate bomb never inflates far', async () => {
-  const bomb = V.invalidItems.find((i) => /bomb/.test(i.name));
-  const keys = await ds.deriveKeys(ds.fromHex(V.pairing[0].secretHex));
-  const { body } = await ds.decryptFrame(keys, 'inbox', ds.fromHex(bomb.framesHex[0]));
+/** Runs fn with a DecompressionStream that counts what it produces. -> the byte count. */
+async function countInflated(fn) {
   const Original = globalThis.DecompressionStream;
   let produced = 0;
   globalThis.DecompressionStream = class {
@@ -248,11 +265,114 @@ test('inflateRaw stops at the limit: a deflate bomb never inflates far', async (
     }
   };
   try {
-    await assert.rejects(ds.inflateRaw(body, 10), (e) => e.code === 'integrity');
+    await fn();
     await ds.sleep(50);
   } finally { globalThis.DecompressionStream = Original; }
+  return produced;
+}
+
+const openBomb = async () => {
+  const bomb = V.invalidItems.find((i) => /bomb/.test(i.name));
+  const keys = await ds.deriveKeys(ds.fromHex(V.pairing[0].secretHex));
+  return ds.decryptFrame(keys, 'inbox', ds.fromHex(bomb.framesHex[0]));
+};
+
+test('inflateRaw stops at the limit: a deflate bomb never inflates far', async () => {
+  const { body } = await openBomb();
+  const produced = await countInflated(() => assert.rejects(ds.inflateRaw(body, 10), (e) => e.code === 'integrity'));
   assert.ok(produced < 70 * 1024, `inflated ${produced} bytes`);
   assert.equal((await ds.inflateRaw(body)).length, 1048576, 'without a limit it is a megabyte');
+});
+
+test('the Reassembler inflates no more than the header’s size (the deflate bomb through Reassembler.add)', async () => {
+  const { header, body } = await openBomb();
+  const produced = await countInflated(() => assert.rejects(new ds.Reassembler().add(header, body), (e) => e.code === 'integrity'));
+  assert.ok(produced < 70 * 1024, `inflated ${produced} bytes`);
+});
+
+// A RelayClient whose fetch answers a poll with `lines` and attachment GETs with download(url).
+const scripted = (lines, download) => new ds.RelayClient({ relay: 'https://relay.example.org', retryDelaysMs: [0, 0, 0],
+  fetch: async (url) => (url.includes('/json?') ? new Response(lines.map((l) => JSON.stringify(l)).join('\n') + '\n') : download(url)) });
+const attachmentLine = (id, url = `https://files.example/${id}.bin`) => ({ id, time: 1, event: 'message', message: 'dls1', attachment: { url } });
+const zeros = (n, onPull = () => {}) => {
+  let o = 0;
+  return new ReadableStream({ pull(c) { const k = Math.min(1 << 20, n - o); o += k; onPull(k); c.enqueue(new Uint8Array(k)); if (o >= n) c.close(); } });
+};
+
+test('attachment downloads stop at 12,713,984 bytes: a v1.0 12 MiB frame fits, one byte more is junk', async () => {
+  assert.equal(ds.MAX_ATTACHMENT, 12713984, 'a literal (v1.0’s 12 MiB chunk + 128 KiB), not derived from CHUNK');
+  let pulledDeclared = 0;
+  const sizes = { ok: ds.MAX_ATTACHMENT, over: ds.MAX_ATTACHMENT + 1 };
+  const rc = scripted(['ok', 'over', 'declared'].map((id) => attachmentLine(id)), async (url) => {
+    const id = url.split('/').pop().replace('.bin', '');
+    if (id === 'declared') {
+      return new Response(zeros(ds.MAX_ATTACHMENT + 1, (k) => { pulledDeclared += k; }), { headers: { 'content-length': String(ds.MAX_ATTACHMENT + 1) } });
+    }
+    return new Response(zeros(sizes[id])); // no Content-Length: the read itself must stop
+  });
+  const entries = await rc.poll('t', 'all');
+  assert.deepEqual(entries.map((e) => e.outcome), ['frame', 'junk', 'junk']);
+  assert.equal(entries[0].frame.length, 12713984);
+  assert.equal(entries[1].frame, null, 'nothing of an over-cap body is kept');
+  assert.ok(pulledDeclared <= 2 << 20, `an over-cap Content-Length is junk without reading (${pulledDeclared} bytes pulled)`);
+});
+
+test('download outcomes: 2xx frame, 404/410 expired, other statuses and network errors retry, a foreign http URL junk', async () => {
+  const cases = { a: 200, b: 404, c: 410, d: 403, e: 500, f: 418, g: 'throw' };
+  const lines = [...Object.keys(cases).map((id) => attachmentLine(id)), attachmentLine('h', 'http://elsewhere.example/h.bin'),
+    { id: 'i', time: 1, event: 'message', message: 'not base64!' }];
+  const rc = scripted(lines, async (url) => {
+    const s = cases[url.split('/').pop().replace('.bin', '')];
+    if (s === 'throw') throw new TypeError('fetch failed');
+    return new Response(s === 200 ? new Uint8Array(10) : 'x', { status: s });
+  });
+  assert.deepEqual((await rc.poll('t', 'all')).map((e) => [e.id, e.outcome]),
+    [['a', 'frame'], ['b', 'expired'], ['c', 'expired'], ['d', 'retry'], ['e', 'retry'], ['f', 'retry'], ['g', 'retry'], ['h', 'junk'], ['i', 'junk']]);
+});
+
+test('a poll answer over 64 MiB fails the poll with relay, whether declared or streamed', async () => {
+  const declared = async () => new Response(zeros(10), { headers: { 'content-length': String(ds.MAX_POLL_RESPONSE + 1) } });
+  await assert.rejects(new ds.RelayClient({ relay: 'https://relay.example.org', fetch: declared }).poll('t', 'all'), (e) => e.code === 'relay');
+  const chunk = new Uint8Array(8 << 20).fill(10); // newlines
+  const streamed = async () => {
+    let n = 0;
+    return new Response(new ReadableStream({ pull(c) { if (n++ < 8) c.enqueue(chunk); else { c.enqueue(Uint8Array.of(10)); c.close(); } } }));
+  };
+  await assert.rejects(new ds.RelayClient({ relay: 'https://relay.example.org', fetch: streamed }).poll('t', 'all'), (e) => e.code === 'relay');
+});
+
+test('publish maps answers to codes: other 4xx refused at once, 413 full, 429 network at once, 408/5xx/no answer retried in the call', async () => {
+  const pub = async (answers, retryAfter) => {
+    let calls = 0;
+    const f = async () => {
+      const a = answers[Math.min(calls++, answers.length - 1)];
+      if (a === 'throw') throw new TypeError('fetch failed');
+      return new Response('{}', { status: a, headers: retryAfter ? { 'Retry-After': retryAfter } : {} });
+    };
+    const rc = new ds.RelayClient({ relay: 'https://relay.example.org', fetch: f, retryDelaysMs: [0, 0, 0] });
+    try { await rc.publish('t', ds.randomBytes(100)); return { ok: true, calls }; } catch (e) { return { code: e.code, status: e.status, calls }; }
+  };
+  for (const s of [400, 401, 403, 404, 405, 409, 451]) assert.deepEqual(await pub([s]), { code: 'refused', status: s, calls: 1 }, String(s));
+  assert.deepEqual(await pub([413]), { code: 'full', status: 413, calls: 1 });
+  assert.deepEqual(await pub([429]), { code: 'network', status: 429, calls: 1 });
+  for (const s of [408, 500, 502, 503]) assert.deepEqual(await pub([s]), { code: 'network', status: s, calls: 4 }, String(s));
+  assert.deepEqual(await pub(['throw']), { code: 'network', status: 0, calls: 4 });
+  assert.deepEqual(await pub([502, 200]), { ok: true, calls: 2 });
+  assert.deepEqual(await pub(['throw', 200]), { ok: true, calls: 2 });
+});
+
+test('a Retry-After on a 5xx is honoured in the call, at most 60 s', async () => {
+  const waits = []; // the in-call waits of 1 s or more (the request deadlines are set below 1 s here)
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...a) => { if (ms >= 1000) { waits.push(ms); ms = 0; } return realSetTimeout(fn, ms, ...a); };
+  try {
+    let calls = 0;
+    const f = async () => { calls++; return new Response('{}', { status: calls <= 2 ? 503 : 200, headers: { 'Retry-After': calls === 1 ? '2' : '600' } }); };
+    const rc = new ds.RelayClient({ relay: 'https://relay.example.org', fetch: f, retryDelaysMs: [0, 0, 0], timeouts: { short: 999, long: 999 } });
+    await rc.publish('t', ds.randomBytes(100));
+    assert.equal(calls, 3);
+  } finally { globalThis.setTimeout = realSetTimeout; }
+  assert.deepEqual(waits, [2000, 60000]);
 });
 
 test('size limits', async () => {

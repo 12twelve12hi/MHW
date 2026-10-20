@@ -1,17 +1,18 @@
 // A small stand-in for an ntfy server, for tests and local demos. It implements the parts of ntfy the Daylight Share
 // protocol uses (PROTOCOL.md section 3) and behaves like ntfy.sh where the protocol depends on it (NTFY-FACTS.md):
 //
-// - attachments of at most 2 MiB each (2,097,152 bytes) and 20,000,000 live bytes per visitor (uploader), freed 3 h
+// - attachments of at most 2,000,000 bytes each (the floor PROTOCOL 3.5 promises; ntfy.sh itself takes 2,097,152, so
+//   pass --attachment-max 2097152 to mirror it exactly) and 20,000,000 live bytes per visitor (uploader), freed 3 h
 //   after the upload started; over either limit a publish gets 413 {"code":41301} (the body is drained, never reset);
 // - a message's `time` is stamped when its request starts, and it becomes visible to polls only when its body has been
 //   read, so a slow upload can appear after messages stamped later than it;
-// - `since=<unix time>` is inclusive; `since=<message id>` returns what was stored after it, and an unknown or expired
-//   id returns everything;
+// - `since=<unix time>` is inclusive. `since=<message id>` (kept from the v1.0 mock; no client uses id cursors) returns
+//   what was stored after it, and an unknown or expired id returns everything, as on ntfy.sh (NTFY-FACTS.md);
 // - messages are kept 12 h and attachments 3 h, on the mock's clock (which tests can inject or move).
 //
 //   node mock-relay.mjs [--port 8787] [--host 127.0.0.1] [--public-url http://10.0.2.2:8787]
 //                       [--message-ttl 43200] [--attachment-ttl 10800]
-//                       [--attachment-max 2097152] [--visitor-total 20000000] [--no-attachments] [--early-413]
+//                       [--attachment-max 2000000] [--visitor-total 20000000] [--no-attachments] [--early-413]
 //                       [--control]
 //
 // --no-attachments  every attachment publish answers 400 {"code":40014} (a server without attachment-cache-dir)
@@ -55,7 +56,7 @@ const ERRORS = {
 
 export function startMockRelay({
   port = 0, host = '127.0.0.1', publicUrl = '', messageTtlSec = 12 * 3600, attachmentTtlSec = 3 * 3600,
-  messageMaxBytes = 4096, attachmentMaxBytes = 2097152, visitorAttachmentTotalBytes = 20000000,
+  messageMaxBytes = 4096, attachmentMaxBytes = 2000000, visitorAttachmentTotalBytes = 20000000,
   attachments = true, early413 = false, control = false, keepaliveSec = 45, now = () => Date.now(),
   failDownload = null, failPublish = null,
 } = {}) {
@@ -295,13 +296,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const arg = (name, def) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : def; };
   if (has('help')) {
     console.log('node mock-relay.mjs [--port 8787] [--host 127.0.0.1] [--public-url URL] [--message-ttl 43200] [--attachment-ttl 10800]\n'
-      + '                    [--attachment-max 2097152] [--visitor-total 20000000] [--no-attachments] [--early-413] [--control]');
+      + '                    [--attachment-max 2000000] [--visitor-total 20000000] [--no-attachments] [--early-413] [--control]');
     process.exit(0);
   }
   const relay = await startMockRelay({
     port: Number(arg('port', 8787)), host: arg('host', '127.0.0.1'), publicUrl: arg('public-url', ''),
     messageTtlSec: Number(arg('message-ttl', 43200)), attachmentTtlSec: Number(arg('attachment-ttl', 10800)),
-    attachmentMaxBytes: Number(arg('attachment-max', 2097152)), visitorAttachmentTotalBytes: Number(arg('visitor-total', 20000000)),
+    attachmentMaxBytes: Number(arg('attachment-max', 2000000)), visitorAttachmentTotalBytes: Number(arg('visitor-total', 20000000)),
     attachments: !has('no-attachments'), early413: has('early-413'), control: has('control'),
   });
   console.log(`mock ntfy relay listening on ${relay.url}`);

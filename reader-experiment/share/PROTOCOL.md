@@ -58,13 +58,14 @@ daylightshare://pair?c=<code, 28 chars, no dashes>[&r=<relay URL, percent-encode
 
 - `r` is present only when the relay is not `https://ntfy.sh`. It is the normalised relay URL
   (`vectors/test-vectors.json` > `relays`):
-  1. Trim whitespace. Empty means `https://ntfy.sh`.
+  1. Trim whitespace. Empty means `https://ntfy.sh`. Whitespace or a control character left inside is an error.
   2. A scheme other than `http` or `https` (any case) is an error, never turned into `https://…`. With no scheme,
      `https://` is added.
   3. The query, the fragment and any user info are dropped.
-  4. The host is required and lowercased: ASCII letters, digits, `-` and `.`, or a bracketed IPv6 address
-     (internationalised names in punycode).
-  5. A port must be digits; the default port (443 for https, 80 for http) is dropped.
+  4. The host is required and lowercased: ASCII letters, digits, `-` and `.`, starting with a letter or digit, or a
+     bracketed IPv6 address of hex digits, `:` and `.` (no zone id). Internationalised names go in punycode.
+  5. A port must be digits; the default port (443 for https, 80 for http) is dropped. This is a textual rule, like
+     the rest: `:0443` stays.
   6. A path with a `.` or `..` segment is an error; trailing slashes are removed.
 - `n` is a display name for the Daylight ("Anjan's Daylight"), at most 60 characters.
 - Unknown parameters are ignored. Senders accept the link, the typed code, or the code with dashes.

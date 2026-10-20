@@ -316,6 +316,10 @@ trailing `.0`. For example, 9,000,001 → "9.1", 12,000,000 → "12" and 14,200,
 
 Every row also has "Remove". The word "relay" appears only where it names a setting the user can find.
 
+Typography: the tables in this record are written with ASCII apostrophes. The apps show every sentence in this
+section and in finding 21 with ’ (U+2019), as in "Couldn’t" and "can’t", and with "…" (U+2026), "·" (U+00B7) and "✓"
+(U+2713). The `statusText` vectors pin the exact strings.
+
 Messages at share time (sender apps):
 
 | When | Message |

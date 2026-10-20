@@ -59,7 +59,7 @@ const codeParsing = [
   { name: 'compact', input: code1, secretHex: pairing[0].secretHex },
   { name: 'lowercase with spaces', input: lowerSpaced, secretHex: pairing[0].secretHex },
   { name: 'look-alike digits 0 1 8', input: swapped, secretHex: pairing[0].secretHex },
-  { name: 'look-alike digits 0 and 1 (and 8): O, I and B typed as digits', input: lookalikeInput, secretHex: toHex(lookalike) },
+  { name: 'look-alike digits 0 and 1', input: lookalikeInput, secretHex: toHex(lookalike) },
   { name: 'underscores and dots', input: code1.match(/.{1,4}/g).join('_').replace(/_/, '.'), secretHex: pairing[0].secretHex },
   { name: 'pairing link', input: pairing[0].link, secretHex: pairing[0].secretHex, relay: 'https://ntfy.sh', nameExpected: '' },
   { name: 'pairing link with relay and name', input: pairing[0].linkWithRelayAndName, secretHex: pairing[0].secretHex, relay: 'https://relay.example.org/ntfy', nameExpected: 'Anjan’s Daylight & co' },
@@ -93,6 +93,19 @@ const relayCases = [
   ['https://bücher.example/', null],
   ['https://relay.example.org:84a/', null],
   ['https://relay example.org/', null],
+  // Edge cases a URL parser would decide differently; the rule is textual (see the notes).
+  ['HTTP://[::1]:80/', 'http://[::1]'],
+  ['https://[::FFFF:192.0.2.1]:443/', 'https://[::ffff:192.0.2.1]'],
+  ['http://[fe80::1%25en0]/', null], // an IPv6 zone id: only hex digits, ':' and '.' inside the brackets
+  ['https://relay.example.org:0443', 'https://relay.example.org:0443'], // the default port is compared as text
+  ['https://ntfy.sh./', 'https://ntfy.sh.'], // a trailing dot is kept: not the default relay
+  ['https://relay.example.org/a%20b', 'https://relay.example.org/a%20b'],
+  ['https://relay.example.org/a b', null], // whitespace inside
+  ['https://relay.example.org/\u00a0x', null],
+  ['https://relay.example.org/\u0000', null], // a control character
+  ['https://./', null], // the host must start with a letter or digit
+  ['https://.relay.example.org/', null],
+  ['https://-relay.example.org/', null],
 ];
 const relays = relayCases.map(([input, expect]) => {
   let got;
@@ -346,14 +359,19 @@ const statusRows = [
   ['expired / refused', { kind: 'file', status: 'expired', errorCode: 'refused', size: 300000, created: NOW - 7 * HOUR }],
   ['expired / too-large (a v1.0 row)', { kind: 'file', status: 'expired', errorCode: 'too-large', size: 14200000, created: NOW - 3 * HOUR }],
   ['expired / gone', { kind: 'file', status: 'expired', errorCode: 'gone', size: 500000, created: NOW - 3 * HOUR }],
+  // Rows saved by v1.0 have no errorCode: read it as ''.
+  ['failed (a v1.0 row: no errorCode)', { kind: 'url', status: 'failed', size: 0, created: NOW - HOUR }],
+  ['expired (a v1.0 row: no errorCode)', { kind: 'file', status: 'expired', size: 300000, created: NOW - 8 * 24 * HOUR }],
 ];
 const statusText = statusRows.map(([name, row]) => ({ name, row, now: NOW, ...describeRow(row, NOW) }));
 assert.equal(statusText[10].sentence, 'Too big to send. Files can be up to 9 MB; this one is 14.2 MB.');
+assert.deepEqual([statusText[12].action, statusText[13].action], ['retry-now', 'try-again']);
 const formatMBCases = [[9000001, '9.1'], [12000000, '12'], [14200000, '14.2'], [9000000, '9'], [1, '0.1']]
   .map(([bytes, expect]) => { assert.equal(formatMB(bytes), expect); return { bytes, expect }; });
 
 // What an app does with an incoming pairing (PROTOCOL 1.3 "Confirmation").
 const s2 = secrets[1].secret;
+const s1LastByte = s1.slice(); s1LastByte[15] ^= 1; // differs from s1 in its last byte only
 const P = (secret, relay, name) => ({ secretHex: toHex(secret), relay, name });
 const confirmCases = [
   ['a link, not paired yet', 'link', null, P(s1, 'https://ntfy.sh', 'Anjan’s Daylight')],
@@ -364,6 +382,9 @@ const confirmCases = [
   ['a link with the same secret moving back to ntfy.sh', 'link', P(s1, 'http://192.168.1.10:8080', ''), P(s1, 'https://ntfy.sh', '')],
   ['a code typed in the app, not paired yet: no question', 'app', null, P(s1, 'https://ntfy.sh', '')],
   ['a code typed in the app that replaces a different secret (current has no name)', 'app', P(s2, 'https://ntfy.sh', ''), P(s1, 'https://ntfy.sh', '')],
+  ['a link through a relay with a port: the line names host and port', 'link', null, P(s1, 'https://Relay.Example.org:8443/ntfy/', 'Anjan’s Daylight')],
+  ['a link with the same secret moving to an IPv6 relay with a port', 'link', P(s1, 'https://ntfy.sh', ''), P(s1, 'http://[::1]:8080/', '')],
+  ['a link whose secret differs only in its last byte: replaces the current pairing', 'link', P(s1, 'https://ntfy.sh', 'Kitchen Daylight'), P(s1LastByte, 'https://ntfy.sh', 'Anjan’s Daylight')],
 ];
 const toPairing = (p) => p && { secret: fromHex(p.secretHex), relay: p.relay, name: p.name };
 const pairingConfirmationVectors = confirmCases.map(([name, source, current, next]) => ({
@@ -371,6 +392,9 @@ const pairingConfirmationVectors = confirmCases.map(([name, source, current, nex
 }));
 assert.equal(pairingConfirmationVectors[2].expect.button, 'Switch');
 assert.equal(pairingConfirmationVectors[3].expect.notice, 'Pairing updated: now sending through relay.example.org.');
+assert.equal(pairingConfirmationVectors[8].expect.lines[1], 'Sends through relay.example.org:8443.');
+assert.equal(pairingConfirmationVectors[9].expect.notice, 'Pairing updated: now sending through [::1]:8080.');
+assert.equal(pairingConfirmationVectors[10].expect.button, 'Switch');
 
 const out = {
   protocol: 'Daylight Share v1, revision 1.1 (reader-experiment/share/PROTOCOL.md)',
@@ -379,8 +403,8 @@ const out = {
     'All hex is lowercase. Strings are UTF-8 (in this file, JSON with \\u escapes where needed). Every implementation runs every group; Swift skips fileNamesUtf16 (Swift strings cannot hold lone surrogates).',
     'pairing: derive code, link and topics/key from secretHex; also parse code and link back to the secret.',
     'codeParsing: parse input; expect secretHex, or an error ("checksum" = well-formed but the check byte is wrong, "format" = wrong length or characters; implementations may word errors differently). For links also check relay and nameExpected. The two look-alike cases type O, I and B as 0, 1 and 8.',
-    'relays: normalise input with the relay URL rule (PROTOCOL 1.3); expect the string, or an error ("relay") for {error}. The rule is textual: no WHATWG parsing, no IDN conversion.',
-    'sizing: the fixed sizes every sender uses (CHUNK, MAX_ITEM, MAX_HEADER, largestFrame = chunk + maxHeader + 36) and, for content of `size` bytes that does not compress, the number of parts a sender makes, or "too-large" (refused before anything is queued). This checks arithmetic, not crypto.',
+    'relays: normalise input with the relay URL rule (PROTOCOL 1.3); expect the string, or an error ("relay") for {error}. The rule is textual: no URL parser, no IDN conversion. Details a parser would decide differently: whitespace or a control character left after trimming is an error; a host name starts with a letter or digit; a bracketed IPv6 host holds only hex digits, ":" and "." (lowercased; no zone id); the default port is dropped only when it is the text "443" (https) or "80" (http), so ":0443" stays; a trailing dot in the host and percent escapes in the path are kept as they are.',
+    'sizing: the fixed sizes every sender uses (chunk = CHUNK, maxItem = MAX_ITEM, maxHeader = MAX_HEADER, largestFrame = chunk + maxHeader + 36) and, for content of `size` bytes that does not compress, the number of parts a sender makes, or "too-large" (refused before anything is queued). This checks arithmetic, not crypto.',
     'urls: the web URL rule (PROTOCOL 4): expect is the accepted string (the trimmed input, unchanged) or null (refused). Senders and receivers both use it.',
     'seal: with key from secretHex, seal headerJson bytes exactly as given + body with nonceHex, AAD from purpose; must equal frameHex. Also open frameHex back to headerJson/body. "header of exactly 65,536 bytes" is the largest header a receiver accepts.',
     'items: open each frame (purpose inbox), feed headers/bodies to the reassembler in the given order; the completed item must match expect.header (minus part/parts) and the content. The text file is one deflate-raw stream cut into parts of 16 bytes: join the parts, then inflate.',
@@ -388,8 +412,8 @@ const out = {
     'invalidItems: every frame opens and its header passes the checks, but reassembly must fail with an integrity error ("integrity"), and must not inflate more than `size` bytes on the way (the bomb inflates to 1 MiB; its deflate bytes are built by hand, so they are the same for every zlib).',
     'fileNames: the safe file name for an untrusted name (PROTOCOL 5): at most 120 UTF-16 units and 200 UTF-8 bytes, whole code points only. fileNamesUtf16: the same, with the input given as UTF-16 code units (lone surrogates are removed).',
     'acks: an ack header with ids = the first 32 hex digits of SHA-256(idLabel) and the worst `from` (60 emoji); headerJson is the serialisation (no escaping of non-ASCII), frameLength the sealed frame (headerJson bytes + 36) and small whether base64(frame) fits a message (<= 3800 characters). 70 ids (MAX_ACK_IDS) must be small. This checks serialisation and arithmetic, not crypto.',
-    'statusText: what every app shows for an outbox row at time `now` (ms): label, sentence (null = none) and action (null, "retry-now" = button "Retry now", "try-again" = button "Try again"). The copy uses typographic apostrophes (U+2019), "…" (U+2026), "·" (U+00B7) and "✓" (U+2713). formatMB: sizes in the copy, ceil(bytes / 100,000) / 10 without a trailing ".0". These check copy and arithmetic, not crypto.',
-    'pairingConfirmation: what an app does with a pairing that arrives, given the current pairing (or null) and the source ("link": camera, tapped link or #pair=; "app": typed, pasted or scanned on the app\'s own pairing screen). expect.ask: show title and lines with the buttons `button` and "Cancel", and pair only on `button`; otherwise pair at once and show `notice` when it is not null.',
+    'statusText: what every app shows for an outbox row at time `now` (ms): label, sentence (null = none) and action (null, "retry-now" = button "Retry now", "try-again" = button "Try again"). A row saved by v1.0 has no errorCode: read it as "" (the last two cases). All user copy, here and in the sentences no vector pins (CHANGES-v1.1 2.5 and finding 21), uses typographic apostrophes (U+2019), "…" (U+2026), "·" (U+00B7) and "✓" (U+2713). formatMB (its own top-level group): sizes in the copy, ceil(bytes / 100,000) / 10 without a trailing ".0". These check copy and arithmetic, not crypto.',
+    'pairingConfirmation: what an app does with a pairing that arrives, given the current pairing (or null) and the source ("link": camera, tapped link or #pair=; "app": typed, pasted or scanned on the app\'s own pairing screen). expect.ask: show title and lines with the buttons `button` and "Cancel", and pair only on `button`; otherwise pair at once and show `notice` when it is not null. Relays in the input are raw: normalise them first (relays). A relay is named by its host and port as text, taken from the normalised relay ("relay.example.org:8443", "[::1]:8080"), not by a URL parser\'s host. Secrets are compared on all 16 bytes. A missing name reads "a Daylight" in the title and "your current Daylight" in the "This replaces" line.',
   ],
   pairing, codeParsing, relays, sizing, urls, seal: sealVectors, items, invalidFrames, invalidItems, badHeaders, fileNames,
   fileNamesUtf16, acks, statusText, formatMB: formatMBCases, pairingConfirmation: pairingConfirmationVectors,

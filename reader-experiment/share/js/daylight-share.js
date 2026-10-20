@@ -219,15 +219,18 @@ export async function parseCode(input) {
 
 /**
  * The relay URL rule (PROTOCOL 1.3; vectors > relays). Textual, the same in every language:
- * trim; empty -> https://ntfy.sh; a scheme other than http(s) is an error (never turned into https://…), no scheme ->
- * https://; drop the query, fragment and user info; the host is required, lowercased, ASCII letters, digits, '-' and
- * '.' or a bracketed IPv6 address; a port is digits and the default one is dropped; no '.' or '..' path segments;
- * trailing slashes removed. Throws ShareError('relay').
+ * trim; empty -> https://ntfy.sh; whitespace or a control character left inside is an error; a scheme other than
+ * http(s) is an error (never turned into https://…), no scheme -> https://; drop the query, fragment and user info;
+ * the host is required and lowercased: ASCII letters, digits, '-' and '.' starting with a letter or digit, or a
+ * bracketed IPv6 address of hex digits, ':' and '.' only (no zone id); a port is digits, and is dropped when it is
+ * the text "443" (https) or "80" (http), so ":0443" stays; no '.' or '..' path segments; trailing slashes removed.
+ * Throws ShareError('relay').
  */
 export function normalizeRelay(relay) {
   const bad = (message = 'That relay address isn’t valid.') => { throw new ShareError('relay', message); };
   let s = String(relay ?? '').trim();
   if (!s) return DEFAULT_RELAY;
+  if (/[\s\p{Cc}]/u.test(s)) bad();
   let scheme = 'https';
   const m = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(s);
   if (m) {
@@ -253,7 +256,7 @@ export function normalizeRelay(relay) {
     host = (colon < 0 ? hostport : hostport.slice(0, colon)).toLowerCase();
     if (colon >= 0) port = hostport.slice(colon + 1);
     if (!/^[0-9]*$/.test(port)) bad();
-    if (!/^[a-z0-9.-]+$/.test(host)) bad();
+    if (!/^[a-z0-9][a-z0-9.-]*$/.test(host)) bad();
   }
   if ((scheme === 'https' && port === '443') || (scheme === 'http' && port === '80')) port = '';
   if (path.split('/').some((seg) => seg === '.' || seg === '..')) bad();
@@ -261,7 +264,14 @@ export function normalizeRelay(relay) {
   return `${scheme}://${host}${port ? ':' + port : ''}${path}`;
 }
 
-const relayHost = (relay) => new URL(normalizeRelay(relay)).host;
+/**
+ * The relay as people see it: the normalised relay's host and port, as text (no URL parser), e.g.
+ * "relay.example.org", "relay.example.org:8443", "[::1]:8080". Throws ShareError('relay') like normalizeRelay.
+ */
+export function relayHost(relay) {
+  const r = normalizeRelay(relay);
+  return r.slice(r.indexOf('://') + 3).split('/', 1)[0];
+}
 
 export function cleanName(name) {
   const s = String(name ?? '').replace(/[\p{Cc}\s]+/gu, ' ').trim();
@@ -304,7 +314,8 @@ export function samePairingSecret(a, b) {
  * current: the pairing in use, or null. next: the parsed pairing. source: 'link' (a QR code scanned with the camera,
  * a tapped link, the web sender's #pair=) or 'app' (typed, pasted or scanned on the app's own pairing screen).
  * -> {ask, title, lines, button, notice}: when `ask`, show title, lines and the buttons `button` and "Cancel", and pair
- * only on `button`; otherwise pair at once and show `notice` when it is not null.
+ * only on `button`; otherwise pair at once and show `notice` when it is not null. The relay is named by relayHost()
+ * (host and port, e.g. "relay.example.org:8443"). Pairing (or switching) is then applyPairingChange() + saving it.
  */
 export function pairingConfirmation(current, next, { source = 'link' } = {}) {
   const nextRelay = normalizeRelay(next?.relay);
@@ -834,6 +845,23 @@ function locked(storage, role, fn) {
   return run;
 }
 
+/**
+ * The outbox rule for a pairing change (PROTOCOL 3.3 step 6), applied to the storage a Sender uses, under the same
+ * lock. current: the pairing in use (or null); next: the one being applied. The same secret (a new relay or name)
+ * keeps the outbox: build a new Sender with `next` and pending rows go through the new relay. A different secret (or
+ * no current pairing) deletes every row, their stored content and the ack cursor. -> true when it deleted them.
+ */
+export function applyPairingChange(storage, current, next) {
+  return locked(storage, 'sender', async () => {
+    if (current && samePairingSecret(current, next)) return false;
+    const rows = (await storage.get('outbox')) ?? [];
+    for (const r of rows) if (r?.id) await storage.remove(`outbox/${r.id}`);
+    await storage.remove('outbox');
+    await storage.remove('ackSince');
+    return true;
+  });
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Status and copy (CHANGES-v1.1 2.5; vectors > statusText): the same words on every surface.
 
@@ -965,9 +993,9 @@ export class Sender {
     await this._saveRow(row);
     let error = null;
     try {
-      for (let i = 0; i < frames.length; i++) {
-        await this.relay.publish(keys.inboxTopic, frames[i]);
-        if (i < frames.length - 1) { row.attemptStarted = this.now(); await this._saveRow(row); }
+      for (const frame of frames) {
+        await this.relay.publish(keys.inboxTopic, frame);
+        row.attemptStarted = this.now(); await this._saveRow(row); // progress: `sending` is stale 15 min after this
       }
     } catch (e) { error = e; }
     if (!error) {

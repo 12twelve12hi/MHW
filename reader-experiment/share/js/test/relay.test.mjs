@@ -1,4 +1,5 @@
-// End-to-end tests through the mock relay, which runs with ntfy.sh's limits (2 MiB per attachment, 20 MB per visitor).
+// End-to-end tests through the mock relay, which runs with the limits PROTOCOL 3.5 promises (2,000,000 bytes per
+// attachment, 20,000,000 per visitor; ntfy.sh itself takes 2 MiB per attachment).
 // The clock is injected into the library and the mock alike; `advance` moves both.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -255,7 +256,7 @@ test('an expired attachment (404) lets the cursor pass and is requested once ove
 });
 
 test('a late-landing attachment is not skipped', async () => {
-  const { relay, sender, receiver, keys, advance, now } = await setup({ control: true });
+  const { relay, sender, receiver, keys, advance, now, messages } = await setup({ control: true });
   try {
     const built = await ds.buildItemFrames(keys, { kind: 'file', name: 'slow.pdf', mime: 'application/pdf', content: pdf(50000), sent: ds.nowIso(now()) });
     const slow = fetch(`${relay.url}/${keys.inboxTopic}`, { method: 'PUT', headers: { Filename: 'dls1.bin', Message: 'dls1', 'X-Mock-Hold': '500' }, body: built.frames[0] });
@@ -265,6 +266,10 @@ test('a late-landing attachment is not skipped', async () => {
     const first = await receiver.pollOnce();
     assert.deepEqual(first.items.map((i) => i.header.kind), ['url']);
     assert.equal((await slow).status, 200);
+    const [link, file] = messages();
+    assert.ok(!link.attachment && file.attachment, 'the premise: the upload became visible after the link…');
+    assert.ok(file.time < link.time, '…but is stamped earlier (time at request start)');
+    assert.ok((await receiver.storage.get('inboxSince')) <= file.time, 'so only the overlap lets the next poll list it');
     const second = await receiver.pollOnce();
     assert.deepEqual(second.items.map((i) => i.header.id), [built.id]);
   } finally { await relay.close(); }
@@ -656,7 +661,17 @@ test('expired after a week', async () => {
 });
 
 test('the mock relay behaves like ntfy.sh where the protocol depends on it', async () => {
-  const { relay, keys } = await setup({ visitorAttachmentTotalBytes: 3000000 });
+  {
+    const { relay, keys } = await setup();
+    try {
+      const put = (size) => fetch(`${relay.url}/${keys.inboxTopic}`, { method: 'PUT', headers: { Filename: 'x.bin' }, body: new Uint8Array(size) });
+      const res = await put(2000001);
+      assert.equal(res.status, 413, 'by default the per-file limit is the 2,000,000 PROTOCOL 3.5 promises');
+      assert.equal((await res.json()).code, 41301);
+      assert.equal((await put(2000000)).status, 200);
+    } finally { await relay.close(); }
+  }
+  const { relay, keys } = await setup({ attachmentMaxBytes: 2097152, visitorAttachmentTotalBytes: 3000000 }); // ntfy.sh exactly
   try {
     const put = (size, visitor) => fetch(`${relay.url}/${keys.inboxTopic}`, { method: 'PUT', headers: { Filename: 'x.bin', ...(visitor ? { 'X-Mock-Visitor': visitor } : {}) }, body: new Uint8Array(size) });
     let res = await put(2097153);
@@ -672,4 +687,401 @@ test('the mock relay behaves like ntfy.sh where the protocol depends on it', asy
     assert.equal((await poll(String(first.time))).length, 1, 'since=<time> is inclusive');
     assert.equal((await poll(String(first.time + 1))).length, 0);
   } finally { await relay.close(); }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Cursors: retry entries hold the inbox and the ack cursor (CHANGES-v1.1 2.6, finding 15)
+
+for (const failure of [503, 429]) {
+  test(`a download ${failure} holds the inbox cursor below a message 40 min later; the item still arrives`, async () => {
+    const { relay, sender, receiver, hooks, messages, advance } = await setup();
+    try {
+      const a = await sender.send({ kind: 'file', name: 'a.pdf', mime: 'application/pdf', content: pdf(50000) });
+      const [ma] = messages();
+      hooks.download = (id) => (id === ma.id ? failure : null);
+      advance(40 * MIN);
+      await sender.send({ kind: 'url', url: 'https://example.com/later' });
+      const first = await receiver.pollOnce();
+      assert.deepEqual(first.items.map((i) => i.header.kind), ['url']);
+      assert.ok((await receiver.storage.get('inboxSince')) <= ma.time - 1800, 'held at the retry entry, not at the newest');
+      hooks.download = null;
+      advance(MIN);
+      const second = await receiver.pollOnce();
+      assert.deepEqual(second.items.map((i) => i.header.id), [a.id]);
+    } finally { await relay.close(); }
+  });
+}
+
+test('checkAcks holds the ack cursor at a retry download, keeps a 1,800 s overlap, and saves it', async () => {
+  const { relay, sender, keys, hooks, messages, advance } = await setup();
+  try {
+    const a = await sender.send({ kind: 'url', url: 'https://example.com/a' });
+    const rc = new ds.RelayClient({ relay: relay.url, retryDelaysMs: [0, 0, 0] });
+    const ids = [...Array.from({ length: 149 }, () => ds.newItemId()), a.id]; // a v1.0 Daylight's attachment-sized ack
+    await rc.publish(keys.ackTopic, await ds.encryptFrame(keys, 'ack', { v: 1, kind: 'ack', ids, sent: ds.nowIso(T0), from: 'Daylight' }, new Uint8Array(0)));
+    const [big] = messages(keys.ackTopic);
+    assert.ok(big.attachment);
+    hooks.download = (id) => (id === big.id ? 503 : null);
+    advance(40 * MIN);
+    await rc.publish(keys.ackTopic, await ds.buildAckFrame(keys, [ds.newItemId()]));
+    const small = messages(keys.ackTopic)[1];
+    assert.equal(await sender.checkAcks(), 0);
+    assert.ok((await sender.storage.get('ackSince')) <= big.time - 1800, 'the ack cursor is held at the retry entry');
+    hooks.download = null;
+    assert.equal(await sender.checkAcks(), 1);
+    assert.equal((await row(sender, a.id)).status, 'delivered');
+    assert.equal(await sender.storage.get('ackSince'), small.time - 1800, 'newest − 1800 once nothing is held');
+  } finally { await relay.close(); }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Receiver: acks, ordering, download outcomes, integrity failures, incomplete items
+
+test('a poll with 75 new items acks all of them, in two ack messages of at most 70 ids', async () => {
+  const { relay, sender, receiver, keys, messages } = await setup();
+  try {
+    for (let i = 0; i < 75; i++) await sender.send({ kind: 'url', url: `https://example.com/${i}` });
+    const got = await receiver.pollOnce();
+    assert.equal(got.items.length, 75);
+    assert.equal(got.acked.length, 75);
+    const acks = messages(keys.ackTopic);
+    assert.equal(acks.length, 2);
+    assert.ok(acks.every((m) => !m.attachment), 'every ack frame is a message');
+    assert.equal(await sender.checkAcks(), 75);
+  } finally { await relay.close(); }
+});
+
+test('pollOnce saves its state before it publishes acks, and stops at the first failed ack', async () => {
+  const log = [];
+  const { relay, sender, keys, pairing, now, hooks } = await setup();
+  try {
+    class Logged extends ds.MemoryStorage { async set(k, v) { log.push(`set ${k}`); return super.set(k, v); } }
+    const f = (url, init) => { if (url.endsWith(keys.ackTopic)) log.push('ack'); return fetch(url, init); };
+    const r = new ds.Receiver({ pairing, storage: new Logged(), fetch: f, now, retryDelaysMs: [] });
+    for (let i = 0; i < 75; i++) await sender.send({ kind: 'url', url: `https://example.com/${i}` });
+    hooks.publish = (topic) => (topic === keys.ackTopic ? 503 : null);
+    const got = await r.pollOnce();
+    assert.equal(got.items.length, 75);
+    assert.match(got.ackError, /503/);
+    assert.ok(log.indexOf('set seenItems') >= 0 && log.indexOf('set seenItems') < log.indexOf('ack'), log.join(','));
+    assert.equal(log.filter((l) => l === 'ack').length, 1, 'no second ack frame after the first failed');
+  } finally { await relay.close(); }
+});
+
+test('tick reads acks before re-sending: an acked item that is due is not uploaded again', async () => {
+  const { relay, sender, receiver, advance, puts } = await setup();
+  try {
+    await sender.send({ kind: 'file', name: 'a.pdf', mime: 'application/pdf', content: pdf(50000) });
+    await receiver.pollOnce();
+    advance(185 * MIN);
+    const before = puts();
+    assert.deepEqual(await sender.tick(), { delivered: 1, resent: 0 });
+    assert.equal(puts(), before);
+  } finally { await relay.close(); }
+});
+
+for (const [status, outcome] of [[410, 'expired'], [403, 'retry'], [500, 'retry'], [418, 'retry']]) {
+  test(`a download ${status} is ${outcome === 'expired' ? 'expired: handled and not asked for again' : 'a retry: the item arrives at the next poll'}`, async () => {
+    const { relay, sender, receiver, hooks, messages } = await setup();
+    try {
+      const r = await sender.send({ kind: 'file', name: 'a.pdf', mime: 'application/pdf', content: pdf(50000) });
+      const [m] = messages();
+      hooks.download = (id, n) => (n === 0 ? status : null);
+      assert.equal((await receiver.pollOnce()).items.length, 0);
+      const second = await receiver.pollOnce();
+      if (outcome === 'expired') {
+        assert.equal(second.items.length, 0);
+        assert.equal(relay.state.downloadsById[m.id], 1, 'an expired attachment is not asked for again');
+      } else {
+        assert.deepEqual(second.items.map((i) => i.header.id), [r.id]);
+      }
+    } finally { await relay.close(); }
+  });
+}
+
+test('after a download 429 later message entries still decode; after a 503 later downloads still go', async () => {
+  {
+    const { relay, sender, receiver, hooks, messages } = await setup();
+    try {
+      await sender.send({ kind: 'file', name: 'a.pdf', mime: 'application/pdf', content: pdf(50000) });
+      await sender.send({ kind: 'url', url: 'https://example.com/b' });
+      const [ma] = messages();
+      hooks.download = (id) => (id === ma.id ? 429 : null);
+      assert.deepEqual((await receiver.pollOnce()).items.map((i) => i.header.kind), ['url']);
+    } finally { await relay.close(); }
+  }
+  {
+    const { relay, sender, receiver, hooks, messages } = await setup();
+    try {
+      await sender.send({ kind: 'file', name: 'a.pdf', mime: 'application/pdf', content: pdf(50000, 1) });
+      await sender.send({ kind: 'file', name: 'b.pdf', mime: 'application/pdf', content: pdf(50000, 2) });
+      const [ma] = messages();
+      hooks.download = (id) => (id === ma.id ? 503 : null);
+      assert.deepEqual((await receiver.pollOnce()).items.map((i) => i.header.name), ['b.pdf']);
+    } finally { await relay.close(); }
+  }
+});
+
+test('an item that fails its integrity check has every part message handled, and holds nothing', async () => {
+  const { relay, receiver, keys, messages } = await setup();
+  try {
+    const built = await ds.buildItemFrames(keys, { kind: 'file', name: 'x.pdf', mime: 'application/pdf', content: pdf(3000) }, { chunkSize: 1000 });
+    const rc = new ds.RelayClient({ relay: relay.url });
+    const p2 = await ds.decryptFrame(keys, 'inbox', built.frames[2]);
+    const bad = await ds.encryptFrame(keys, 'inbox', p2.header, pdf(1000, 9)); // part 2 with other bytes: sha256 fails
+    for (const f of built.frames.slice(0, 2)) await rc.publish(keys.inboxTopic, f);
+    await receiver.pollOnce();
+    assert.deepEqual(Object.keys(await receiver.storage.get('incomplete')), [built.id]);
+    await rc.publish(keys.inboxTopic, bad);
+    const got = await receiver.pollOnce();
+    assert.equal(got.items.length, 0);
+    const handled = await receiver.storage.get('seenMsgs');
+    assert.equal(messages().length, 3);
+    assert.ok(messages().every((m) => Object.hasOwn(handled, m.id)), 'all three part messages are handled');
+    assert.deepEqual(await receiver.storage.get('incomplete'), {});
+  } finally { await relay.close(); }
+});
+
+test('an incomplete item is given up 24 h after its first part, also after a restart: the cursor is no longer held at it', async () => {
+  const { relay, sender, receiver, keys, pairing, messages, advance, now } = await setup();
+  try {
+    const built = await ds.buildItemFrames(keys, { kind: 'file', name: 'x.pdf', mime: 'application/pdf', content: pdf(3000) }, { chunkSize: 1000 });
+    await new ds.RelayClient({ relay: relay.url }).publish(keys.inboxTopic, built.frames[0]);
+    await receiver.pollOnce();
+    assert.ok(Object.hasOwn(await receiver.storage.get('incomplete'), built.id));
+    const restarted = new ds.Receiver({ pairing, storage: receiver.storage, now }); // its held parts are gone; `incomplete` is not
+    advance(24 * HOUR + MIN);
+    await sender.send({ kind: 'url', url: 'https://example.com/next-day' });
+    const link = messages().at(-1);
+    assert.equal((await restarted.pollOnce()).items.length, 1);
+    assert.deepEqual(await receiver.storage.get('incomplete'), {});
+    assert.equal(await receiver.storage.get('inboxSince'), link.time - 1800);
+  } finally { await relay.close(); }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Sender: counters, staleness, expiry, retry, pass breakers, refusing big items (CHANGES-v1.1 2.4)
+
+test('attempts counts failures since the last success; slowFails counts slow failures in a row', async () => {
+  const { relay, sender, hooks, advance } = await setup();
+  try {
+    hooks.publish = () => 503;
+    const u = await sender.send({ kind: 'url', url: 'https://example.com/u' });
+    assert.equal(u.attempts, 1);
+    hooks.publish = null;
+    advance(2 * MIN);
+    assert.equal((await sender.resendDue())[0].attempts, 0, 'reset by the success');
+
+    let answer = 413;
+    hooks.publish = (topic, n, isAttachment) => (isAttachment ? answer : null);
+    const f = await sender.send({ kind: 'file', name: 'a.pdf', mime: 'application/pdf', content: pdf(50000) });
+    assert.equal(f.slowFails, 1);
+    answer = 503;
+    advance(185 * MIN);
+    const pick = async () => (await sender.resendDue()).find((x) => x.id === f.id);
+    let r = await pick();
+    assert.equal(r.errorCode, 'network');
+    assert.equal(r.slowFails, 0, 'a network failure breaks the run');
+    answer = 413;
+    for (let i = 1; i <= 2; i++) { advance(185 * MIN); r = await pick(); assert.equal(r.status, 'failed', `slow failure ${i} of the new run`); }
+    advance(185 * MIN);
+    r = await pick();
+    assert.equal(r.status, 'expired', 'the third in a row');
+    assert.equal(r.errorCode, 'full');
+  } finally { await relay.close(); }
+});
+
+test('the network backoff is capped at 60 min', async () => {
+  const { relay, sender, advance, posts } = await setup();
+  try {
+    const id = ds.newItemId();
+    await sender.storage.set('outbox', [{ id, kind: 'url', url: 'https://example.com/b', title: '', name: '', mime: '', size: 0, sent: ds.nowIso(T0),
+      created: T0, status: 'failed', errorCode: 'network', attempts: 7, slowFails: 0, lastPublish: T0, attachment: false, error: '' }]);
+    advance(59 * MIN);
+    assert.deepEqual(await sender.resendDue(), []);
+    advance(MIN);
+    assert.equal((await sender.resendDue())[0].status, 'sent');
+    assert.equal(posts(), 1);
+  } finally { await relay.close(); }
+});
+
+test('a sending row left by a stopped process is re-sent only after 15 min without progress; each accepted frame is progress', async () => {
+  const { relay, sender, pairing, advance, now, posts, fast } = await setup();
+  try {
+    const id = ds.newItemId();
+    await sender.storage.set('outbox', [{ id, kind: 'url', url: 'https://example.com/stuck', title: '', name: '', mime: '', size: 0,
+      sent: ds.nowIso(T0), created: T0 - HOUR, status: 'sending', attemptStarted: T0, lastPublish: 0, attachment: false, attempts: 0, error: '' }]);
+    advance(14 * MIN);
+    assert.deepEqual(await sender.resendDue(), []);
+    advance(MIN);
+    assert.equal((await sender.resendDue())[0].status, 'sent');
+    assert.equal(posts(), 1);
+
+    // A network where each request takes 5 min: the row records progress after every accepted frame, the last included,
+    // so a process killed right after the relay took the last frame leaves a row that is not due for 15 min.
+    const saved = [];
+    class Snapshots extends ds.MemoryStorage { async set(k, v) { if (k === 'outbox') saved.push(...structuredClone(v)); return super.set(k, v); } }
+    const slowNet = (url, init) => { advance(5 * MIN); return fetch(url, init); };
+    const s2 = new ds.Sender({ pairing, storage: new Snapshots(), now, fetch: slowNet, chunkSize: 20000, ...fast });
+    const start = now();
+    const r = await s2.send({ kind: 'file', name: 'b.pdf', mime: 'application/pdf', content: pdf(50000) });
+    assert.equal(r.status, 'sent');
+    const sending = saved.filter((x) => x.id === r.id && x.status === 'sending').map((x) => x.attemptStarted - start);
+    assert.deepEqual([...new Set(sending)], [0, 5 * MIN, 10 * MIN, 15 * MIN], 'saved at the start and after each of the 3 frames');
+    assert.equal(r.lastPublish, start + 15 * MIN, 'lastPublish is the end of the attempt');
+  } finally { await relay.close(); }
+});
+
+test('a failed/full row that reaches 7 days becomes expired with no error code', async () => {
+  const { relay, sender, hooks, advance, now } = await setup();
+  try {
+    hooks.publish = (topic, n, isAttachment) => (isAttachment ? 413 : null);
+    const f = await sender.send({ kind: 'file', name: 'a.pdf', mime: 'application/pdf', content: pdf(50000) });
+    assert.equal(f.errorCode, 'full');
+    advance(7 * DAY + MIN);
+    await sender.resendDue();
+    const r = await row(sender, f.id);
+    assert.equal(r.status, 'expired');
+    assert.equal(r.errorCode, '');
+    assert.match(ds.describeRow(r, now()).sentence, /within a week/);
+  } finally { await relay.close(); }
+});
+
+test('Retry now sends a failed row at once; Try again resets the counters; other rows are left alone', async () => {
+  const { relay, sender, hooks, advance, posts, puts } = await setup();
+  try {
+    hooks.publish = () => 503;
+    const u = await sender.send({ kind: 'url', url: 'https://example.com/u' });
+    hooks.publish = null;
+    const before = posts();
+    const r = await sender.retry(u.id);
+    assert.equal(r.status, 'sent');
+    assert.equal(posts(), before + 1, 'Retry now publishes without waiting for the backoff');
+
+    let answer = 413;
+    hooks.publish = (topic, n, isAttachment) => (isAttachment ? answer : null);
+    const f = await sender.send({ kind: 'file', name: 'a.pdf', mime: 'application/pdf', content: pdf(50000) });
+    for (let i = 0; i < 2; i++) { advance(185 * MIN); await sender.resendDue(); }
+    assert.equal((await row(sender, f.id)).status, 'expired');
+    const t = await sender.retry(f.id);
+    assert.equal(t.status, 'failed', 'one more full after Try again does not end it at once');
+    assert.equal(t.slowFails, 1);
+    assert.equal(t.attempts, 1);
+
+    answer = null;
+    const others = [
+      { status: 'sending', errorCode: '', attemptStarted: T0 },
+      { status: 'sent', errorCode: '' },
+      { status: 'delivered', errorCode: '' },
+      { status: 'expired', errorCode: 'gone' },
+      { status: 'expired', errorCode: 'too-large', size: 10000000 },
+    ].map((o) => ({ id: ds.newItemId(), kind: 'url', url: 'https://example.com/o', title: '', name: '', mime: '', size: 0, sent: ds.nowIso(T0),
+      created: T0, lastPublish: T0, attachment: false, attempts: 0, error: '', ...o }));
+    await sender.storage.set('outbox', [...others, ...(await sender.list())]);
+    const p0 = posts() + puts();
+    for (const o of others) {
+      const back = await sender.retry(o.id);
+      assert.deepEqual([back.status, back.errorCode, back.lastPublish, back.created], [o.status, o.errorCode, o.lastPublish, o.created], `${o.status}/${o.errorCode}`);
+    }
+    assert.equal(posts() + puts(), p0, 'no publish');
+  } finally { await relay.close(); }
+});
+
+test('a pass keeps going after a 5xx and after a refused attachment', async () => {
+  {
+    const { relay, sender, hooks, advance } = await setup();
+    try {
+      hooks.publish = () => 503;
+      const a = await sender.send({ kind: 'url', url: 'https://example.com/a' });
+      const b = await sender.send({ kind: 'url', url: 'https://example.com/b' });
+      let left = 4; // one publish call and its three in-call retries
+      hooks.publish = () => (left-- > 0 ? 503 : null);
+      advance(2 * MIN);
+      const attempted = await sender.resendDue();
+      assert.deepEqual(attempted.map((r) => [r.id, r.status]), [[a.id, 'failed'], [b.id, 'sent']]);
+    } finally { await relay.close(); }
+  }
+  {
+    const { relay, sender, hooks, advance } = await setup();
+    try {
+      hooks.publish = () => 503;
+      const a = await sender.send({ kind: 'file', name: 'a.pdf', mime: 'application/pdf', content: pdf(50000, 1) });
+      const b = await sender.send({ kind: 'file', name: 'b.pdf', mime: 'application/pdf', content: pdf(50000, 2) });
+      let once = true;
+      hooks.publish = (t, n, isAttachment) => (isAttachment && once ? ((once = false), 403) : null);
+      advance(2 * MIN);
+      const attempted = await sender.resendDue();
+      assert.deepEqual(attempted.map((r) => [r.id, r.status, r.errorCode]), [[a.id, 'failed', 'refused'], [b.id, 'sent', '']]);
+    } finally { await relay.close(); }
+  }
+});
+
+test('Sender.send refuses content over 9 MB: nothing stored, nothing published', async () => {
+  const { relay, sender, puts, posts } = await setup();
+  try {
+    await assert.rejects(sender.send({ kind: 'file', name: 'big.pdf', mime: 'application/pdf', content: new Uint8Array(9000001) }),
+      (e) => e.code === 'too-large' && e.message === 'Too big to send. Files can be up to 9 MB; this one is 9.1 MB.');
+    assert.deepEqual(await sender.list(), []);
+    assert.equal(puts() + posts(), 0);
+  } finally { await relay.close(); }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The outbox lock, and the pairing-change rule (note a; PROTOCOL 3.3 step 6)
+
+test('two Senders on one slow storage: concurrent sends lose no rows, concurrent passes publish each due row once', async () => {
+  class SlowStorage extends ds.MemoryStorage {
+    async get(k) { await ds.sleep(Math.random() * 4); return super.get(k); }
+    async set(k, v) { await ds.sleep(Math.random() * 4); return super.set(k, v); }
+  }
+  const { relay, pairing, now, posts, advance, fast } = await setup();
+  try {
+    const storage = new SlowStorage();
+    const a = new ds.Sender({ pairing, storage, now, ...fast });
+    const b = new ds.Sender({ pairing, storage, now, ...fast });
+    const url = (i) => ({ kind: 'url', url: `https://example.com/${i}` });
+    await Promise.all([a.send(url(1)), b.send(url(2)), a.send(url(3)), b.send(url(4)), a.send(url(5)), b.send(url(6))]);
+    assert.equal((await a.list()).length, 6, 'no row lost');
+    const rows = (await a.list()).map((r) => ({ ...r, status: 'failed', errorCode: 'network', attempts: 1, lastPublish: now() }));
+    await storage.set('outbox', rows);
+    advance(2 * MIN);
+    const before = posts();
+    await Promise.all([a.tick(), b.tick(), a.resendDue(), b.resendDue()]);
+    assert.equal(posts() - before, 6, 'each due row published once');
+    assert.ok((await a.list()).every((r) => r.status === 'sent'));
+  } finally { await relay.close(); }
+});
+
+test('applyPairingChange: the same secret keeps the outbox for the new relay; another secret deletes rows, content and ack cursor', async () => {
+  const { relay, sender, pairing, hooks, advance, now, fast } = await setup();
+  const relay2 = await startMockRelay({ now });
+  try {
+    const storage = sender.storage;
+    hooks.publish = () => 503;
+    const f = await sender.send({ kind: 'file', name: 'a.pdf', mime: 'application/pdf', content: pdf(50000) });
+    assert.equal(f.status, 'failed');
+    await storage.set('ackSince', 123);
+
+    const moved = { ...pairing, relay: relay2.url, name: 'Renamed' };
+    assert.equal(await ds.applyPairingChange(storage, pairing, moved), false, 'same secret: kept');
+    const s2 = new ds.Sender({ pairing: moved, storage, now, ...fast });
+    advance(2 * MIN);
+    assert.equal((await s2.resendDue())[0].status, 'sent', 'the pending row goes through the new relay');
+    assert.equal(relay2.state.topics.get((await s2.keys()).inboxTopic).length, 1);
+
+    const other = { secret: ds.generateSecret(), relay: relay2.url, name: 'Another Daylight' };
+    assert.equal(await ds.applyPairingChange(storage, moved, other), true, 'another secret: deleted');
+    assert.deepEqual(await storage.get('outbox'), undefined);
+    assert.equal(await storage.get(`outbox/${f.id}`), undefined);
+    assert.equal(await storage.get('ackSince'), undefined);
+    assert.equal(await ds.applyPairingChange(new ds.MemoryStorage(), null, other), true, 'nothing paired before: a fresh outbox');
+
+    // Under the sender lock: a share in flight finishes first, then its row is deleted with the rest.
+    hooks.publish = null;
+    const s3 = new ds.Sender({ pairing: moved, storage, now, ...fast });
+    const [sent, cleared] = await Promise.all([s3.send({ kind: 'url', url: 'https://example.com/in-flight' }), ds.applyPairingChange(storage, moved, other)]);
+    assert.equal(sent.status, 'sent');
+    assert.equal(cleared, true);
+    assert.deepEqual(await s3.list(), []);
+  } finally { await relay.close(); await relay2.close(); }
 });

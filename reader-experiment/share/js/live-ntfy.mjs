@@ -16,10 +16,15 @@ const log = (...a) => console.log('[live]', ...a);
 const fail = (m) => { console.error('[live] FAIL:', m); process.exit(1); };
 setTimeout(() => fail('timed out after 10 minutes'), 600000).unref();
 
-const frames = []; // body sizes of every publish the sender makes
-const recording = (url, init) => {
-  if (init?.method === 'PUT' || init?.method === 'POST') frames.push({ method: init.method, bytes: init.body?.length ?? 0 });
-  return fetch(url, init);
+// Every publish request the sender makes, in-call retries included: its body size, and its status once answered
+// (0 while unanswered or when the request failed without an answer).
+const frames = [];
+const recording = async (url, init) => {
+  const f = { method: init?.method ?? 'GET', bytes: init?.body?.length ?? 0, status: 0 };
+  if (f.method === 'PUT' || f.method === 'POST') frames.push(f);
+  const res = await fetch(url, init);
+  f.status = res.status;
+  return res;
 };
 const secret = ds.generateSecret();
 const pairing = { secret, relay, name: 'CI Daylight' };
@@ -76,11 +81,11 @@ rows.push(await sender.send({ kind: 'file', name: 'live-5mb.pdf', mime: 'applica
 for (const r of rows) log('sent', r.kind, r.name || r.url, r.status, r.attachment ? 'as attachment' : 'as message', r.error || '');
 if (rows.some((r) => r.status !== 'sent')) fail('publish failed: ' + rows.map((r) => `${r.status}/${r.errorCode} ${r.error}`).join('; '));
 
-const puts = frames.filter((f) => f.method === 'PUT');
-log('frames published:', frames.map((f) => `${f.method} ${f.bytes}`).join(', '));
-const bigFrames = puts.filter((f) => f.bytes > 1000000);
-if (bigFrames.length !== 3) fail(`the 5 MB file went in ${bigFrames.length} large frames, not 3`);
-for (const f of frames) {
+log('publish requests:', frames.map((f) => `${f.method} ${f.bytes} → ${f.status || 'no answer'}`).join(', '));
+// Only the 5 MB file has frames over 1 MB. Count the accepted ones, so an in-call retry after a blip does not count twice.
+const bigFrames = frames.filter((f) => f.method === 'PUT' && f.bytes > 1000000 && f.status >= 200 && f.status < 300);
+if (bigFrames.length !== 3) fail(`the 5 MB file went in ${bigFrames.length} accepted large frames, not 3`);
+for (const f of frames) { // every request, accepted or not
   if (f.bytes > LARGEST_FRAME) fail(`a frame of ${f.bytes} bytes is over ${LARGEST_FRAME}`);
   if (f.bytes >= NTFY_ATTACHMENT_LIMIT) fail(`a frame of ${f.bytes} bytes is not under ntfy.sh's 2 MiB`);
 }
