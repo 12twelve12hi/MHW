@@ -23,12 +23,14 @@ pub struct Launch {
     pub e2e_status: Option<PathBuf>,
     /// Test hook: do what the clipboard hotkey does (only a running app in test mode honours it).
     pub e2e_hotkey: bool,
+    /// Test hook: turn start at login on, as the tray menu does (only a running app in test mode honours it).
+    pub e2e_autostart: bool,
 }
 
 impl Launch {
     /// Nothing to send or pair: a plain launch (from the Start menu, say).
     pub fn is_plain(&self) -> bool {
-        self.paths.is_empty() && self.links.is_empty() && !self.e2e_hotkey
+        self.paths.is_empty() && self.links.is_empty() && !self.e2e_hotkey && !self.e2e_autostart
     }
 
     /// Started by the end-to-end test.
@@ -73,6 +75,7 @@ pub fn parse<S: AsRef<str>>(args: &[S], cwd: &Path) -> Launch {
                 "e2e-pair" => out.e2e_pair = value().filter(|v| !v.is_empty()),
                 "e2e-status" => out.e2e_status = value().filter(|v| !v.is_empty()).map(|v| absolute(&v, cwd)),
                 "e2e-hotkey" => out.e2e_hotkey = true,
+                "e2e-autostart" => out.e2e_autostart = true,
                 _ => {}
             }
             continue;
@@ -129,6 +132,8 @@ mod tests {
         assert!(l.is_plain());
 
         let l = parse(&["--e2e-pair", "daylightshare://pair?c=Q", "--e2e-status=status.json", "--unknown", "--e2e-hotkey"], &cwd());
+        assert!(!l.e2e_autostart);
+        assert!(!parse(&["--e2e-autostart"], &cwd()).is_plain());
         assert_eq!(l.e2e_pair.as_deref(), Some("daylightshare://pair?c=Q"));
         assert_eq!(l.e2e_status, Some(cwd().join("status.json")));
         assert!(l.e2e_hotkey);

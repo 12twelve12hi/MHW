@@ -3324,6 +3324,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-single-instance",
  "windows",
+ "windows-registry",
 ]
 
 [[package]]

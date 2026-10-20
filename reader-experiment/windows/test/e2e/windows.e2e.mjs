@@ -10,8 +10,9 @@
 //      gets them through the single-instance plugin);
 //   4. puts a link on the clipboard and starts the app with --e2e-hotkey, which takes the hotkey's code path;
 //   5. checks that the Receiver got all three items intact and the status file shows them Delivered;
-//   6. starts it once more without arguments (the window opens; screenshot), quits it, uninstalls silently and checks
-//      that the shortcut and the link scheme are gone.
+//   6. turns on start at login with --e2e-autostart (what the tray menu's switch does) and checks the Run entry;
+//   7. starts it once more without arguments (the window opens; screenshot), quits it, uninstalls silently and checks
+//      that the shortcut, the link scheme and the start-at-login entry are gone.
 //
 //   node test/e2e/windows.e2e.mjs --installer out/Send-to-Daylight-windows-setup.exe
 //   node test/e2e/windows.e2e.mjs --exe src-tauri/target/release/send-to-daylight.exe     (no install/uninstall)
@@ -226,7 +227,17 @@ async function main() {
   check(done.rows.length === 3, 'exactly three items in the history', String(done.rows.length));
   check(received.length === 3, 'the Daylight got each item once', String(received.length));
 
-  // --- 6. window, quit, uninstall ----------------------------------------------------------------------------------
+  // --- 6. start at login ------------------------------------------------------------------------------------------
+  step('Start at login: the tray menu’s switch (test hook --e2e-autostart)');
+  check(!regValue(RUN_KEY, 'Send to Daylight'), 'off by default');
+  launchAgain(['--e2e-autostart'], 'start-at-login hook');
+  const run = await waitFor('the start-at-login entry', () => regValue(RUN_KEY, 'Send to Daylight'), { timeout: 20000 }).catch(() => '');
+  const runLine = run.trim().split('\n').pop().trim();
+  check(runLine.toLowerCase().endsWith(`"${EXE}" --autostart`.toLowerCase()), 'the Run entry starts the app quietly, its path quoted', runLine);
+  const heard = await waitFor('the window to show it on', () => readStatus()?.autostart === true, { timeout: 15000 }).catch(() => false);
+  check(heard, 'Settings shows Start at login on');
+
+  // --- 7. window, quit, uninstall ----------------------------------------------------------------------------------
   step('A plain second launch opens the window');
   launchAgain([], 'plain launch');
   const visible = await waitFor('a visible "Send to Daylight" window', () => {

@@ -436,7 +436,7 @@ function writeStatusSoon() {
   statusTimer = setTimeout(async () => {
     try {
       const snap = await app.snapshot();
-      Object.assign(snap, { version: info.version, hotkey, sendTo: info.sendTo, view, log: log.slice(-50) });
+      Object.assign(snap, { version: info.version, hotkey, autostart: !!info.autostart, sendTo: info.sendTo, view, log: log.slice(-50) });
       await bridge.e2eStatus(JSON.stringify(snap, null, 2));
     } catch (e) { console.warn('Send to Daylight: status file', e); }
   }, 80);
@@ -512,7 +512,7 @@ async function init() {
 
   await bridge.onWake(() => drain());
   await bridge.onTick(() => app.tick().catch(() => {}));
-  await bridge.onAutostart((on) => { info.autostart = !!on; $('autostart').checked = !!on; });
+  await bridge.onAutostart((on) => { info.autostart = !!on; $('autostart').checked = !!on; note(`start at login ${on ? 'on' : 'off'}`); writeStatusSoon(); });
   drain();
   app.start();
   setInterval(() => { if (!document.hidden && view === 'view-send') renderHistory(); }, 60 * 1000);

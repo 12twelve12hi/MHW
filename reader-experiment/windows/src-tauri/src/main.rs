@@ -122,9 +122,14 @@ fn handle_launch(app: &AppHandle, launch: args::Launch, forwarded: bool) {
     for link in launch.links {
         actions.push(Action::Pair { link });
     }
-    // The test hook works only in an app started in test mode.
+    // The test hooks work only in an app started in test mode.
     if launch.e2e_hotkey && st.e2e.status.is_some() {
         actions.push(clipboard_action(app));
+    }
+    if launch.e2e_autostart && st.e2e.status.is_some() {
+        if let Err(e) = apply_autostart(app, true) {
+            diag(app, format!("start at login: {e}"));
+        }
     }
     push(app, actions);
     if show {
@@ -235,12 +240,36 @@ async fn set_hotkey(app: AppHandle, accel: String) -> Result<String, String> {
 fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<bool, String> {
     let al = app.autolaunch();
     let r = if enabled { al.enable() } else { al.disable() };
+    if enabled && r.is_ok() {
+        if let Err(e) = quote_autostart_entry() {
+            diag(app, format!("couldn't quote the start-at-login entry: {e}"));
+        }
+    }
     let now = al.is_enabled().unwrap_or(false);
     if let Some(item) = state(app).autostart_item.lock().unwrap().as_ref() {
         let _ = item.set_checked(now);
     }
     let _ = app.emit(EV_AUTOSTART, now);
     r.map(|_| now).map_err(|e| e.to_string())
+}
+
+/// The plugin writes `C:\...\Send to Daylight\send-to-daylight.exe --autostart` to the Run key without quotes, and the
+/// install folder has spaces: quote the path, so Windows can't mistake `...\Send` for the program.
+#[cfg(windows)]
+fn quote_autostart_entry() -> Result<(), String> {
+    let key = windows_registry::CURRENT_USER
+        .create(r"Software\Microsoft\Windows\CurrentVersion\Run")
+        .map_err(|e| e.to_string())?;
+    if key.get_string(PRODUCT).is_ok() {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        key.set_string(PRODUCT, format!("\"{}\" --autostart", exe.display())).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn quote_autostart_entry() -> Result<(), String> {
+    Ok(())
 }
 
 #[tauri::command]

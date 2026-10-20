@@ -142,9 +142,11 @@ relay (`../share/js/mock-relay.mjs`), with a `Receiver` from `daylight-share.js`
 3. starts the app again with a PDF and a text file as arguments, as Send to does, and checks that the Daylight gets
    both intact;
 4. puts a link on the clipboard and starts the app with `--e2e-hotkey`, a test hook that takes the hotkey's code path
-   (pressing a global hotkey on a CI machine isn't practical); a test-mode app is the only one that honours it;
-5. waits until the status file shows all three **Delivered**, opens the window (screenshot), quits and uninstalls, and
-   checks that the shortcut, the link scheme and the start-at-login entry are gone.
+   (pressing a global hotkey on a CI machine isn't practical); only an app started in test mode honours the hooks;
+5. waits until the status file shows all three **Delivered**;
+6. turns on start at login with `--e2e-autostart` (what the tray menu's switch does) and checks the Run entry;
+7. opens the window (screenshot), quits and uninstalls, and checks that the shortcut, the link scheme and the
+   start-at-login entry are gone.
 
 The workflow then uploads the installer to the `reader-experiment-latest` release; the bare `send-to-daylight.exe`
 and the test output (status file, screenshot) are kept as workflow artifacts.

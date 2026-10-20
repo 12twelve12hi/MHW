@@ -34,7 +34,7 @@ pub fn status() -> SendTo {
 /// Creates (or replaces) the shortcut, pointing at this executable.
 pub fn create() -> Result<SendTo, String> {
     let lnk = shortcut_path().ok_or("no APPDATA folder")?;
-    let exe = tauri::utils::platform::current_exe().map_err(|e| e.to_string())?;
+    let exe = plain_path(std::env::current_exe().map_err(|e| e.to_string())?);
     if let Some(dir) = lnk.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
@@ -44,6 +44,19 @@ pub fn create() -> Result<SendTo, String> {
         .join()
         .map_err(|_| "the shortcut thread failed".to_string())??;
     Ok(status())
+}
+
+/// The Shell's link APIs refuse verbatim paths (`\\?\C:\...`, what canonicalize returns) with "The parameter is
+/// incorrect": give them the plain form.
+fn plain_path(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        p
+    }
 }
 
 /// First run: make sure the shortcut exists; later runs leave it alone. `marker` records that the first run happened.
@@ -99,5 +112,17 @@ mod imp {
 mod imp {
     pub fn create_link(_lnk: &std::path::Path, _exe: &std::path::Path) -> Result<(), String> {
         Err("Send to shortcuts exist only on Windows".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_paths() {
+        assert_eq!(plain_path(PathBuf::from(r"\\?\C:\Apps\a.exe")), PathBuf::from(r"C:\Apps\a.exe"));
+        assert_eq!(plain_path(PathBuf::from(r"\\?\UNC\srv\share\a.exe")), PathBuf::from(r"\\srv\share\a.exe"));
+        assert_eq!(plain_path(PathBuf::from(r"C:\Apps\a.exe")), PathBuf::from(r"C:\Apps\a.exe"));
     }
 }
