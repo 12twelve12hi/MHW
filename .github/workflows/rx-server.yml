@@ -1,0 +1,279 @@
+name: Reader experiment - Daylight server
+
+# Tests the Daylight server (a Cloudflare Worker, reader-experiment/server) on every push that touches it, and deploys it
+# to the repo owner's Cloudflare account when CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE exist.
+# Without them the deploy job only explains what to add; it never fails for a missing secret.
+# To apply changed secrets or variables: open the latest run of this workflow and choose "Re-run all jobs".
+on:
+  push:
+    branches: [claude/sweet-goldberg-ej1nb0]
+    paths:
+      - 'reader-experiment/server/**'
+      - '!reader-experiment/server/**/*.md'
+      - 'reader-experiment/share/js/**'
+      - '.github/workflows/rx-server.yml'
+  workflow_dispatch:   # GitHub offers "Run workflow" only once this file is on the default branch
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rx-server
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      server_changed: ${{ steps.changes.outputs.server }}
+    defaults:
+      run:
+        working-directory: reader-experiment/server
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262      # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020    # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: reader-experiment/server/package-lock.json
+      - run: npm ci
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Tests (unit in Node; Worker and end to end in workerd with Miniflare, the mock relay and a mock Claude)
+        run: npm test
+      - name: Bundle fits the Free plan (3 MB compressed) and carries no test hooks
+        env:
+          WRANGLER_SEND_METRICS: 'false'
+        run: |
+          npx wrangler deploy --dry-run --outdir .build
+          size=$(gzip -9c .build/index.js | wc -c); echo "Bundle: $size bytes gzipped"
+          test "$size" -lt 3000000
+          ! grep -E -q 'TEST_ANTHROPIC_BASE_URL|TEST_KNOBS|X-DLS-Test|__test/' .build/index.js
+          echo "### Daylight server: tests passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Bundle: $size bytes gzipped (Free plan limit 3 MB), no test hooks." >> "$GITHUB_STEP_SUMMARY"
+      - name: Did this push change the server? (share/js-only pushes are tested, not deployed)
+        id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != push ] || [ -z "${BEFORE//0/}" ]; then echo server=true >> "$GITHUB_OUTPUT"; exit 0; fi
+          files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA" --jq '.files[].filename' || echo FAILED)
+          if echo "$files" | grep -v '\.md$' | grep -qE '^(FAILED$|reader-experiment/server/|\.github/workflows/rx-server\.yml$)'; then
+            echo server=true >> "$GITHUB_OUTPUT"; else echo server=false >> "$GITHUB_OUTPUT"; fi
+
+  ntfy-attach:
+    name: ntfy.sh external attachments (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262      # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020    # v4.4.0
+        with:
+          node-version: 22
+      - run: node reader-experiment/server/test/live/ntfy-attach.mjs >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy to Cloudflare (when the secrets exist)
+    needs: test
+    # Deploy on server changes, on "Re-run all jobs" and on a manual run; never on pull_request.
+    if: needs.test.outputs.server_changed == 'true' || github.run_attempt > 1 || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: daylight-server     # created on first use; protect it in Settings › Environments (README, step 8)
+    defaults:
+      run:
+        working-directory: reader-experiment/server
+    env:                             # no secrets at job level: each step gets only what it needs
+      WRANGLER_SEND_METRICS: 'false'
+      CF_API: https://api.cloudflare.com/client/v4
+      PLAN: ${{ vars.DAYLIGHT_WORKERS_PLAN || 'free' }}
+      DELIVERY: ${{ vars.DAYLIGHT_DELIVERY || 'lab' }}
+      HAS_CF: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+    steps:
+      - name: Without the Cloudflare secrets there is nothing to deploy
+        if: env.HAS_CF != 'true'
+        working-directory: .
+        run: |
+          msg="The Daylight server is built and tested but not deployed. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE in GitHub › Settings › Secrets and variables › Actions, then open this run and choose Re-run all jobs (see reader-experiment/server/README.md)."
+          echo "::notice title=Daylight server not deployed::$msg"
+          printf '### Daylight server\n\n%s\n\nNext: add CLOUDFLARE_API_TOKEN.\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262      # v4.4.0
+        if: env.HAS_CF == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020    # v4.4.0
+        if: env.HAS_CF == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: reader-experiment/server/package-lock.json
+      - name: Install (no secret is in this step's environment)
+        if: env.HAS_CF == 'true'
+        run: npm ci
+
+      - name: Check the secrets
+        id: gate
+        if: env.HAS_CF == 'true'
+        env:
+          HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+          DAYLIGHT_SERVER_CODE: ${{ secrets.DAYLIGHT_SERVER_CODE }}
+          DAYLIGHT_PAIRING: ${{ secrets.DAYLIGHT_PAIRING }}
+          DAYLIGHT_EMAIL_LOCAL: ${{ secrets.DAYLIGHT_EMAIL_LOCAL }}
+        # Masks every form of the codes and every derived value first; never echoes input. A pairing code in
+        # DAYLIGHT_SERVER_CODE fails here. A missing DAYLIGHT_SERVER_CODE is a notice (ok=false), not a failure.
+        run: node scripts/derive.mjs gate
+
+      - name: Cloudflare token, permissions and R2
+        id: cf
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          HAS_EMAIL: ${{ secrets.DAYLIGHT_EMAIL_DOMAIN != '' }}
+        run: node scripts/cf-check.mjs     # writes r2=on|off; fails naming a missing permission in plain words
+
+      - name: workers.dev address
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          sub=$(curl -fsS -H "$auth" "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" | jq -r '.result.subdomain // empty' || true)
+          if [ -z "$sub" ]; then
+            sub="dl-$(openssl rand -hex 5)"
+            echo "::add-mask::$sub"
+            curl -fsS -X PUT -H "$auth" -H 'Content-Type: application/json' --data "{\"subdomain\":\"$sub\"}" \
+              "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" > /dev/null
+          fi
+          echo "::add-mask::$sub"
+          echo "::add-mask::$WORKER_NAME.$sub.workers.dev"
+          echo "SERVER_URL=https://$WORKER_NAME.$sub.workers.dev" >> "$GITHUB_ENV"
+
+      - name: D1 database (create once), R2 bucket and deploy config
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2: ${{ steps.cf.outputs.r2 }}
+          CI: 'true'
+        run: |
+          id=$(npx wrangler d1 list --json | jq -r '.[] | select(.name == "daylight-server") | .uuid')
+          if [ -z "$id" ]; then
+            npx wrangler d1 create daylight-server > /dev/null
+            id=$(npx wrangler d1 list --json | jq -r '.[] | select(.name == "daylight-server") | .uuid')
+          fi
+          test -n "$id"
+          sed -e "s/00000000-0000-0000-0000-000000000000/$id/" -e "s/^name = \"daylight-server\"/name = \"$WORKER_NAME\"/" \
+            wrangler.toml > wrangler.deploy.toml
+          if [ "$R2" = on ]; then
+            code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/daylight-server")
+            [ "$code" = 200 ] || npx wrangler r2 bucket create daylight-server
+            rules=$(npx wrangler r2 bucket lifecycle list daylight-server 2>/dev/null || true)
+            add() { echo "$rules" | grep -q "$1" || npx wrangler r2 bucket lifecycle add daylight-server "$1" "$2" --expire-days "$3" --force; }
+            add dls-files f/ 14; add dls-mail m/ 8; add dls-ai a/ 1
+            printf '\n[[r2_buckets]]\nbinding = "FILES"\nbucket_name = "daylight-server"\n' >> wrangler.deploy.toml
+          else
+            echo "::notice title=R2 is off::Large files, email-in and PDF AI need R2. Turn it on in the Cloudflare dashboard (R2; it asks for a card, the free tier isn't charged), then Re-run all jobs."
+          fi
+          if [ "$PLAN" = paid ]; then printf '\n[limits]\ncpu_ms = 60000\n' >> wrangler.deploy.toml; fi
+          npx wrangler d1 migrations apply daylight-server --remote -c wrangler.deploy.toml
+
+      - name: Deploy the Worker with its secrets
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DAYLIGHT_SERVER_CODE: ${{ secrets.DAYLIGHT_SERVER_CODE }}
+          DAYLIGHT_PAIRING: ${{ secrets.DAYLIGHT_PAIRING }}          # secrets.mjs uploads it only when DELIVERY=v1
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DAYLIGHT_EMAIL_DOMAIN: ${{ secrets.DAYLIGHT_EMAIL_DOMAIN }}
+          DAYLIGHT_EMAIL_LOCAL: ${{ secrets.DAYLIGHT_EMAIL_LOCAL }}
+          DAYLIGHT_EMAIL_SALT: ${{ secrets.DAYLIGHT_EMAIL_SALT }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          AI_MAX_USD: ${{ vars.DAYLIGHT_AI_MAX_USD_DAY || '10' }}
+          AI_MAX_REQ: ${{ vars.DAYLIGHT_AI_MAX_REQ_DAY || '100' }}
+          CI: 'true'
+        run: |
+          umask 077
+          node scripts/secrets.mjs "$RUNNER_TEMP/put.json" "$RUNNER_TEMP/delete.txt"
+          deploy() { npx wrangler deploy -c wrangler.deploy.toml --secrets-file "$RUNNER_TEMP/put.json" \
+            --var "SERVER_URL:$SERVER_URL" --var "GIT_SHA:${GITHUB_SHA::7}" --var "WORKERS_PLAN:$PLAN" \
+            --var "DELIVERY:$DELIVERY" --var "AI_MAX_USD_DAY:$AI_MAX_USD" --var "AI_MAX_REQ_DAY:$AI_MAX_REQ" > "$RUNNER_TEMP/deploy.out"; }
+          if ! deploy 2> "$RUNNER_TEMP/deploy.err"; then
+            grep -qi ratelimit "$RUNNER_TEMP/deploy.err" || { cat "$RUNNER_TEMP/deploy.err"; exit 1; }
+            echo "::warning::This account refused the rate-limiting binding; deploying without it."
+            node scripts/cf-check.mjs drop-ratelimit wrangler.deploy.toml && deploy
+          fi
+          # Optional secrets removed from GitHub are removed from the Worker too.
+          existing=$(npx wrangler secret list -c wrangler.deploy.toml --format json 2>/dev/null | jq -r '.[].name' || true)
+          while read -r name; do
+            [ -n "$name" ] && echo "$existing" | grep -qx "$name" && npx wrangler secret delete "$name" -c wrangler.deploy.toml > /dev/null || true
+          done < "$RUNNER_TEMP/delete.txt"
+          rm -f "$RUNNER_TEMP/put.json" "$RUNNER_TEMP/delete.txt" "$RUNNER_TEMP/deploy.err" "$RUNNER_TEMP/deploy.out"
+
+      - name: Remove the Workers of earlier Server codes
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CI: 'true'
+        run: |
+          curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts" \
+            | jq -r '.result[].id' | grep -E '^daylight-[0-9a-f]{12}$' | grep -vx "$WORKER_NAME" \
+            | while read -r old; do echo "::add-mask::$old"; npx wrangler delete --name "$old" --force > /dev/null; done || true
+
+      - name: Email routing
+        if: steps.gate.outputs.ok == 'true' && steps.cf.outputs.r2 == 'on'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DAYLIGHT_SERVER_CODE: ${{ secrets.DAYLIGHT_SERVER_CODE }}
+          DAYLIGHT_PAIRING: ${{ secrets.DAYLIGHT_PAIRING }}
+          DAYLIGHT_EMAIL_DOMAIN: ${{ secrets.DAYLIGHT_EMAIL_DOMAIN }}
+          DAYLIGHT_EMAIL_LOCAL: ${{ secrets.DAYLIGHT_EMAIL_LOCAL }}
+          DAYLIGHT_EMAIL_SALT: ${{ secrets.DAYLIGHT_EMAIL_SALT }}
+          CI: 'true'
+        run: |
+          [ -n "$DAYLIGHT_EMAIL_DOMAIN" ] || exit 0
+          addr=$(node scripts/derive.mjs email)          # masks the address itself before printing it
+          auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          d="$DAYLIGHT_EMAIL_DOMAIN"; zone=""; zname=""   # the zone is the domain itself or its nearest parent on this account
+          while [ -z "$zone" ] && [ "${d#*.}" != "$d" ]; do
+            zone=$(curl -fsS -H "$auth" "$CF_API/zones?name=$d&account.id=$CLOUDFLARE_ACCOUNT_ID" | jq -r '.result[0].id // empty'); zname="$d"; d="${d#*.}"
+          done
+          [ -n "$zone" ] || { echo "::error::DAYLIGHT_EMAIL_DOMAIN is not a domain on this Cloudflare account."; exit 1; }
+          if [ "$zname" = "$DAYLIGHT_EMAIL_DOMAIN" ]; then
+            npx wrangler email routing enable "$zname" --zone-id "$zone" > /dev/null || echo "::warning::Turn on Email Routing for the domain in the Cloudflare dashboard (Email › Email Routing)."
+          else
+            echo "::notice::For a subdomain, add it once under Email › Email Routing › Settings › Subdomains in the Cloudflare dashboard."
+          fi
+          body=$(jq -n --arg a "$addr" --arg w "$WORKER_NAME" '{name: "daylight-server", enabled: true, priority: 0,
+            matchers: [{type: "literal", field: "to", value: $a}], actions: [{type: "worker", value: [$w]}]}')
+          rid=$(curl -fsS -H "$auth" "$CF_API/zones/$zone/email/routing/rules?per_page=50" | jq -r '.result[] | select(.name == "daylight-server") | .id' | head -1)
+          if [ -n "$rid" ]; then
+            curl -fsS -X PUT -H "$auth" -H 'Content-Type: application/json' --data "$body" "$CF_API/zones/$zone/email/routing/rules/$rid" > /dev/null
+          else
+            curl -fsS -X POST -H "$auth" -H 'Content-Type: application/json' --data "$body" "$CF_API/zones/$zone/email/routing/rules" > /dev/null
+          fi
+
+      - name: Announce, smoke test and CPU canary
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          DAYLIGHT_SERVER_CODE: ${{ secrets.DAYLIGHT_SERVER_CODE }}
+          DAYLIGHT_PAIRING: ${{ secrets.DAYLIGHT_PAIRING }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+        # Waits up to 5 min for /v1/hello, publishes the config frame from the runner, then calls /v1/admin/announce and
+        # /v1/admin/selftest three times. The summary holds only the fingerprint, the feature states and the next step.
+        run: node scripts/derive.mjs announce "$SERVER_URL" >> "$GITHUB_STEP_SUMMARY"

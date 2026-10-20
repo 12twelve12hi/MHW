@@ -1,0 +1,272 @@
+{
+  "generatedBy": "reader-experiment/server/vectors/generate.mjs",
+  "notes": "Labels end with a 0x00 byte; AADs do not. Nonces are SHA-256(\"server-vector-nonce/<label>\")[0:12]. All binary values are lowercase hex unless named base64.",
+  "secretHex": "27018efa6c00e0fec24d663e1119f9a1",
+  "pairingCode": "E4AY-56TM-ADQP-5QSN-MY7B-CGPZ-UFRA",
+  "derived": {
+    "seedHex": "a01fb48dbec51d1150ff319c24efa094",
+    "serverCode": "SERVER-UAP3-JDN6-YUOR-CUH7-GGOC-J35A-SRYA",
+    "serverCodeLink": "daylightserver://setup?c=UAP3JDN6YUORCUH7GGOCJ35ASRYA&r=https%3A%2F%2Frelay.example.org&k=tk_live_123",
+    "authToken": "1f072f8396e2c6c81ad764f2603750d3a78b586d2467f04a07551e8059fd92a5",
+    "configTopic": "dls-02bb0360a282818ef051948333611b48",
+    "itemTopic": "dls-8ce202791b284c7153c81f68ca47e652",
+    "ackTopic": "dls-1756a7b65ce6e2d6b15383d25cc79700",
+    "emailToken": "6g7atzntly",
+    "emailTokenWithSalt": {
+      "salt": "rotate-1",
+      "emailToken": "mq5zpdfd2f"
+    },
+    "fingerprint": "5138e08d",
+    "workerName": "daylight-f2c6c83052c0",
+    "serverItemIds": [
+      {
+        "origin": "digest:2026-10-20",
+        "id": "fef401d3f1917fc76f96632b5d7ad58e"
+      },
+      {
+        "origin": "feed:3a1b2c4d5e6f:0123456789abcdef0123456789abcdef",
+        "id": "a9edaab64278c150f582c1deee68e891"
+      }
+    ]
+  },
+  "serverCodeParsing": [
+    {
+      "input": "SERVER-UAP3-JDN6-YUOR-CUH7-GGOC-J35A-SRYA",
+      "seedHex": "a01fb48dbec51d1150ff319c24efa094"
+    },
+    {
+      "input": "server uap3 jdn6 yuor cuh7 ggoc j35a srya",
+      "seedHex": "a01fb48dbec51d1150ff319c24efa094"
+    },
+    {
+      "input": "daylightserver://setup?c=UAP3JDN6YUORCUH7GGOCJ35ASRYA&r=https%3A%2F%2Frelay.example.org&k=tk_live_123",
+      "seedHex": "a01fb48dbec51d1150ff319c24efa094",
+      "relay": "https://relay.example.org",
+      "token": "tk_live_123"
+    },
+    {
+      "input": "E4AY-56TM-ADQP-5QSN-MY7B-CGPZ-UFRA",
+      "error": "pairing-code"
+    },
+    {
+      "input": "daylightshare://pair?c=E4AY56TMADQP5QSNMY7BCGPZUFRA",
+      "error": "pairing-code"
+    },
+    {
+      "input": "SERVER-AAP3-JDN6-YUOR-CUH7-GGOC-J35A-SRYA",
+      "error": "checksum"
+    },
+    {
+      "input": "SERVER-ABCD",
+      "error": "format"
+    }
+  ],
+  "frames": {
+    "config": {
+      "aad": "dlshare/v1/server-config",
+      "nonceHex": "984a70cd2bad8cc8b0506c1f",
+      "header": {
+        "v": 1,
+        "kind": "config",
+        "id": "2b8e0f6c1d4a4e5f9a0b1c2d3e4f5a6b",
+        "sent": "2026-10-20T06:00:00.000Z",
+        "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+        "api": 1,
+        "fingerprint": "5138e08d",
+        "delivery": "lab"
+      },
+      "frameBase64": "RExTMZhKcM0rrYzIsFBsH3qVIwu1hwuW4lEDCERR1XbVbUemlXgaXPnCpAy5XivZwScGdb6mZ/QvQQuRr8iUHBsCjpIu3A6j/mZbOkketuS0O+YzUUkH56In8MhU032xTJ5jVzxMIJpbxSBYl6y5umOCde6ZRQrlCz2OSddvP1NARZ3ZRoEcBTTvLUEySxXYaY5AmI81KOEluBvq7E//sR7cro3qFZe2C+gTpBQgmuugmRCiv5RNtqC3zfwN8JxPoVQJKgKGASREKPcQ7v4AtXwoMevCuvyT1TPI4nLtvLWmaJtfy+1mpjVG0B3Z5j0QGKLsWA=="
+    },
+    "item": {
+      "aad": "dlshare/v1/server-item",
+      "id": "fef401d3f1917fc76f96632b5d7ad58e",
+      "contentBase64": "PCFkb2N0eXBlIGh0bWw+PGh0bWw+PGhlYWQ+PG1ldGEgY2hhcnNldD0idXRmLTgiPjx0aXRsZT5EaWdlc3Q8L3RpdGxlPjwvaGVhZD48Ym9keT48cD5Ud28gcGFydHMuPC9wPjwvYm9keT48L2h0bWw+",
+      "chunkSize": 64,
+      "parts": [
+        {
+          "nonceHex": "9dbee0a16ac2875e0765ca94",
+          "frameBase64": "RExTMZ2+4KFqwodeB2XKlB7k3Jq8G6bAEqfrSO8ugLotdoxhQVfXndH2TEgzA3GeuEk8MElLAgaC00rPDfN+GEcXCRyPvOrFWX+YcODBIhPucbvUmyquEXKrpuQneLMkBuFlAkzhTKuZfVZR/mwBEqN1Loc6Wk/B/a8ziqYx6t2sWBxVftuLlbWtK3rjYSnEM89nOGXN6vo8PPgLJxpjsWsNEgfGTdnIQAVmre/l/KC7R0Ihg2vvNBcXx0kHlpeKKE8Jv6sa8O9Qc5zmowV1m/l5HHzwRHFKXazu8Rc5v/L6wxEps7xDvzEb+cTAsfmdFGMZkMJju9KDMPegqZKxpR54ItqBKzclwrCYEsiBIsFRfXK0N9+9vCDhy7NzdycVCYM+Uo96kBG7W0bhDx9Sm3U1tXExoCxb+oy8r00+UYhUcEv9txjbZ511sU9lG/0rcLDxN9M6YoHit8DKI0rZTPcK97KgL5CN0MtBUaBSnMF+jkTFI8i8K+QmHqKC0sbtlx2eXnZNmQ7vaR0ZVfxPwbSDsISx9B59S+LzNZX9W0V6vgre9L54hnWyXZh3u0oHCe0gDDgwVCk2FFNPGFiOrqA+SkLnYmeAXYhpZTYolQdtykV0cQLx5Q==",
+          "header": {
+            "v": 1,
+            "id": "fef401d3f1917fc76f96632b5d7ad58e",
+            "kind": "page",
+            "url": "https://daylight.invalid/i/fef401d3f1917fc76f96632b5d7ad58e",
+            "title": "Digest · Tue 20 Oct",
+            "mime": "text/html",
+            "size": 114,
+            "sha256": "f8ff751abae1b4e73abf98dcb3f4cf3bb967c035001a6c01246263919db6baca",
+            "sent": "2026-10-20T06:00:00.000Z",
+            "from": "Digest",
+            "app": "server/1",
+            "x-origin": "digest",
+            "part": 0,
+            "parts": 2
+          }
+        },
+        {
+          "nonceHex": "f3e7a6e494ce73a7638b0946",
+          "frameBase64": "RExTMfPnpuSUznOnY4sJRp0t3fwXhHWEDPOGuzKC1OnrKmqzVxqHZk7QocZxdqHqaWDbXo4eT/ydiVJXJMfB8VjPMb4KZBzasJ32aQI84NpDNB1BvueMBx6pc3RSjZ0mKE23HPvLJMCttSBQfqP6Q/lKZyifMoptKDUTyCxznKGK/us8vbVYXz9Tl07jaHzAzpYayiVk7Qc9BMG9bEuV8MBq2TcSTRSyLBL8ZgwBRRwZaxPZyCIxnKO7Q1pj5relcQUIqTfLM9+Q7zyhVk4fRwgBmhGOCivwQmbHxftg/kRJK/MtzCMX9sjtIqiZ/kqDJMAaCEKxZ+bYEPcSKGq0yJnanAh9sF+dW5AToITUYDUe0j4RdMGBRadjDIzoCj4fUrxRfc7m+1zNjV/V3llVtaPuRue0iF58JbZ3zU07j1kU5SBRdcubn0LUX0ayDxPYJY5RDQEmsmeJLdCUHHWEe03JT7na8Ql7k7nQ14rdHfLDnDLNLOlRyebOe+tPX/fMz1JrXhXLWJmhd18v9FBvSAowpsNFm2RNCLUmlkyq4EGovEMe4hc4Xegx2pqt3n2Uxtjkd1pmcaLHGbI9IF3bwwz6JnvAb6QJ3ac=",
+          "header": {
+            "v": 1,
+            "id": "fef401d3f1917fc76f96632b5d7ad58e",
+            "kind": "page",
+            "url": "https://daylight.invalid/i/fef401d3f1917fc76f96632b5d7ad58e",
+            "title": "Digest · Tue 20 Oct",
+            "mime": "text/html",
+            "size": 114,
+            "sha256": "f8ff751abae1b4e73abf98dcb3f4cf3bb967c035001a6c01246263919db6baca",
+            "sent": "2026-10-20T06:00:00.000Z",
+            "from": "Digest",
+            "app": "server/1",
+            "x-origin": "digest",
+            "part": 1,
+            "parts": 2
+          }
+        }
+      ]
+    },
+    "hello": {
+      "aad": "dlshare/v1/server-ack",
+      "nonceHex": "947b62b17ea7f96910cda8b1",
+      "header": {
+        "v": 1,
+        "kind": "ack",
+        "ids": [],
+        "sent": "2026-10-20T06:00:00.000Z",
+        "x-inbox": {
+          "app": "inbox-lab/1.0"
+        }
+      },
+      "frameBase64": "RExTMZR7YrF+p/lpEM2osVPVET12impgE/j7OTRw6l+Iadz+G182qR0omyyqoWU3M+QQZfvlQjXW9CTi4NGOZZXdUpz9hlNrYtBrA74uBXhS0pbu8pU7cYY4qEYOLhHT0ouaiDiEL45jI/MGiM74NMQI2AnrB5lx0yrBWJ4t6JfvkZWfJw=="
+    },
+    "ack": {
+      "aad": "dlshare/v1/server-ack",
+      "nonceHex": "f9bff3c4a26bf9d393b06a17",
+      "header": {
+        "v": 1,
+        "kind": "ack",
+        "ids": [
+          "fef401d3f1917fc76f96632b5d7ad58e"
+        ],
+        "sent": "2026-10-20T06:00:00.000Z",
+        "from": "Daylight"
+      },
+      "frameBase64": "RExTMfm/88Sia/nTk7BqF7qWBAWRF31rU2giDKwAo0PP5aDVwAvtuFZ/4TyCRTKuOHX1mrqZNlCLawekYeaDBNIZgcx5RsQm5MMKn3d6MkUrI0L8DlYq1rKiHVanhwrpdn4iz+3Vhoe5eMiACPd4zhOpTVQHFOkW742vz5viOysV1o8M7loiZMAtFN33vx95UH4u4+E2OQ=="
+    }
+  },
+  "negative": [
+    {
+      "frame": "config",
+      "openWith": "box:item",
+      "expect": "frame"
+    },
+    {
+      "frame": "config",
+      "openWith": "box:ack",
+      "expect": "frame"
+    },
+    {
+      "frame": "config",
+      "openWith": "pairing:inbox",
+      "expect": "frame"
+    },
+    {
+      "frame": "config",
+      "openWith": "pairing:ack",
+      "expect": "frame"
+    },
+    {
+      "frame": "inbox",
+      "openWith": "box:config",
+      "expect": "frame",
+      "frameBase64": "RExTMd7cGx+SMjOMuNDmjDa6EVy9pP2cAdu1QkBZsjVure3OElpbvM+g7PyN5mq1MkvSHpex+YC5XkanqSa4qoNKXrIR7fwOuUmDYT7oq6raOvxWbgjb3RsGRvHGNae4AyxW8s3/QSXj5PRjZbx6gg3gcAB5aJYSUfHLYudRRmyKzvs7H8pphjTSBGOLk9143l0Ad93RztTpSekjM99f"
+    },
+    {
+      "frame": "item",
+      "openWith": "pairing:inbox",
+      "expect": "frame"
+    }
+  ],
+  "hosted": {
+    "note": "Ordinary v1 frames under the pairing key (enc identity). Publish one message per part with Attach: <url of the frame>; a v1 Receiver receives the item and acks it.",
+    "itemId": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    "name": "hosted.pdf",
+    "mime": "application/pdf",
+    "contentBase64": "JVBERi0xLjQgaG9zdGVkIHZlY3RvciBmaWxlLCBzcGxpdCBpbnRvIHR3byBzbWFsbCBwYXJ0cyBmb3IgdGhlIHZlY3RvcnMuCg==",
+    "sha256": "8bc57fd0fb4b32443d674edd54271b85919d1646ba7a7daf1712239d97c11182",
+    "parts": [
+      {
+        "nonceHex": "d454e5c9da9bb8a5888bd294",
+        "frameBase64": "RExTMdRU5cnam7iliIvSlBaPnuzD9Unn/YKLpsVsD0wAv29eiOmJ1ZlgF2aIq7gWczxjSd4npKWKPLD+BcYRiHe5wHBkYlmPK3cdms3CXLJZF/GvsVR+sccxUd6LObPfVpD525Es1t+0AzNr9BEjqBUBG4TqfMJnfwLvLYlo4+Tpb4pFr5Vjvs8uETPNyMgIDMmMywRuh6mlwP6u0nZIjUk7bUXxXk8fT5zXHj86iHSGe56yqNURFtVB/c7hom2pxGU2d/mikw2KHK3vxb7A5uiSYDhImK1FrAlJTtteMcShvOTB7ECFiNG+lq4FKA1KkivHApAFB6soydHgNOa1iuIHUq2+uB7xuSqpk7DC7KPhILHbTFQx+MHHO2qGH0HJ66i320OyhMy6kpZIf19egNXacIItH5Twp7DqWTQ7urFKyh6C6JXrv44nwTbnQde9u8PmabFFGHtkdqle/8QtWf1PJA=="
+      },
+      {
+        "nonceHex": "1b3fab06f1bc91fe09163896",
+        "frameBase64": "RExTMRs/qwbxvJH+CRY4lpwNtCmOt/hlbq4b6NdfwM+LBd1G6dgdisx4C58Q4UNa9pu2pKQ0cp6mpGEjLZfCRP0WaomC+eiXsydRftpQMXwSlZuDalfZYDEkoKwygot6qD9UBfxgcmz/2P3YP0p43GTdkkMX49+yvcmzFtsoSgW5N4bqsOK2arjL7mdytrDqNlUfuB+fi5ddYTQiAU/UIQZ+tb6QrUKMwp2w0EmUOBTOi1CqDuwCQ0XSHxS70y4XmQ+reagQXAm/WyXckI/hJfrZwwTcX3Ls68txqybrUEGhSgjWy/bjHtL9DgE4HKpPOfln85GOQjPAvV6c+vpWJx+ZeX/m4Gd0Ah6HD3vTPxSXLjuDKhX3hQJc9DPgKsZyQbaYNBf6j93KEat69aO/4VB1Evr+BQuUgVeK7/VmBSUGmrrLzUDA25Ts90zBWlF3trHmUzGR9TRBugrN"
+      }
+    ],
+    "expect": "item received"
+  },
+  "publicUrl": {
+    "accepted": [
+      {
+        "input": "https://example.com/a?b=1#c",
+        "output": "https://example.com/a?b=1#c"
+      },
+      {
+        "input": "HTTPS://EXAMPLE.COM",
+        "output": "https://example.com/"
+      },
+      {
+        "input": "http://8.8.8.8/",
+        "output": "http://8.8.8.8/"
+      },
+      {
+        "input": "http://[2001:db8::1]/x",
+        "output": "http://[2001:db8::1]/x"
+      },
+      {
+        "input": "https://example.com:8443/",
+        "output": "https://example.com:8443/"
+      },
+      {
+        "input": "http://example.com\\@evil.com",
+        "output": "http://example.com/@evil.com"
+      }
+    ],
+    "refused": [
+      "http://192.168.1.1/reboot",
+      "http://10.0.0.1/",
+      "http://172.16.0.1/",
+      "http://127.0.0.1/",
+      "http://169.254.169.254/",
+      "http://100.64.0.1/",
+      "http://0.0.0.0/",
+      "http://198.18.0.1/",
+      "http://224.0.0.1/",
+      "http://240.0.0.1/",
+      "http://192.0.0.1/",
+      "http://2130706433/",
+      "http://0x7f.1/",
+      "http://127.1/",
+      "http://[::1]/",
+      "http://[::]/",
+      "http://[::ffff:10.0.0.1]/",
+      "http://[::10.0.0.1]/",
+      "http://[fc00::1]/",
+      "http://[fe80::1]/",
+      "http://[64:ff9b::a00:1]/",
+      "http://[2002:a00:1::]/",
+      "http://localhost/",
+      "http://x.localhost/",
+      "http://printer.local/",
+      "http://db.internal/",
+      "http://router.lan/",
+      "http://nas.home.arpa/",
+      "http://router/",
+      "http://user:pw@example.com/",
+      "javascript:alert(1)",
+      "ftp://example.com/",
+      ""
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+node_modules/
+.wrangler/
+dist/
+.build/
+.build-test/
+.dev.vars
+wrangler.deploy.toml

@@ -1,0 +1,49 @@
+# The Daylight server (DESIGN.md 12.2). The deploy workflow (.github/workflows/rx-server.yml) writes
+# wrangler.deploy.toml from this file: the Worker's name (daylight-<12 hex>, from the Server code), the D1 database id,
+# and the R2 binding and CPU limit when they apply.
+name = "daylight-server"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+preview_urls = false
+send_metrics = false
+minify = true                      # also drops the `if (__TESTING__)` blocks from the deploy bundle
+
+# Test-only code hangs on __TESTING__: false here, so esbuild drops it from every deploy bundle (CI greps the bundle).
+# The tests build with --define __TESTING__:true.
+[define]
+__TESTING__ = "false"
+
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "daylight-server"
+database_id = "00000000-0000-0000-0000-000000000000"   # replaced by the deploy workflow
+migrations_dir = "migrations"
+
+[[ratelimits]]
+name = "FAILS"                     # failed authentications and unknown hosted ids, per IP (3.3)
+namespace_id = "7301"
+simple = { limit = 30, period = 60 }
+
+[vars]
+SERVER_URL = ""                    # set by the deploy (--var)
+GIT_SHA = ""
+WORKERS_PLAN = "free"
+DELIVERY = "lab"
+AI_MAX_USD_DAY = "10"
+AI_MAX_REQ_DAY = "100"
+
+[observability]
+enabled = true
+
+[observability.logs]
+invocation_logs = false            # no request URLs or headers in Cloudflare's logs
+# Our own log lines carry request ids, routes and error codes only, never exception messages
+# (V8's JSON.parse errors quote input), content, URLs, addresses or keys.
+
+# Appended by the deploy when R2 is on:   [[r2_buckets]] binding = "FILES", bucket_name = "daylight-server"
+# Appended on Workers Paid:              [limits] cpu_ms = 60000
