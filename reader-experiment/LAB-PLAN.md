@@ -473,19 +473,51 @@ through the Sender's `onAckHeader` hook (2.7.1). It stores:
 
 | Key (JS storage; a `lab.json` file next to the outbox in Kotlin and Swift) | Content |
 |---|---|
-| `lab/inbox` | The last `Info`, plus `at` = that message's relay `time` in ms. Only a message with a later `at` replaces it. |
+| `lab/inbox` | One entry per **publisher**: its last `Info`, plus `at` = that message's relay `time` in ms. The publisher is the part of `app` before the first `/` (`android`, `reader-lab`; anything else, an empty `app` included, is `other`). A message replaces its publisher's entry when its `at` is the same or later. Messages are processed in the order the poll returns them, so a tie within one relay second goes to the later message. |
 | `lab/heard` | The latest relay time (ms) of any ack-topic message that decrypted: an ack or a Lab frame |
-| `lab/states` | id → `{s, t}`. A new entry replaces the stored one when its rank is higher, or when the ranks are equal and its `t` is later. Pruned to ids still in the outbox, at most 200. |
+| `lab/states` | id → `{s, t}`. A new entry replaces the stored one when its rank is higher, or when the ranks are equal and its `t` is later. Pruned to ids still in the Sender's outbox or in the hosted outbox (`server/hosted`, F02), at most 200. |
 
 - **Pairing changes.** A different secret removes every `lab/*` key with the outbox (`applyPairingChange`). The same
   secret keeps them.
+- **Two Inboxes on one ack topic.** During a handover (5.3.4), Daylight Share and the Lab Reader both publish on the
+  same ack topic. Each keeps its own entry, so neither overwrites the other's caps (`reader-doc`, `quiet`).
 - **Derived values.**
-  - `inboxLab()` = `inbox` exists, `inbox.lab ≥ 1` and `now − inbox.at ≤ 14 days`.
-  - `hasCap(t)` = `inboxLab()` and `caps` contains `t`.
-  - `checkedIn()` = the later of `heard` and `inbox.poll`, or null.
+  - A publisher is **fresh** when `now − at ≤ INBOX_STALE` = 36 hours, three hello periods.
+  - `inboxLab()` = some fresh publisher has `lab ≥ 1`. A publisher's `lab: 0` frame replaces its own entry, so it
+    ends that publisher's Lab at once. A sender that missed the `lab: 0` frame gets it again from the 48-hour repeat
+    (2.2.4), and in any case the entry goes stale after 36 hours.
+  - `caps()` = the union of the caps of the fresh publishers with `lab ≥ 1`. `hasCap(t)` = `t` is in `caps()`.
+  - Each publisher's `poll` is clamped to no later than the relay `time` of the message that carried it, so a
+    Daylight whose clock runs fast cannot read as "just now" forever.
+  - `checkedIn()` = the later of `heard` and the newest clamped `poll`, or null.
   - `state(id)` is shown only for rows whose status is `delivered`.
 - **No row says Delivered without an ack.** An ack frame listing the id is the only way into `delivered`; states
   never change a row's status.
+
+**2.2.7 Household message budget.** ntfy.sh allows about 250 published messages a day per IP address. At home the
+phone, the Mac and the DC-1 share one address. Polls are requests, not messages: they count only against the request
+rate, a burst of 60 refilled at one per 5 s. The server's own messages (config frames, server items) come from
+Cloudflare's addresses (DESIGN 5.3) and are not counted here. The server lane's acks, though, come from the DC-1 and
+are.
+
+A busy day: 30 items sent (20 links and pages, 10 files of 1–3 parts), Documents = Ask, Instant delivery on, and the
+server lane delivering 60 feed items.
+
+| Traffic | Published by | Messages a day | What bounds it |
+|---|---|---|---|
+| Item frames | senders | ≈ 40 | v1.1: one message per small frame, files in parts of ≤ 1.9 MB |
+| Re-sends | senders | ≤ 5 | v1.1: 11 h for messages, 185 min for attachments, three tries when the relay is full |
+| Acks, pairing lane | DC-1 | ≤ 30 | One per poll or live batch that brought new items |
+| v1.1 ack digests | DC-1 | ≤ 8 | ≤ 4 frames every 11 h |
+| Lab hellos and state frames | DC-1 | ≤ 30 | The daily cap and 30 s spacing (2.2.4) |
+| Lab state digests | DC-1 | ≤ 4 | 2 frames every 11 h |
+| Server-lane acks and hellos (Wave S) | DC-1 | ≤ 27 | S0 sends server-lane acks at most once every 15 minutes while items arrive (≤ 24 for hourly feeds), plus 3 hellos |
+| **Household total** | | **≤ 144** | **Target: ≤ 150** |
+
+Return-lane traffic (W2 and the Reader work) must fit the same target before it ships. That covers F06 items, which
+the user starts (about 5 a day); R2 marks (≤ 6 batches); R3 manifests (≤ 8, 2.4); R4 progress (≤ 6); and each
+device's return acks. L2 adds these rows to this table and to the soak. While return traffic runs, the Lab state cap
+drops to 20.
 
 ### 2.3 Item header fields (W1) and reserved names
 
@@ -495,8 +527,19 @@ through the Sender's `onAckHeader` hook (2.7.1). It stores:
 | `x-orig` | a URL passing the web URL rule | url, page | The URL as shared, when `normaliseShare` changed it (F16) | every sender, Lab on | Lab Inbox item details ("Cleaned from {host}") |
 
 Senders add these only with Lab on. Inboxes ignore an unknown value, and an `x-orig` that fails the web URL rule.
-**Reserved** (no other use): `x-note`, `x-tags`, `x-dest`, `x-private`, `x-to`, `x-rk`, `x-anchor`, `x-item`,
-`x-inbox`, `x-st`, and the server's `x-origin` and `x-about`.
+
+- **`x-orig` stays small.** A sender leaves `x-orig` out when it is over 1,024 characters, or when it would turn a
+  small frame into a large one (over 3,800 base64 characters). A large frame would make the item an attachment: kept
+  3 h, re-sent at 185 minutes and counted against the 20 MB per sender. Vectors pin both cases.
+- **How they reach the Inbox.** Today's validators drop unknown fields: JS `checkItemHeader` returns a cleaned copy
+  with only known fields, and Kotlin's `ItemHeader.check` returns a typed `ItemHeader`. So L0 and K0 (W0) make them
+  also return **`extras`**: `x-cap` when it is one of the four values, and `x-orig` when it passes `webUrl`, both read
+  from part 0 only. Every other `x-` field is still dropped. `Reassembler.add` and `Receiver.accept()` carry `extras`
+  with the item. Swift's `ItemHeader` does the same (A0) for parity. The Inbox stores the extras in `InboxItem` (K5).
+  The `labHeaderExtras` vectors pin it.
+
+**Reserved** (no other use): `x-note`, `x-tags`, `x-dest`, `x-private`, `x-to`, `x-rk`, `x-dev`, `x-anchor`,
+`x-item`, `x-inbox`, `x-st`, and the server's `x-origin` and `x-about`.
 
 ### 2.4 Return lane and control lane (specified now, built in W2 and W3)
 
@@ -513,17 +556,33 @@ key             = the pairing key (PROTOCOL 1.4), as for the inbox and ack topic
 ```
 
 - **Lane.** A *lane* is `{itemTopic, ackTopic, itemAad, ackAad}`. The v1 lane is
-  `{inboxTopic, ackTopic, "dlshare/v1/inbox", "dlshare/v1/ack"}`. The return lane reuses the protocol's `Sender` (on
-  the Daylight) and `Receiver` (on phones and computers) unchanged, with its own topics and AADs. Frames, chunking,
-  the outbox, re-sends, acks, dedupe and every limit of PROTOCOL 2–4 apply as they are.
+  `{inboxTopic, ackTopic, "dlshare/v1/inbox", "dlshare/v1/ack"}`. The return lane runs the protocol's `Sender` (on
+  the Daylight) and `Receiver` (on phones and computers) with their own topics and AADs. Frames, chunking, re-sends,
+  acks, dedupe and every limit of PROTOCOL 2–4 apply as they are. It is not "unchanged", though: L2 adds three
+  things to `Sender` and `Receiver`:
+  - a `lane` option (topics and AADs);
+  - a storage prefix per lane (`lane/<name>/…` in JS storage; a `lane-<name>/` folder in Kotlin and Swift), so the
+    two outboxes never share keys;
+  - per-device delivery (below), because v1.1's `_checkAcks` counts any ack.
+- **Device ids.** Each phone and computer keeps a random 16-hex id, `x-dev`. It is stored locally, never synced, and
+  new after a reinstall. `from` is free text and often repeats ("iPhone"), so it cannot name a device. With Lab on, a
+  device puts `x-dev` in its item headers on the pairing lane (W2) and in its return-lane acks. The Daylight learns
+  its devices from them, keeping the 8 most recently heard.
 - **Return items** are ordinary item headers (PROTOCOL 2.1) plus two fields:
   - `x-rk`: `"share"` (the user shared it on the DC-1, F06), `"marks"` (R2), `"queue"` (R3) or `"reading"` (R4);
-  - `x-to`: optional, one device's `from` name; absent means every device.
+  - `x-to`: optional, one device's `x-dev`; absent means every known device.
 
   `marks`, `queue` and `reading` are `kind: "file"` with the MIME types `application/vnd.daylight.marks+json`,
   `…queue+json` and `…reading+json` (5.4–5.6). A device acks every return item it reads, even one whose `x-rk` it
-  does not know (it drops that one). With `x-to` set, the Daylight's return outbox counts only the named device's ack
-  (by the ack's `from`).
+  does not know (it drops that one).
+- **Delivery per device.** The Daylight's return outbox tracks each item per target device. The item is delivered to
+  a device when an ack carrying that device's `x-dev` lists it, and it is done when every target has acked, or after
+  7 days. Without `x-to`, the targets are the known devices at publish time (at most 8), so the first device's ack
+  no longer stops the re-sends another device still needs. An ack without `x-dev` counts for no device.
+- **Manifests replace each other.** A `queue` manifest (R3) is published only when its content hash changed, at most
+  once an hour. Publishing one removes every older, un-acked manifest from the return outbox, so a superseded
+  manifest is never re-sent for 7 days.
+- **Budget.** Every return-lane row is in 2.2.7 before it ships.
 - **Control frames** (W3) are reserved: `{v:1, kind:"cmd", id, cmd, args, sent, from}`, acked on `controlAckTopic`.
 - **AADs.** The protocol module's `aadFor` becomes an explicit map: `inbox`, `ack`, `lab-return`, `lab-return-ack`,
   `lab-control`, `lab-control-ack`. An unknown purpose throws `ShareError('purpose')`, as DESIGN 17.2 asks. The
@@ -533,7 +592,7 @@ key             = the pairing key (PROTOCOL 1.4), as for the inbox and ack topic
 ### 2.5 Delivery timeline text
 
 `describeLabRow(row, now, ctx)`, where `ctx = {lab, inboxLab, hasCap, state, online}`, returns
-`{label, sentence, action, steps, stepLine, stepIndex}`. Rules in order:
+`{label, sentence, action, stepLine, final}`. Rules in order:
 
 1. `ctx.lab` is false → `describeRow(row, now)`, with no steps.
 2. Offline (`ctx.online === false`) and the row is `sending`, or `failed` with error code `network` →
@@ -548,31 +607,40 @@ key             = the pairing key (PROTOCOL 1.4), as for the inbox and ack topic
 | Lab, offline, pending | Waiting for connection | It will send when this device is back online. |
 | Delivered, Lab Inbox, no state yet | On your Daylight ✓ | Saved on your Daylight. |
 | `waiting` | Waiting for a tap on your Daylight | Tap its notice on your Daylight to add it to the Reader. |
-| `held` | Held on your Daylight | It waits in Daylight Share until you add it to the Reader. |
+| `held` | Kept for later on your Daylight | It waits in Daylight Share until you add it to the Reader. |
 | `inbox` | In Daylight Share on your Daylight | No Reader on your Daylight takes this, so it waits in Daylight Share. |
-| `handed` | Handed to the Reader | Your Daylight passed it to the Daylight Reader. |
+| `handed`, a file | Handed to the Reader | Your Daylight passed it to the Reader. The Reader doesn’t confirm documents yet. |
+| `handed`, a link or page | Handed to the Reader | Your Daylight passed it to the Reader as a shared link. The Reader doesn’t confirm those. |
 | `failed` | Not added to the Reader | The Reader couldn’t open this. It waits in the inbox on your Daylight. |
 | `queued` | In your Reader’s queue | The Reader will download it when your Daylight is online. |
 | `reader` | In your Reader ✓ | Saved in the Daylight Reader. |
 
-Delivered rows have no action button; every row can be removed.
+Delivered rows have no action button; every row can be removed. The Reader step is never a control: tapping a row
+opens its details, and nothing on a row asks for setup.
 
-**Step line.** There are four steps: "This device", "Relay", "Daylight", "Reader". Each has a mark: `✓` done, `…`
-under way, `!` stopped, `→` passed on without confirmation, or nothing (not reached). Steps are joined with ` · `,
-for example `This device ✓ · Relay ✓ · Daylight ✓ · Reader …`.
+**Step line.** There are three steps, in the user's words: "Sent", "On your Daylight" and "In the Reader". Each has a
+mark: `✓` done, `…` under way, `!` stopped, or none (not reached yet). For `handed`, the third step reads "Handed to
+the Reader" with no mark, because the Reader did not confirm it. Steps are joined with ` · `.
 
-| Row | Marks (device, relay, Daylight, Reader) | `stepIndex` |
-|---|---|---|
-| `sending`; offline waiting | … , , , | 1 |
-| `failed`, `expired` | ! , , , | 1 |
-| `sent` | ✓ , ✓ , … , | 3 |
-| Delivered with no state; `waiting`; `held` | ✓ , ✓ , ✓ , … | 4 |
-| `handed` | ✓ , ✓ , ✓ , → | 4 |
-| `inbox`, `failed` (state) | ✓ , ✓ , ✓ , ! | 4 |
-| `queued`, `reader` | ✓ , ✓ , ✓ , ✓ | 4 |
+| Row | Step line |
+|---|---|
+| `sending`; offline waiting | Sent … · On your Daylight · In the Reader |
+| `failed`, `expired` | Sent ! · On your Daylight · In the Reader |
+| `sent` | Sent ✓ · On your Daylight … · In the Reader |
+| Delivered with no state; `waiting`; `held` | Sent ✓ · On your Daylight ✓ · In the Reader … |
+| `handed` | Sent ✓ · On your Daylight ✓ · Handed to the Reader |
+| `inbox`, `failed` (state) | Sent ✓ · On your Daylight ✓ · In the Reader ! |
+| `queued`, `reader` | Sent ✓ · On your Daylight ✓ · In the Reader ✓ |
 
-The row's accessibility label is `{label}. {sentence} Step {stepIndex} of 4.` The step line itself is hidden from
-screen readers, because the label says it. The marks are glyphs and words, never colour alone.
+**What a row shows.** A history list stays light:
+
+- Every row shows its title and label.
+- The sentence and the step line show on the **newest row**, and on every row that is **not final**. `final` is true
+  for `reader`, `queued` and `handed`. Rows from rules 1 to 4 (v1.1's `describeRow`) keep v1.1's layout exactly.
+- Everywhere else they are in the row's details (tap the row).
+- The row's accessibility label is `{label}. {sentence}`, whether the sentence is shown or not. It has no step count.
+  The step line is hidden from screen readers, because the label says it. The marks are glyphs and words, never
+  colour alone.
 
 **Check-in header** (Lab on, paired; above the history): "Your Daylight checked in {rel}."
 
@@ -581,8 +649,8 @@ screen readers, because the label says it. The marks are glyphs and words, never
 - It comes from `checkedIn()` (2.2.6). With a v1.1 Inbox it still works, from ack times. It never blocks sending.
 
 **Faster checks while something is in flight.** While the app or popup is visible and a delivered row from the last
-10 minutes has no final state (`reader`, `queued`, `inbox`, `failed`, `held`), the sender reads the ack topic every
-30 s instead of its normal interval.
+10 minutes has no settled state (`reader`, `queued`, `handed`, `inbox`, `failed`, `held`), the sender reads the ack
+topic every 30 s instead of its normal interval.
 
 ### 2.6 Server discovery and the NEEDS_KEY / NOT_CONFIGURED mapping
 
@@ -599,18 +667,37 @@ same names, and pass `server/vectors/server-vectors.json`. Discovery runs only w
 | any request | `401 BAD_AUTH` | `error` | `discover({force: true})` once, then show the `BAD_AUTH` message |
 | any request | `423 LOCKED` | `locked` | Show it |
 | `GET /v1/status` | `features[f].state` is `needs-key`, `needs-r2`, `needs-domain`, `needs-paid` or `needs-lab-inbox` | that state | Show it |
-| a call | `409 NEEDS_KEY` | `needs-key` | Set the cached `features[feature]` to it; show |
-| a call | `409 NOT_CONFIGURED` with `missing` holding `DAYLIGHT_EMAIL_DOMAIN`, `R2` or `DAYLIGHT_SERVER_CODE` | `needs-domain`, `needs-r2` or `needs-server` | Cache; show |
-| a call | `409 NEEDS_LAB_INBOX` | `needs-lab-inbox` | Cache; show |
+| a call | `409 NEEDS_KEY` | `needs-key` | `server.noteError(feature, err)` updates the cached status; show |
+| a call | `409 NOT_CONFIGURED`; `missing` is read in this order: `DAYLIGHT_SERVER_CODE`, `DAYLIGHT_EMAIL_DOMAIN`, `R2` (the client module's order, which DESIGN 10.4 omits) | `needs-server`, `needs-domain` or `needs-r2` | `noteError`; show |
+| a call | `409 NEEDS_LAB_INBOX` | `needs-lab-inbox` | `noteError`; show |
 | a call | `429 RATE_LIMITED`, `AI_BUSY`, `AI_QUEUE_FULL` | stays ready | Show the server's message and wait `retryAfter` |
+
+**The 5 s bound.** `DaylightServer.state()` may wait on `_origin()`, `discover()` and a relay poll that has no
+timeout; only `status()` races 5 s. So `labGate` puts its own 5 s deadline around `server.state()`, which yields
+`OFFLINE` (2.7.2), and the Swift and Kotlin gates do the same.
+
+**Client-module change (SV0, server lane, W0).** The JS apps use the module unchanged, so the small additions they
+need come from the server lane:
+
+- `DaylightServer.noteError(feature, error)` updates the cached status from a `ServerError`. Nothing outside the
+  module writes `server/status`.
+- A `serverState` section in `server-vectors.json`: status JSON or error JSON in, `{state, message}` out, including
+  the `NOT_CONFIGURED` order. With it the Swift and Kotlin ports cannot map states differently.
+- DESIGN 13.1's storage keys gain `server/pendingMove`, which the module already uses and the ports follow.
+- `pollAcks` tests with Lab frames (2.8).
+
+Swift and Kotlin mirror `noteError`.
 
 **Lab feature → server feature key.** Summaries with Claude → `ai` (`pdf` when the source is a PDF). Email-in address
 → `email`. Feeds and daily digest → `feeds`. Files over 9 MB → `files`. "Also send the result to my Daylight" →
 `deliver`.
 
-**The "Daylight server" section (W0)** shows:
+**The "Daylight server" section (W0)** is where setup happens, so it carries the long texts. Its row under Lab is
+subtitled "Optional · {short state}". It shows:
 
-- the state ("Ready" or its message);
+- the state: "Ready", or the state's long message (DESIGN 14.1, with the exact secret names);
+- when the server is not set up, the setup steps in brief (server README "Turning it on", steps 1–5 and 10), with
+  step 5's **Copy** button for the Server code;
 - the server's host and fingerprint ("3f9a-1c2e");
 - the delivery mode, with the v1 notice when it applies (DESIGN 14.3);
 - the **Server code** with **Copy** (the `daylightserver://` link form when the relay is not ntfy.sh);
@@ -631,12 +718,12 @@ off. Afterwards, show the new Server code and the re-run help (DESIGN 12.7).
 - `deriveServerSeed`, `formatServerCode`, `parseServerCode`, `deriveServerValues`, `showFingerprint`;
 - `openBox` (config only), `checkConfig`, `pollServerTopic`;
 - `DaylightServer`: `discover`, `confirmMove`, `setManualUrl`, `clearManualUrl`, `status`, `state`, `request`,
-  `lockBeforeRepair`, `notice`, `markNoticeShown`;
+  `noteError`, `lockBeforeRepair`, `notice`, `markNoticeShown`;
 - `STATE_MESSAGES`, `ERROR_MESSAGES`, `errorMessage`, `localMessage`, `noticeText`;
-- the storage keys of DESIGN 13.1.
+- the storage keys of DESIGN 13.1, `server/pendingMove` included.
 
-They must pass `server-vectors.json` › `derived`, `serverCodeParsing`, `frames` (config) and `negative` (config
-parts). Wave S adds the rest.
+They must pass `server-vectors.json` › `derived`, `serverCodeParsing`, `frames` (config), `negative` (config parts)
+and `serverState`. Wave S adds the rest.
 
 ### 2.7 JS reference additions, then the ports
 
@@ -646,10 +733,19 @@ must not change:
 - `aadFor` becomes the explicit map of 2.4; an unknown purpose throws.
 - `new Sender({…, onAckHeader})`: called as `onAckHeader(header, {time, msgId})` for every decrypted ack-topic frame
   whose `kind` is `ack`, inside `_checkAcks`, before rows are updated. Its exceptions are caught and logged.
+- `checkItemHeader(h)` returns the header as today plus `extras` (2.3). `Reassembler.add` and `Receiver` pass
+  `extras` on with the item.
 - `Sender.send(item, {defer = false})` (F07): with `defer`, the row is stored as `failed` with error code `network`,
   `attempts: 0` and `lastPublish: now`. Nothing is published; the content is stored as usual.
-- `Sender.flushNetwork({max = 30})` (F07): attempts every `failed`/`network` row now, oldest first, whatever its
-  back-off, at most `max` rows, stopping at a 429. Returns the rows it attempted.
+- `Sender.flushNetwork({maxFrames = 30, maxAttachmentBytes = 18_000_000})` (F07) attempts the `failed`/`network`
+  rows now, oldest first, whatever their back-off.
+  - A pass stops before a row that would take it over either cap.
+  - It follows `_resendDue`'s pass rules: after a `429` it publishes nothing more, and after a `413` no more
+    attachments.
+  - Each attempted row gets `attachment` and `lastPublish` exactly as `_attempt` sets them.
+  - It returns the rows it attempted.
+  - Callers space passes at least 3 minutes apart. In that time ntfy.sh's request bucket refills by 36, so a pass of
+    30 never meets an empty bucket.
 - `applyPairingChange` also removes every `lab/*` key when the secret differs.
 - W2 (L2): `Sender` and `Receiver` take `lane` (2.4).
 
@@ -660,42 +756,58 @@ builds copy it, as they copy the protocol module. W0 exports:
 export const LAB_LEVEL = 1;
 export const CAPS = { st: 'st', tap: 'tap', readerLink: 'reader-link', capKind: 'cap-kind', readerDoc: 'reader-doc', quiet: 'quiet' };
 export const LAB_STATES = ['waiting', 'held', 'inbox', 'handed', 'failed', 'queued', 'reader'];
-export const STATE_RANK = { waiting: 1, held: 1, inbox: 1, handed: 2, failed: 2, queued: 3, reader: 4 };
+export const STATE_RANK = { waiting: 1, held: 2, inbox: 2, handed: 3, failed: 3, queued: 4, reader: 5 };
 export const MAX_ST_PER_FRAME = 24, HELLO_EVERY_MS = 11 * 3600e3, STATE_DIGEST_WINDOW_MS = 48 * 3600e3,
-             STATE_DIGEST_MAX = 48, INBOX_STALE_MS = 14 * 86400e3, PENDING_MAX = 500;
+             STATE_DIGEST_MAX = 48, INBOX_STALE_MS = 36 * 3600e3, PENDING_MAX = 500, APP_MAX = 60,
+             LAB_FRAME_GAP_MS = 30e3, LAB_FRAMES_PER_DAY = 30, LAB_YIELD_MS = 3600e3,
+             LAB_OFF_REPEAT_MS = 48 * 3600e3, GATE_DEADLINE_MS = 5e3;
 export function buildInboxInfo({ lab, app, caps, poll, live }) {}      // clamps as 2.2.5
 export async function buildLabFrame(keys, { inbox, states = [], from, sent, nonce }) {}   // throws if >24 or not small
-export function parseLabAck(header) {}                                  // 2.2.5
-export class LabLedger { constructor({ storage, now }) {} async record(header, { time }) {} async inbox() {}
-  async inboxLab() {} async hasCap(token) {} async checkedIn() {} async state(id) {} async prune(ids) {} }
+export function parseLabAck(header) {}                                  // 2.2.5, exactly
+export class LabLedger { constructor({ storage, now }) {} async record(header, { time }) {} async publishers() {}
+  async inboxLab() {} async caps() {} async hasCap(token) {} async checkedIn() {} async state(id) {}
+  async prune(ids) {} }                                                // per publisher (2.2.6)
 export function labHook(ledger) {}                                     // -> onAckHeader for the Sender
-export function describeLabRow(row, now, ctx) {}                       // 2.5
+export function describeLabRow(row, now, ctx) {}                       // 2.5 -> {label, sentence, action, stepLine, final}
 export function checkedInText(ms, now) {}                              // 2.5
-export const LAB_TEXT = { /* every string of 1.6 and 2.5, keyed */ };
-export function needsMessage(state, { app, platform, feature } = {}) {}
-export async function labGate(feature, ctx) {}                         // -> {ready, state, message}
+export const LAB_TEXT = { /* every string of 1.4, 1.6 and 2.5, keyed; LAB_TEXT.short holds the short states */ };
+export function needsMessage(state, { app, platform, feature, short = false } = {}) {}
+export async function labGate(feature, ctx) {}                         // -> {ready, state, message, short}
 export async function deriveLabTopics(secret) {}                       // 2.4
 export class LabInbox { constructor({ storage, relay, keys, info, from, now }) {}   // the Inbox side, for the JS
-  record(id, s, t) {} async flush() {} async labTurnedOn() {} async labTurnedOff() {} async digest() {} }
+  record(id, s, t) {} async flush() {} noteRelayLimit(status) {} noteAcksFailed() {}
+  async labTurnedOn() {} async labTurnedOff() {} async digest() {} }    // 2.2.4: spacing, giving way, cap
 export class LabInboxSim { constructor({ receiver, labInbox, stateFor }) {} async pollOnce() {} }  // tests: a Lab Daylight
 ```
 
 - `LabInbox` is the reference for Kotlin's. Tests and the Apple e2e receiver use it as the Daylight.
 - `LabInboxSim.pollOnce()` runs `receiver.pollOnce()` and then records, for each new item, `stateFor(header)`. The
   default is `reader` for url and page, `handed` for file; `waiting` is available as a test option. Then it flushes.
-- `labGate(feature, ctx)` checks, in order: Lab is on; paired (`needs-pairing`); the feature's required capability
-  (`needs-inbox` or `needs-reader-lab`); its permission or setting (supplied by the app as `ctx.local(feature)`);
-  then the server state (`ctx.server.state(key)`) for server features; then `later` when `ctx.built(feature)` is
-  false.
+- `labGate(feature, ctx)` checks, in order:
+  1. Lab is on.
+  2. Paired (`needs-pairing`).
+  3. The feature's required Inbox capability (`needs-inbox`).
+  4. Its permission or setting, supplied by the app as `ctx.local(feature)`.
+  5. For server features, the server state: `ctx.server.state(key)` raced against `GATE_DEADLINE_MS`, where the
+     deadline gives `OFFLINE`. When a later server call fails with a `ServerError`, the app calls
+     `ctx.server.noteError(key, err)` (2.6).
+  6. `later` when `ctx.built(feature)` is false.
 
-W1 additions (L1): `normaliseShare`, `extractAppleNewsTarget`, `classifyShare`, `excerptHtml`, `excerptMarkdown`,
-`excerptFileName`, `textFragment`, `testArticle`, `redactDiagnostics`, and the W1 strings in `LAB_TEXT`. Then the CLI
-`share/js/bin/daylight-send.mjs` (F09).
+W1 additions (L1):
+- `normaliseShare`, `extractAppleNewsTarget`;
+- `classifyShare({text, url, title, source})` (F11);
+- `excerptHtml`, `excerptMarkdown`, `excerptFileName`, `textFragment`;
+- `testArticle`, `redactDiagnostics`;
+- the W1 strings in `LAB_TEXT`;
+- `share/js/capture/`: `clean-html.js` (moved here from `extension/src/clean-html.js`), Mozilla Readability 0.6.0 and
+  `sync.mjs` (6.3);
+- then the CLI `share/js/bin/daylight-send.mjs` (F09).
 
 **2.7.3 Ports.** Same names, same behaviour, same vectors:
 
 | JS | Swift (`DaylightShareKit`) | Kotlin (`share-core`, package `com.daylight.share.core.lab`) |
 |---|---|---|
+| `checkItemHeader` → `extras` | `ItemHeader` `extras` | `ItemHeader.check` → `ItemHeader.extras`, carried by `Reassembler` and `Receiver` |
 | `buildInboxInfo` / Info | `LabInboxInfo` | `LabInboxInfo` |
 | `buildLabFrame`, `parseLabAck` | `LabFrame.build`, `LabFrame.parse` | `LabFrame.build`, `LabFrame.parse` |
 | `LabLedger` | `LabLedger` (file `lab.json` next to the outbox state, coordinated like `OutboxStore`) | `LabLedger` (`lab.json` in `FileOutboxStore.dir`) |
@@ -704,7 +816,7 @@ W1 additions (L1): `normaliseShare`, `extractAppleNewsTarget`, `classifyShare`, 
 | `LabInbox` | — | `LabInbox` (pure JVM: the Daylight Share Inbox and the Lab Reader vendor the same class) |
 | Sender hook | `ShareSender(…, onAckHeader:)` | `Outbox(…, onAckHeader = …)` |
 | W1: `normaliseShare`, excerpt builders | `ShareNormaliser`, `Excerpt` | `Normalise`, `Excerpt` |
-| server W0 subset (2.6) | `DaylightServer`, `ServerCode`, `ServerMessages` (folder `Server/`) | package `…core.server` |
+| server W0 subset (2.6), `noteError` included | `DaylightServer`, `ServerCode`, `ServerMessages` (folder `Server/`) | package `…core.server` |
 
 ### 2.8 Vectors and CI
 
@@ -714,18 +826,26 @@ the protocol vectors' secret:
 | Section | Holds |
 |---|---|
 | `labTopics` | The four derived topics (2.4) and one sealed return frame |
-| `labFrames` | A hello, a frame with 3 states and the worst-case frame of 2.2.1, each with nonce, base64 frame, header JSON and its expected parse |
-| `labParse` | At least 25 headers: valid; junk caps; bad ids; ids not empty with `x-st` (ignored); unknown state; out-of-range `t`; missing `x-inbox`; `lab: 0`; 70 entries (first 64 read) → expected `{inbox, states}` |
-| `labLedger` | Sequences of (header, relay time) → the expected state per id, and `inboxLab`, `hasCap` and `checkedIn` at a given `now` (equal rank, later `t`; lower rank ignored; stale hello) |
-| `labRowText` | (row, now, ctx) → `{label, sentence, action, stepLine, stepIndex}` for every row of 2.5 and the v1.1 fall-throughs |
-| `labText` | Every string id → text, with the per-platform variants of 1.6 |
+| `labFrames` | A hello, a frame with 3 states and the worst-case frame of 2.2.1 (60 lone surrogates in `from`), each with nonce, base64 frame, header JSON and its expected parse |
+| `labParse` | At least 45 headers, stored as JSON text: valid; junk caps; bad ids; ids not empty with `x-st` (ignored); unknown state; out-of-range `t`; missing `x-inbox`; `lab: 0`; 70 entries (first 64 read). Then every rule of 2.2.5: `poll` on Feb 30, at T24:00, with second 60 and on Feb 29 of a leap year; `lab` as 1.0, 1e0, "1", true and 2 (above `LAB_LEVEL`); `t` as -0 and 1.5; 16 junk caps before a valid one; repeated caps after junk; emoji and combining marks in `app` (→ ""); the same `i` twice → expected `{inbox, states}` |
+| `labLedger` | Sequences of (header, relay time) → the expected state per id, and `inboxLab`, `caps`, `hasCap` and `checkedIn` at a given `now`. Cases: equal rank with a later `t`; a lower rank ignored; `held` after `waiting` and a re-announced `waiting`; a hello gone stale at 36 h; two publishers (`android/…`, `reader-lab/…`) in either order and within the same relay second; a `lab: 0` from one of them; the handover order of 5.3.4; a `poll` later than its relay time (clamped) |
+| `labGate` | A stubbed ctx (paired or not, caps, local check, server state, a server that never answers) → `{state, short}` |
+| `labHeaderExtras` | Item headers with valid and invalid `x-cap` and `x-orig`, on part 0 and on later parts, and unknown `x-` fields → the `extras` that `checkItemHeader` returns |
+| `labRowText` | (row, now, ctx) → `{label, sentence, action, stepLine, final}` for every row of 2.5 and the v1.1 fall-throughs |
+| `labText` | Every string id → text, with the per-platform variants of 1.6 and the short states of 1.4 |
 | `v1Safety` | The `labFrames` frames as a v1.1 ack reader sees them: no ids. Kotlin's and Swift's `VectorTests` also assert `idsOf` / `ids(in:)` = `[]` and no delivered row. |
 
 **W1 additions:**
 
-- `share/vectors/normalise.json`: at least 40 cases (F16);
-- a `labExcerpt` section: selection inputs → HTML, Markdown, file name and URL (F11);
-- a `diagnostics` section: a log fixture → its redacted text (F26).
+- `share/vectors/normalise.json`: at least 50 cases (F16). They include real "headline + link" shares that must stay
+  links with the headline as the title: NYT ("Opinion | … https://nyti.ms/…"), the Guardian, Apple News, Substack,
+  X, and Chrome on Android's "Title\nURL". They also include `x-orig` over 1,024 characters (left out).
+- A `labExcerpt` section: selection inputs → HTML, Markdown, file name and URL (F11). It includes the `classifyShare`
+  cases of F11: the four excerpt rules, and the headline + link shares above as links.
+- A `diagnostics` section: a log fixture → its redacted text (F26).
+
+**`server/vectors/server-vectors.json`** (server lane, SV0) gains `serverState`: status JSON or error JSON in,
+`{state, message}` out.
 
 **CI:**
 
@@ -733,16 +853,25 @@ the protocol vectors' secret:
   `normalise.test.mjs` and `cli.test.mjs`. The vectors are regenerated and `git diff --exit-code` must find no
   change.
 - **F17 skew suite.**
-  - JS (`lab-skew.test.mjs`): {v1.1 Sender, Lab Sender} × {v1.1 Receiver, `LabInboxSim`} × {url, page, file}. Every
-    item is delivered; Lab states appear only when both sides are Lab; a v1.1 Sender never throws on Lab frames;
-    `describeRow` is unchanged against a v1.1 Receiver.
+  - JS (`lab-skew.test.mjs`): {v1.0 Sender, v1.1 Sender, Lab Sender} × {v1.0 Receiver, v1.1 Receiver,
+    `LabInboxSim`} × {url, page, file}. The v1.0 peer is `daylight-share.js` as of b48752b, kept as
+    `share/js/test/fixtures/daylight-share-v1.0.js`. Every item is delivered. Lab states appear only when both sides
+    are Lab. A v1.0 or v1.1 Sender never throws on Lab frames. `describeRow` is unchanged against a v1.1 Receiver.
+    Two `LabInboxSim` publishers on one ack topic (Daylight Share and the Lab Reader) run in both handover orders.
   - Kotlin `LabSkewTest`: the Kotlin `Outbox` with `LabLedger` against the JS Receiver with and without
-    `LabInboxSim`, and the Kotlin `Receiver` with `LabInbox` against the JS Sender with and without the ledger. It
-    uses the existing node interop through the mock relay.
+    `LabInboxSim`, and the Kotlin `Receiver` with `LabInbox` against the JS Sender with and without the ledger, plus
+    the two-publisher case. It uses the existing node interop through the mock relay.
   - Swift `LabSkewTests`: Swift's sender against `apple/scripts/e2e-receiver.mjs`, with and without its new `--lab`
     flag.
-- **Soak** (in `lab-skew.test.mjs`): 7 simulated days on the mock relay with ntfy.sh's limits. 30 items a day, the
-  Inbox polling every 15 min, hellos, states and digests. No 429, and the Daylight publishes at most 60 messages a day.
+- **Soak** (in `lab-skew.test.mjs`): 7 simulated days on the mock relay with ntfy.sh's limits. Every client sits
+  behind one visitor address, as a household does. The traffic is 2.2.7's busy day: 30 items, Documents = Ask, and a
+  simulated server lane delivering 60 items a day. It runs twice: with the Inbox polling every 15 minutes, and with
+  Instant delivery. It asserts: no 429; at most 150 messages from the household on any day; Lab frames within their
+  cap; and no ack delayed by a Lab frame. A second run adds a forced 429 and checks that Lab frames give way for an
+  hour.
+- **Server (SV0, `rx-server.yml`).** `pollAcks` in v1 mode with Lab frames (`ids: []`, with `x-st`, and `lab: 0`) on
+  the pairing ack topic: they deliver nothing and change no row. That they count as presence in v1 mode is harmless,
+  and DESIGN 5.5 is updated to say so. Wave S adds the server ack topic in Lab mode (4.2).
 
 ---
 
@@ -752,29 +881,55 @@ the protocol vectors' secret:
 
 | Platform | Wave 0 | Wave 1 |
 |---|---|---|
-| iPhone, iPad | F00 (with the server section), F17, F27 | F01, F03, F04, F07, F08, F09, F10, F11, F16, F26, F33 |
-| Mac | F00 (with the server section), F17, F27 | F01, F04, F07, F08, F09, F11, F16, F26, F33 |
-| Chrome, Safari | F00, F17, F27 | F01, F03, F04, F07, F10, F11, F16, F26, F33, F34 |
-| Android phone | F00, F17, F27 | F01, F03, F04, F07, F08, F09, F11, F16, F26, F33 |
-| Web sender | F00, F17, F27 | F01, F07, F09, F16, F26, F33 |
+| iPhone, iPad | F00 (with the server section), F17, F27 (baseline with Comfort, in P0) | F01, F02 entry point, F03, F04, F07, F08, F09, F10, F16, F26, F33; F11 after 6.5 Q1 |
+| Mac | F00 (with the server section), F17, F27 | F01, F02 entry point, F04, F07, F08, F09, F16, F23 (Print to Daylight), F26, F29 (menu-bar drop), F33 (the existing clipboard command); F11 (Services) after Q1 |
+| Chrome, Safari | F00, F17, F27 | F01, F02 entry point (Chrome), F03, F04, F07, F10, F11 (explicit selections only), F16, F26, F33, F34 |
+| Android phone | F00, F17, F27 | F01, F02 entry point, F03, F04, F07, F08, F09, F16, F26, F33; F11 after Q1 |
+| Web sender | F00, F17, F27 | F01, F02 entry point, F07, F09, F16, F26, F33 |
 | DC-1 Inbox | F00, F17 (hello and states), F27 | F01 (states complete), F03 and F11 (row lines), F15, F26 |
-| Windows | F00, F17, F27 | F01, F07, F08, F09, F16, F26, F33 |
+| Windows | F00, F17, F27 | F01, F02 entry point, F07, F08, F09, F16, F26, F33 (the existing clipboard command) |
 
 iPhone and Mac land first in each wave. The DC-1 Inbox's W0 part (hello and states) runs at the same time, in its own
 folder, because the iPhone's and the Mac's timelines need a Lab Inbox to show anything on a real device. Its W1 UI
-work (F15 and the rest) follows the Android phone, as the user's order says.
+work (F15 and the rest) follows the Android phone, as the user's order says. The Windows, extension and web Lab
+builds are not published to the release before the iPhone and Mac W0 builds are (6.2).
+
+**What W0 and W1 are for.** They make sending feel reliable and effortless: share in place, the honest timeline,
+the offline outbox, clean links and the page as you see it. They do not yet deliver what makes a DC-1 owner say
+"finally". The research ranks that list as big files, notes coming home, email-in and the morning stack
+(raw/eink-tablets.md §8.2). Those come next, in this order:
+
+- W2 starts with F06 (send back) and F13 (big files on the same Wi-Fi), iPhone, Mac and Inbox first (4.1).
+- Wave S starts with S0 and F02, big files through the server (4.2).
+- R2 (notes coming home) follows L2 (5.4).
+
+Meanwhile W1 points to big files at the moment of need (the F02 entry point below). On the tablet, W1 adds no new
+interruption: excerpts wait for 6.5 Q1, Keep for later replaces Later (F15), and the extra lines live in item
+details. The quiet-arrival fix (R0, R1) reaches only the lab tablet; 6.5 Q8 asks whether to request its main-Reader
+equivalents. (FEATURES §1 item 8 says Lab ships F06 "now". It ships in W2, and this plan wins where the two differ.
+The research lane corrects that sentence.)
+
+**F02 entry point (W1, every sender with F02).** Where a file is refused as over 9 MB, Lab adds one control under the
+v1.1 too-big sentence: **Send files over 9 MB ›**. It runs `labGate('files')`, so it shows the `needs-server` note
+until a server exists, and `later` once one is ready but this app does not build F02 yet (Wave S). From W2 the same
+note also offers F13 ("Or send it over your Wi-Fi."). With Lab off the screen is v1.1's.
+
+- [ ] **F02e.1** Refusing a 14 MB PDF shows the too-big sentence and, with Lab on, **Send files over 9 MB ›** under
+  it. Tapping it shows the `needs-server` sentence with no server, and `later` with a ready server (stubbed). With
+  Lab off, the screen equals the v1.1 baseline.
 
 ### 3.2 Wave 0
 
 #### F00 Lab switch, What's in Lab, needs-setup notes, Daylight server section
 
-**Common.** Section 1 and 2.6. Every app gets one Lab settings block, a What's in Lab list, a `LabNote` component and
-the server section (the Inbox gets the server-lane version in Wave S).
+**Common.** Section 1 and 2.6. Every app gets one Lab settings block, a What's in Lab list with short states and the
+server group (1.4), a `LabNote` component and the server section (the Inbox gets the server-lane version in Wave S).
+W0 builds set `LAB_NOTE_ENABLED = false` (1.2).
 
 | Platform | UI and behaviour | Edge cases |
 |---|---|---|
-| iPhone, iPad | In `DaylightShareUI`: `LabSettingsSection` (switch, footer, rows), `WhatsInLabView` (a `List`), `ServerSettingsView`, the `LabNote` view modifier and `LabGate` (async). The one-time note is a banner at the top of `HomeView`. The share extension reads `SharedStore.lab`; with Lab off it is exactly v1.1. On iPad the settings sheet works at every split width. | Storage still resolving: treat Lab as on and re-render on `.daylightShareChanged`. Not paired: the server section shows `needs-pairing`. |
-| Mac | The same components in `MacSettingsView`; the one-time note in the main window. | Ad-hoc builds: the Share menu item has no access to the app's setting and behaves as Lab on (README "Pairing once"). |
+| iPhone, iPad | In `DaylightShareUI`: `LabSettingsSection` (switch, footer, rows), `WhatsInLabView` (a `List`), `ServerSettingsView`, the `LabNote` view modifier and `LabGate` (async). The one-time note (from W1) is a banner at the top of `HomeView`. The share extension reads `SharedStore.lab`; with Lab off it is exactly v1.1. On iPad the settings sheet works at every split width. | Storage still resolving: treat Lab as on and re-render on `.daylightShareChanged`. Not paired: the server section shows `needs-pairing`. |
+| Mac | The same components in `MacSettingsView`; the one-time note (from W1) in the main window. | Ad-hoc builds: the Share menu item's pairing card gets its own Lab switch (1.1), and What's in Lab ends with the ad-hoc line (1.4). |
 | Android phone | `Prefs.lab` with a `StateFlow`; a `LabCard` at the top of `SettingsScreen`; `ui/LabScreen.kt` (What's in Lab and the server section); a `LabNote` composable; the one-time note as a card on `SenderScreen`. `ShareActivity` reads `Prefs.lab`. | Role switch: the Lab flag is shared by both roles. |
 | DC-1 Inbox | The same card in the Inbox role, and the note on `InboxScreen`. What's in Lab lists the Inbox's features. The server row shows `needs-server` until Wave S. | Lab off sends the `lab: 0` hello (F17). |
 | Chrome, Safari | The popup's settings row; `src/lab.html` with `src/lab-page.js` (What's in Lab and the server section); `src/lab-ui.js` (`labNote(el, msg)`, `aria-live`). Server calls run in the service worker (DESIGN 13.2). | The host permission for the Worker is requested at the first server tap; a refusal gives `needs-site-access`. |
@@ -783,25 +938,29 @@ the server section (the Inbox gets the server-lane version in Wave S).
 
 **Acceptance (all apps):**
 
-- [ ] **F00.1** On a fresh install, Lab is on and the one-time note shows once. An upgrade from the last non-Lab build
-  does the same, keeping the pairing and history.
+- [ ] **F00.1** On a fresh install, Lab is on. The one-time note shows once, and only in builds whose app has F01 or
+  F04; a W0 build shows none. An upgrade from the last non-Lab build does the same, keeping the pairing and history.
 - [ ] **F00.2** With Lab off, each main screen's accessibility tree equals the non-Lab baseline (1.7).
-- [ ] **F00.3** Tapping each Lab feature in a needs-setup state shows exactly its sentence under the control. The
-  control is not greyed out, and a screen reader announces the sentence.
+- [ ] **F00.3** Each Lab feature's row in What's in Lab shows its short state. Tapping the feature in a needs-setup
+  state shows exactly its sentence under the control. The control is not greyed out, and a screen reader announces
+  the sentence.
 - [ ] **F00.4** Queue an item offline, turn Lab off, go back online: the item is sent. History, pairing and server pin
   are all still there.
 - [ ] **F00.5** For the vector pairing, the Server code shown equals `server-vectors.json` › `derived`, and Copy puts
   it on the clipboard (every sender).
-- [ ] **F00.6** With no server deployed, "Summaries with Claude" shows the `needs-server` sentence within 5 s (online),
-  or the `OFFLINE` sentence (offline).
+- [ ] **F00.6** With no server deployed, "Summaries with Claude" shows the `needs-server` sentence within 5 s
+  (online), or the `OFFLINE` sentence (offline). With a relay that never answers, it shows `OFFLINE` at 5 s.
+- [ ] **F00.7** A fresh install with nothing set up shows no setup instructions until something is tapped. No screen
+  reachable without tapping a Lab feature or opening the Daylight server section contains a secret name or a
+  needs-setup sentence (UI test over each screen's text).
 
 **Automated:**
 
 | Platform | Tests |
 |---|---|
-| Apple | `swift test`: `LabTextVectorTests`, `ServerVectorTests`; XCUITest `LabOffParityTests` (iPhone and Mac), `LabNoteTests` (stubbed gate states) |
-| Android | Robolectric `LabOffParityTest` (semantics trees, both roles), `LabNoteTest`, `PrefsLabTest` (missing key → on, note once) |
-| Extension, web | `test/unit/lab.test.mjs`; Playwright `test/e2e/lab.e2e.mjs`: popup and `lab.html` with Lab on and off, parity snapshots, notes for stubbed states |
+| Apple | `swift test`: `LabTextVectorTests`, `ServerVectorTests`; XCUITest `LabOffParityTests` (iPhone and Mac), `LabNoteTests` (stubbed gate states), `LabFirstRunTests` (F00.1, F00.7) |
+| Android | Robolectric `LabOffParityTest` (semantics trees, both roles), `LabNoteTest`, `PrefsLabTest` (missing key → on; the note only with `LAB_NOTE_ENABLED`, once), `LabFirstRunTest` |
+| Extension, web | `test/unit/lab.test.mjs`; Playwright `test/e2e/lab.e2e.mjs`: popup and `lab.html` with Lab on and off, parity snapshots (`ariaSnapshot`), notes for stubbed states, the first-run text check |
 | Windows | `test/unit/lab.test.mjs`; `windows.e2e.mjs` gains a Lab-off status snapshot |
 
 #### F17 Capability hello and version-skew safety
@@ -810,19 +969,23 @@ the server section (the Inbox gets the server-lane version in Wave S).
 
 - Wire `LabLedger` through `onAckHeader` (2.2.6) and persist it.
 - What's in Lab's header shows the Inbox's Lab state.
-- Features that depend on the Inbox gate on capabilities. In W1 that is only the timeline's Reader step: `st` decides
-  whether "On your Daylight ✓" or "Delivered ✓" shows, and tapping a document's Reader step without `reader-doc`
-  shows `needs-reader-lab`.
+- Features that depend on the Inbox gate on capabilities. In W1 that is only the timeline: `st` decides whether
+  "On your Daylight ✓" or "Delivered ✓" shows. No W0 or W1 control gates on a Reader capability. A row's Reader step
+  is not interactive, and a document's `handed` sentence says on its own that the Reader does not confirm documents
+  yet (2.5).
 
 **DC-1 Inbox (W0, needed by every sender's W1).**
 
 - `inbox/LabReporter.kt` wires share-core's `LabInbox` into `InboxRepo`, `Handoff` and `HandoffActivity`. Its store is
   `files/inbox/lab-<inboxTopic>.json`.
-- It records:
-  - `waiting` when `Handoff.notifyWaiting` (or the card) first announces an item;
+- It records, for items received on the pairing's inbox topic only (2.2.4):
+  - `waiting` when `Handoff.notifyWaiting` (or the card) first announces an item, and never again for that id;
   - the final state of every hand-off in `HandoffActivity.done` and in each kept-in-Inbox path, mapped as in 2.2.3;
   - nothing for `mark(…, "started")`.
-- It flushes after `pollOnce` and `handleLive` (after acks) and in `HandoffActivity`'s `finally`.
+- It flushes after `pollOnce` and `handleLive` (after acks) and in `HandoffActivity`'s `finally`, under 2.2.4's
+  spacing, giving-way and cap rules. `pollOnce` and the live path report a failed ack publish
+  (`noteAcksFailed`), and any `429` or `413` (`noteRelayLimit`, from `Receiver.Result.limited` and the publish
+  answers).
 - Hello caps: `st`, `tap`; `reader-link` when the link target takes `SAVE_PAGE`; `cap-kind` from W1.
 - It logs, under the `DaylightShare` tag: `lab: hello caps=<…>`, `lab: states n=<k> published`, and
   `lab: state <id> <s>`.
@@ -842,23 +1005,35 @@ the server section (the Inbox gets the server-lane version in Wave S).
   fake clock; soak).
 - [ ] **F17.4** On a real DC-1: turning Lab on in Daylight Share makes an iPhone with the app open show
   "Your Daylight: Lab on" within one ack check.
+- [ ] **F17.5** The household soak (2.8) passes in both polling and Instant modes: no 429 and at most 150 messages a
+  day. Lab frames stay within 30 a day, at least 30 s apart, and publish nothing for an hour after a 429 or 413.
 
-**Automated:** the vectors and the skew suite (2.8). Android: share-core `LabInboxTest` (record, coalesce, flush in 24s,
-hello cadence, the `lab: 0` frame, pending cap, digest) and Robolectric `LabReporterTest` (2.2.3's mapping for every
-hand-off path). e2e (`rx-e2e.yml`): `inbox-e2e.sh` reads Lab frames with `e2e/sender.mjs` and asserts `reader` for the
-page and `handed` for the PDF.
+**Automated:** the vectors and the skew suite (2.8).
+
+- Android: share-core `LabInboxTest`. It covers record with the merge rule, flush in 24s, 30 s spacing, giving way
+  after a 429 or 413 and after failed acks, the daily cap, halving a refused batch, hello cadence, the `lab: 0` frame
+  and its 48-hour repeats, the pending cap and the digest.
+- Robolectric `LabReporterTest`: 2.2.3's mapping for every hand-off path, an unknown status → `handed`, a held item
+  that is re-announced stays `held`, and an item tagged `lane = "server"` records nothing.
+- e2e (`rx-e2e.yml`): `inbox-e2e.sh` reads Lab frames with `e2e/sender.mjs` and asserts `reader` for the page and
+  `handed` for the PDF.
 
 #### F27 Accessibility baseline, plus a Lab comfort mode
 
-**Baseline (not Lab, every build).**
+**Baseline (not Lab, every build).** It lands in each app's P0 close-out, before the Lab-off baselines are recorded
+(0.2, 1.7).
 
 - Every control has a label.
 - Status labels wrap instead of truncating at 200% text (Dynamic Type, Android font scale, browser zoom).
 - Status changes are announced: "Delivered", "In your Reader".
 - Typed-code pairing is always available.
 - States are shown in words and glyphs, never colour alone.
+- **Comfort**, a switch in every build's settings, outside Lab and off by default. Footer: "Larger text and buttons,
+  more contrast, no motion." It works the same with Lab on or off, so someone who turns Lab off keeps it.
+- Nothing sends on a timer for someone who needs more time. When Comfort, VoiceOver, Switch Control, TalkBack or
+  Switch Access is on, a Lab countdown (F04) is replaced by an explicit **Send** (WCAG 2.2.1).
 
-**Comfort (Lab switch).**
+**Comfort.**
 
 | Platform | Comfort mode |
 |---|---|
@@ -876,40 +1051,61 @@ The DC-1 Inbox's Lab screens never animate, comfort or not (F15).
   screen tests.
 - [ ] **F27.3** A VoiceOver run and a TalkBack run of pair → send → delivered, recorded for each release, announce
   each state change.
-- [ ] **F27.4** Comfort on: no label is truncated at the narrowest supported width (iPad one-third split, 360 dp
-  phone, 360 px popup).
+- [ ] **F27.4** With Comfort on, at the narrowest supported width (iPad one-third split, 360 dp phone, 360 px popup)
+  and the largest text size, no text is truncated or clipped:
+  - Apple: an XCTest hosts each screen at that width with `.accessibility3` and compares every text element's fitting
+    size with its laid-out frame (`TruncationAudit`).
+  - Android: no text node's `TextLayoutResult` has `hasVisualOverflow`.
+  - JS apps: Playwright checks `scrollWidth ≤ clientWidth` and `scrollHeight ≤ clientHeight + 1` for every element
+    with text.
+
+  Screenshots are uploaded for review.
+- [ ] **F27.5** With Comfort on, or a screen reader or switch access reported on (stubbed in unit tests), every Lab
+  countdown is replaced by an explicit Send (F04.5).
+- [ ] **F27.6** Turning Lab off leaves Comfort as it was.
 
 **Automated:** `@axe-core/playwright` (pinned) in `extension/test/e2e/a11y.e2e.mjs`, also run against the Windows
-`dist/index.html` with a fake bridge; the XCUITest audits; Compose accessibility checks.
+`dist/index.html` with a fake bridge; the XCUITest audits; Compose accessibility checks; the truncation checks of
+F27.4.
 
 ### 3.3 Wave 1: features
 
 #### F01 Honest delivery timeline
 
-**Common.** `describeLabRow`, the step line and the check-in header (2.5); `LabLedger` (2.2.6); failure sentences
-from v1.1 with **Retry now** / **Try again**; faster checks while an item is in flight (2.5).
+**Common.** `describeLabRow`, the step line, what a row shows, and the check-in header (2.5); `LabLedger` (2.2.6);
+failure sentences and buttons exactly as v1.1 (**Retry now** / **Try again** only where they help); faster checks
+while an item is in flight (2.5).
 
 | Platform | UI | Behaviour, edge cases |
 |---|---|---|
-| iPhone, iPad, Mac | A `TimelineRow` in `DaylightShareUI`: title, label, sentence and step line (caption style); the check-in header above History. | Background app refresh runs `tick()`, so the ledger updates; rows refresh on `.daylightShareChanged`. |
+| iPhone, iPad, Mac | A `TimelineRow` in `DaylightShareUI`: title and label; the sentence and step line (caption style) on the newest row and rows that are not final; everything in the row's details on tap. The check-in header sits above History. | Background app refresh runs `tick()`, so the ledger updates; rows refresh on `.daylightShareChanged`. |
 | Android phone | `SenderScreen` rows from `LabRowText.of` and the header. | WorkManager's periodic job feeds the ledger. |
 | Chrome, Safari | Popup rows and the header. Toolbar badge: `…` sending, `✓` delivered, `!` error, and a new `⌛` for an item waiting for a tap (`waiting` or `held`). | The badge shows the state of the most recent row. |
 | Web | Rows and header. | Only while the page is open. |
 | Windows | Window rows (`logic.js` `rowView` → `describeLabRow`) and the header; a toast "In your Reader: {title}" for `reader` states while the window is hidden. | — |
-| DC-1 Inbox | Records and publishes states (F17). Each row in the Inbox's own list gains the line "Sender sees: {label}" (the same text as the sender). | — |
+| DC-1 Inbox | Records and publishes states (F17). The item's detail screen gains the line "Sender sees: {label}" (the same text as the sender). The list rows do not. | — |
 
 **Acceptance:**
 
-- [ ] **F01.1** A link sent while the Lab Inbox is open shows "In your Reader ✓" on the sender within 30 s of
-  "On your Daylight ✓" (CI e2e, plus one run on Rooted 2 per sender family).
+- [ ] **F01.1** A link sent with Lab on both sides shows "In your Reader ✓" on the sender within 45 s of
+  "On your Daylight ✓", with the Inbox open (CI e2e). On Rooted 2, once per sender family, under real conditions:
+  - the Inbox in front;
+  - the Inbox in the background with the Reader in front, "Display over other apps" on;
+  - the same with it off: the row shows "Waiting for a tap on your Daylight" until the notice is tapped, then
+    "In your Reader ✓";
+  - the screen off, with Instant delivery on.
 - [ ] **F01.2** With the Inbox's Documents set to Ask, a PDF shows "Waiting for a tap on your Daylight". After the
-  notice is tapped, the sender shows "Handed to the Reader" at its next ack check ("In your Reader ✓" when the Lab
-  Reader receives, R1).
+  notice is tapped, the sender shows "Handed to the Reader" and "The Reader doesn’t confirm documents yet." at its
+  next ack check ("In your Reader ✓" when the Lab Reader receives, R1).
 - [ ] **F01.3** The header shows "Your Daylight checked in N min ago". With the Daylight off, sends still go out.
-- [ ] **F01.4** Every failed row has one sentence naming the cause and a Retry button. No row says Delivered or In
-  your Reader without an ack listing its id (unit test over the outbox state machine and the ledger).
-- [ ] **F01.5** Against a v1.1 Inbox, rows read Sent / Delivered ✓ exactly as today (skew suite).
-- [ ] **F01.6** VoiceOver and TalkBack read "{label}. {sentence} Step N of 4."
+- [ ] **F01.4** Every failed row has one sentence naming the cause, and v1.1's button where it helps: **Retry now**
+  after a network failure, **Try again** where trying again can help, none for too big or refused. No row says
+  Delivered or In your Reader without an ack listing its id (unit test over the outbox state machine and the
+  ledger).
+- [ ] **F01.5** Against a v1.0 or v1.1 Inbox, rows read Sent / Delivered ✓ exactly as today (skew suite).
+- [ ] **F01.6** VoiceOver and TalkBack read "{label}. {sentence}" for each row, with no step count. The step line
+  shows only on the newest row and on rows that are not final (UI test with three rows: `reader`, `waiting`, and
+  the newest, `sent`).
 
 **Automated:** the `labRowText` vectors in JS, Swift and Kotlin. The extension e2e uses `LabInboxSim` for
 `reader`, `waiting` → `handed`, and a v1.1 Receiver. Apple: `EndToEndTests` with `e2e-receiver.mjs --lab`. Android:
@@ -920,8 +1116,8 @@ published by the real Inbox.
 
 **Common.**
 
-- **`extension/src/clean-html.js`**, the single source, is run on `document.documentElement.cloneNode(true)`, never
-  on the live page. It:
+- **`share/js/capture/clean-html.js`**, the single source (moved from `extension/src/clean-html.js` by L1; consumers
+  copy it with `sync.mjs`, 6.3), is run on `document.documentElement.cloneNode(true)`, never on the live page. It:
   - removes every `<script>` whose `type`, trimmed and lowercased, is not `application/ld+json`;
   - removes every attribute whose name starts with `on`, in any case;
   - removes `srcdoc` from iframes;
