@@ -21,10 +21,19 @@ try {
   check(body.attachment?.url === url, `attachment.url is the given URL (${body.attachment ? Object.keys(body.attachment).join(', ') : 'no attachment'})`);
   const keptHours = body.expires && body.time ? (body.expires - body.time) / 3600 : null;
   check(keptHours === null || keptHours >= 11.9, `kept as a message for ${keptHours === null ? 'an unstated time' : `${keptHours.toFixed(1)} h`}`);
-  const poll = await fetch(`${relay}/${topic}/json?poll=1&since=all`, { signal: AbortSignal.timeout(30_000) });
-  const listed = (await poll.text()).split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })
-    .find((m) => m?.id === body.id);
-  check(!!listed && listed.attachment?.url === url, `a poll lists it with the same attachment.url${listed?.attachment?.size ? '' : ' and no size (as expected)'}`);
+  // ntfy can list a message a moment after its publish answered (NTFY-FACTS), so poll a few times.
+  let listed = null, seen = 0;
+  for (let i = 0; i < 6 && !listed; i++) {
+    if (i) await new Promise((r) => setTimeout(r, 2000));
+    const poll = await fetch(`${relay}/${topic}/json?poll=1&since=all`, { signal: AbortSignal.timeout(30_000) });
+    const msgs = (await poll.text()).split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    seen = msgs.length;
+    listed = msgs.find((m) => m.id === body.id) ?? null;
+  }
+  check(!!listed, `a poll lists the message (${seen} message(s) on the topic)`);
+  if (listed) {
+    check(listed.attachment?.url === url, `the polled attachment.url is the given URL (attachment fields: ${Object.keys(listed.attachment ?? {}).join(', ') || 'none'})`);
+  }
 } catch (e) {
   check(false, `probe failed: ${e?.name ?? 'error'}`);
 }
