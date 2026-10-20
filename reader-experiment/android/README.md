@@ -56,7 +56,7 @@ each item, acknowledges it (that is the sender's "Delivered ✓"), and hands it 
 |---|---|---|
 | Link | `SAVE_PAGE` with the URL and title (the Reader's read-later) | the Reader's small "Saved" card |
 | Web page | `SAVE_PAGE` with the URL, the title and the page's HTML | the same; paywalled and logged-in pages work |
-| Document | `ACTION_SEND` with the file, or `ACTION_SEND_MULTIPLE` (several at once, or **Add quietly to the library**) | `SEND`: the Reader imports it and opens it; several at once go to the library |
+| Document | `ACTION_SEND` with the file, or `ACTION_SEND_MULTIPLE` (several at once, or **Add to the library as a batch**) | one document: the Reader imports it and opens it; several at once: the Reader's library ("N added"), which closes the document that was open |
 
 If the Reader refuses `SAVE_PAGE` (read-later from the browser switched off in the Reader's settings), the Inbox
 shares the link with the Reader instead. Builds that only have some entry points get what they support
@@ -67,7 +67,9 @@ stay in the Inbox with **Open with…**.
 **Settings › Deliver to**: **Automatic** is the Daylight Reader (`com.daylightcomputer.reader`, then its suffixed
 builds). The list also shows every other installed app that takes `SAVE_PAGE` or shared PDFs/EPUBs, with its package
 name and what it takes, so a side-by-side copy such as `com.daylightcomputer.readerexperiment` is only ever chosen on
-purpose. If the chosen app is uninstalled, Automatic applies.
+purpose. What the chosen app does not take goes to Automatic: a copy that answers `SAVE_PAGE` but takes no documents
+gets the links and pages, and documents still go to the Daylight Reader (a non-Reader app counts as taking links only
+through `SAVE_PAGE` or `daylightreader://save`). If the chosen app is uninstalled, Automatic applies.
 
 ### Why "Display over other apps"?
 
@@ -78,25 +80,36 @@ Android only lets an app open another app while you are looking at it. So:
   go to the Reader as they arrive; documents follow **Documents** (below).
 - **Otherwise:** every item waits for a tap on its notification.
 
-Every item that waits for a tap gets its own notification at once ("New PDF from iPhone: <title>" / "Tap to add to the
-Reader"), grouped under "3 new from iPhone" when there are several. Tapping one hands that item over; tapping the group
-hands over all of them. The notifications use the **New items** channel at high importance, so they pop up over the
-full-screen Reader; if notifications are off or the channel was turned down, the Inbox says so and links to the setting.
+Every item that waits for a tap is announced at once, and once:
+
+- **A notification** per item ("New PDF from iPhone: <title>" / "Tap to add to the Reader"), grouped under "3 new from
+  iPhone" when there are several. Tapping one hands that item over; tapping the group hands over the ones it lists. They
+  use the **New items** channel at high importance, so they can pop up over the full-screen Reader; if notifications
+  are off or the channel was turned down, the Inbox says so and links to the setting.
+- **A card over the Reader**, with "Display over other apps" (the Daylight's setup): "New PDF from iPhone", the title,
+  **Add to Reader** and **Later**. A heads-up notification shows for a few seconds and an e-paper reader can miss it (or
+  the system may not show it over a full-screen app); the card stays until answered. It takes no keyboard focus and
+  touches outside it go to the Reader. While the card is up, the notifications are posted without popping up. **Later**
+  takes it down for those items (they wait in the Inbox and in the notification shade).
+
+Only an item never announced before alerts. A notification swiped away does not come back, one that is up is not posted
+again, and an item whose hand-off is running is not announced meanwhile.
 
 **Documents** (on the Inbox screen), for documents that arrive while another app is in front:
 
 | Choice | What happens | Hand-off (`via`) |
 |---|---|---|
-| **Ask with a notification** (default) | the notification above; its tap hands the document over and the Reader opens it | `send_file` (`send_multiple` for a group) |
-| **Add quietly to the library** | handed over at once as a batch, even a single document | `send_multiple` |
+| **Ask with a notification** (default) | the notification and the card above; a tap hands the document over and the Reader opens it | `send_file` (`send_multiple` for several) |
+| **Add to the library as a batch** | handed over at once as a batch, even a single document | `send_multiple` |
 | **Open as they arrive** | handed over at once; the Reader imports and opens it | `send_file` |
 
-What the Reader does with a batch is its own decision: the Daylight Reader (public source, `ImportViewModel`) decides
-by how many documents arrive together, not by the action. One document is followed into the reader and opened, as
-with `ACTION_SEND`; two or more go to the library ("N added"), which it brings to the front with `CLEAR_TOP`. So with
-today's Reader, **Add quietly** keeps several documents out of the way but still opens a single one, which is why
-asking is the default. The earlier switch "Open documents as they arrive", when it was on, carries over as **Open as
-they arrive**.
+What the Reader does with a batch is its own decision, and today's Daylight Reader (public source: `ImportActivity`,
+`ImportViewModel`, `ReaderLauncher.libraryIntent`) treats `ACTION_SEND` and `ACTION_SEND_MULTIPLE` alike and decides by
+how many documents arrive together. One document is followed into the reader and opened. Two or more go to the library
+("N added"), which it brings forward in its main task with `CLEAR_TOP`, and that closes the document being read. So
+**Add to the library as a batch** is not quiet with today's Reader in either case; it is there for a Reader build that
+adds a batch without opening anything, and asking is the default. The earlier switch
+"Open documents as they arrive", when it was on, carries over as **Open as they arrive**.
 
 ## Build
 
@@ -141,17 +154,20 @@ notification-permission prompt. Everything is logged under the tag `DaylightShar
 
 ```
 received <id> kind=<url|page|file> from=<sender> size=<bytes> stored
-received <id> kind=<url|page|file> -> handed to <package> via <save_page|send_link|view_link|send_file|send_file_octet|view_file|send_multiple> status=<saved|duplicate|queued|refused|sent|ok|no_answer>[ docs=<ask|quiet|open>] by=<front|auto|tap>
-received <id> kind=<...> -> waiting for a tap (notification)[ docs=<ask|quiet|open>]
+received <id> kind=<url|page|file> -> handed to <package> via <save_page|send_link|view_link|send_file|send_file_octet|view_file|send_multiple> status=<saved|duplicate|queued|refused|sent|ok|no_answer>[ docs=<ask|quiet|open>] by=<front|auto|tap|card>
+received <id> kind=<...> -> waiting for a tap (<card + notification|notification|card|notifications off>)[ docs=<ask|quiet|open>]
+received <id> -> notification dismissed: waits in the Inbox
 received <id> kind=<...> -> kept in inbox (no reader installed) status=no_reader
 ```
 
 `docs=` (documents only) is the **Documents** choice at the time; `by=` says whether the Inbox was in front, handed
-over in the background on its own, or a notification was tapped.
+over in the background on its own, a notification was tapped, or the card's **Add to Reader**. "waiting for a tap" is
+logged once per item, when it is first announced, and says where.
 
 A refused `SAVE_PAGE` logs `status=refused` and then the `send_link` retry. Items reach the Reader at once while the
 Inbox is in front; for background hand-offs in a test, `adb shell appops set com.daylight.share SYSTEM_ALERT_WINDOW
-allow` and use `instant=1&auto=1` (or `docs=quiet`). With `docs=ask`, open the shade with
+allow` and use `instant=1&auto=1` (or `docs=quiet`). With `docs=ask` and that permission, the card comes up over the
+app in front (a window titled "Daylight Share" in `adb shell dumpsys window windows`). Without the permission, open the shade with
 `adb shell cmd statusbar expand-notifications` and tap the item's notification; on an emulator after `adb root`, the
 same tap is `adb shell am start -n com.daylight.share/.inbox.HandoffActivity --es mode one --es item <id>` (the activity
 is not exported, so only root may start it). Release builds ignore setup links and only speak HTTPS.

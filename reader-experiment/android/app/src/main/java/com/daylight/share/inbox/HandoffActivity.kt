@@ -31,9 +31,16 @@ import kotlinx.coroutines.launch
  * what it imports; "Documents" ([DocumentMode]) decides whether they go as ACTION_SEND or ACTION_SEND_MULTIPLE.
  */
 class HandoffActivity : ComponentActivity() {
+    /** What a running hand-off takes: [mode], the [picked] items, and "Documents" ([docs]) as it started. */
+    data class Claim(val mode: String, val picked: Set<String>, val docs: DocumentMode)
+
     private var mode = MODE_ALL
-    /** Items a notification's tap asked for ([MODE_ONE], or added to a hand-off already running). */
+    /** Items a notification's or the card's tap asked for ([MODE_ONE], or added to a hand-off already running). */
     private val picked = LinkedHashSet<String>()
+    /** Those of [picked] that came from the card over the Reader (logged `by=card`). */
+    private val fromCard = HashSet<String>()
+    private var docs = DocumentMode.DEFAULT
+    private var myClaim: Claim? = null
     private var pending: CompletableDeferred<ActivityResult>? = null
     private val launcher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         pending?.complete(r)
@@ -45,7 +52,9 @@ class HandoffActivity : ComponentActivity() {
         running = true
         requestedAt = 0L
         mode = intent?.getStringExtra(EXTRA_MODE) ?: MODE_ALL
-        intent?.getStringExtra(EXTRA_ITEM)?.let { picked += it }
+        intent?.let { pick(it) }
+        docs = App.of(this).prefs.documentMode
+        claimNow()
         // Our card shows only until the Reader's own card is up (two stacked cards look messy on e-paper).
         setContent { DaylightTheme { if (message.value.isNotEmpty()) StatusCard(message.value) } }
         lifecycleScope.launch {
@@ -59,6 +68,7 @@ class HandoffActivity : ComponentActivity() {
                 logw("hand-off stopped", e)
             } finally {
                 running = false
+                unclaim()
                 // Whatever still waits (documents after the first, late arrivals) gets the notification.
                 val left = App.of(this@HandoffActivity).inbox.waiting()
                 if (left.isEmpty()) Handoff.cancelNotification(this@HandoffActivity) else Handoff.notifyWaiting(this@HandoffActivity, left)
@@ -73,14 +83,34 @@ class HandoffActivity : ComponentActivity() {
         super.onNewIntent(intent)
         when (intent.getStringExtra(EXTRA_MODE)) {
             MODE_ALL -> mode = MODE_ALL
-            MODE_ONE -> intent.getStringExtra(EXTRA_ITEM)?.let { picked += it }
+            MODE_ONE -> pick(intent)
         }
+        if (myClaim != null) claimNow()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         running = false
+        unclaim()
         pending?.cancel()
+    }
+
+    private fun pick(i: Intent) {
+        val ids = itemsOf(i)
+        picked += ids
+        if (i.getStringExtra(EXTRA_BY) == BY_CARD) fromCard += ids
+    }
+
+    /** Tells [Handoff.notifyWaiting] which items this hand-off is taking, so they are not announced meanwhile. */
+    private fun claimNow() {
+        val c = Claim(mode, picked.toSet(), docs)
+        myClaim = c
+        claim = c
+    }
+
+    private fun unclaim() {
+        if (claim === myClaim) claim = null
+        myClaim = null
     }
 
     /** Returns how many items were handed on. */
@@ -89,7 +119,6 @@ class HandoffActivity : ComponentActivity() {
         val repo = app.inbox
         val attempted = HashSet<String>()
         var handed = 0
-        val docs = app.prefs.documentMode
         while (true) {
             val waiting = repo.waiting().filter { it.id !in attempted && wanted(mode, picked, it, docs) }
             if (waiting.isEmpty()) break
@@ -147,9 +176,9 @@ class HandoffActivity : ComponentActivity() {
         }
         if (withFiles.isEmpty()) return 0
         withResumed { }
-        // Together as SEND_MULTIPLE (several, or "Add quietly"); else, or for a Reader without it, the first document
+        // Together as SEND_MULTIPLE (several, or "as a batch"); else, or for a Reader without it, the first document
         // alone (the rest at the next hand-off).
-        for (route in Routes.forDocuments(this, withFiles, ReaderApps.targets(this), docs)) {
+        for (route in Routes.forDocuments(this, withFiles, ReaderApps.targetsFor(this, Kind.FILE), docs)) {
             val status = start(route, null) ?: continue
             val carried = withFiles.filter { it.first.id in route.ids }
             for ((item, _) in carried) done(item, route, status, docs)
@@ -204,10 +233,11 @@ class HandoffActivity : ComponentActivity() {
         }
     }
 
-    /** Logs `received <id> kind=<k> -> handed to <pkg> via <path> status=<s>`, plus ` docs=<ask|quiet|open>` for documents and how it started (` by=front|auto|tap`). */
+    /** Logs `received <id> kind=<k> -> handed to <pkg> via <path> status=<s>`, plus ` docs=<ask|quiet|open>` for documents and how it started (` by=front|auto|tap|card`). */
     private fun done(item: InboxItem, route: Route, status: String, docs: DocumentMode? = null) {
         mark(item, route, status)
         val by = when {
+            item.id in fromCard -> BY_CARD
             mode == MODE_AUTO && item.id !in picked -> "auto"
             mode == MODE_ONE || item.id in picked || openedFromNotification -> "tap"
             else -> "front"
@@ -221,9 +251,13 @@ class HandoffActivity : ComponentActivity() {
         const val MODE_ALL = "all"
         /** In the background with "Display over other apps": links always, documents unless "Documents" is "ask". */
         const val MODE_AUTO = "auto"
-        /** One item, from the tap on its notification ([EXTRA_ITEM]). */
+        /** The items tapped: one notification's ([EXTRA_ITEM]), the summary's or the card's ([EXTRA_ITEMS]). */
         const val MODE_ONE = "one"
         const val EXTRA_ITEM = "item"
+        const val EXTRA_ITEMS = "items"
+        /** Who asked: [BY_CARD] for the card over the Reader (else a notification). */
+        const val EXTRA_BY = "by"
+        const val BY_CARD = "card"
 
         @Volatile
         var running = false
@@ -232,11 +266,29 @@ class HandoffActivity : ComponentActivity() {
         @Volatile
         var requestedAt = 0L
 
+        /** The running hand-off's [Claim], or null. */
+        @Volatile
+        var claim: Claim? = null
+
+        /** Whether a running hand-off is taking [item] (it is not announced meanwhile). */
+        fun claims(item: InboxItem): Boolean {
+            val c = claim ?: return false
+            return running && wanted(c.mode, c.picked, item, c.docs)
+        }
+
         fun intent(context: Context, mode: String): Intent =
             Intent(context, HandoffActivity::class.java).putExtra(EXTRA_MODE, mode)
 
         /** The tap on one item's notification. */
         fun forItem(context: Context, id: String): Intent = intent(context, MODE_ONE).putExtra(EXTRA_ITEM, id)
+
+        /** The tap on the summary or the card ([by] = [BY_CARD]): exactly the items it shows. */
+        fun forItems(context: Context, ids: List<String>, by: String? = null): Intent =
+            intent(context, MODE_ONE).putExtra(EXTRA_ITEMS, ids.toTypedArray()).apply { by?.let { putExtra(EXTRA_BY, it) } }
+
+        /** The item ids an intent asks for ([EXTRA_ITEM] and [EXTRA_ITEMS]). */
+        fun itemsOf(intent: Intent): List<String> =
+            (listOfNotNull(intent.getStringExtra(EXTRA_ITEM)) + intent.getStringArrayExtra(EXTRA_ITEMS).orEmpty()).distinct()
 
         /** Whether a hand-off in [mode] takes [item]: everything ([MODE_ALL]), the tapped items, and in [MODE_AUTO] what goes without a tap. */
         fun wanted(mode: String, picked: Set<String>, item: InboxItem, docs: DocumentMode): Boolean = when (mode) {

@@ -188,7 +188,7 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
                         }
                     }
                 } else {
-                    Text("Allowed ✓ Links and pages go to the Reader as they arrive.", style = MaterialTheme.typography.bodyMedium)
+                    Text("Allowed ✓ Links and pages go to the Reader as they arrive; documents that wait for a tap get a card over the Reader.", style = MaterialTheme.typography.bodyMedium)
                 }
                 HorizontalDivider(color = Ink)
                 Text("Documents", style = MaterialTheme.typography.bodyLarge)
@@ -262,8 +262,8 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
 }
 
 private fun documentModeDetail(m: DocumentMode): String = when (m) {
-    DocumentMode.ASK -> "A notification pops up with its name; tap it to add the document to the Reader, which opens it."
-    DocumentMode.QUIET -> "Handed over as a batch (several at once go to the library instead of opening). The Daylight Reader still opens a document that arrives on its own."
+    DocumentMode.ASK -> "A card over the Reader (with “Display over other apps”) and a notification show its name. Tap Add to Reader to add it; the Reader opens it. Later keeps it here."
+    DocumentMode.QUIET -> "Hands documents over together, for a Reader that adds a batch to its library without opening it. Today’s Daylight Reader doesn’t yet: it opens a single document, and for two or more it shows its library, which closes the document you’re reading."
     DocumentMode.OPEN -> "The Reader imports each document and opens it, even while you read something else."
 }
 

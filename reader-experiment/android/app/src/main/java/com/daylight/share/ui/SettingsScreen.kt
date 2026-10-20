@@ -143,7 +143,7 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
             val readers = remember(activity.resumes.intValue) { ReaderApps.installed(activity) }
             val apps = remember(activity.resumes.intValue) { ReaderApps.candidates(activity) }
             Section("Deliver to") {
-                Text("Which app gets the items. Automatic is the Daylight Reader; any other app that takes saved pages or documents (such as a side-by-side test copy of the Reader) can be chosen here.", style = MaterialTheme.typography.bodyMedium)
+                Text("Which app gets the items. Automatic is the Daylight Reader; any other app that takes saved pages or documents (such as a side-by-side test copy of the Reader) can be chosen here. What the chosen app doesn’t take goes to Automatic.", style = MaterialTheme.typography.bodyMedium)
                 Choice(
                     "Automatic",
                     deliverTo.isEmpty(),
@@ -153,8 +153,13 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
                     app.prefs.deliverTo = ""
                 }
                 for (c in apps) {
-                    val takes = listOfNotNull(if (c.savePage) "links and pages" else null, if (c.documents) "documents" else null).joinToString(" and ")
-                    Choice(c.label, deliverTo == c.pkg, detail = "${c.pkg} · takes $takes") {
+                    val takes = listOfNotNull(if (c.links) "links and pages" else null, if (c.documents) "documents" else null).joinToString(" and ")
+                    val rest = when {
+                        !c.documents -> "; documents go to Automatic"
+                        !c.links -> "; links and pages go to Automatic"
+                        else -> ""
+                    }
+                    Choice(c.label, deliverTo == c.pkg, detail = "${c.pkg} · takes $takes$rest") {
                         deliverTo = c.pkg
                         app.prefs.deliverTo = c.pkg
                     }

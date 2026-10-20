@@ -176,6 +176,30 @@ class Prefs(private val context: Context) {
         get() = sp.getBoolean("askedNotif", false)
         set(v) = sp.edit().putBoolean("askedNotif", v).apply()
 
+    /** The ids of waiting items in a notice state ([NOTICE_ANNOUNCED], [NOTICE_DISMISSED], [NOTICE_LATER]). */
+    fun noticeIds(state: String): Set<String> = sp.getStringSet("notice.$state", null)?.toSet() ?: emptySet()
+
+    fun addNoticeIds(state: String, ids: Collection<String>) {
+        val cur = noticeIds(state)
+        if (cur.containsAll(ids)) return
+        sp.edit().putStringSet("notice.$state", HashSet(cur + ids)).apply()
+    }
+
+    /** Forgets the notice state of items that no longer wait (handed over, removed, kept in the Inbox). */
+    fun keepNoticeIds(waiting: Set<String>) {
+        val e = sp.edit()
+        var changed = false
+        for (state in NOTICE_STATES) {
+            val cur = noticeIds(state)
+            val kept = cur.filterTo(HashSet()) { it in waiting }
+            if (kept.size != cur.size) {
+                e.putStringSet("notice.$state", kept)
+                changed = true
+            }
+        }
+        if (changed) e.apply()
+    }
+
     fun senderPairing(): Pairing? = senderLink?.let { runCatching { Pairing.parse(it) }.getOrNull() }
 
     private fun defaultDeviceName(): String {
@@ -185,6 +209,14 @@ class Prefs(private val context: Context) {
     }
 
     companion object {
+        /** Waiting items that were announced (a notification, the card): they never alert again. */
+        const val NOTICE_ANNOUNCED = "announced"
+        /** Waiting items whose notification the user swiped away: not announced again. */
+        const val NOTICE_DISMISSED = "dismissed"
+        /** Waiting items the card was answered "Later" for: the card does not show them again. */
+        const val NOTICE_LATER = "later"
+        private val NOTICE_STATES = listOf(NOTICE_ANNOUNCED, NOTICE_DISMISSED, NOTICE_LATER)
+
         /** A Daylight tablet: the Reader is installed, or the maker or model says so. */
         fun looksLikeDaylight(context: Context): Boolean {
             val reader = try {

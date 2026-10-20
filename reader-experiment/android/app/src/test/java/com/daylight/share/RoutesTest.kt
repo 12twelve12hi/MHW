@@ -207,5 +207,20 @@ class RoutesTest {
         val routes = Routes.forItem(ctx, item(Kind.URL), null, ReaderApps.targets(ctx, ReaderApps.EXPERIMENT))
         assertEquals(listOf(Path.SAVE_PAGE to ReaderApps.EXPERIMENT), routes.map { it.path to it.pkg })
         assertTrue(ReaderApps.label(ctx, ReaderApps.EXPERIMENT).contains(ReaderApps.EXPERIMENT))
+
+        // What the chosen app does not take goes to Automatic: the copy takes no documents, the PDF app no links (a
+        // shared link counts only for Reader builds).
+        assertTrue(experiment.links)
+        assertFalse(pdfs.links)
+        assertEquals(listOf(ReaderApps.EXPERIMENT), ReaderApps.targetsFor(ctx, Kind.URL, ReaderApps.EXPERIMENT))
+        assertEquals(listOf(ReaderApps.EXPERIMENT), ReaderApps.targetsFor(ctx, Kind.PAGE, ReaderApps.EXPERIMENT))
+        assertEquals(listOf(main), ReaderApps.targetsFor(ctx, Kind.FILE, ReaderApps.EXPERIMENT))
+        assertEquals(listOf("com.example.pdfs"), ReaderApps.targetsFor(ctx, Kind.FILE, "com.example.pdfs"))
+        assertEquals(listOf(main), ReaderApps.targetsFor(ctx, Kind.URL, "com.example.pdfs"))
+        assertEquals(listOf(main), ReaderApps.targetsFor(ctx, Kind.FILE, ""))
+        assertEquals(listOf(main), ReaderApps.targetsFor(ctx, Kind.URL, "com.example.uninstalled"))
+        val f = stored("paper.pdf", "%PDF-1.4")
+        val doc = Routes.forItem(ctx, item(Kind.FILE, "x/paper.pdf", "application/pdf"), f, ReaderApps.targetsFor(ctx, Kind.FILE, ReaderApps.EXPERIMENT))
+        assertEquals(Path.SEND_FILE to main, doc.first().path to doc.first().pkg)
     }
 }

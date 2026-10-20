@@ -8,7 +8,8 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <!-- Inbox: "Display over other apps" lets it hand items to the Reader while another app is in front. -->
+    <!-- Inbox: "Display over other apps" lets it hand items to the Reader while another app is in front, and show the
+         card for documents that wait for a tap over the Reader. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- Inbox, Instant delivery: asks to be left out of battery optimisation so Doze does not cut the connection. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -126,6 +127,11 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps one connection to the user's ntfy relay open so items shared from the user's phone reach this tablet at once." />
         </service>
+
+        <!-- Inbox: an item's notification swiped away (it is not announced again). -->
+        <receiver
+            android:name=".inbox.NoticeDismissedReceiver"
+            android:exported="false" />
 
         <receiver
             android:name=".inbox.BootReceiver"
