@@ -1372,7 +1372,7 @@
   {
     "id": "F38",
     "rank": 38,
-    "name": "Notes into Obsidian, a folder or Readwise from the Mac",
+    "name": "Notes into Obsidian, a folder or Readwise",
     "theme": "Round trip",
     "summary": "Returned Markdown notes and annotated PDFs (F06) are filed into a chosen folder or Obsidian vault, updating one file per document without touching the user's own text.",
     "platforms": [

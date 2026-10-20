@@ -10,7 +10,7 @@
 2. **They send what you see, not a URL the server fetches again.** Readwise, Matter and Instapaper win on paywalled and logged-in pages because the browser sends the rendered page. Server crawlers produce broken snapshots. This fits our end-to-end design exactly: the relay can't fetch anything, so the device does (F03, F10).
 3. **They tell the truth about delivery.** "Sent" that turns out not to have arrived is the loudest pain across Kindle email (SMTP accepted, rejected later), Taildrop (no notification, open since 2023) and Immich (false success). Our delivery receipts are already a differentiator. Lab extends them to "In your Reader", "Waiting for a tap" and the Daylight's last check-in (F01, F15).
 4. **Nothing gets lost, offline included.** Instapaper is loved as "rock solid" offline; Karakeep users stuck on flights ask for an outbox. Queue first, send when possible, never duplicate (F07, F32).
-5. **They respect the document.** PDFs stay PDFs (Amazon's forced "convert" and silent fixed-layout E016 are what not to do); images survive (WebP placeholders on Kobo); big files just arrive. Big files are the biggest gap against every pen tablet: ntfy.sh takes 2 MB per file (F13 on the same Wi-Fi now, F02 with the server later).
+5. **They respect the document.** PDFs stay PDFs (Amazon's forced "convert" and silent fixed-layout E016 are what not to do); images survive (WebP placeholders on Kobo); big files just arrive. Big files are the biggest gap against every pen tablet: ntfy.sh takes 2 MB per file (F13 on the same Wi-Fi with no server, F02 through the server later).
 6. **Organising at save time is optional and light.** A note, a tag, a destination and a remembered default, never a form. People tag at save time when it costs nothing (wallabag #675) and abandon apps that force an editor (F12).
 7. **They batch and schedule for calm reading.** Instapaper's Kindle digest, "a personal newspaper with its own contents page", is the best-loved e-reader feature in the research, and its repeats are its best-known flaw. A morning stack built on the tablet needs no server (F14, F22).
 8. **They close the loop.** Highlights, notes, progress and "finished" coming back to the phone or Mac is the biggest unmet want for pen tablets (KOReader #4587 open since 2019; ZotFile users stranded by Zotero 7). The DC-1's pen makes this Daylight's differentiator: Lab ships "Send back from the DC-1" now (F06) and the Reader-side automatic return next (F05, F18).
@@ -63,7 +63,7 @@ Ranked by value to readers times strength of evidence times fit for a grayscale 
 | 35 | [RSS feeds checked by the Inbox](#f35) | companion+inbox | M | M | W3 |
 | 36 | [Server feeds and digests while the tablet sleeps](#f36) | server | M | M | next |
 | 37 | [AI summary, "explain this", ask and translate (Claude)](#f37) | server | M | M | next |
-| 38 | [Notes into Obsidian, a folder or Readwise from the Mac](#f38) | companion-only | M | M | W3 |
+| 38 | [Notes into Obsidian, a folder or Readwise](#f38) | companion-only | M | M | W3 |
 | 39 | [Handwriting to text for returned pages](#f39) | companion-only | M | M | W3 |
 | 40 | [Inbox triage and housekeeping](#f40) | companion+inbox | M | M | W3 |
 | 41 | [Android Quick Settings tile and "Send to Daylight" in the text-selection menu](#f41) | companion-only | S | M | W2 |
@@ -195,9 +195,9 @@ Ranked by value to readers times strength of evidence times fit for a grayscale 
 
 **Our design.**
 
-- *iPhone, iPad, Mac:* The share extension encrypts file-to-file into the App Group outbox, starts background URLSession upload tasks (sharedContainerIdentifier), shows "Sending to <Daylight>" with Options for 1.5 s, then closes. Delivery shows later in the app and as a notification. Ad-hoc Mac builds keep their own outbox, as today.
-- *Android phone:* Translucent share activity; enqueue an expedited WorkManager job and finish within a second; the card says "Queued for <Daylight>" with an Options chip.
-- *Chrome, Safari:* Toolbar click already sends. The popup shows status and never blocks the send.
+- *iPhone, iPad, Mac:* The share extension encrypts file-to-file into the App Group outbox, starts background URLSession upload tasks (sharedContainerIdentifier), shows "Sending to &lt;Daylight>" with Options for 1.5 s, then closes. Delivery shows later in the app and as a notification. Ad-hoc Mac builds keep their own outbox, as today.
+- *Android phone:* Translucent share activity; enqueue an expedited WorkManager job and finish within a second; the card says "Queued for &lt;Daylight>" with an Options chip.
+- *Chrome, Safari:* The shortcut already sends without the popup. Lab adds "Send when I click the toolbar button": the popup opens already sending (as in kindle-send-chrome) and shows the status.
 
 <a id="f05"></a>
 ### 5. Notes come home automatically
@@ -240,7 +240,7 @@ Ranked by value to readers times strength of evidence times fit for a grayscale 
 **Our design.**
 
 - *DC-1 Inbox:* In the Inbox role the app's share target (an activity-alias) is labelled "Send to my phone or Mac"; in the phone role it stays "Send to Daylight". It builds ordinary frames on a new return topic and AAD derived from the secret (label `dlshare/v1/return`), with the usual outbox, re-sends and 9 MB limit; optional `x-to` names one device.
-- *iPhone, iPad, Mac, Android phone, Windows:* Poll the return topic with the ack-topic rules (on launch, background refresh, the existing timers); store items under From your Daylight; ack on a return-ack topic; notify "From your Daylight: <name>". Save to Files or a chosen Mac folder (F38).
+- *iPhone, iPad, Mac, Android phone, Windows:* Poll the return topic with the ack-topic rules (on launch, background refresh, the existing timers); store items under From your Daylight; ack on a return-ack topic; notify "From your Daylight: &lt;name>". Save to Files or a chosen Mac folder (F38).
 - *Chrome, Safari, Web sender:* A From your Daylight list in the popup or page with Download.
 
 <a id="f07"></a>
@@ -271,7 +271,7 @@ Ranked by value to readers times strength of evidence times fit for a grayscale 
 
 `F08` · value **H** · effort **S** · needs **companion-only** · **Lab wave 1** · Capture
 
-**What it is.** "Anjan's Daylight" shows in the top row of Android's share sheet. iPhone, Mac and Windows already name the Daylight in their share entries; Lab keeps those names current.
+**What it is.** "Anjan's Daylight" shows in the top row of Android's share sheet, next to contacts. iPhone, Mac and Windows already have a "Daylight" share entry; their confirmation says which Daylight it is going to.
 
 **Who does it best.** Pushbullet (historically); Android's Sharing Shortcuts API is the supported route.
 
@@ -284,7 +284,7 @@ Ranked by value to readers times strength of evidence times fit for a grayscale 
 **Our design.**
 
 - *Android phone:* ShortcutManagerCompat.pushDynamicShortcut with a share-target category, long-lived, labelled with the Daylight's name; re-pushed on every send; removed on unpair.
-- *iPhone, iPad, Mac, Windows:* Share entries show the paired Daylight's name (from the pairing link's `n`).
+- *iPhone, iPad, Mac, Windows:* The share entry keeps the label "Daylight"; the sheet and the notification name the paired Daylight (from the pairing link's `n`).
 
 <a id="f09"></a>
 ### 9. Automation: Shortcuts, Siri, URL scheme, Android intent, command line
@@ -374,7 +374,7 @@ Ranked by value to readers times strength of evidence times fit for a grayscale 
 **Our design.**
 
 - *Protocol:* Optional header fields `x-note` (up to 280 characters), `x-tags` (up to 8 of 40 characters), `x-dest` ("now" | "quiet" | "hold" | "stack"). Old Inboxes ignore them.
-- *All senders:* The F04 Options window (and the extension popup's 1.5 s grace) holds the publish while the user types; Enter creates a new tag, suggestions are added only when chosen; last destination remembered.
+- *All senders:* The F04 Options window holds the publish while the user types; in the extension popup the fields sit under the Send button, and the shortcut and menus use the last destination. Enter creates a new tag; a suggestion is added only when chosen.
 - *DC-1 Inbox:* Shows note and tags on the row; filters by tag and by source device; for pages, inserts "Note from iPhone: ..." at the top of the HTML (setting, on by default). `now` hands over at once and opens documents even when Documents = Ask; `quiet` adds quietly; `hold` keeps the item in the Inbox (F40); `stack` goes to the morning stack (F14). Filing into Reader collections is a Reader change (section 4).
 
 <a id="f13"></a>
@@ -609,7 +609,7 @@ Ranked by value to readers times strength of evidence times fit for a grayscale 
 
 - *Mac:* Install a PDF Service ("Send to Daylight" in every Print dialog's PDF menu) that hands the PDF to the app.
 - *Android phone:* A PrintService named after the Daylight that writes the PDF and sends it.
-- *iPhone, iPad:* A Lab tip: Print > pinch out the preview > Share > Daylight (works today).
+- *iPhone, iPad:* A Lab tip: Print > Share (or pinch out the preview) > Daylight, which uses today's share extension; verify on iOS 26.
 - *DC-1 Inbox:* Shows page count and size for documents.
 
 <a id="f24"></a>
@@ -908,7 +908,7 @@ Ranked by value to readers times strength of evidence times fit for a grayscale 
 **What it would take.** The Worker plus the ANTHROPIC_API_KEY secret (server/DESIGN.md section 9).
 
 <a id="f38"></a>
-### 38. Notes into Obsidian, a folder or Readwise from the Mac
+### 38. Notes into Obsidian, a folder or Readwise
 
 `F38` · value **M** · effort **M** · needs **companion-only** · **Lab wave 3** · Round trip
 
@@ -1021,7 +1021,7 @@ Ranked by value to readers times strength of evidence times fit for a grayscale 
 
 **Our design.**
 
-- *Mac, iPhone, iPad:* PDFKit page transforms on a copy "<name> (paper mode).pdf".
+- *Mac, iPhone, iPad:* PDFKit page transforms on a copy "&lt;name> (paper mode).pdf".
 - *Android phone:* The same with a PDF library (vector transforms, no rasterising).
 
 <a id="f44"></a>
@@ -1081,7 +1081,7 @@ Ranked by value to readers times strength of evidence times fit for a grayscale 
 **Our design.**
 
 - *DC-1 Inbox:* "Let someone send": a fresh temporary secret (its own topics), a QR to the web sender with `#guest=`, valid one hour or 20 items, Approve / Decline per item, then the secret is destroyed.
-- *Web sender:* Guest mode: no settings, no history kept, a banner "Sending to <name>'s Daylight as a guest".
+- *Web sender:* Guest mode: no settings, no history kept, a banner "Sending to &lt;name>'s Daylight as a guest".
 
 <a id="f47"></a>
 ### 47. Import a reading list
@@ -1530,7 +1530,7 @@ Everything here is buildable now without a server and without changing the Dayli
 
 ### 3.1 Rules every Lab feature must pass
 
-- Behind the app's one Lab switch (F00). Lab on by default. With Lab off the app behaves exactly like the last non-Lab build (screenshot diff in UI tests).
+- Behind the app's one Lab switch (F00), except F27's accessibility baseline, which ships in every build. Lab on by default. With Lab off the app behaves exactly like the last non-Lab build (screenshot diff in UI tests).
 - A Lab feature whose prerequisite is missing stays visible and, when tapped, says in one sentence what is missing and where to add it (LAB-DECISIONS.md).
 - Wire compatibility: only `x-` header fields and new derived topics; a v1.1 non-Lab Inbox and non-Lab senders keep working (the F17 version-skew suite runs in CI for every Lab change).
 - Nothing new leaves the device unencrypted. Any path that is not end-to-end encrypted (a read-later service token, a direct service fetch) says so the first time it is used.
@@ -1547,7 +1547,7 @@ Everything here is buildable now without a server and without changing the Dayli
 
 **Wave 2:** [F06](#f06) Send back from the DC-1 to my phone or Mac; [F12](#f12) Note, tags and "read now / quietly / hold" at send time; [F13](#f13) Big files on the same Wi-Fi (direct, no server); [F22](#f22) Send several tabs or items as one issue; [F23](#f23) PDFs stay PDFs, and "Print to Daylight" from any app; [F24](#f24) Image diet: self-contained pages tuned for grayscale; [F29](#f29) Mac power moves; [F30](#f30) Scan paper to a clean PDF; [F31](#f31) Chrome Reading List to Daylight; [F32](#f32) "Already sent" notice and duplicate guard; [F41](#f41) Android Quick Settings tile and "Send to Daylight" in the text-selection menu; [F42](#f42) iPhone controls and widgets; [F48](#f48) Verified delivery and private items; [F50](#f50) iPad: sidebar layout, drag and drop, keyboard; [F51](#f51) No lock-in: export, your own relay, a documented protocol.
 
-**Wave 3:** [F14](#f14) Morning stack: one issue with a contents page, never repeating; [F20](#f20) "On your Daylight": see and steer what waits in the Inbox; [F25](#f25) Read-later connectors pulled by the Inbox; [F28](#f28) YouTube videos as readable transcripts; [F35](#f35) RSS feeds checked by the Inbox; [F38](#f38) Notes into Obsidian, a folder or Readwise from the Mac; [F39](#f39) Handwriting to text for returned pages; [F40](#f40) Inbox triage and housekeeping; [F43](#f43) Paper mode for PDFs: crop margins, blank note pages, writing margin; [F44](#f44) Send a paper by DOI, arXiv id or PubMed id; [F45](#f45) X/Twitter threads as one article; [F46](#f46) Guest drop: let someone send to this Daylight once; [F47](#f47) Import a reading list; [F49](#f49) Pairing fingerprint and safe handling of what arrives.
+**Wave 3:** [F14](#f14) Morning stack: one issue with a contents page, never repeating; [F20](#f20) "On your Daylight": see and steer what waits in the Inbox; [F25](#f25) Read-later connectors pulled by the Inbox; [F28](#f28) YouTube videos as readable transcripts; [F35](#f35) RSS feeds checked by the Inbox; [F38](#f38) Notes into Obsidian, a folder or Readwise; [F39](#f39) Handwriting to text for returned pages; [F40](#f40) Inbox triage and housekeeping; [F43](#f43) Paper mode for PDFs: crop margins, blank note pages, writing margin; [F44](#f44) Send a paper by DOI, arXiv id or PubMed id; [F45](#f45) X/Twitter threads as one article; [F46](#f46) Guest drop: let someone send to this Daylight once; [F47](#f47) Import a reading list; [F49](#f49) Pairing fingerprint and safe handling of what arrives.
 
 **Wave 4 (stretch):** [F56](#f56) Listen on the phone; [F57](#f57) Zotero plugin: Send to Daylight, annotations back; [F59](#f59) Import from Safari Reading List (Mac); [F60](#f60) Keyboard-first quick send and a command palette; [F61](#f61) Make scans searchable before sending (OCR); [F62](#f62) arXiv and HTML papers with readable maths; [F63](#f63) Warn about fake redactions and hidden metadata before sending; [F67](#f67) Watched folder on the tablet.
 
@@ -1588,7 +1588,7 @@ Why this order: Wave 1 fixes the top complaints in the research (silent delivery
   - [F14](#f14) Morning stack: one issue with a contents page, never repeating
   - [F20](#f20) "On your Daylight": see and steer what waits in the Inbox
   - [F25](#f25) Read-later connectors pulled by the Inbox
-  - [F38](#f38) Notes into Obsidian, a folder or Readwise from the Mac
+  - [F38](#f38) Notes into Obsidian, a folder or Readwise
   - [F39](#f39) Handwriting to text for returned pages
   - [F43](#f43) Paper mode for PDFs: crop margins, blank note pages, writing margin
   - [F44](#f44) Send a paper by DOI, arXiv id or PubMed id
@@ -1670,7 +1670,7 @@ Same app and extensions as the iPhone; everything in the iPhone list applies. iP
   - [F20](#f20) "On your Daylight": see and steer what waits in the Inbox
   - [F25](#f25) Read-later connectors pulled by the Inbox
   - [F35](#f35) RSS feeds checked by the Inbox
-  - [F38](#f38) Notes into Obsidian, a folder or Readwise from the Mac
+  - [F38](#f38) Notes into Obsidian, a folder or Readwise
   - [F39](#f39) Handwriting to text for returned pages
   - [F43](#f43) Paper mode for PDFs: crop margins, blank note pages, writing margin
   - [F44](#f44) Send a paper by DOI, arXiv id or PubMed id
@@ -1963,7 +1963,7 @@ Each criterion is written so a developer can automate it and a tester can check 
 - [ ] An item over 9 MB is refused on the DC-1 with the standard sentence.
 - [ ] Returned file names pass the safe-file-name vectors; a name containing "../" is saved inside the app's folder.
 - [ ] The phone install shows only "Send to Daylight" and the Inbox install only "Send to my phone or Mac" in the share sheet.
-- [ ] The Inbox item shows "Sent" then "Received by <device>"; a non-Lab sender ignores the return topic.
+- [ ] The Inbox item shows "Sent" then "Received by &lt;device>"; a non-Lab sender ignores the return topic.
 
 **F12 Note, tags and "read now / quietly / hold" at send time** (companion+inbox, effort M). Apps: iPhone, iPad, Android phone, Mac, Windows, Chrome, Safari, Web sender, DC-1 Inbox.
 
@@ -2076,7 +2076,7 @@ Each criterion is written so a developer can automate it and a tester can check 
 - [ ] The daily cap and mute words hold; RSS 1.0 (rdf), Atom and WordPress fixtures parse.
 - [ ] `dumpsys jobscheduler` shows at most one feed job an hour and none off Wi-Fi.
 
-**F38 Notes into Obsidian, a folder or Readwise from the Mac** (companion-only, effort M). Apps: Mac, iPhone, iPad.
+**F38 Notes into Obsidian, a folder or Readwise** (companion-only, effort M). Apps: Mac, iPhone, iPad.
 
 - [ ] Returning notes for the same document twice updates one file and keeps text the user added outside the managed region.
 - [ ] File names are sanitised; a Readwise push is not repeated on re-export.
