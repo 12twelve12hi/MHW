@@ -77,7 +77,8 @@ final class EndToEndTests: XCTestCase {
         let delivered = try await sender.checkAcks()
         XCTAssertEqual(delivered, inputs.count - 1)
         XCTAssertTrue(sender.outbox.rows.allSatisfy { $0.status == .delivered })
-        XCTAssertEqual(try await bigSender.checkAcks(), 1)
+        let bigDelivered = try await bigSender.checkAcks()
+        XCTAssertEqual(bigDelivered, 1)
         XCTAssertEqual(bigSender.outbox.row(bigRow.id)?.status, .delivered)
         XCTAssertEqual(RowText(row: try XCTUnwrap(bigSender.outbox.row(bigRow.id))).label, "Delivered ✓")
     }

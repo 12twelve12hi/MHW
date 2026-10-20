@@ -264,7 +264,8 @@ final class SenderTests: XCTestCase {
         XCTAssertEqual(row.errorCode, "full")
         for n in 2...3 {
             clock += 184 * 60
-            XCTAssertTrue(await sender.resendDue().isEmpty, "nothing before 185 minutes")
+            let early = await sender.resendDue()
+            XCTAssertTrue(early.isEmpty, "nothing before 185 minutes")
             clock += 60
             FakeRelay.with { $0.failNext = [413] }
             let r = await sender.resendDue()
@@ -278,7 +279,8 @@ final class SenderTests: XCTestCase {
                        "Too much was sent from this network for hours, so it stopped trying. Try again later.")
         XCTAssertEqual(RowText(row: ended, now: clock).action, .tryAgain)
         clock += 24 * 3600
-        XCTAssertTrue(await sender.resendDue().isEmpty, "an expired row is not re-sent by itself")
+        let none = await sender.resendDue()
+        XCTAssertTrue(none.isEmpty, "an expired row is not re-sent by itself")
         let again = await sender.retry(row.id)
         XCTAssertEqual(again?.status, .sent)
         XCTAssertEqual(again?.slowFails, 0)
@@ -298,9 +300,11 @@ final class SenderTests: XCTestCase {
                        "The relay set on your Daylight turned this down. It will try again in about 3 hours.")
         XCTAssertNil(RowText(row: row, now: clock).action)
         clock += 30 * 60
-        XCTAssertTrue(await sender.resendDue().isEmpty)
+        let early = await sender.resendDue()
+        XCTAssertTrue(early.isEmpty)
         clock += 155 * 60
-        XCTAssertEqual(await sender.resendDue().first?.status, .sent)
+        let later = await sender.resendDue()
+        XCTAssertEqual(later.first?.status, .sent)
     }
 
     /// After a 429 a pass publishes nothing more; after a 413 no attachment item, but a link still goes.
@@ -379,13 +383,15 @@ final class SenderTests: XCTestCase {
         let held = FakeRelay.inject(topic: keys.ackTopic, frame: ackA, time: t, attachment: true)
         FakeRelay.inject(topic: keys.ackTopic, frame: ackB, time: t + 3600, attachment: false)
         FakeRelay.with { $0.downloadStatus[held] = 503 }
-        XCTAssertEqual(try await sender.checkAcks(), 1)
+        let first = try await sender.checkAcks()
+        XCTAssertEqual(first, 1)
         XCTAssertEqual(sender.outbox.row(b.id)?.status, .delivered)
         XCTAssertEqual(sender.outbox.row(a.id)?.status, .sent)
         XCTAssertEqual(sender.outbox.load().ackSince, t - 1800, "held at the download to retry")
         // It arrives: delivered, and the cursor moves on.
         FakeRelay.with { $0.downloadStatus[held] = nil }
-        XCTAssertEqual(try await sender.checkAcks(), 1)
+        let second = try await sender.checkAcks()
+        XCTAssertEqual(second, 1)
         XCTAssertEqual(sender.outbox.row(a.id)?.status, .delivered)
         XCTAssertEqual(sender.outbox.load().ackSince, t + 3600 - 1800)
         // An expired attachment (404) does not hold it, and never moves it back.
