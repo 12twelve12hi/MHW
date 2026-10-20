@@ -4,6 +4,9 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -19,7 +22,9 @@ import com.daylight.share.logw
 import com.daylight.share.ui.MainActivity
 import com.daylight.share.ui.StatusCard
 import com.daylight.share.ui.DaylightTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -31,6 +36,13 @@ import kotlinx.coroutines.launch
  * Links and pages go first, each waiting for the Reader's answer; a refused SAVE_PAGE (read-later from the browser
  * switched off in the Reader) is retried as a shared link. Documents go last, together, because the Reader opens
  * what it imports; "Documents" ([DocumentMode]) decides whether they go as ACTION_SEND or ACTION_SEND_MULTIPLE.
+ *
+ * A hand-off the Reader does not answer (documents, shared links) goes to the Reader's import, which drops a share
+ * that arrives while its previous import is pending (DEVICE-CHECKS.md, round 2): it starts in a fresh task
+ * ([Routes.IMPORT_FLAGS]), never within [IMPORT_GAP_MS] of the previous one (this activity waits, with its card), and
+ * the hand-off ends there (the Reader is in front); what it wanted and is still waiting is offered again when the gap
+ * is over. If this activity is sent to the background (Home while the card waits, or the Reader in front), nothing
+ * brings it back, so it ends and announces what still waits rather than block every later hand-off.
  */
 class HandoffActivity : ComponentActivity() {
     /** What a running hand-off takes: [mode], the [picked] items, and "Documents" ([docs]) as it started. */
@@ -48,9 +60,16 @@ class HandoffActivity : ComponentActivity() {
         pending?.complete(r)
     }
     private val message = mutableStateOf("Adding to Daylight Reader…")
+    /** A hand-off went to the Reader's import: it is in front now, and the next import waits [IMPORT_GAP_MS]. */
+    private var importStarted = false
+    /** Ends this activity if the Reader's answer does not come while it is in the background ([onStop]). */
+    private var answerTimeout: Job? = null
+    /** This instance's hand-off, as [current] names it. */
+    private val run = Any()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        current = run
         running = true
         requestedAt = 0L
         mode = intent?.getStringExtra(EXTRA_MODE) ?: MODE_ALL
@@ -66,14 +85,56 @@ class HandoffActivity : ComponentActivity() {
                     // A tap with nothing to hand over (already in the Reader, or removed): show the Inbox instead of flashing.
                     startActivity(Intent(this@HandoffActivity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 logw("hand-off stopped", e)
             } finally {
-                running = false
+                ended()
                 unclaim()
                 // Whatever still waits (documents after the first, late arrivals) gets the notification.
-                val left = App.of(this@HandoffActivity).inbox.waiting()
+                val app = App.of(this@HandoffActivity)
+                val left = app.inbox.waiting()
                 if (left.isEmpty()) Handoff.cancelNotification(this@HandoffActivity) else Handoff.notifyWaiting(this@HandoffActivity, left)
+                // The Reader is importing: what this hand-off wanted and could not take yet is offered again after the gap.
+                if (importStarted && left.any { wanted(mode, picked, it, docs) }) {
+                    logi("hand-off: ${left.size} still waiting; offered again in ${IMPORT_GAP_MS / 1000} s")
+                    Handler(Looper.getMainLooper()).postDelayed({ Handoff.dispatch(app) }, IMPORT_GAP_MS + 1_000)
+                }
+                finish()
+            }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        answerTimeout?.cancel()
+        answerTimeout = null
+    }
+
+    /**
+     * In the background (Home while the card waits for the gap, the Reader in front after a shared link) nothing brings
+     * this activity back: it ends, and the coroutine's `finally` announces what still waits. Waiting for SAVE_PAGE's
+     * answer is normal (the Reader's activity covers this one), so that gets [ANSWER_GRACE_MS]. With the screen off
+     * (the Daylight asleep) it stays: it is still on top when the screen comes back, and goes on from there.
+     */
+    override fun onStop() {
+        super.onStop()
+        if (isFinishing || isChangingConfigurations) return
+        if (getSystemService(PowerManager::class.java)?.isInteractive == false) {
+            logi("hand-off: screen off; going on when it is back")
+            return
+        }
+        if (pending == null) {
+            logi("hand-off: sent to the background before it was done; what still waits gets a notification")
+            finish()
+            return
+        }
+        answerTimeout?.cancel()
+        answerTimeout = lifecycleScope.launch {
+            delay(ANSWER_GRACE_MS)
+            if (pending != null && !isFinishing) {
+                logi("hand-off: no answer from the Reader within ${ANSWER_GRACE_MS / 1000} s while in the background; stopping")
                 finish()
             }
         }
@@ -92,9 +153,17 @@ class HandoffActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        running = false
+        ended()
         unclaim()
         pending?.cancel()
+    }
+
+    /** No hand-off runs any more, unless a newer instance started meanwhile. */
+    private fun ended() {
+        if (current === run) {
+            current = null
+            running = false
+        }
     }
 
     private fun pick(i: Intent) {
@@ -129,16 +198,17 @@ class HandoffActivity : ComponentActivity() {
                 attempted += link.id
                 message.value = "Adding “${link.displayTitle.take(60)}” to Daylight Reader…"
                 if (handLink(link)) handed++
+                if (importStarted) break // shared as a link: the Reader is in front, importing it
                 continue
             }
             attempted += waiting.map { it.id }
             var batch = waiting
-            // The Reader drops a document shared while its previous import is still pending (DEVICE-CHECKS.md, round
-            // 2): a document hand-off never starts within DOCUMENT_GAP_MS of the last one. It waits, and then hands
+            // The Reader drops a share that arrives while its previous import is still pending (DEVICE-CHECKS.md, round
+            // 2): a document hand-off never starts within IMPORT_GAP_MS of the last import. It waits, and then hands
             // over together everything this hand-off takes by then (taps and arrivals meanwhile included).
-            val wait = documentWait()
+            val wait = importWait()
             if (wait > 0) {
-                logi("documents: ${waiting.size} waiting; next hand-off in ${(wait + 999) / 1000} s (the Reader drops a document shared while its previous import is pending)")
+                logi("documents: ${waiting.size} waiting; next hand-off in ${(wait + 999) / 1000} s (the Reader drops a share that arrives while its previous import is pending)")
                 message.value = if (waiting.size > 1) "Adding ${waiting.size} documents to Daylight Reader in a moment…"
                 else "Adding “${waiting[0].displayTitle.take(60)}” to Daylight Reader in a moment…"
                 delay(wait)
@@ -153,7 +223,7 @@ class HandoffActivity : ComponentActivity() {
                 else -> "Opening “${batch[0].displayTitle.take(60)}” in Daylight Reader…"
             }
             handed += handFiles(batch, docs)
-            break // the Reader is in front now; documents that remain wait for the next hand-off
+            break // the Reader is in front now; what remains is offered again after the gap (see onCreate's finally)
         }
         return handed
     }
@@ -163,11 +233,13 @@ class HandoffActivity : ComponentActivity() {
         val file = repo.fileOf(item)
         val routes = Routes.forItem(this, item, file)
         for (route in routes) {
+            if (!route.path.expectsResult && !importGap(item)) return false
             withResumed { }
             val status = start(route, item) ?: continue
             if (status == "refused" && route.path == Path.SAVE_PAGE) {
                 logi("received ${item.id} kind=${item.kind} -> handed to ${route.pkg} via ${route.path.key} status=refused")
                 val retry = Routes.sendLink(this, route.pkg, item.id, item.url ?: continue, item.title) ?: continue
+                if (!importGap(item)) return false
                 withResumed { }
                 val s2 = start(retry, item) ?: continue
                 done(item, retry, s2)
@@ -197,9 +269,8 @@ class HandoffActivity : ComponentActivity() {
         // alone (the rest at the next hand-off).
         for (route in Routes.forDocuments(this, withFiles, ReaderApps.targetsFor(this, Kind.FILE), docs)) {
             val status = start(route, null) ?: continue
-            lastDocumentHandoff = SystemClock.elapsedRealtime()
             val carried = withFiles.filter { it.first.id in route.ids }
-            logi("documents: ${carried.size} to ${route.pkg} via ${route.path.key} in a fresh task (NEW_TASK|CLEAR_TASK); the next document hand-off waits ${DOCUMENT_GAP_MS / 1000} s")
+            logi("documents: ${carried.size} to ${route.pkg} via ${route.path.key} in a fresh task (NEW_TASK|CLEAR_TASK); the next import hand-off waits ${IMPORT_GAP_MS / 1000} s")
             for ((item, _) in carried) done(item, route, status, docs)
             return carried.size
         }
@@ -237,6 +308,9 @@ class HandoffActivity : ComponentActivity() {
         }
         return try {
             startActivity(route.intent)
+            // The Reader's import has it (and is in front): the next import hand-off waits.
+            lastImportHandoff = SystemClock.elapsedRealtime()
+            importStarted = true
             "sent"
         } catch (e: ActivityNotFoundException) {
             null
@@ -264,21 +338,44 @@ class HandoffActivity : ComponentActivity() {
         logi("received ${item.id} kind=${item.kind} -> handed to ${route.pkg} via ${route.path.key} status=$status" + (if (docs != null) " docs=${docs.key}" else "") + " by=$by")
     }
 
-    /** How long to wait before the next document hand-off may start (0 = now). */
-    private fun documentWait(): Long {
-        val last = lastDocumentHandoff
+    /** How long to wait before the next import hand-off may start (0 = now). */
+    private fun importWait(): Long {
+        val last = lastImportHandoff
         if (last == 0L) return 0L
         val since = SystemClock.elapsedRealtime() - last
-        return if (since in 0 until DOCUMENT_GAP_MS) DOCUMENT_GAP_MS - since else 0L
+        return if (since in 0 until IMPORT_GAP_MS) IMPORT_GAP_MS - since else 0L
+    }
+
+    /**
+     * Before a link goes to the Reader's import (shared as text, or daylightreader://save): waits out [IMPORT_GAP_MS]
+     * with the card up. Returns false when [item] was removed from the Inbox meanwhile.
+     */
+    private suspend fun importGap(item: InboxItem): Boolean {
+        val wait = importWait()
+        if (wait <= 0) return true
+        logi("links: next hand-off in ${(wait + 999) / 1000} s (the Reader drops a share that arrives while its previous import is pending)")
+        message.value = "Adding “${item.displayTitle.take(60)}” to Daylight Reader in a moment…"
+        delay(wait)
+        return App.of(this).inbox.get(item.id) != null
     }
 
     companion object {
-        /** The least time between two document hand-offs: the Reader's import of the previous one must be done. */
-        const val DOCUMENT_GAP_MS = 25_000L
+        /**
+         * The least time between two hand-offs to the Reader's import (documents, shared links): its import of the
+         * previous one must be done. Not measured on a device yet (DEVICE-CHECKS.md has no import times).
+         */
+        const val IMPORT_GAP_MS = 25_000L
 
-        /** When the last document hand-off started ([SystemClock.elapsedRealtime]; 0 = none in this process). */
+        /** How long a hand-off in the background waits for SAVE_PAGE's answer before it gives up ([onStop]). */
+        const val ANSWER_GRACE_MS = 120_000L
+
+        /** When the last import hand-off started ([SystemClock.elapsedRealtime]; 0 = none in this process). */
         @Volatile
-        var lastDocumentHandoff = 0L
+        var lastImportHandoff = 0L
+
+        /** The hand-off that runs (an older instance ending late does not clear [running]). */
+        @Volatile
+        private var current: Any? = null
 
         const val EXTRA_MODE = "mode"
         /** Everything waiting (foreground, or the notification's tap). */

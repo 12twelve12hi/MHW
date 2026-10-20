@@ -36,8 +36,6 @@ import com.daylight.share.BuildConfig
 import com.daylight.share.Prefs
 import com.daylight.share.Role
 import com.daylight.share.core.Limits
-import com.daylight.share.core.Relay
-import com.daylight.share.core.ShareException
 import com.daylight.share.inbox.InstantDeliveryService
 import com.daylight.share.inbox.ReaderApps
 import kotlinx.coroutines.launch
@@ -128,14 +126,14 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 SecondaryButton("Save relay", enabled = !checking) {
                     if (role != Role.INBOX) {
-                        try {
-                            val r = Relay.normalize(relay)
-                            // Same secret, another relay: the outbox stays and pending items go through the new relay.
-                            app.sender.setRelay(r)
-                            relay = r
+                        // Same secret, another relay: the outbox stays and pending items go through the new relay.
+                        // Unpaired, there is no relay to change: it comes with the pairing.
+                        val failure = app.sender.saveRelay(relay)
+                        if (failure != null) {
+                            relayError = failure
+                        } else {
+                            relay = app.sender.pairing()?.relay ?: relay
                             saved = "Relay saved."
-                        } catch (e: ShareException) {
-                            relayError = e.message
                         }
                         return@SecondaryButton
                     }

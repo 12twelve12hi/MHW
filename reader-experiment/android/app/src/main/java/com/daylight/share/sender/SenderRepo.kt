@@ -8,6 +8,7 @@ import androidx.annotation.VisibleForTesting
 import com.daylight.share.App
 import com.daylight.share.BuildConfig
 import com.daylight.share.Work
+import com.daylight.share.core.Body
 import com.daylight.share.core.BytesBody
 import com.daylight.share.core.FileBody
 import com.daylight.share.core.FileOutboxStore
@@ -17,6 +18,7 @@ import com.daylight.share.core.OutboxRow
 import com.daylight.share.core.Outbox
 import com.daylight.share.core.OutgoingItem
 import com.daylight.share.core.Pairing
+import com.daylight.share.core.Relay
 import com.daylight.share.core.RelayClient
 import com.daylight.share.core.ShareException
 import com.daylight.share.core.Text
@@ -55,37 +57,50 @@ class SenderRepo(private val app: App) {
     fun pairing(): Pairing? = _pairing.value
 
     /**
-     * Uses [p] from now on (PROTOCOL 3.3 step 6): the same secret (a new relay or name) keeps the outbox, so pending
-     * items go through the new relay; a different secret deletes the old outbox, its rows and their content. Callers
-     * ask first when [PairingConfirmation] says so.
+     * Uses [p] from now on (PROTOCOL 3.3 step 6; CHANGES-v1.1 2.4 "pairing change"): the same secret (a new relay or
+     * name) keeps the outbox, so pending items go through the new relay; a different secret deletes the old outbox, its
+     * rows, their content and the ack cursor. That includes an outbox kept by [unpair]: every outbox but [p]'s goes.
+     * Callers ask first when [PairingConfirmation] says so.
      */
     fun pair(p: Pairing) {
         val old = pairing()
-        val replaced = old != null && !old.sameSecret(p)
+        val keep = p.keys.inboxTopic
         synchronized(this) {
-            if (replaced) {
-                FileOutboxStore(File(root, old!!.keys.inboxTopic)).clear()
-                logi("sender: a different Daylight: the outbox for ${old.name.ifEmpty { "the previous one" }} was deleted")
-            }
+            // Under this lock, so a share being added ([addTo]) lands before the deletion or is refused after it.
+            val others = root.listFiles()?.filter { it.isDirectory && it.name != keep }.orEmpty()
+            for (dir in others) FileOutboxStore(dir).clear()
+            if (others.isNotEmpty()) logi("sender: a different Daylight: the outbox for ${old?.name?.ifEmpty { null } ?: "the previous one"} was deleted")
             outbox = null
+            app.prefs.senderLink = p.link()
+            _pairing.value = p
         }
-        app.prefs.senderLink = p.link()
-        _pairing.value = p
-        if (replaced) _rows.value = emptyList()
+        if (old == null || !old.sameSecret(p)) _rows.value = emptyList()
         logi("sender: paired with ${p.name.ifEmpty { "a Daylight" }} via ${p.relay}")
     }
 
+    /** Forgets the pairing. The outbox stays until the next [pair]: kept for the same code, deleted for another. */
     fun unpair() {
-        app.prefs.senderLink = null
-        _pairing.value = null
-        synchronized(this) { outbox = null }
+        synchronized(this) {
+            app.prefs.senderLink = null
+            _pairing.value = null
+            outbox = null
+        }
         _rows.value = emptyList()
     }
 
-    /** Changes the relay of the current pairing (Settings). */
-    fun setRelay(relay: String) {
-        val p = pairing() ?: return
-        pair(Pairing(p.secret, relay, p.name))
+    /**
+     * Settings › Relay › Save on a sender: changes the relay of the current pairing (the outbox stays). Returns null when
+     * saved, else the sentence to show: the relay comes with the pairing, so there is nothing to change while unpaired.
+     */
+    fun saveRelay(input: String): String? {
+        val p = pairing() ?: return NOT_PAIRED_RELAY
+        val r = try {
+            Relay.normalize(input)
+        } catch (e: ShareException) {
+            return e.message ?: "That relay address isn’t valid."
+        }
+        if (r != p.relay) pair(Pairing(p.secret, r, p.name))
+        return null
     }
 
     @Synchronized
@@ -117,25 +132,37 @@ class SenderRepo(private val app: App) {
      * message for the user.
      */
     suspend fun add(shared: Shared): OutboxRow = withContext(Dispatchers.IO) {
-        val o = outbox() ?: throw ShareException("pairing", "Pair with your Daylight first.")
-        val row = when (shared) {
+        // The Daylight this share is for: if the user pairs with another one while a file is being copied, the share
+        // is refused rather than written into the deleted outbox (or sent to a Daylight it was not shared to).
+        val topic = outbox()?.pairing?.keys?.inboxTopic ?: throw ShareException("pairing", "Pair with your Daylight first.")
+        when (shared) {
             is Shared.Link -> {
                 val url = Text.webUrl(shared.url) ?: Text.findUrl(shared.url) ?: throw ShareException("url", "That isn’t a web address.")
-                o.add(OutgoingItem(Kind.URL, url = url, title = shared.title), null)
+                addTo(topic, OutgoingItem(Kind.URL, url = url, title = shared.title), null)
             }
             is Shared.Text -> {
                 val name = Text.safeFileName((shared.subject?.take(60)?.ifBlank { null } ?: "Shared text") + ".txt")
-                o.add(OutgoingItem(Kind.FILE, name = name, mime = "text/plain", title = shared.subject), BytesBody(shared.text.toByteArray()))
+                addTo(topic, OutgoingItem(Kind.FILE, name = name, mime = "text/plain", title = shared.subject), BytesBody(shared.text.toByteArray()))
             }
             is Shared.Stream -> {
                 val copy = copyIn(shared.uri, shared.mime)
                 try {
-                    o.add(OutgoingItem(Kind.FILE, name = copy.name, mime = copy.mime, title = copy.title), FileBody(copy.file), moveContent = true)
+                    addTo(topic, OutgoingItem(Kind.FILE, name = copy.name, mime = copy.mime, title = copy.title), FileBody(copy.file), moveContent = true)
                 } finally {
                     copy.file.delete()
                 }
             }
         }
+    }
+
+    /**
+     * Adds to the outbox of the pairing with inbox topic [topic], under the same lock as [pair]'s deletion. Throws
+     * [ShareException] "pairing" ([PAIRING_CHANGED]) when the user paired with another Daylight (or unpaired) meanwhile.
+     */
+    @VisibleForTesting
+    internal fun addTo(topic: String, item: OutgoingItem, content: Body?, moveContent: Boolean = false): OutboxRow = synchronized(this) {
+        val o = outbox()?.takeIf { it.pairing.keys.inboxTopic == topic } ?: throw ShareException("pairing", PAIRING_CHANGED)
+        val row = o.add(item, content, moveContent)
         _rows.value = o.rows()
         row
     }
@@ -154,8 +181,22 @@ class SenderRepo(private val app: App) {
     suspend fun tick() = withContext(Dispatchers.IO) {
         val o = outbox() ?: return@withContext
         val t = o.tick()
+        if (dropIfReplaced(o)) return@withContext
         if (t.delivered > 0 || t.resent > 0) logi("sender: ${t.delivered} delivered, ${t.resent} sent again")
         _rows.value = o.rows()
+    }
+
+    /**
+     * A pass that was running on [o] while the user paired with another Daylight may have saved its ack cursor into
+     * the outbox [pair] had just deleted: deleted again here. Returns whether [o] belongs to a replaced pairing.
+     */
+    private fun dropIfReplaced(o: Outbox): Boolean {
+        synchronized(this) {
+            val current = pairing() ?: return false
+            if (current.sameSecret(o.pairing)) return false
+            FileOutboxStore(File(root, o.pairing.keys.inboxTopic)).clear()
+            return true
+        }
     }
 
     suspend fun retry(id: String) = withContext(Dispatchers.IO) {
@@ -233,13 +274,23 @@ class SenderRepo(private val app: App) {
     }
 
     companion object {
-        /** A stream of unknown size that passed 9 MB while it was copied (the shared sentence, without the size). */
+        /** A stream of unknown size that passed 9 MB while it was copied and was longer than [MAX_MEASURED] (its size unknown). */
         const val TOO_BIG_UNKNOWN = "Too big to send. Files can be up to 9 MB."
 
+        /** A stream of unknown size over 9 MB is read on (not stored) up to this many bytes to tell its size. */
+        const val MAX_MEASURED = 100_000_000L
+
+        /** "Save relay" on a sender that is not paired: the relay comes with the pairing. */
+        const val NOT_PAIRED_RELAY = "Pair with your Daylight first. The relay comes with its code."
+
+        /** The share started for one Daylight, and the user paired with another (or unpaired) before it was stored. */
+        const val PAIRING_CHANGED = "The pairing changed while this was being prepared, so it wasn’t sent. Share it again."
+
         /**
-         * Copies [input] to [dest], stopping as soon as it passes [Limits.MAX_ITEM] bytes ("too-large"). A write that
-         * fails is "storage" ("This device is out of space…"), a read that fails is "content". On failure [dest] may be
-         * left for the caller to delete.
+         * Copies [input] to [dest], stopping the copy as soon as it passes [Limits.MAX_ITEM] bytes ("too-large", with the
+         * shared sentence and the size when the rest of the stream, read without storing it, ends by [MAX_MEASURED]). A
+         * write that fails is "storage" ("This device is out of space…"), a read that fails is "content". On failure
+         * [dest] may be left for the caller to delete.
          */
         fun copyCapped(input: java.io.InputStream, dest: File) {
             val out = try {
@@ -258,7 +309,7 @@ class SenderRepo(private val app: App) {
                     }
                     if (n < 0) break
                     total += n
-                    if (total > Limits.MAX_ITEM) throw ShareException("too-large", TOO_BIG_UNKNOWN)
+                    if (total > Limits.MAX_ITEM) throw ShareException("too-large", tooBig(input, buf, total))
                     try {
                         it.write(buf, 0, n)
                     } catch (e: IOException) {
@@ -266,6 +317,21 @@ class SenderRepo(private val app: App) {
                     }
                 }
             }
+        }
+
+        /** The sentence for a stream that passed 9 MB after [readSoFar] bytes: with its size when the rest is short enough to count. */
+        private fun tooBig(input: java.io.InputStream, buf: ByteArray, readSoFar: Long): String {
+            var total = readSoFar
+            try {
+                while (total <= MAX_MEASURED) {
+                    val n = input.read(buf)
+                    if (n < 0) return Text.tooBigMessage(total)
+                    total += n
+                }
+            } catch (e: IOException) {
+                // Cannot tell its size: the sentence without it.
+            }
+            return TOO_BIG_UNKNOWN
         }
 
         private val BY_EXTENSION = mapOf(

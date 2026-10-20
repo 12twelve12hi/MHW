@@ -75,12 +75,18 @@ each item, acknowledges it (that is the sender's "Delivered ✓"), and hands it 
 | Document | `ACTION_SEND` with the file, or `ACTION_SEND_MULTIPLE` (several at once, or **Add to the library as a batch**) | one document: the Reader imports it and opens it; several at once: the Reader's library ("N added"), which closes the document that was open |
 
 Each item in the Inbox says **In your Reader ✓** only when the Reader confirmed it (`SAVE_PAGE` answered `saved` or
-`duplicate`); documents and shared links get no answer from the Reader, so they say **Handed to the Reader**.
+`duplicate`); documents and shared links get no answer from the Reader, so they say **Handed to the Reader**, with
+**Add to Reader again** in case the Reader dropped it.
 
-Every document hand-off starts the Reader's import in a fresh task (`FLAG_ACTIVITY_NEW_TASK |
-FLAG_ACTIVITY_CLEAR_TASK`), and a document hand-off never starts within 25 seconds of the previous one: it waits, and
-then hands over together whatever is waiting by then (logged as `documents: … waiting; next hand-off in N s`). Today's
-Reader drops a document shared while its previous import is still pending (DEVICE-CHECKS.md, round 2).
+Today's Reader drops a share that arrives while its previous import is still pending (DEVICE-CHECKS.md, round 2). So
+every hand-off to the Reader's import (documents, and links shared as text or as `daylightreader://save`) starts in a
+fresh task (`FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_CLEAR_TASK`) and never within 25 seconds of the previous one: it
+waits with its card up, then hands over together whatever is waiting by then (logged as `documents: … waiting; next
+hand-off in N s`, or `links: next hand-off in N s`). After such a hand-off the Reader is in front, so the hand-off ends
+there; what it still had to take is offered again when the 25 seconds are over (`hand-off: N still waiting; offered
+again in 25 s`). Pressing Home while the card waits ends that hand-off (the items get their notification). The 25
+seconds are not measured yet: DEVICE-CHECKS.md has no import times, so a 9 MB PDF followed by a second one belongs on
+the next device check.
 
 If the Reader refuses `SAVE_PAGE` (read-later from the browser switched off in the Reader's settings), the Inbox
 shares the link with the Reader instead. Builds that only have some entry points get what they support
@@ -140,7 +146,8 @@ adds a batch without opening anything, and asking is the default. The earlier sw
 The Inbox says why, in one sentence: "Offline. New items will arrive when this Daylight is back online.", "Too much has
 gone through this network for now. New items will arrive later.", "The relay isn’t working right now (error 502). It
 will keep trying.", or "Your Daylight is out of space, so new items can’t be saved. Free some space." (an item that
-could not be stored is not acknowledged; it comes back with the sender's next re-send).
+could not be stored, or whose parts could not be written, is not acknowledged and not downloaded again; it comes back
+with the sender's next re-send). A limit reported while connected shows as "Connected · Too much has gone through…".
 
 **Settings › Relay** on the Inbox checks a relay other than ntfy.sh before saving it: it sends a 2 MB test file through
 it and downloads it again, and keeps the old relay with a sentence when that fails (too small a file limit, files

@@ -66,7 +66,8 @@ class App : Application() {
     /**
      * A custom Inbox relay saved before protocol 1.1 is checked once in the background (CHANGES-v1.1 finding 21). A
      * failure only shows its sentence as a warning on the Inbox screen: the saved relay and the pairing code never
-     * change here. A check that could not reach the relay is not recorded, so the next start tries again.
+     * change here. A check that could not reach the relay, or that it answered with 429 or a 5xx, is not recorded, so
+     * the next start tries again.
      */
     fun checkInboxRelayOnce() {
         val relay = prefs.inboxRelay
@@ -74,8 +75,10 @@ class App : Application() {
         scope.launch(Dispatchers.IO) {
             val failure = inbox.checkRelay(relay)
             if (prefs.inboxRelay != relay) return@launch // changed meanwhile: Save checked it
-            if (failure?.reason == RelayProbe.REASON_NETWORK) {
-                logi("relay check of $relay: not reachable now; trying again at the next start")
+            // Unreachable, or busy (429, 5xx: "Try again later"): not recorded, so the next start checks again. A
+            // relay that stays broken shows the Inbox's own sentence for the failing polls meanwhile.
+            if (failure != null && (failure.reason == RelayProbe.REASON_NETWORK || failure.status == 429 || failure.status >= 500)) {
+                logi("relay check of $relay: ${failure.message}; trying again at the next start")
                 return@launch
             }
             prefs.inboxRelayChecked = relay

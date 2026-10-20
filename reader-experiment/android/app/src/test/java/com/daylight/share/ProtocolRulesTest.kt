@@ -9,6 +9,8 @@ import com.daylight.share.core.FileBody
 import com.daylight.share.core.ItemHeader
 import com.daylight.share.core.Kind
 import com.daylight.share.core.OutboxRow
+import com.daylight.share.core.OutgoingItem
+import com.daylight.share.core.Pairing
 import com.daylight.share.core.Reassembler
 import com.daylight.share.core.RelayException
 import com.daylight.share.core.RelayProbe
@@ -17,7 +19,9 @@ import com.daylight.share.core.Status
 import com.daylight.share.inbox.InboxItem
 import com.daylight.share.inbox.InboxRepo
 import com.daylight.share.inbox.InboxText
+import com.daylight.share.inbox.SyncState
 import com.daylight.share.sender.SenderRepo
+import com.daylight.share.sender.Shared
 import com.daylight.share.sender.ShareActivity
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -131,8 +135,22 @@ class ProtocolRulesTest {
         assertEquals(InboxText.LIMITED, InboxText.forFailure(RelayException("relay", "x", 413)))
         assertEquals("Offline. New items will arrive when this Daylight is back online.", InboxText.forFailure(RelayException(ErrorCode.NETWORK, "x", 0)))
         assertEquals("The relay isn’t working right now (error 502). It will keep trying.", InboxText.forFailure(RelayException("relay", "x", 502)))
-        assertEquals(InboxText.OFFLINE, InboxText.forFailure(IOException("x")))
         assertEquals("Your Daylight is out of space, so new items can’t be saved. Free some space.", InboxText.OUT_OF_SPACE)
+        // Relay failures are ShareExceptions; an IOException is this device failing to write (a full disk).
+        assertEquals(InboxText.OUT_OF_SPACE, InboxText.forFailure(IOException("No space left on device")))
+        assertEquals(InboxText.OFFLINE, InboxText.forFailure(IllegalStateException("x")))
+        val s = SyncState()
+        s.failed(IOException("No space left on device")).let {
+            assertTrue(it.storeFull)
+            assertNull(it.error)
+        }
+        assertEquals(InboxText.OFFLINE, s.failed(RelayException(ErrorCode.NETWORK, "x", 0)).error)
+        // A limit stays visible once the live connection opens; a failure's sentence goes.
+        assertEquals(InboxText.LIMITED, s.copy(error = InboxText.LIMITED).connected().error)
+        assertNull(s.copy(error = InboxText.OFFLINE).connected().error)
+        assertTrue(s.connected().live)
+        assertEquals("The Reader doesn’t confirm documents. If it isn’t in its library, add it again.", InboxText.unconfirmedHint(Kind.FILE))
+        assertEquals("The Reader hasn’t confirmed this one. If it isn’t in its library, add it again.", InboxText.unconfirmedHint(Kind.URL))
     }
 
     @Test
@@ -176,26 +194,93 @@ class ProtocolRulesTest {
     @Test
     fun aStreamOfUnknownSizeStopsAt9MB() {
         var read = 0L
-        val endless = object : InputStream() {
-            override fun read(): Int = if (read++ < 20_000_000) 0 else -1
+        fun stream(size: Long) = object : InputStream() {
+            override fun read(): Int = if (read++ < size) 0 else -1
             override fun read(b: ByteArray, off: Int, len: Int): Int {
-                if (read >= 20_000_000) return -1
-                read += len
-                return len
+                if (read >= size) return -1
+                val n = minOf(len.toLong(), size - read).toInt()
+                read += n
+                return n
             }
         }
         val dest = File.createTempFile("dls-copy", ".bin")
         try {
-            SenderRepo.copyCapped(endless, dest)
+            SenderRepo.copyCapped(stream(14_200_000), dest)
             fail("copied")
         } catch (e: ShareException) {
             assertEquals("too-large", e.code)
+            // The rest is read (not stored) to tell its size: the shared sentence.
+            assertEquals("Too big to send. Files can be up to 9 MB; this one is 14.2 MB.", e.message)
+        }
+        assertTrue("stopped storing at the limit: ${dest.length()}", dest.length() <= 9_000_000)
+        assertEquals(14_200_000, read)
+        // Longer than it measures: the sentence without the size.
+        read = 0
+        try {
+            SenderRepo.copyCapped(stream(Long.MAX_VALUE), dest)
+            fail("copied")
+        } catch (e: ShareException) {
             assertEquals("Too big to send. Files can be up to 9 MB.", e.message)
         }
-        assertTrue("stopped at the limit, read $read", read < 9_000_000 + 256 * 1024 + 1)
+        assertTrue("read $read", read <= SenderRepo.MAX_MEASURED + 256 * 1024)
         val small = File.createTempFile("dls-copy", ".bin")
         SenderRepo.copyCapped(ByteArray(1234).inputStream(), small)
         assertEquals(1234, small.length())
+    }
+
+    @Test
+    fun anotherCodeAfterUnpairDeletesTheOldOutboxAndTheSameCodeKeepsIt() = runBlocking {
+        val nowhere = "http://127.0.0.1:9"
+        val kitchen = Pairing(Pairing.generate().secret, nowhere, "Kitchen")
+        app.sender.pair(kitchen)
+        app.sender.add(Shared.Link("https://example.com/pending", "Pending"))
+        val kitchenDir = File(app.filesDir, "outbox/${kitchen.keys.inboxTopic}")
+        assertTrue(kitchenDir.isDirectory)
+
+        // Unpair, then the same code again: the outbox is still there.
+        app.sender.unpair()
+        assertTrue(kitchenDir.isDirectory)
+        app.sender.pair(kitchen)
+        app.sender.refresh()
+        assertEquals(1, app.sender.rows.value.size)
+
+        // Unpair, then another code: everything of the first Daylight goes (CHANGES-v1.1 2.4 "different secret").
+        app.sender.unpair()
+        val office = Pairing(Pairing.generate().secret, nowhere, "Office")
+        app.sender.pair(office)
+        assertFalse(kitchenDir.exists())
+        app.sender.refresh()
+        assertTrue(app.sender.rows.value.isEmpty())
+    }
+
+    @Test
+    fun aShareStillBeingPreparedWhenThePairingChangesIsRefused() {
+        val nowhere = "http://127.0.0.1:9"
+        val kitchen = Pairing(Pairing.generate().secret, nowhere, "Kitchen")
+        app.sender.pair(kitchen)
+        // A file was being copied for Kitchen when the user switched to Office.
+        app.sender.pair(Pairing(Pairing.generate().secret, nowhere, "Office"))
+        try {
+            app.sender.addTo(kitchen.keys.inboxTopic, OutgoingItem(Kind.FILE, name = "a.pdf", mime = "application/pdf"), BytesBody(ByteArray(10)))
+            fail("added")
+        } catch (e: ShareException) {
+            assertEquals("pairing", e.code)
+            assertEquals(SenderRepo.PAIRING_CHANGED, e.message)
+        }
+        assertFalse("nothing written for Kitchen", File(app.filesDir, "outbox/${kitchen.keys.inboxTopic}").exists())
+        assertTrue(app.sender.rows.value.isEmpty())
+    }
+
+    @Test
+    fun saveRelayOnASenderNeedsAPairing() {
+        assertEquals(SenderRepo.NOT_PAIRED_RELAY, app.sender.saveRelay("https://relay.example.org"))
+        assertNull(app.sender.pairing())
+        val p = Pairing(Pairing.generate().secret, "http://127.0.0.1:9", "Kitchen")
+        app.sender.pair(p)
+        assertEquals("The relay must be an http(s) address.", app.sender.saveRelay("ftp://relay.example.org"))
+        assertNull(app.sender.saveRelay("https://Relay.Example.org/"))
+        assertEquals("https://relay.example.org", app.sender.pairing()!!.relay)
+        assertTrue(app.sender.pairing()!!.sameSecret(p))
     }
 
     @Test

@@ -74,7 +74,7 @@ object Live {
                         receiver.relay.openStream(receiver.pairing.keys.inboxTopic, receiver.since()) { receiver.handled(it) }
                     }
                     _state.value = State.LIVE
-                    app.inbox.sync.value = app.inbox.sync.value.copy(live = true, error = null)
+                    app.inbox.sync.value = app.inbox.sync.value.connected()
                     coroutineScope {
                         val closer = launch {
                             try {
@@ -97,7 +97,7 @@ object Live {
                 } catch (e: Exception) {
                     logw("live: ${e.message ?: e.javaClass.simpleName}")
                     // The Inbox shows one of its sentences (CHANGES-v1.1 2.5), not the technical message.
-                    app.inbox.sync.value = app.inbox.sync.value.copy(live = false, error = InboxText.forFailure(e))
+                    app.inbox.sync.value = app.inbox.sync.value.copy(live = false).failed(e)
                 }
                 app.inbox.sync.value = app.inbox.sync.value.copy(live = false)
                 if (System.currentTimeMillis() - opened > 60_000) backoff = 2_000L

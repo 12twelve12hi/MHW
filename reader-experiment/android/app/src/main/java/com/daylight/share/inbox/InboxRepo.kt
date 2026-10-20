@@ -111,7 +111,17 @@ data class SyncState(
     val error: String? = null,
     val checking: Boolean = false,
     val storeFull: Boolean = false,
-)
+) {
+    /**
+     * After a poll or the live connection failed with [e]. The relay's failures are [ShareException]s; an IOException
+     * is this device failing to write (the receiver's state on a full disk), so it is the out-of-space sentence.
+     */
+    fun failed(e: Throwable): SyncState =
+        if (e is IOException) copy(storeFull = true, checking = false) else copy(error = InboxText.forFailure(e), checking = false)
+
+    /** The live connection is open: its failure sentence goes, a limit reported by the catch-up poll stays. */
+    fun connected(): SyncState = copy(live = true, error = error.takeIf { it == InboxText.LIMITED })
+}
 
 /** What the Daylight Inbox says about receiving (CHANGES-v1.1 2.5, "The Daylight Inbox"). */
 object InboxText {
@@ -121,6 +131,11 @@ object InboxText {
     fun relayError(status: Int) = "The relay isn’t working right now (error $status). It will keep trying."
     const val RELAY_ERROR = "The relay isn’t working right now. It will keep trying."
 
+    /** Under an item handed to the Reader without its confirmation ("Handed to the Reader"), next to "Add to Reader again". */
+    fun unconfirmedHint(kind: String): String =
+        if (kind == Kind.FILE) "The Reader doesn’t confirm documents. If it isn’t in its library, add it again."
+        else "The Reader hasn’t confirmed this one. If it isn’t in its library, add it again."
+
     /** The sentence for a poll (or the live connection) that failed with [e]. */
     fun forFailure(e: Throwable): String {
         val status = (e as? ShareException)?.status ?: 0
@@ -129,6 +144,8 @@ object InboxText {
             e is ShareException && e.code == ErrorCode.NETWORK -> OFFLINE
             status >= 300 -> relayError(status)
             e is ShareException -> RELAY_ERROR
+            // Not the relay's (those are ShareExceptions): a write on this device failed.
+            e is IOException -> OUT_OF_SPACE
             else -> OFFLINE
         }
     }
@@ -258,7 +275,7 @@ class InboxRepo(private val app: App) {
             r.items.size
         } catch (e: Exception) {
             logw("inbox: poll failed: ${e.message ?: e.javaClass.simpleName}" + ((e as? ShareException)?.status?.let { " (status $it)" } ?: ""))
-            sync.value = sync.value.copy(error = InboxText.forFailure(e), checking = false)
+            sync.value = sync.value.failed(e)
             0
         }
     }

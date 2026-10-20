@@ -107,6 +107,8 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
                     Text("Daylight Inbox", style = MaterialTheme.typography.headlineSmall)
                     Text(
                         when {
+                            // A limit reported while connected stays visible (what it held back arrives later).
+                            live == Live.State.LIVE && sync.error != null -> "Connected · ${sync.error}"
                             live == Live.State.LIVE -> "Connected · items arrive right away"
                             sync.checking -> "Checking…"
                             sync.error != null -> sync.error!!
@@ -323,12 +325,21 @@ private fun ItemRow(activity: MainActivity, item: InboxItem, readerInstalled: Bo
             else -> item.readerLabel
         }
         Text(status, style = MaterialTheme.typography.bodyLarge)
-        if (item.state == InboxItem.IN_READER && !item.confirmedInReader && item.kind == Kind.FILE) {
-            Text("The Reader doesn’t confirm documents: look for it in its library.", style = MaterialTheme.typography.bodySmall)
+        // Handed over without the Reader's confirmation (a document, a shared link, or no answer yet): the Reader may
+        // have dropped it (DEVICE-CHECKS.md, round 2), so it can be handed over again.
+        val unconfirmed = item.state == InboxItem.IN_READER && !item.confirmedInReader
+        val canHandOver = item.kind != Kind.FILE || item.file != null
+        if (unconfirmed) {
+            Text(InboxText.unconfirmedHint(item.kind), style = MaterialTheme.typography.bodySmall)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (readerInstalled && item.state != InboxItem.IN_READER) {
+            if (readerInstalled && canHandOver && item.state != InboxItem.IN_READER) {
                 PrimaryButton("Add to Reader") {
+                    app.inbox.requeue(item.id)
+                    Handoff.dispatch(activity)
+                }
+            } else if (readerInstalled && canHandOver && unconfirmed) {
+                SecondaryButton("Add to Reader again") {
                     app.inbox.requeue(item.id)
                     Handoff.dispatch(activity)
                 }

@@ -124,7 +124,7 @@ class ScreensSmokeTest {
         assertTrue(app.sender.pairing()!!.sameSecret(mine))
         c2.get().confirmPairing()
         assertTrue(app.sender.pairing()!!.sameSecret(other))
-        // (A background check still running on the old outbox may leave an empty folder behind, never its rows.)
+        // (A background pass still running on the old outbox may write its ack cursor there; its next tick deletes it.)
         assertTrue(com.daylight.share.core.FileOutboxStore(outboxDir).load().first.isEmpty())
         runBlocking { app.sender.refresh() }
         assertTrue(app.sender.rows.value.isEmpty())

@@ -95,6 +95,12 @@ class RoutesTest {
         assertEquals("text/plain", link.type)
         assertEquals("https://example.com/a", link.getStringExtra(Intent.EXTRA_TEXT))
         assertEquals("A title", link.getStringExtra(Intent.EXTRA_SUBJECT))
+        // A shared link goes to the Reader's ImportActivity, like a document: a fresh task (DEVICE-CHECKS.md, round 2).
+        assertEquals(Routes.IMPORT_FLAGS, link.flags and Routes.IMPORT_FLAGS)
+        // SAVE_PAGE answers to this activity: no new task.
+        assertEquals(0, save.flags and Intent.FLAG_ACTIVITY_NEW_TASK)
+        assertFalse(Path.SEND_LINK.expectsResult)
+        assertTrue(Path.SAVE_PAGE.expectsResult)
     }
 
     @Test
@@ -120,6 +126,11 @@ class RoutesTest {
         assertEquals(Path.SEND_FILE to "$main.experiment", r.path to r.pkg)
         assertEquals("application/pdf", r.intent.type)
         assertTrue(r.intent.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
+        assertEquals(Routes.IMPORT_FLAGS, r.intent.flags and Routes.IMPORT_FLAGS)
+        // "Open with…" too, in case the Reader is picked.
+        val chooser = Routes.openWith(ctx, item(Kind.FILE, "x/paper.pdf", "application/pdf"), f)!!
+        val view = chooser.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)!!
+        assertEquals(Routes.IMPORT_FLAGS, view.flags and Routes.IMPORT_FLAGS)
         assertEquals(Path.SEND_FILE_GENERIC, routes[1].path)
         val multi = Routes.sendMultiple(ctx, "$main.experiment", listOf(item(Kind.FILE, mime = "application/pdf") to f, item(Kind.FILE, mime = "application/epub+zip") to f))
         assertEquals("application/*", multi!!.intent.type)

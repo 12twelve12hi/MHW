@@ -68,7 +68,7 @@ class HandoffDecisionsTest {
         HandoffActivity.running = false
         HandoffActivity.requestedAt = 0L
         HandoffActivity.claim = null
-        HandoffActivity.lastDocumentHandoff = 0L
+        HandoffActivity.lastImportHandoff = 0L
         WaitingCard.forget()
         // FileProvider caches its roots in a static map; every Robolectric test has a new files folder.
         FileProvider::class.java.declaredFields
@@ -79,11 +79,14 @@ class HandoffDecisionsTest {
             }
     }
 
-    private fun installReader() {
+    /** The Daylight Reader as modelled here: SAVE_PAGE (unless [savePage] is false), and ImportActivity for shares. */
+    private fun installReader(savePage: Boolean = true) {
         val pm = shadowOf(app.packageManager)
-        val save = ComponentName(main, "$main.SavePageActivity")
-        pm.addActivityIfNotPresent(save)
-        pm.addIntentFilterForActivity(save, IntentFilter(ReaderApps.ACTION_SAVE_PAGE).apply { addCategory(Intent.CATEGORY_DEFAULT) })
+        if (savePage) {
+            val save = ComponentName(main, "$main.SavePageActivity")
+            pm.addActivityIfNotPresent(save)
+            pm.addIntentFilterForActivity(save, IntentFilter(ReaderApps.ACTION_SAVE_PAGE).apply { addCategory(Intent.CATEGORY_DEFAULT) })
+        }
         val import = ComponentName(main, "$main.ImportActivity")
         pm.addActivityIfNotPresent(import)
         pm.addIntentFilterForActivity(import, IntentFilter().apply {
@@ -591,10 +594,132 @@ class HandoffDecisionsTest {
         assertTrue(c.get().isFinishing)
         assertFalse(HandoffActivity.running)
 
-        // A link never waits for the document gap.
+        // A link the Reader answers (SAVE_PAGE, not its import) never waits for the gap.
         app.inbox.put(link.copy(id = "e".repeat(32)))
         val l = runHandoff(HandoffActivity.intent(app, HandoffActivity.MODE_ALL))
         assertEquals(ReaderApps.ACTION_SAVE_PAGE, shadowOf(l.get()).nextStartedActivityForResult.intent.action)
+    }
+
+    /**
+     * Home while the card waits out the gap: nothing brings the hand-off back, so it ends there (before, it waited
+     * forever for its activity to resume, and every later hand-off was skipped because one was "running").
+     */
+    @Test
+    fun homeWhileTheCardWaitsEndsTheHandOffAndTheNextOneRuns() {
+        shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        installReader()
+        inboxWith(pdf, epub)
+        runHandoff(HandoffActivity.forItem(app, pdf.id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        assertEquals(Intent.ACTION_SEND, shadowOf(app).nextStartedActivity.action)
+
+        // The EPUB is tapped 10 s later: its hand-off waits with the card up, and the user presses Home.
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(10))
+        val c = runHandoff(HandoffActivity.forItem(app, epub.id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        assertTrue(HandoffActivity.running)
+        assertTrue(HandoffActivity.claims(epub))
+        c.pause().stop()
+        assertTrue(c.get().isFinishing)
+        c.destroy()
+        idle()
+        assertFalse(HandoffActivity.running)
+        assertNull(HandoffActivity.claim)
+        assertLogged("hand-off: sent to the background before it was done")
+        // It waits for a tap again (its notification is up); nothing is handed over behind the user's back.
+        assertEquals(InboxItem.WAITING, app.inbox.get(epub.id)!!.state)
+        assertNotNull(itemNotice(epub.id))
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(20))
+        assertNull(shadowOf(app).nextStartedActivity)
+
+        // The next hand-off is not blocked.
+        runHandoff(HandoffActivity.forItem(app, epub.id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        assertEquals(Intent.ACTION_SEND, shadowOf(app).nextStartedActivity.action)
+        assertEquals(InboxItem.IN_READER, app.inbox.get(epub.id)!!.state)
+        assertFalse(HandoffActivity.running)
+    }
+
+    /** Waiting for SAVE_PAGE's answer in the background is normal for a while, then the hand-off gives up. */
+    @Test
+    fun aHandOffInTheBackgroundWaitsForTheReadersAnswerThenGivesUp() {
+        installReader()
+        inboxWith(link)
+        val c = runHandoff(HandoffActivity.intent(app, HandoffActivity.MODE_ALL))
+        val save = shadowOf(c.get()).nextStartedActivityForResult
+        assertEquals(ReaderApps.ACTION_SAVE_PAGE, save.intent.action)
+        c.pause().stop()
+        assertFalse(c.get().isFinishing) // the Reader's activity covers it while it saves
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(60))
+        assertFalse(c.get().isFinishing)
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(61))
+        assertTrue(c.get().isFinishing)
+        c.destroy()
+        idle()
+        assertFalse(HandoffActivity.running)
+        assertLogged("hand-off: no answer from the Reader within 120 s while in the background")
+        // Handed over, unconfirmed: the Inbox offers "Add to Reader again".
+        app.inbox.get(link.id)!!.let {
+            assertEquals(InboxItem.IN_READER, it.state)
+            assertEquals("started", it.readerStatus)
+            assertFalse(it.confirmedInReader)
+        }
+    }
+
+    /**
+     * A link shared as text goes to the same ImportActivity as documents (a Reader without SAVE_PAGE, or read-later
+     * off): a fresh task, and the next import waits; the PDF behind it is offered again when the gap is over.
+     */
+    @Test
+    fun aSharedLinkGoesToAFreshImportAndTheDocumentAfterItWaits() {
+        installReader(savePage = false)
+        inboxWith(link, pdf)
+        ShadowSettings.setCanDrawOverlays(true)
+        app.prefs.documentMode = DocumentMode.OPEN
+        val c = runHandoff(HandoffActivity.intent(app, HandoffActivity.MODE_ALL))
+        val sent = shadowOf(app).nextStartedActivity
+        assertEquals(Intent.ACTION_SEND, sent.action)
+        assertEquals("text/plain", sent.type)
+        assertEquals(main, sent.`package`)
+        assertTrue(sent.flags and Intent.FLAG_ACTIVITY_NEW_TASK != 0)
+        assertTrue(sent.flags and Intent.FLAG_ACTIVITY_CLEAR_TASK != 0)
+        // The Reader is importing the link: the PDF does not follow at once (its CLEAR_TASK would tear that import down).
+        assertNull(shadowOf(app).nextStartedActivity)
+        assertTrue(c.get().isFinishing)
+        assertEquals(InboxItem.WAITING, app.inbox.get(pdf.id)!!.state)
+        assertLogged("received ${link.id} kind=${Kind.URL} -> handed to $main via send_link status=sent by=front")
+        assertLogged("hand-off: 1 still waiting; offered again in 25 s")
+        c.pause().stop().destroy()
+        idle()
+
+        // When the gap is over it is offered again: in the background, with "Display over other apps", a hand-off starts.
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(27))
+        val next = shadowOf(app).nextStartedActivity
+        assertEquals(HandoffActivity::class.java.name, next.component!!.className)
+        assertEquals(HandoffActivity.MODE_AUTO, next.getStringExtra(HandoffActivity.EXTRA_MODE))
+    }
+
+    /** SAVE_PAGE refused (read-later off) a few seconds after a document: the shared link waits out the gap. */
+    @Test
+    fun aRefusedSavePageFallsBackToASharedLinkAfterTheGap() {
+        installReader()
+        inboxWith(pdf)
+        runHandoff(HandoffActivity.forItem(app, pdf.id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        assertEquals(Intent.ACTION_SEND, shadowOf(app).nextStartedActivity.action)
+        app.inbox.put(link)
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(5))
+
+        val c = runHandoff(HandoffActivity.intent(app, HandoffActivity.MODE_ALL))
+        val save = shadowOf(c.get()).nextStartedActivityForResult
+        assertEquals(ReaderApps.ACTION_SAVE_PAGE, save.intent.action) // answered by the Reader: no gap
+        shadowOf(c.get()).receiveResult(save.intent, Activity.RESULT_OK, Intent().putExtra(ReaderApps.EXTRA_STATUS, "refused"))
+        idle()
+        assertNull(shadowOf(app).nextStartedActivity)
+        assertLogged("links: next hand-off in 20 s")
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(21))
+        val sent = shadowOf(app).nextStartedActivity
+        assertEquals("text/plain", sent.type)
+        assertTrue(sent.flags and Intent.FLAG_ACTIVITY_CLEAR_TASK != 0)
+        assertEquals("send_link", app.inbox.get(link.id)!!.via)
+        assertFalse(app.inbox.get(link.id)!!.confirmedInReader)
+        assertTrue(c.get().isFinishing)
     }
 
     @Test
