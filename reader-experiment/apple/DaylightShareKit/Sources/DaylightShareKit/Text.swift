@@ -213,8 +213,9 @@ public enum ShareText {
             return nil
         }
         let authority = rest.prefix(while: { $0 != "/" && $0 != "?" && $0 != "#" })
-        guard let (host, port) = hostAndPort(authority) else { return nil }
-        if let port, !port.allSatisfy(isDigit) { return nil }
+        guard let parts = hostAndPort(authority) else { return nil }
+        let host = parts.host
+        if let port = parts.port, !port.allSatisfy(isDigit) { return nil }
         guard let first = host.first, first != ".", !host.contains(where: { "<>^|\\".unicodeScalars.contains($0) }) else {
             return nil
         }
@@ -258,9 +259,9 @@ public enum ShareText {
         }
         let authority = s.prefix(while: { $0 != "/" && $0 != "?" && $0 != "#" })
         var path = s[authority.endIndex...].prefix(while: { $0 != "?" && $0 != "#" })
-        guard let (hostScalars, portScalars) = hostAndPort(authority) else { throw bad() }
-        let host = string(hostScalars).lowercased()
-        let port = portScalars.map(string) ?? ""
+        guard let parts = hostAndPort(authority) else { throw bad() }
+        let host = string(parts.host).lowercased()
+        let port = parts.port.map { string($0) } ?? ""
         guard port.unicodeScalars.allSatisfy(isDigit) else { throw bad() }
         let hs = Array(host.unicodeScalars)
         if hs.first == "[" {

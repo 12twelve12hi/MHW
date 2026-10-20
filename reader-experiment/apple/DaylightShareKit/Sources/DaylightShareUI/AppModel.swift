@@ -126,8 +126,8 @@ public final class AppModel: ObservableObject {
 
     /// Runs `body` on the storage queue once storage is settled, then publishes the new state.
     private func write(_ body: @escaping @Sendable (SharedStore) -> Void) async {
-        await store.ready()
         let store = self.store
+        await store.ready()
         await Self.onStorage { body(store) }
         await reloadNow()
     }
@@ -160,8 +160,8 @@ public final class AppModel: ObservableObject {
 
     /// Decides whether to ask (PROTOCOL 1.3), against the stored pairing.
     public func offer(_ p: Pairing, source: PairingConfirmation.Source) async {
-        await store.ready()
         let store = self.store
+        await store.ready()
         let current = await Self.onStorage { store.pairing }
         let confirmation = PairingConfirmation(current: current, next: p, source: source)
         if confirmation.ask {
@@ -218,8 +218,8 @@ public final class AppModel: ObservableObject {
 
     /// A sender for the stored pairing (read on the storage queue), or nil when not paired.
     private func sender() async -> ShareSender? {
-        await store.ready()
         let store = self.store
+        await store.ready()
         return await Self.onStorage { try? DaylightShare.sender(store: store) }
     }
 

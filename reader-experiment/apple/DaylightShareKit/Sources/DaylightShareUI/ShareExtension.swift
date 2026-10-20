@@ -226,13 +226,13 @@ public final class ShareExtensionModel: ObservableObject {
     public func start(inputItems: [Any]) {
         guard !started else { return }
         started = true
+        let store = self.store
         Task {
             payloads = await SharePayloadReader.read(inputItems)
             summary = Self.describe(payloads)
             // The App Group is resolved in the background (never on this thread); wait for it before reading the pairing.
             await store.ready()
             sharesPairingWithApp = store.isShared
-            let store = self.store
             let current = await AppModel.onStorage { store.pairing }
             daylightName = current?.displayName ?? "your Daylight"
             if case let .pairing(link)? = payloads.first {
@@ -263,8 +263,8 @@ public final class ShareExtensionModel: ObservableObject {
     }
 
     func offer(_ p: Pairing, source: PairingConfirmation.Source, thenSend: Bool) async {
-        await store.ready()
         let store = self.store
+        await store.ready()
         let current = await AppModel.onStorage { store.pairing }
         let c = PairingConfirmation(current: current, next: p, source: source)
         if c.ask {
@@ -301,8 +301,8 @@ public final class ShareExtensionModel: ObservableObject {
     }
 
     func send() async {
-        await store.ready()
         let store = self.store
+        await store.ready()
         guard let sender = await AppModel.onStorage({ try? DaylightShare.sender(store: store) }) else {
             phase = .needsPairing
             return
