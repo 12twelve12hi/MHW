@@ -1210,3 +1210,500 @@ All answer `409 NOT_CONFIGURED` without a domain or R2.
 | `POST /v1/ai/jobs` | the same body | `202 {"job": {"id", "state": "queued", "created"}}`; `429 AI_QUEUE_FULL` |
 | `GET /v1/ai/jobs/{id}` | — | `{"job": {"id", "state": "queued" \| "running" \| "done" \| "failed", "result"?, "error"?, "delivered"?}}` |
 
+---
+
+## 11. Storage
+
+### 11.1 D1 (`migrations/0001_init.sql`)
+
+```sql
+CREATE TABLE settings (k TEXT PRIMARY KEY, v TEXT NOT NULL);                 -- JSON values: digest, ai, lock, cursors, inbox
+CREATE TABLE usage (
+  day TEXT NOT NULL, kind TEXT NOT NULL,                                      -- 'YYYY-MM-DD' UTC; ai | email_in | email_items | ntfy_msgs
+  n INTEGER NOT NULL DEFAULT 0, usd_micros INTEGER NOT NULL DEFAULT 0, reserved_micros INTEGER NOT NULL DEFAULT 0,
+  tokens_in INTEGER NOT NULL DEFAULT 0, tokens_out INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, kind));
+CREATE TABLE outbox (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, token TEXT NOT NULL UNIQUE, fp TEXT NOT NULL,
+  origin TEXT NOT NULL, kind TEXT NOT NULL, title TEXT, parts INTEGER NOT NULL, bytes INTEGER NOT NULL,
+  state TEXT NOT NULL,                                                        -- queued | sent | delivered | expired | rejected
+  created INTEGER NOT NULL, last_publish INTEGER NOT NULL DEFAULT 0, next_part INTEGER NOT NULL DEFAULT 0,
+  publishes INTEGER NOT NULL DEFAULT 0, error TEXT);
+CREATE INDEX outbox_state ON outbox(state, last_publish);
+CREATE TABLE frames (item_id TEXT NOT NULL, i INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (item_id, i));  -- ≤ 1 MiB chunk each
+CREATE TABLE files (                                                          -- hosted large files (bytes in R2 f/)
+  id TEXT PRIMARY KEY, fp TEXT NOT NULL, n INTEGER NOT NULL, stored TEXT NOT NULL DEFAULT '',
+  bytes INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, expires INTEGER NOT NULL);
+CREATE TABLE feeds (
+  id TEXT PRIMARY KEY, url TEXT NOT NULL UNIQUE, title TEXT, site TEXT,
+  mode TEXT NOT NULL CHECK (mode IN ('each', 'digest')),
+  etag TEXT, last_modified TEXT, next_check INTEGER NOT NULL, last_check INTEGER, last_ok INTEGER,
+  errors INTEGER NOT NULL DEFAULT 0, last_error TEXT, floods INTEGER NOT NULL DEFAULT 0, paused INTEGER NOT NULL DEFAULT 0,
+  new_day TEXT, new_today INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL);
+CREATE INDEX feeds_due ON feeds(paused, next_check);
+CREATE TABLE entries (
+  feed_id TEXT NOT NULL, key TEXT NOT NULL, url TEXT, title TEXT, author TEXT, published INTEGER, excerpt TEXT,
+  first_seen INTEGER NOT NULL,
+  state TEXT NOT NULL,                                                        -- baseline | pending | digest | sent | digested | skipped
+  item_id TEXT,
+  PRIMARY KEY (feed_id, key));
+CREATE INDEX entries_state ON entries(state, first_seen);
+CREATE TABLE mail (
+  id TEXT PRIMARY KEY, received INTEGER NOT NULL, from_addr TEXT, from_domain TEXT, from_name TEXT, subject TEXT,
+  size INTEGER NOT NULL,
+  state TEXT NOT NULL,                                                        -- queued | running | done | dropped | waiting-paid | failed
+  reason TEXT, attempts INTEGER NOT NULL DEFAULT 0, lease INTEGER NOT NULL DEFAULT 0, items TEXT);
+CREATE INDEX mail_state ON mail(state, received);
+CREATE INDEX mail_from ON mail(from_addr, received);
+CREATE INDEX mail_domain ON mail(from_domain, received);
+CREATE TABLE blocked (pattern TEXT PRIMARY KEY, added INTEGER NOT NULL);
+CREATE TABLE sources (
+  id TEXT PRIMARY KEY, fp TEXT NOT NULL, type TEXT NOT NULL,                  -- 'pdf' (parts in R2 a/) | 'text' (in `text`)
+  name TEXT, title TEXT, url TEXT, text TEXT, n INTEGER NOT NULL DEFAULT 0, validated TEXT NOT NULL DEFAULT '',
+  bytes INTEGER NOT NULL, created INTEGER NOT NULL, expires INTEGER NOT NULL);
+CREATE TABLE jobs (
+  id TEXT PRIMARY KEY, op TEXT NOT NULL, state TEXT NOT NULL, created INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0, lease INTEGER NOT NULL DEFAULT 0, reserved_micros INTEGER NOT NULL,
+  input TEXT NOT NULL,                                                        -- ≤ 64 KiB JSON; long text is a source
+  result TEXT, error TEXT, delivered TEXT, expires INTEGER NOT NULL);
+CREATE INDEX jobs_state ON jobs(state, created);
+CREATE TABLE log (t INTEGER NOT NULL, code TEXT NOT NULL);                    -- last 200 error codes, nothing else
+```
+
+- **Claiming work.** Work items are claimed with a conditional update: `UPDATE … SET state='running', lease=?,
+  attempts=attempts+1 WHERE id=? AND (state='queued' OR (state='running' AND lease<?))`, then a check that
+  `meta.changes == 1`. Overlapping Cron runs therefore never do the same work. Every counter that enforces a cap
+  (AI, email, ntfy, feeds per day) is raised with a conditional `UPDATE … WHERE n < ?` and checked the same way.
+- **Hourly cleanup.** Expired rows are deleted:
+  - outbox rows and their frames (8 days);
+  - files, sources and jobs (24 h after expiry);
+  - mail rows (30 days), entries (180 days), usage (90 days), and log rows beyond 200.
+- **Size guard.** D1 reports the database size (`meta.size_after`). Past **400 MB** (80 % of 500 MB) the Worker
+  pauses optional writes: new feed entries, text sources and mail rows. `GET /v1/status` says why, while settings,
+  usage and outbox keep working.
+
+### 11.2 R2 (bucket `daylight-server`, optional)
+
+| Prefix | Holds | Readable by the server? | Lifecycle rule |
+|---|---|---|---|
+| `f/<fileId>/<i>` | Hosted large-file frames | No: encrypted with the pairing key (6.6) | `dls-files`: 14 days |
+| `m/<mailId>.eml` | Raw email, until processed (or 7 days waiting for Paid) | Yes | `dls-mail`: 8 days |
+| `a/<sourceId>/<i>` | PDF sources as validated base64 parts | Yes | `dls-ai`: 1 day |
+
+The Worker deletes objects as soon as they are no longer needed: files on `DELETE`, mail after processing. Lifecycle
+rules are the backstop. Server item frames live in D1 (11.1), so feeds, digests and text AI work without R2.
+
+---
+
+## 12. Configuration and deployment
+
+### 12.0 Setup checklist
+
+| # | Step | When |
+|---|---|---|
+| 1 | Create a Cloudflare account. | required, once |
+| 2 | Create an API token from the **"Edit Cloudflare Workers"** template and add **Account › D1 › Edit**. If you may ever want email-in, also add **Zone › Zone › Read**, **Zone › Email Routing Rules › Edit** and **Zone › DNS › Edit** for that domain's zone now, so the token never needs editing. Save it as the repo secret `CLOUDFLARE_API_TOKEN`. | required, once |
+| 3 | Copy the account ID (dashboard › Workers & Pages › right column) into `CLOUDFLARE_ACCOUNT_ID`. | required, once |
+| 4 | In the iPhone or Mac app: **Lab settings › Daylight server › Server code › Copy**, and paste it into `DAYLIGHT_SERVER_CODE`. | required; again after every re-pairing |
+| 5 | Optional: `ANTHROPIC_API_KEY` for AI. Make the key in a Console workspace with a monthly spend limit. | optional |
+| 6 | Optional: turn on **R2** in the Cloudflare dashboard (it asks for a card; the free tier is not charged). Needed for large files, email-in and PDF AI. | optional, once |
+| 7 | Optional: email-in needs a domain on Cloudflare and `DAYLIGHT_EMAIL_DOMAIN` (12.5). Workers Paid is recommended for it (2.2). | optional |
+| 8 | Recommended: in GitHub › Settings › Environments › `daylight-server` (created by the first run), limit deployment branches to `claude/sweet-goldberg-ej1nb0`, and move the secrets there. | recommended, once |
+| 9 | **Apply:** GitHub › Actions › "Reader experiment - Daylight server" › the latest run › **Re-run all jobs**. A re-run reads the current secrets. Pushing a change under `reader-experiment/server/` also deploys. ("Run workflow" appears only for workflows on the default branch, which this one is not.) | after every change of secrets or variables |
+
+The deploy checks the token first: it verifies the token, then reads Workers, D1 and (with a domain) the zone. A
+missing permission is named in plain words ("The API token can't edit D1 databases. Add Account › D1 › Edit to it.").
+The job summary always ends with **"Next: <the first missing step>"**.
+
+### 12.1 Files in `reader-experiment/server/`
+
+```
+DESIGN.md                this file
+package.json             deps: @anthropic-ai/sdk 0.135.0, postal-mime 4.0.x; dev: wrangler 4.151.2,
+                         miniflare (the version wrangler 4.151.2 depends on), typescript
+wrangler.toml
+migrations/0001_init.sql
+src/index.ts             fetch / scheduled / email handlers and the router
+src/{auth,budget,config,outbox,files,email,feeds,feedparse,digest,ai,sources,safefetch,sanitize,html,errors}.ts
+client/daylight-server.js  the app-side module (13)
+scripts/derive.mjs       CI helper: gate | email | announce <url>  (reads DAYLIGHT_SERVER_CODE / DAYLIGHT_PAIRING)
+scripts/cf-check.mjs     CI helper: token, permissions, R2 availability, rate-limit binding support
+scripts/secrets.mjs      CI helper: splits the optional secrets into put.json / delete.json
+vectors/generate.mjs, vectors/server-vectors.json
+test/*.test.mjs, test/relay.mjs (share's mock relay plus `Attach:`), test/live/ntfy-attach.mjs
+```
+
+The Worker is TypeScript, type-checked against the SDK's types. It imports `../share/js/daylight-share.js` for
+pairing parsing, frames, `relayLimits`, `webUrl`, `safeFileName` and `checkItemHeader`, so it can never drift from the
+protocol.
+
+### 12.2 `wrangler.toml`
+
+```toml
+name = "daylight-server"           # the deploy replaces it with workerName, daylight-<12 hex> (3.2)
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+preview_urls = false
+define = { __TESTING__ = "false" } # tests build with --define __TESTING__:true; a deploy bundle never honours test vars
+
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "daylight-server"
+database_id = "00000000-0000-0000-0000-000000000000"   # replaced by the deploy workflow
+migrations_dir = "migrations"
+
+[[ratelimits]]
+name = "FAILS"                     # failed authentications and unknown hosted ids, per IP (3.3)
+namespace_id = "7301"
+simple = { limit = 30, period = 60 }
+
+[vars]
+SERVER_URL = ""                    # set by the deploy (--var)
+GIT_SHA = ""
+WORKERS_PLAN = "free"
+DELIVERY = "lab"
+AI_MAX_USD_DAY = "10"
+AI_MAX_REQ_DAY = "100"
+
+[observability]
+enabled = true
+
+[observability.logs]
+invocation_logs = false            # no request URLs or headers in Cloudflare's logs
+# Our own log lines carry request ids, routes and error codes only, never exception messages
+# (V8's JSON.parse errors quote input), content, URLs, addresses or keys.
+
+# Appended by the deploy when R2 is on:   [[r2_buckets]] binding = "FILES", bucket_name = "daylight-server"
+# Appended on Workers Paid:              [limits] cpu_ms = 60000
+```
+
+### 12.3 Secrets and variables
+
+| GitHub secret | Needed for | Goes to |
+|---|---|---|
+| `CLOUDFLARE_API_TOKEN` | Deploying at all | GitHub only |
+| `CLOUDFLARE_ACCOUNT_ID` | Deploying at all | GitHub only |
+| `DAYLIGHT_SERVER_CODE` | Everything (3.1); also carries the relay and ntfy token when not ntfy.sh | Worker secret |
+| `ANTHROPIC_API_KEY` | AI | Worker secret |
+| `DAYLIGHT_EMAIL_DOMAIN` | Email-in | Worker secret (+ routing rule) |
+| `DAYLIGHT_EMAIL_LOCAL` | Optional address that survives re-pairing (7.1) | Worker secret |
+| `DAYLIGHT_EMAIL_SALT` | Optional: change the address without re-pairing (7.1) | Worker secret |
+| `NTFY_TOKEN` | Optional ntfy access token, if not in the Server code link (5.3) | Worker secret |
+| `DAYLIGHT_PAIRING` | **Only** with the variable `DAYLIGHT_DELIVERY=v1` (3.1); otherwise never uploaded | Worker secret |
+
+| GitHub variable | Values |
+|---|---|
+| `DAYLIGHT_WORKERS_PLAN` | `free` (default) or `paid` (2.2) |
+| `DAYLIGHT_DELIVERY` | `lab` (default) or `v1` (3.1) |
+| `DAYLIGHT_AI_MAX_USD_DAY` / `DAYLIGHT_AI_MAX_REQ_DAY` | Hard AI ceilings (default 10 / 100); apps can only set lower (9.3) |
+
+Optional secrets that disappear from GitHub are deleted from the Worker on the next deploy. Test-only behaviour hangs
+on the build-time constant `__TESTING__`, which is `false` in every deploy bundle. CI checks that the bundle does not
+contain the test variable's name.
+
+### 12.4 `.github/workflows/rx-server.yml`
+
+```yaml
+name: Reader experiment - Daylight server
+
+# Tests the Daylight server (a Cloudflare Worker) on every push that touches it, and deploys it to the repo owner's
+# Cloudflare account when CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE exist.
+# To apply changed secrets or variables: open the latest run of this workflow and choose "Re-run all jobs".
+on:
+  push:
+    branches: [claude/sweet-goldberg-ej1nb0]
+    paths:
+      - 'reader-experiment/server/**'
+      - '!reader-experiment/server/**/*.md'
+      - 'reader-experiment/share/js/**'
+      - '.github/workflows/rx-server.yml'
+  workflow_dispatch:   # GitHub offers "Run workflow" only once this file is on the default branch
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rx-server
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    outputs:
+      server_changed: ${{ steps.changes.outputs.server }}
+    defaults:
+      run:
+        working-directory: reader-experiment/server
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262      # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020    # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: reader-experiment/server/package-lock.json
+      - run: npm ci
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Tests (Miniflare, mock relay, mock Claude, D1 and subrequest counters)
+        run: npm test
+      - name: Bundle fits the Free plan (3 MB compressed) and carries no test hooks
+        run: |
+          npx wrangler deploy --dry-run --outdir .build
+          size=$(gzip -9c .build/index.js | wc -c); echo "Bundle: $size bytes gzipped"
+          test "$size" -lt 3000000
+          ! grep -q TEST_ANTHROPIC_BASE_URL .build/index.js
+      - name: Did this push change the server? (share/js-only pushes are tested, not deployed)
+        id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != push ] || [ -z "${BEFORE//0/}" ]; then echo server=true >> "$GITHUB_OUTPUT"; exit 0; fi
+          files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA" --jq '.files[].filename' || echo FAILED)
+          if echo "$files" | grep -v '\.md$' | grep -qE '^(FAILED$|reader-experiment/server/|\.github/workflows/rx-server\.yml$)'; then
+            echo server=true >> "$GITHUB_OUTPUT"; else echo server=false >> "$GITHUB_OUTPUT"; fi
+
+  ntfy-attach:
+    name: ntfy.sh external attachments (informational, 6.4)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262      # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020    # v4.4.0
+        with:
+          node-version: 22
+      - run: node reader-experiment/server/test/live/ntfy-attach.mjs >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy to Cloudflare
+    needs: test
+    # deploy on server changes, on "Re-run all jobs" and on a manual run; never on pull_request
+    if: needs.test.outputs.server_changed == 'true' || github.run_attempt > 1 || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: daylight-server     # created on first use; protect it in Settings › Environments (12.0 step 8)
+    defaults:
+      run:
+        working-directory: reader-experiment/server
+    env:                             # no secrets at job level: each step gets only what it needs
+      WRANGLER_SEND_METRICS: 'false'
+      CF_API: https://api.cloudflare.com/client/v4
+      PLAN: ${{ vars.DAYLIGHT_WORKERS_PLAN || 'free' }}
+      DELIVERY: ${{ vars.DAYLIGHT_DELIVERY || 'lab' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262      # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020    # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: reader-experiment/server/package-lock.json
+      - name: Install (no secret is in this step's environment)
+        run: npm ci
+
+      - name: Check the secrets
+        id: gate
+        env:
+          HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+          DAYLIGHT_SERVER_CODE: ${{ secrets.DAYLIGHT_SERVER_CODE }}
+          DAYLIGHT_PAIRING: ${{ secrets.DAYLIGHT_PAIRING }}
+        # First prints ::add-mask:: for every form of the codes (raw, normalized, without dashes, the c= value) and
+        # every derived value (seed hex, authToken, topics, workerName); never echoes input, even on an error.
+        # Then validates (a pairing code in DAYLIGHT_SERVER_CODE fails; DAYLIGHT_PAIRING without DELIVERY=v1 warns).
+        # Missing secrets: a ::notice:: naming them and "then Re-run all jobs", ok=false, and the job still passes.
+        # Writes ok, fingerprint to $GITHUB_OUTPUT and WORKER_NAME to $GITHUB_ENV.
+        run: node scripts/derive.mjs gate
+
+      - name: Cloudflare token, permissions and R2
+        id: cf
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          HAS_EMAIL: ${{ secrets.DAYLIGHT_EMAIL_DOMAIN != '' }}
+        run: node scripts/cf-check.mjs     # writes r2=on|off; fails naming a missing permission in plain words
+
+      - name: workers.dev address
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          sub=$(curl -fsS -H "$auth" "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" | jq -r '.result.subdomain // empty' || true)
+          if [ -z "$sub" ]; then
+            sub="dl-$(openssl rand -hex 5)"
+            echo "::add-mask::$sub"
+            curl -fsS -X PUT -H "$auth" -H 'Content-Type: application/json' --data "{\"subdomain\":\"$sub\"}" \
+              "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" > /dev/null
+          fi
+          echo "::add-mask::$sub"
+          echo "SERVER_URL=https://$WORKER_NAME.$sub.workers.dev" >> "$GITHUB_ENV"
+
+      - name: D1 database (create once), R2 bucket and deploy config
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2: ${{ steps.cf.outputs.r2 }}
+        run: |
+          id=$(npx wrangler d1 list --json | jq -r '.[] | select(.name == "daylight-server") | .uuid')
+          if [ -z "$id" ]; then
+            npx wrangler d1 create daylight-server > /dev/null
+            id=$(npx wrangler d1 list --json | jq -r '.[] | select(.name == "daylight-server") | .uuid')
+          fi
+          sed -e "s/00000000-0000-0000-0000-000000000000/$id/" -e "s/^name = \"daylight-server\"/name = \"$WORKER_NAME\"/" \
+            wrangler.toml > wrangler.deploy.toml
+          if [ "$R2" = on ]; then
+            code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/daylight-server")
+            [ "$code" = 200 ] || npx wrangler r2 bucket create daylight-server
+            rules=$(npx wrangler r2 bucket lifecycle list daylight-server || true)
+            add() { echo "$rules" | grep -q "$1" || npx wrangler r2 bucket lifecycle add daylight-server "$1" "$2" --expire-days "$3" --force; }
+            add dls-files f/ 14; add dls-mail m/ 8; add dls-ai a/ 1
+            printf '\n[[r2_buckets]]\nbinding = "FILES"\nbucket_name = "daylight-server"\n' >> wrangler.deploy.toml
+          else
+            echo "::notice title=R2 is off::Large files, email-in and PDF AI need R2. Turn it on in the Cloudflare dashboard (R2; it asks for a card, the free tier isn't charged), then Re-run all jobs."
+          fi
+          if [ "$PLAN" = paid ]; then printf '\n[limits]\ncpu_ms = 60000\n' >> wrangler.deploy.toml; fi
+          npx wrangler d1 migrations apply daylight-server --remote -c wrangler.deploy.toml
+
+      - name: Deploy the Worker with its secrets
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DAYLIGHT_SERVER_CODE: ${{ secrets.DAYLIGHT_SERVER_CODE }}
+          DAYLIGHT_PAIRING: ${{ secrets.DAYLIGHT_PAIRING }}          # secrets.mjs uploads it only when DELIVERY=v1
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DAYLIGHT_EMAIL_DOMAIN: ${{ secrets.DAYLIGHT_EMAIL_DOMAIN }}
+          DAYLIGHT_EMAIL_LOCAL: ${{ secrets.DAYLIGHT_EMAIL_LOCAL }}
+          DAYLIGHT_EMAIL_SALT: ${{ secrets.DAYLIGHT_EMAIL_SALT }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          AI_MAX_USD: ${{ vars.DAYLIGHT_AI_MAX_USD_DAY || '10' }}
+          AI_MAX_REQ: ${{ vars.DAYLIGHT_AI_MAX_REQ_DAY || '100' }}
+        run: |
+          umask 077
+          node scripts/secrets.mjs "$RUNNER_TEMP/put.json" "$RUNNER_TEMP/delete.json"
+          deploy() { npx wrangler deploy -c wrangler.deploy.toml --secrets-file "$RUNNER_TEMP/put.json" \
+            --var "SERVER_URL:$SERVER_URL" --var "GIT_SHA:${GITHUB_SHA::7}" --var "WORKERS_PLAN:$PLAN" \
+            --var "DELIVERY:$DELIVERY" --var "AI_MAX_USD_DAY:$AI_MAX_USD" --var "AI_MAX_REQ_DAY:$AI_MAX_REQ"; }
+          if ! deploy 2> "$RUNNER_TEMP/deploy.err"; then
+            grep -qi ratelimit "$RUNNER_TEMP/deploy.err" || { cat "$RUNNER_TEMP/deploy.err"; exit 1; }
+            echo "::warning::This account refused the rate-limiting binding; deploying without it (3.3)."
+            node scripts/cf-check.mjs drop-ratelimit wrangler.deploy.toml && deploy
+          fi
+          if [ "$(cat "$RUNNER_TEMP/delete.json")" != "{}" ]; then
+            npx wrangler secret bulk "$RUNNER_TEMP/delete.json" -c wrangler.deploy.toml
+          fi
+          rm -f "$RUNNER_TEMP/put.json" "$RUNNER_TEMP/delete.json" "$RUNNER_TEMP/deploy.err"
+
+      - name: Remove the Workers of earlier Server codes (12.7)
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts" \
+            | jq -r '.result[].id' | grep -E '^daylight-[0-9a-f]{12}$' | grep -vx "$WORKER_NAME" \
+            | while read -r old; do echo "::add-mask::$old"; npx wrangler delete --name "$old" --force > /dev/null; done
+
+      - name: Email routing
+        if: steps.gate.outputs.ok == 'true' && steps.cf.outputs.r2 == 'on'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DAYLIGHT_SERVER_CODE: ${{ secrets.DAYLIGHT_SERVER_CODE }}
+          DAYLIGHT_PAIRING: ${{ secrets.DAYLIGHT_PAIRING }}
+          DAYLIGHT_EMAIL_DOMAIN: ${{ secrets.DAYLIGHT_EMAIL_DOMAIN }}
+          DAYLIGHT_EMAIL_LOCAL: ${{ secrets.DAYLIGHT_EMAIL_LOCAL }}
+          DAYLIGHT_EMAIL_SALT: ${{ secrets.DAYLIGHT_EMAIL_SALT }}
+        run: |
+          [ -n "$DAYLIGHT_EMAIL_DOMAIN" ] || exit 0
+          addr=$(node scripts/derive.mjs email)          # masks the address itself before printing it
+          auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          d="$DAYLIGHT_EMAIL_DOMAIN"; zone=""            # the zone is the domain itself or its nearest parent on this account
+          while [ -z "$zone" ] && [ "${d#*.}" != "$d" ]; do
+            zone=$(curl -fsS -H "$auth" "$CF_API/zones?name=$d&account.id=$CLOUDFLARE_ACCOUNT_ID" | jq -r '.result[0].id // empty'); zname="$d"; d="${d#*.}"
+          done
+          [ -n "$zone" ] || { echo "::error::DAYLIGHT_EMAIL_DOMAIN is not a domain on this Cloudflare account."; exit 1; }
+          if [ "$zname" = "$DAYLIGHT_EMAIL_DOMAIN" ]; then
+            npx wrangler email routing enable "$zname" --zone-id "$zone" > /dev/null || echo "::warning::Turn on Email Routing for the domain in the Cloudflare dashboard (Email › Email Routing)."
+          else
+            echo "::notice::For a subdomain, add it once under Email › Email Routing › Settings › Subdomains in the Cloudflare dashboard."
+          fi
+          body=$(jq -n --arg a "$addr" --arg w "$WORKER_NAME" '{name: "daylight-server", enabled: true, priority: 0,
+            matchers: [{type: "literal", field: "to", value: $a}], actions: [{type: "worker", value: [$w]}]}')
+          rid=$(curl -fsS -H "$auth" "$CF_API/zones/$zone/email/routing/rules?per_page=50" | jq -r '.result[] | select(.name == "daylight-server") | .id' | head -1)
+          if [ -n "$rid" ]; then
+            curl -fsS -X PUT -H "$auth" -H 'Content-Type: application/json' --data "$body" "$CF_API/zones/$zone/email/routing/rules/$rid" > /dev/null
+          else
+            curl -fsS -X POST -H "$auth" -H 'Content-Type: application/json' --data "$body" "$CF_API/zones/$zone/email/routing/rules" > /dev/null
+          fi
+
+      - name: Announce, smoke test and CPU canary
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          DAYLIGHT_SERVER_CODE: ${{ secrets.DAYLIGHT_SERVER_CODE }}
+          DAYLIGHT_PAIRING: ${{ secrets.DAYLIGHT_PAIRING }}
+        # Waits up to 5 min for /v1/hello (a new workers.dev subdomain can take minutes to resolve; on a first deploy a
+        # timeout is a warning, because the Cron run announces anyway). Publishes the config frame from the runner, then
+        # calls /v1/admin/announce (the Worker publishes and polls the config topic) and /v1/admin/selftest three times.
+        # The summary holds only the fingerprint, feature states and the next step, e.g.
+        #   "Daylight server is live. Server code fingerprint 3f9a-1c2e. Delivery: Lab. AI: ready. Email: needs
+        #    DAYLIGHT_EMAIL_DOMAIN. Feeds: ready. Large files: ready. Relay from the Worker: 200, listed. CPU canary: ok.
+        #    Next: add DAYLIGHT_EMAIL_DOMAIN for email-in (optional)."
+        run: node scripts/derive.mjs announce "$SERVER_URL" >> "$GITHUB_STEP_SUMMARY"
+```
+
+Public-repo hygiene (the repo is public, so Actions logs and summaries are world-readable):
+
+- The workflow never runs on `pull_request`, so forks cannot reach the secrets.
+- No secret is in the environment during `npm ci`, so dependency install scripts never see one.
+- Every secret is given only to the steps that use it.
+- Actions are pinned by commit SHA, and `actions/checkout` does not keep the `GITHUB_TOKEN` in `.git/config`.
+- These are masked before they could be printed: the Server code and pairing code in every form, every derived value,
+  the workers.dev subdomain, the Worker name, the Worker URL and the email address.
+- Summaries never rely on masking: they contain only the fingerprint, the states and the next step.
+
+### 12.5 Adding an email domain later
+
+1. Have a domain on Cloudflare (its nameservers point to Cloudflare). If the domain already receives mail elsewhere,
+   use a subdomain such as `read.example.com`, because Email Routing replaces a domain's MX records.
+2. Make sure the API token has **Zone › Zone › Read**, **Zone › Email Routing Rules › Edit** and **Zone › DNS ›
+   Edit** for that zone (12.0 step 2 suggests adding them up front).
+3. Turn on R2 (12.0 step 6) and, for reliable delivery, Workers Paid (12.6).
+4. Add the repo secret `DAYLIGHT_EMAIL_DOMAIN` (`example.com` or `read.example.com`). For a subdomain, add it once in
+   the dashboard under Email › Email Routing › Settings › Subdomains.
+5. Open the latest "Reader experiment - Daylight server" run and choose **Re-run all jobs**. Within a minute the
+   apps show the address.
+
+### 12.6 Switching to Workers Paid
+
+Subscribe to Workers Paid in the Cloudflare dashboard, set the repo variable `DAYLIGHT_WORKERS_PLAN=paid`, and
+re-run. That adds `cpu_ms = 60000`, and the Worker raises its caps (2.2 rule 8). Mail waiting as `waiting-paid` is
+processed on the next Cron runs.
+
+### 12.7 After re-pairing
+
+1. The app that re-pairs locks the old server (3.4) and shows the new Server code with a Copy button.
+2. The user pastes it into `DAYLIGHT_SERVER_CODE` and re-runs the deploy.
+3. The deploy creates the Worker under the new `workerName` and deletes the old Worker. It points the email routing
+   rule at the new Worker and publishes the new config on the new config topic.
+4. The apps find it there. They pin the new origin without asking, because they re-paired themselves: the pin is
+   per fingerprint.
+5. D1 and R2 are kept. Feeds, the digest time, the block list and usage carry over. Data sealed for the old pairing is
+   expired (3.4).
+6. The email address changes unless `DAYLIGHT_EMAIL_LOCAL` is set (7.1).
+
