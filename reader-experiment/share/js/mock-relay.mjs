@@ -13,7 +13,7 @@
 //   node mock-relay.mjs [--port 8787] [--host 127.0.0.1] [--public-url http://10.0.2.2:8787]
 //                       [--message-ttl 43200] [--attachment-ttl 10800]
 //                       [--attachment-max 2000000] [--visitor-total 20000000] [--no-attachments] [--early-413]
-//                       [--control]
+//                       [--control] [--ntfy-limits]
 //
 // --no-attachments  every attachment publish answers 400 {"code":40014} (a server without attachment-cache-dir)
 // --early-413       answer an over-limit PUT's 413 before reading its body, then close the connection (a Go ntfy
@@ -34,6 +34,13 @@
 //                            body was read
 //   failDownload(id, n) -> status | 'reset' | null   n = downloads of that attachment so far
 //   failPublish(topic, n, isAttachment) -> status | null   n = publishes to that topic so far
+//
+// Rate limits (off by default; startMockRelay({...NTFY_SH_LIMITS}) or --ntfy-limits turns on ntfy.sh's, NTFY-FACTS.md):
+// per visitor, on the mock's clock, token buckets as ntfy implements them, each answering 429 {"code":42901} when
+// empty: requests (every publish, poll and download; a burst of 60, then one every 5 s), messages (250 a day: a burst
+// of 250 refilled evenly over 24 h) and attachment bandwidth (uploads and downloads, 200 MB a day, likewise).
+// state.publishLog lists every accepted publish ({time, topic, visitor, attachment, bytes}) and state.limited every
+// 429 the limits answered ({time, visitor, limit: 'requests' | 'messages' | 'bandwidth', path}).
 
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
@@ -54,11 +61,17 @@ const ERRORS = {
   503: [50301, 'service unavailable'],
 };
 
+/** ntfy.sh's per-visitor limits (NTFY-FACTS.md), for startMockRelay({...NTFY_SH_LIMITS}). */
+export const NTFY_SH_LIMITS = Object.freeze({
+  visitorRequestBurst: 60, visitorRequestRefillMs: 5000, visitorMessagesPerDay: 250, visitorBandwidthPerDay: 200_000_000,
+});
+
 export function startMockRelay({
   port = 0, host = '127.0.0.1', publicUrl = '', messageTtlSec = 12 * 3600, attachmentTtlSec = 3 * 3600,
   messageMaxBytes = 4096, attachmentMaxBytes = 2000000, visitorAttachmentTotalBytes = 20000000,
   attachments = true, early413 = false, control = false, keepaliveSec = 45, now = () => Date.now(),
   failDownload = null, failPublish = null,
+  visitorRequestBurst = 0, visitorRequestRefillMs = 5000, visitorMessagesPerDay = 0, visitorBandwidthPerDay = 0,
 } = {}) {
   const topics = new Map(); // topic -> [message], in the order they became visible
   const files = new Map(); // id -> {bytes, expires}
@@ -67,7 +80,8 @@ export function startMockRelay({
   const publishCounts = new Map(); // topic -> publishes so far
   const queued = { downloads: [], publishes: [] }; // control: [{status, topic}]
   let offsetMs = 0;
-  const state = { topics, files, visitors, published: 0, downloads: 0, downloadsById: {}, requests: [] };
+  const state = { topics, files, visitors, published: 0, downloads: 0, downloadsById: {}, requests: [], publishLog: [], limited: [] };
+  const buckets = new Map(); // `${limit}/${visitor}` -> {tokens, at}
   let base = '';
 
   const clock = () => now() + offsetMs;
@@ -82,6 +96,29 @@ export function startMockRelay({
   }
 
   const visitorUsed = (v) => (visitors.get(v) ?? []).reduce((n, a) => n + a.bytes, 0);
+  const visitorOf = (req) => (control && req.headers['x-mock-visitor']) || req.socket.remoteAddress || 'unknown';
+
+  // A token bucket on the mock's clock: `burst` tokens, one more every `refillMs`. -> true when `n` tokens were taken.
+  function take(limit, visitor, burst, refillMs, n = 1) {
+    if (!(burst > 0)) return true;
+    const key = `${limit}/${visitor}`;
+    const t = clock();
+    const b = buckets.get(key) ?? { tokens: burst, at: t };
+    b.tokens = Math.min(burst, b.tokens + (t - b.at) / refillMs);
+    b.at = t;
+    buckets.set(key, b);
+    if (b.tokens < n) return false;
+    b.tokens -= n;
+    return true;
+  }
+  const DAY_MS = 86400000;
+  const allowRequest = (v) => take('requests', v, visitorRequestBurst, visitorRequestRefillMs);
+  const allowMessage = (v) => take('messages', v, visitorMessagesPerDay, DAY_MS / (visitorMessagesPerDay || 1));
+  const allowBytes = (v, n) => take('bandwidth', v, visitorBandwidthPerDay, DAY_MS / (visitorBandwidthPerDay || 1), n);
+  function limited(req, res, v, limit, path) {
+    state.limited.push({ time: nowSec(), visitor: v, limit, path });
+    return drainThenError(req, res, 429);
+  }
 
   // Attachment URLs as the asking client can reach them: publicUrl if set, else that request's Host header.
   function withBase(m, req) {
@@ -156,6 +193,9 @@ export function startMockRelay({
   }
 
   function handleDownload(req, res, fid) {
+    const v = visitorOf(req);
+    const known = files.get(fid);
+    if (known && !allowBytes(v, known.bytes.length)) return limited(req, res, v, 'bandwidth', `/file/${fid}`);
     const n = state.downloadsById[fid] ?? 0;
     state.downloadsById[fid] = n + 1;
     const forced = failDownload?.(fid, n) ?? takeQueued(queued.downloads, null);
@@ -183,12 +223,14 @@ export function startMockRelay({
     const lenHeader = req.headers['content-length'];
     const declared = lenHeader != null ? Number(lenHeader) : NaN;
     const likelyAttachment = !!filename || declared > messageMaxBytes;
-    const visitor = (control && req.headers['x-mock-visitor']) || req.socket.remoteAddress || 'unknown';
+    const visitor = visitorOf(req);
     const hold = control ? Number(req.headers['x-mock-hold'] ?? 0) : 0;
 
     const forced = failPublish?.(topic, n, likelyAttachment) ?? (control ? takeQueued(queued.publishes, topic) : null);
     if (forced) return drainThenError(req, res, forced);
     if (likelyAttachment && !attachments) return drainThenError(req, res, 400, NO_ATTACHMENTS);
+    if (!allowMessage(visitor)) return limited(req, res, visitor, 'messages', `/${topic}`);
+    if (likelyAttachment && Number.isFinite(declared) && !allowBytes(visitor, declared)) return limited(req, res, visitor, 'bandwidth', `/${topic}`);
     if (likelyAttachment && Number.isFinite(declared)
         && (declared > attachmentMaxBytes || visitorUsed(visitor) + declared > visitorAttachmentTotalBytes)) {
       if (early413) {
@@ -228,6 +270,7 @@ export function startMockRelay({
     list.push(msg);
     topics.set(topic, list);
     state.published++;
+    state.publishLog.push({ time: t, topic, visitor, attachment: !!msg.attachment, bytes: size });
     for (const fn of listeners.get(topic) ?? []) fn(msg);
     return send(res, 200, withBase(msg, req));
   }
@@ -247,6 +290,9 @@ export function startMockRelay({
     if (req.method === 'GET' && url.pathname === '/v1/health') return send(res, 200, { healthy: true });
 
     if (control && parts[0] === '__mock') return handleControl(req, res, url);
+
+    const v = visitorOf(req);
+    if (!allowRequest(v)) return limited(req, res, v, 'requests', url.pathname);
 
     if (req.method === 'GET' && parts[0] === 'file' && parts.length === 2) return handleDownload(req, res, parts[1].replace(/\.bin$/, ''));
 
@@ -296,7 +342,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const arg = (name, def) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : def; };
   if (has('help')) {
     console.log('node mock-relay.mjs [--port 8787] [--host 127.0.0.1] [--public-url URL] [--message-ttl 43200] [--attachment-ttl 10800]\n'
-      + '                    [--attachment-max 2000000] [--visitor-total 20000000] [--no-attachments] [--early-413] [--control]');
+      + '                    [--attachment-max 2000000] [--visitor-total 20000000] [--no-attachments] [--early-413] [--control]\n'
+      + '                    [--ntfy-limits]');
     process.exit(0);
   }
   const relay = await startMockRelay({
@@ -304,6 +351,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     messageTtlSec: Number(arg('message-ttl', 43200)), attachmentTtlSec: Number(arg('attachment-ttl', 10800)),
     attachmentMaxBytes: Number(arg('attachment-max', 2000000)), visitorAttachmentTotalBytes: Number(arg('visitor-total', 20000000)),
     attachments: !has('no-attachments'), early413: has('early-413'), control: has('control'),
+    ...(has('ntfy-limits') ? NTFY_SH_LIMITS : {}),
   });
   console.log(`mock ntfy relay listening on ${relay.url}`);
 }

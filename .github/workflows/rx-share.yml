@@ -1,7 +1,8 @@
 name: Reader experiment - share protocol
 
-# Tests the Daylight Share protocol's JavaScript reference implementation and its vectors, then does a live round
-# trip through https://ntfy.sh to prove the relay behaves as the protocol assumes.
+# Tests the Daylight Share protocol's JavaScript reference implementation, its Lab additions (LAB-PROTOCOL.md) and their
+# vectors, the version-skew suite and the household soak, then does a live round trip through https://ntfy.sh to prove
+# the relay behaves as the protocol assumes.
 on:
   push:
     branches: [claude/sweet-goldberg-ej1nb0]
@@ -38,7 +39,15 @@ jobs:
             if (JSON.stringify(strip(a)) !== JSON.stringify(strip(b))) { console.error("test-vectors.json is stale: run node vectors/generate.mjs"); process.exit(1); }
           '
           cp /tmp/committed.json vectors/test-vectors.json
-      - name: Unit and mock-relay tests
-        run: node --test js/test/*.test.mjs
+      - name: Lab vectors are up to date
+        # lab-vectors.json has no deflate output, so it must regenerate byte for byte
+        run: |
+          node vectors/generate-lab.mjs
+          git diff --exit-code -- vectors/lab-vectors.json || { echo "lab-vectors.json is stale: run node vectors/generate-lab.mjs"; exit 1; }
+      - name: Unit, mock-relay, Lab, skew and soak tests
+        run: node --test js/test/*.test.mjs 2>&1 | tee /tmp/test.log; test "${PIPESTATUS[0]}" -eq 0
+      - name: Household soak summary
+        if: always()
+        run: grep -h '\[soak ' /tmp/test.log | sed 's/^# //' >> "$GITHUB_STEP_SUMMARY" || true
       - name: Live round trip through ntfy.sh
         run: node js/live-ntfy.mjs https://ntfy.sh

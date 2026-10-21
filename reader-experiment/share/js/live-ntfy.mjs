@@ -6,8 +6,11 @@
 //   - an over-limit PUT (2,100,000 bytes) reaches fetch as a 413 (not a reset);
 //   - ntfy.sh still reports at least 2,000,000 bytes per attachment and 20,000,000 per visitor (a canary: no client
 //     reads /v1/account);
-//   - the stream endpoint answers (live delivery) and CORS lets the web sender publish.
+//   - the stream endpoint answers (live delivery) and CORS lets the web sender publish;
+//   - Lab (LAB-PROTOCOL.md 2.2): a Lab frame with the four items' states goes as a small message and a Lab sender's
+//     ledger reads it (In your Reader for the link and the page, Handed to the Reader for the files).
 import * as ds from './daylight-share.js';
+import * as lab from './daylight-lab.js';
 
 const relay = process.argv[2] || ds.DEFAULT_RELAY;
 const LARGEST_FRAME = ds.CHUNK + ds.MAX_HEADER + 36; // 1,966,116
@@ -28,7 +31,9 @@ const recording = async (url, init) => {
 };
 const secret = ds.generateSecret();
 const pairing = { secret, relay, name: 'CI Daylight' };
-const sender = new ds.Sender({ pairing, storage: new ds.MemoryStorage(), from: 'CI', app: 'ci/1', fetch: recording });
+const senderStorage = new ds.MemoryStorage();
+const ledger = new lab.LabLedger({ storage: senderStorage });
+const sender = new ds.Sender({ pairing, storage: senderStorage, from: 'CI', app: 'ci/1', fetch: recording, onAckHeader: lab.labHook(ledger) });
 const receiver = new ds.Receiver({ pairing, storage: new ds.MemoryStorage(), from: 'CI Daylight' });
 const keys = await sender.keys();
 
@@ -109,6 +114,36 @@ if (!large || !same(large.content, big)) fail('the 5 MB file differs');
 let delivered = 0;
 for (let i = 0; i < 6 && delivered < 4; i++) { await ds.sleep(1500); delivered += await sender.checkAcks(); }
 if (delivered !== 4) fail(`only ${delivered} of 4 acks seen`);
+if (await ledger.inboxLab()) fail('a v1.1 Daylight made the ledger read Lab');
+if ((await ledger.checkedIn()) === null) fail('the ledger did not hear the acks');
+
+// Lab: the Daylight publishes its hello and the states as one small Lab frame; the sender's ledger reads them.
+const labInbox = new lab.LabInbox({
+  storage: new ds.MemoryStorage(), relay: new ds.RelayClient({ relay, fetch: recording }), keys,
+  info: { lab: 1, app: 'ci/1', caps: ['st', 'tap', 'reader-link'] }, from: 'CI Daylight', autoFlushMs: null,
+});
+const tNow = Math.floor(Date.now() / 1000);
+for (const g of got) await labInbox.record(g.header.id, g.header.kind === 'file' ? 'handed' : 'reader', tNow);
+const before = frames.length;
+const flushed = await labInbox.flush();
+if (flushed.reason !== 'sent' || flushed.states !== 4) fail(`the Lab frame did not go out: ${JSON.stringify(flushed)}`);
+const labFrame = frames[before];
+log('Lab frame:', labFrame.method, labFrame.bytes, 'characters →', labFrame.status);
+if (labFrame.method !== 'POST' || labFrame.bytes > ds.SMALL_FRAME_B64_MAX) fail('the Lab frame was not a small message');
+let labRead = 0;
+for (let i = 0; i < 6 && labRead < 4; i++) {
+  await ds.sleep(1500);
+  await sender.checkAcks();
+  labRead = 0;
+  for (const g of got) if ((await ledger.state(g.header.id))?.s === (g.header.kind === 'file' ? 'handed' : 'reader')) labRead++;
+}
+if (labRead !== 4) fail(`the Lab sender read ${labRead} of 4 states`);
+if (!(await ledger.inboxLab()) || !(await ledger.hasCap('st'))) fail('the Lab hello was not read');
+const outbox = await sender.list();
+const snap = await ledger.snapshot();
+const labels = outbox.map((r) => lab.describeLabRow(r, Date.now(), { lab: true, ...snap, state: snap.states[r.id] ?? null, online: true }).label);
+log('Lab rows:', labels.join(' | '));
+if (labels.filter((l) => l === 'In your Reader ✓').length !== 2 || labels.filter((l) => l === 'Handed to the Reader').length !== 2) fail('the Lab rows are not as expected');
 
 // The stream endpoint answers and stays open (live delivery).
 const ctrl = new AbortController();
@@ -118,5 +153,5 @@ const first = new TextDecoder().decode((await reader.read()).value ?? new Uint8A
 ctrl.abort();
 log('stream first line:', first.split('\n')[0].slice(0, 120));
 
-log('OK: 4 items (one of 5 MB in 3 frames) delivered and acknowledged through', relay);
+log('OK: 4 items (one of 5 MB in 3 frames) delivered and acknowledged, and their Lab states read, through', relay);
 process.exit(0);

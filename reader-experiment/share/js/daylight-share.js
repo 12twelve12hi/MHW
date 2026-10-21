@@ -42,6 +42,20 @@ export const TIMEOUT_LONG_MS = 1800000; // attachment uploads and downloads
 
 export const PURPOSE_INBOX = 'inbox';
 export const PURPOSE_ACK = 'ack';
+// Lab lanes (LAB-PROTOCOL 2.4): built in W2 and W3, their AADs fixed now.
+export const PURPOSE_LAB_RETURN = 'lab-return';
+export const PURPOSE_LAB_RETURN_ACK = 'lab-return-ack';
+export const PURPOSE_LAB_CONTROL = 'lab-control';
+export const PURPOSE_LAB_CONTROL_ACK = 'lab-control-ack';
+
+/**
+ * The Lab storage keys: the Sender ledger's (LAB-PROTOCOL 2.2.6) and the JS LabInbox's `lab/out`. A pairing with
+ * another secret removes them (applyPairingChange).
+ */
+export const LAB_STORAGE_KEYS = ['lab/inbox', 'lab/heard', 'lab/states', 'lab/out'];
+
+/** The values of the `x-cap` item header field (LAB-PROTOCOL 2.3). */
+export const X_CAP_VALUES = ['seen', 'clean', 'excerpt', 'test'];
 
 const LABEL_KEY = 'dlshare/v1/key';
 const LABEL_INBOX = 'dlshare/v1/inbox';
@@ -346,16 +360,30 @@ export async function deriveKeys(secret) {
 // ---------------------------------------------------------------------------------------------------------------
 // Frames (PROTOCOL 2)
 
-const aadFor = (purpose) => utf8(purpose === PURPOSE_ACK ? LABEL_ACK : LABEL_INBOX);
+const AADS = {
+  inbox: LABEL_INBOX,
+  ack: LABEL_ACK,
+  'lab-return': 'dlshare/v1/lab-return',
+  'lab-return-ack': 'dlshare/v1/lab-return-ack',
+  'lab-control': 'dlshare/v1/lab-control',
+  'lab-control-ack': 'dlshare/v1/lab-control-ack',
+};
+
+/** The AAD bytes of a purpose: an explicit map (LAB-PROTOCOL 2.4). An unknown purpose throws ShareError('purpose'). */
+export function aadFor(purpose) {
+  if (typeof purpose !== 'string' || !Object.hasOwn(AADS, purpose)) throw new ShareError('purpose', `unknown purpose ${purpose}`);
+  return utf8(AADS[purpose]);
+}
 
 /** Low level: seal already-serialised header bytes and a body (no header size check). Used by the vectors. */
 export async function sealFrame(keys, purpose, headerBytes, body = new Uint8Array(0), nonce = randomBytes(12)) {
   if (nonce.length !== 12) throw new ShareError('nonce', 'nonce must be 12 bytes');
+  const aad = aadFor(purpose);
   const len = new Uint8Array(4);
   new DataView(len.buffer).setUint32(0, headerBytes.length, false);
   const plain = concat(len, headerBytes, body);
   const ct = new Uint8Array(await subtle().encrypt(
-    { name: 'AES-GCM', iv: nonce, additionalData: aadFor(purpose), tagLength: 128 }, keys.key, plain));
+    { name: 'AES-GCM', iv: nonce, additionalData: aad, tagLength: 128 }, keys.key, plain));
   return concat(utf8(MAGIC), nonce, ct);
 }
 
@@ -368,12 +396,13 @@ export async function encryptFrame(keys, purpose, header, body, nonce) {
 
 /** Frame bytes -> {header, body}. Throws ShareError('frame', ...) for anything that is not a valid frame. */
 export async function decryptFrame(keys, purpose, frame) {
+  const aad = aadFor(purpose);
   if (!(frame instanceof Uint8Array) || frame.length < 4 + 12 + 16 + 4) throw new ShareError('frame', 'too short');
   for (let i = 0; i < 4; i++) if (frame[i] !== MAGIC.charCodeAt(i)) throw new ShareError('frame', 'bad magic');
   let plain;
   try {
     plain = new Uint8Array(await subtle().decrypt(
-      { name: 'AES-GCM', iv: frame.subarray(4, 16), additionalData: aadFor(purpose), tagLength: 128 },
+      { name: 'AES-GCM', iv: frame.subarray(4, 16), additionalData: aad, tagLength: 128 },
       keys.key, frame.subarray(16)));
   } catch {
     throw new ShareError('frame', 'does not decrypt');
@@ -559,7 +588,27 @@ export async function buildAckFrame(keys, ids, { from = 'Daylight', sent = nowIs
   return encryptFrame(keys, PURPOSE_ACK, header, new Uint8Array(0), nonce);
 }
 
-/** Validates an incoming item header (untrusted). Returns a cleaned copy or throws ShareError('header'). */
+/**
+ * The Lab extras of an item header (LAB-PROTOCOL 2.3; vectors > labHeaderExtras): `x-cap` when it is one of
+ * X_CAP_VALUES and `x-orig` when it passes the web URL rule (the trimmed value), read from part 0 only. Every other
+ * `x-` field is dropped. -> {} or {'x-cap'?, 'x-orig'?}
+ */
+export function itemHeaderExtras(h) {
+  const out = {};
+  if (!h || typeof h !== 'object' || (h.part ?? 0) !== 0) return out;
+  if (typeof h['x-cap'] === 'string' && X_CAP_VALUES.includes(h['x-cap'])) out['x-cap'] = h['x-cap'];
+  if (typeof h['x-orig'] === 'string') {
+    const u = webUrl(h['x-orig']);
+    if (u) out['x-orig'] = u;
+  }
+  return out;
+}
+
+/**
+ * Validates an incoming item header (untrusted). Returns a cleaned copy or throws ShareError('header'). The copy has
+ * `extras`: the Lab fields of part 0 (itemHeaderExtras), {} on later parts. Reassembler.add moves them out of the
+ * header into the item's own `extras`.
+ */
 export function checkItemHeader(h) {
   const bad = (why) => { throw new ShareError('header', why); };
   if (typeof h.id !== 'string' || !/^[0-9a-f]{32}$/.test(h.id)) bad('id');
@@ -587,11 +636,14 @@ export function checkItemHeader(h) {
   const from = cleanName(h.from);
   if (from) out.from = from;
   if (typeof h.app === 'string') out.app = h.app.slice(0, 60);
+  out.extras = part === 0 ? itemHeaderExtras(h) : {};
   return out;
 }
 
 /**
- * Collects parts. add() returns {header, content, msgIds} once an item is complete and verified, else null.
+ * Collects parts. add() returns {header, content, msgIds, extras} once an item is complete and verified, else null.
+ * `extras` holds the Lab fields of part 0 (checkItemHeader); `header` is the cleaned header without part, parts and
+ * extras.
  * meta: {time (relay seconds, default now), msgId} of the message that carried the part; a pending item remembers its
  * earliest time and its message ids. On an integrity failure the item is dropped and the thrown ShareError carries
  * `msgIds`. A deflate-raw stream runs across parts, so parts are joined before decoding (PROTOCOL 2.3).
@@ -620,8 +672,8 @@ export class Reassembler {
     const h = checkItemHeader(rawHeader);
     const t = Number.isFinite(time) ? time : Math.floor(this.now() / 1000);
     if (h.kind === 'url') {
-      const { part, parts, ...header } = h;
-      return { header, content: new Uint8Array(0), msgIds: msgId ? [msgId] : [] };
+      const { part, parts, extras, ...header } = h;
+      return { header, content: new Uint8Array(0), msgIds: msgId ? [msgId] : [], extras };
     }
     let p = this.pending.get(h.id);
     if (!p || p.parts !== h.parts) {
@@ -640,8 +692,8 @@ export class Reassembler {
       const content = p.header.enc === 'deflate-raw' ? await inflateRaw(encoded, p.header.size) : encoded;
       if (content.length !== p.header.size) throw new ShareError('integrity', 'size mismatch');
       if (toHex(await sha256(content)) !== p.header.sha256) throw new ShareError('integrity', 'sha256 mismatch');
-      const { part, parts, ...header } = p.header;
-      return { header, content, msgIds };
+      const { part, parts, extras, ...header } = p.header;
+      return { header, content, msgIds, extras };
     } catch (e) {
       if (e instanceof ShareError) e.msgIds = msgIds;
       throw e;
@@ -849,7 +901,9 @@ function locked(storage, role, fn) {
  * The outbox rule for a pairing change (PROTOCOL 3.3 step 6), applied to the storage a Sender uses, under the same
  * lock. current: the pairing in use (or null); next: the one being applied. The same secret (a new relay or name)
  * keeps the outbox: build a new Sender with `next` and pending rows go through the new relay. A different secret (or
- * no current pairing) deletes every row, their stored content and the ack cursor. -> true when it deleted them.
+ * no current pairing) deletes every row, their stored content, the ack cursor and the Lab ledger (every `lab/*` key:
+ * LAB_STORAGE_KEYS, and any other `lab/` key when the storage can list its keys with `keys()`). -> true when it
+ * deleted them.
  */
 export function applyPairingChange(storage, current, next) {
   return locked(storage, 'sender', async () => {
@@ -858,6 +912,11 @@ export function applyPairingChange(storage, current, next) {
     for (const r of rows) if (r?.id) await storage.remove(`outbox/${r.id}`);
     await storage.remove('outbox');
     await storage.remove('ackSince');
+    const lab = new Set(LAB_STORAGE_KEYS);
+    if (typeof storage.keys === 'function') {
+      try { for (const k of await storage.keys()) if (String(k).startsWith('lab/')) lab.add(k); } catch { /* the known keys only */ }
+    }
+    for (const k of lab) await storage.remove(k);
     return true;
   });
 }
@@ -917,13 +976,19 @@ function normRow(r) {
  * status: sending | sent | delivered | failed | expired. errorCode, for failed and expired: '' | 'network' | 'full' |
  * 'refused' | 'too-large' | 'gone'. `error` is technical detail for logs; show describeRow(row) instead.
  * Every public method runs under a lock shared by all Senders on the same storage object.
+ *
+ * onAckHeader(header, {time, msgId}): called for every ack-topic frame that decrypts and whose `kind` is "ack" (acks
+ * and Lab frames alike), in the order the poll returns them, before rows are updated (LAB-PROTOCOL 2.2.6). `time` is
+ * the message's relay time in seconds. It may be async; its errors are caught and logged. daylight-lab.js's
+ * labHook(ledger) is the Lab one.
  */
 export class Sender {
-  constructor({ pairing, storage, from = '', app = '', fetch: f, now = () => Date.now(), chunkSize, timeouts, retryDelaysMs } = {}) {
+  constructor({ pairing, storage, from = '', app = '', fetch: f, now = () => Date.now(), chunkSize, timeouts, retryDelaysMs, onAckHeader = null } = {}) {
     if (!pairing?.secret) throw new ShareError('pairing', 'Not paired yet.');
     this.pairing = pairing;
     this.storage = storage;
     this.from = from; this.app = app; this.now = now; this.chunkSize = chunkSize;
+    this.onAckHeader = typeof onAckHeader === 'function' ? onAckHeader : null;
     this.relay = new RelayClient({ relay: pairing.relay, fetch: f, timeouts, retryDelaysMs });
     this._keys = null;
   }
@@ -959,10 +1024,14 @@ export class Sender {
     await this._writeRows(rows);
   }
 
-  /** Shares one item now. -> the outbox row. Throws ShareError for bad input (nothing is stored); relay failures mark the row. */
-  send(item) { return this._lock(() => this._send(item)); }
+  /**
+   * Shares one item now. -> the outbox row. Throws ShareError for bad input (nothing is stored); relay failures mark the
+   * row. With `defer` (offline, F07) nothing is published: the row is stored as failed with code 'network',
+   * `attempts` 0 and `lastPublish` now, and the content is kept as usual, for flushNetwork() or the next re-send pass.
+   */
+  send(item, { defer = false } = {}) { return this._lock(() => this._send(item, { defer })); }
 
-  async _send(item) {
+  async _send(item, { defer = false } = {}) {
     const keys = await this.keys();
     const built = await buildItemFrames(keys, { ...item, from: item.from ?? this.from, app: item.app ?? this.app },
       { chunkSize: this.chunkSize });
@@ -973,6 +1042,7 @@ export class Sender {
       sent: built.header.sent, created: now, status: 'sending', errorCode: '', attempts: 0, slowFails: 0,
       lastPublish: 0, attemptStarted: now, attachment: built.attachment, error: '', delivered: 0,
     };
+    if (defer) Object.assign(row, { status: 'failed', errorCode: 'network', lastPublish: now, error: 'deferred while offline' });
     await this._saveRow(row);
     if (row.kind !== 'url') {
       const content = typeof item.content === 'string' ? utf8(item.content) : item.content;
@@ -983,6 +1053,7 @@ export class Sender {
         globalThis.console?.warn?.('Send to Daylight: could not keep a copy for re-sending', e);
       }
     }
+    if (defer) return row;
     return (await this._attempt(row, built.frames)).row;
   }
 
@@ -1012,13 +1083,16 @@ export class Sender {
     return { row, error };
   }
 
-  /** Re-sends a row from its stored content, or ends it (no content: gone; over MAX_ITEM: too-large). */
-  async _attemptStored(row) {
+  /**
+   * Rebuilds a row's frames from its stored content. -> {built}, or {ended: true} after ending the row (no content:
+   * expired/gone; over MAX_ITEM: expired/too-large).
+   */
+  async _buildStored(row) {
     const end = async (errorCode, dropContent) => {
       row.status = 'expired'; row.errorCode = errorCode;
       await this._saveRow(row);
       if (dropContent) await this._dropContent(row.id);
-      return { row, error: null, attempted: false };
+      return { built: null, ended: true };
     };
     let content = new Uint8Array(0);
     if (row.kind !== 'url') {
@@ -1026,15 +1100,21 @@ export class Sender {
       if (!content) return end('gone', false);
     }
     if (row.size > MAX_ITEM) return end('too-large', true);
-    let built;
     try {
-      built = await buildItemFrames(await this.keys(), {
+      const built = await buildItemFrames(await this.keys(), {
         id: row.id, kind: row.kind, url: row.url || undefined, title: row.title, name: row.name, mime: row.mime,
         content, sent: row.sent, from: this.from, app: this.app,
       }, { chunkSize: this.chunkSize });
+      return { built, ended: false };
     } catch (e) {
       return e?.code === 'too-large' ? end('too-large', true) : end('gone', false);
     }
+  }
+
+  /** Re-sends a row from its stored content, or ends it (no content: gone; over MAX_ITEM: too-large). */
+  async _attemptStored(row) {
+    const { built } = await this._buildStored(row);
+    if (!built) return { row, error: null, attempted: false };
     row.attachment = built.attachment;
     return { ...(await this._attempt(row, built.frames)), attempted: true };
   }
@@ -1065,10 +1145,17 @@ export class Sender {
       newest = Math.max(newest, m.time);
       if (m.outcome === 'retry') held = Math.min(held, m.time);
       if (m.outcome !== 'frame') continue;
-      try {
-        const { header } = await decryptFrame(keys, PURPOSE_ACK, m.frame);
-        if (header.kind === 'ack' && Array.isArray(header.ids)) header.ids.forEach((id) => typeof id === 'string' && acked.add(id));
-      } catch { /* junk */ }
+      let header;
+      try { ({ header } = await decryptFrame(keys, PURPOSE_ACK, m.frame)); } catch { continue; /* junk */ }
+      if (header.kind !== 'ack') continue;
+      if (this.onAckHeader) {
+        try {
+          await this.onAckHeader(header, { time: m.time, msgId: m.id });
+        } catch (e) {
+          globalThis.console?.warn?.('Send to Daylight: onAckHeader failed', e);
+        }
+      }
+      if (Array.isArray(header.ids)) header.ids.forEach((id) => typeof id === 'string' && acked.add(id));
     }
     if (entries.length) await this.storage.set('ackSince', nextCursor(since, newest, held));
     const rows = await this.list();
@@ -1121,6 +1208,42 @@ export class Sender {
   }
 
   /**
+   * Coming back online (F07): attempts the rows waiting with errorCode 'network' (status failed) now, oldest first,
+   * whatever their back-off. A pass stops before a row that would take it over `maxFrames` frames or
+   * `maxAttachmentBytes` bytes of attachment frames (a pass always takes its first row, so a row larger than the caps
+   * cannot block the queue). It follows resendDue's pass rules: after a 429 it publishes nothing more, and after a 413
+   * no more attachments. Rows past OUTBOX_EXPIRY_MS are left to resendDue, which expires them. Callers space passes at
+   * least 3 minutes apart. -> the rows it attempted.
+   */
+  flushNetwork(opts) { return this._lock(() => this._flushNetwork(opts)); }
+
+  async _flushNetwork({ maxFrames = 30, maxAttachmentBytes = 18_000_000 } = {}) {
+    const pass = { stopAll: false, stopAttachments: false };
+    let frames = 0, bytes = 0;
+    const out = [];
+    const rows = (await this.list()).reverse().sort((a, b) => a.created - b.created); // oldest first
+    for (const row of rows) {
+      if (pass.stopAll) break;
+      if (row.status !== 'failed' || row.errorCode !== 'network') continue;
+      if (this.now() - row.created > OUTBOX_EXPIRY_MS) continue;
+      if (pass.stopAttachments && row.attachment) continue;
+      const { built } = await this._buildStored(row);
+      if (!built) continue;
+      const attachmentBytes = built.frames.reduce((n, f) => n + (isSmallFrame(f) ? 0 : f.length), 0);
+      if (pass.stopAttachments && attachmentBytes > 0) continue;
+      const first = out.length === 0;
+      if (!first && (frames + built.frames.length > maxFrames || bytes + attachmentBytes > maxAttachmentBytes)) break;
+      frames += built.frames.length; bytes += attachmentBytes;
+      row.attachment = built.attachment;
+      const r = await this._attempt(row, built.frames);
+      out.push(r.row);
+      if (r.error?.status === 429) pass.stopAll = true;
+      else if (r.error?.code === 'full') pass.stopAttachments = true;
+    }
+    return out;
+  }
+
+  /**
    * "Retry now" (a failed row) and "Try again" (an expired row, with errorCode '', 'full' or 'refused'): publishes it
    * again with the same id and header. Any other row is left as it is. -> the row, or null when there is none.
    */
@@ -1165,7 +1288,8 @@ export class Sender {
 
 export class Receiver {
   /**
-   * accept: async ({header, content}) => void stores an item durably; it runs before the id is remembered or acked.
+   * accept: async ({header, content, extras}) => void stores an item durably; it runs before the id is remembered or
+   * acked. `extras` holds the item's Lab header fields (checkItemHeader).
    * When it throws, the item's messages are handled but its id is not remembered and it is not acked: it comes back
    * with the sender's next re-send, and pollOnce returns `storeError`.
    */
@@ -1179,8 +1303,9 @@ export class Receiver {
   async keys() { return (this._keys ??= await deriveKeys(this.pairing.secret)); }
 
   /**
-   * Polls once. -> {items: [{header, content}] (new items, stored), acked: [ids whose ack was published],
-   * ackError: string|null, storeError: string|null}. Throws only when the poll itself fails; acks never throw.
+   * Polls once. -> {items: [{header, content, extras}] (new items, stored), acked: [ids whose ack was published],
+   * ackError: string|null, storeError: string|null, limited: the status (429 or 413) of an ack publish the relay
+   * refused for its limits, else 0}. Throws only when the poll itself fails; acks never throw.
    */
   pollOnce() { return locked(this.storage, 'receiver', () => this._pollOnce()); }
 
@@ -1225,14 +1350,14 @@ export class Receiver {
       handled([m.id, ...done.msgIds]);
       delete incomplete[done.header.id];
       try {
-        await this.accept({ header: done.header, content: done.content });
+        await this.accept({ header: done.header, content: done.content, extras: done.extras });
       } catch (e) {
         storeError = String(e?.message ?? e);
         continue;
       }
       seen[done.header.id] = now;
       ack.add(done.header.id);
-      items.push({ header: done.header, content: done.content });
+      items.push({ header: done.header, content: done.content, extras: done.extras });
     }
     for (const t of Object.values(incomplete)) held = Math.min(held, t);
     if (entries.length) await this.storage.set('inboxSince', nextCursor(since, newest, held));
@@ -1242,7 +1367,7 @@ export class Receiver {
 
     const ids = [...ack];
     const acked = [];
-    let ackError = null;
+    let ackError = null, limited = 0;
     for (let i = 0; i < ids.length; i += MAX_ACK_IDS) {
       const batch = ids.slice(i, i + MAX_ACK_IDS);
       try {
@@ -1250,9 +1375,10 @@ export class Receiver {
         acked.push(...batch);
       } catch (e) {
         ackError = String(e?.message ?? e);
+        if (e?.status === 429 || e?.status === 413) limited = e.status;
         break;
       }
     }
-    return { items, acked, ackError, storeError };
+    return { items, acked, ackError, storeError, limited };
   }
 }
