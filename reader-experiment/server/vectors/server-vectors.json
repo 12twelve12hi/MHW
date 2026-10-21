@@ -268,5 +268,1454 @@
       "ftp://example.com/",
       ""
     ]
+  },
+  "serverState": {
+    "note": "LAB-PLAN 2.6. fromStatus: a GET /v1/status body and a feature -> stateFromStatus. fromError: the server’s answer to a call ({status, body}: body is the response text), a network failure, a gate’s deadline, or a state the app decides before any request -> the error the client makes (code, HTTP status and the fields it keeps) -> stateFromError -> {state, message}; noteError(feature, error) returns the same and does `noteError` to a fresh cached status in which every feature is ready (fromStatus[0].status): kept; updated (that feature now holds `expect`, and server/statusAt is removed so the next state() refreshes); or dropped (server/status and server/statusAt removed; configRefresh: server/configAt removed too, so the next discovery re-reads the config topic).",
+    "fromStatus": [
+      {
+        "name": "ready",
+        "feature": "ai",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "ready",
+          "message": null
+        }
+      },
+      {
+        "name": "needs-key with the server’s message",
+        "feature": "ai",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "needs-key",
+              "message": "Needs a Claude API key. Add ANTHROPIC_API_KEY to the Daylight server (GitHub › Settings › Secrets), then re-run the deploy, to turn this on."
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "needs-key",
+          "message": "Needs a Claude API key. Add ANTHROPIC_API_KEY to the Daylight server (GitHub › Settings › Secrets), then re-run the deploy, to turn this on."
+        }
+      },
+      {
+        "name": "needs-key without a message: the module’s text",
+        "feature": "pdf",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "needs-key"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "needs-key",
+          "message": "Needs a Claude API key. Add ANTHROPIC_API_KEY to the Daylight server (GitHub › Settings › Secrets), then re-run the deploy, to turn this on."
+        }
+      },
+      {
+        "name": "needs-lab-inbox: a newer server’s own text is shown as is",
+        "feature": "deliver",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "needs-lab-inbox",
+              "message": "Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on."
+            }
+          }
+        },
+        "expect": {
+          "state": "needs-lab-inbox",
+          "message": "Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on."
+        }
+      },
+      {
+        "name": "needs-domain",
+        "feature": "email",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "needs-domain",
+              "message": "Needs an email domain. Add DAYLIGHT_EMAIL_DOMAIN (a domain on your Cloudflare account) in GitHub › Settings › Secrets, then re-run the deploy."
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "needs-domain",
+          "message": "Needs an email domain. Add DAYLIGHT_EMAIL_DOMAIN (a domain on your Cloudflare account) in GitHub › Settings › Secrets, then re-run the deploy."
+        }
+      },
+      {
+        "name": "needs-r2 without a message",
+        "feature": "files",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "needs-r2"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "needs-r2",
+          "message": "Needs R2 storage on your Cloudflare account. Turn on R2 in the Cloudflare dashboard (it asks for a card; the free tier isn’t charged), then re-run the deploy."
+        }
+      },
+      {
+        "name": "needs-paid",
+        "feature": "email",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "needs-paid",
+              "message": "Email-in needs Cloudflare’s Workers Paid plan. Subscribe in the Cloudflare dashboard, set the variable DAYLIGHT_WORKERS_PLAN to paid in GitHub › Settings, then re-run the deploy."
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "needs-paid",
+          "message": "Email-in needs Cloudflare’s Workers Paid plan. Subscribe in the Cloudflare dashboard, set the variable DAYLIGHT_WORKERS_PLAN to paid in GitHub › Settings, then re-run the deploy."
+        }
+      },
+      {
+        "name": "error carries the server’s message for the recorded code",
+        "feature": "ai",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "error",
+              "message": "Claude didn’t accept the API key. Check ANTHROPIC_API_KEY in GitHub › Settings › Secrets, then re-run the deploy."
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Claude didn’t accept the API key. Check ANTHROPIC_API_KEY in GitHub › Settings › Secrets, then re-run the deploy."
+        }
+      },
+      {
+        "name": "error without a message",
+        "feature": "ai",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "error"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (SERVER_ERROR). Try again later."
+        }
+      },
+      {
+        "name": "a message that is not a string is ignored",
+        "feature": "feeds",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "needs-lab-inbox",
+              "message": 42
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "needs-lab-inbox",
+          "message": "Needs Lab on your Daylight. Turn on Lab in Daylight Share on the Daylight to receive this."
+        }
+      },
+      {
+        "name": "an empty message is ignored",
+        "feature": "files",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "needs-r2",
+              "message": ""
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "needs-r2",
+          "message": "Needs R2 storage on your Cloudflare account. Turn on R2 in the Cloudflare dashboard (it asks for a card; the free tier isn’t charged), then re-run the deploy."
+        }
+      },
+      {
+        "name": "an unknown state from a newer server passes through with its message",
+        "feature": "feeds",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "needs-dns",
+              "message": "Add the DNS record your server asks for."
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "needs-dns",
+          "message": "Add the DNS record your server asks for."
+        }
+      },
+      {
+        "name": "an unknown state without a message gets the generic sentence",
+        "feature": "feeds",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "needs-dns"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "needs-dns",
+          "message": "Something went wrong on the Daylight server (needs-dns). Try again later."
+        }
+      },
+      {
+        "name": "a feature the status does not list",
+        "feature": "deliver",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (NOT_FOUND). Try again later."
+        }
+      },
+      {
+        "name": "a feature entry without a state",
+        "feature": "ai",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "message": "x"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (NOT_FOUND). Try again later."
+        }
+      },
+      {
+        "name": "a feature entry whose state is not a string",
+        "feature": "ai",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": true
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (NOT_FOUND). Try again later."
+        }
+      },
+      {
+        "name": "a feature entry that is not an object",
+        "feature": "ai",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": "ready",
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (NOT_FOUND). Try again later."
+        }
+      },
+      {
+        "name": "a status without features",
+        "feature": "ai",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (NOT_FOUND). Try again later."
+        }
+      },
+      {
+        "name": "an unknown feature name",
+        "feature": "summaries",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (NOT_FOUND). Try again later."
+        }
+      },
+      {
+        "name": "an inherited name is not a feature",
+        "feature": "constructor",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (NOT_FOUND). Try again later."
+        }
+      }
+    ],
+    "fromError": [
+      {
+        "name": "409 NEEDS_KEY names ai; the app asked for pdf",
+        "feature": "pdf",
+        "response": {
+          "status": 409,
+          "body": "{\"error\":{\"code\":\"NEEDS_KEY\",\"message\":\"Needs a Claude API key. Add ANTHROPIC_API_KEY to the Daylight server (GitHub › Settings › Secrets), then re-run the deploy, to turn this on.\",\"feature\":\"ai\",\"missing\":[\"ANTHROPIC_API_KEY\"]}}"
+        },
+        "error": {
+          "code": "NEEDS_KEY",
+          "status": 409,
+          "feature": "ai",
+          "missing": [
+            "ANTHROPIC_API_KEY"
+          ]
+        },
+        "expect": {
+          "state": "needs-key",
+          "message": "Needs a Claude API key. Add ANTHROPIC_API_KEY to the Daylight server (GitHub › Settings › Secrets), then re-run the deploy, to turn this on."
+        },
+        "noteError": {
+          "cache": "updated",
+          "feature": "ai",
+          "refresh": true
+        }
+      },
+      {
+        "name": "409 NEEDS_KEY whose message is not a string",
+        "feature": "ai",
+        "response": {
+          "status": 409,
+          "body": "{\"error\":{\"code\":\"NEEDS_KEY\",\"message\":42,\"feature\":\"ai\"}}"
+        },
+        "error": {
+          "code": "NEEDS_KEY",
+          "status": 409,
+          "feature": "ai"
+        },
+        "expect": {
+          "state": "needs-key",
+          "message": "Needs a Claude API key. Add ANTHROPIC_API_KEY to the Daylight server (GitHub › Settings › Secrets), then re-run the deploy, to turn this on."
+        },
+        "noteError": {
+          "cache": "updated",
+          "feature": "ai",
+          "refresh": true
+        }
+      },
+      {
+        "name": "409 NEEDS_KEY naming an unknown feature: the app’s feature is noted",
+        "feature": "ai",
+        "response": {
+          "status": 409,
+          "body": "{\"error\":{\"code\":\"NEEDS_KEY\",\"feature\":\"summaries\"}}"
+        },
+        "error": {
+          "code": "NEEDS_KEY",
+          "status": 409,
+          "feature": "summaries"
+        },
+        "expect": {
+          "state": "needs-key",
+          "message": "Needs a Claude API key. Add ANTHROPIC_API_KEY to the Daylight server (GitHub › Settings › Secrets), then re-run the deploy, to turn this on."
+        },
+        "noteError": {
+          "cache": "updated",
+          "feature": "ai",
+          "refresh": true
+        }
+      },
+      {
+        "name": "409 NOT_CONFIGURED, missing the email domain",
+        "feature": "email",
+        "response": {
+          "status": 409,
+          "body": "{\"error\":{\"code\":\"NOT_CONFIGURED\",\"message\":\"Needs an email domain. Add DAYLIGHT_EMAIL_DOMAIN (a domain on your Cloudflare account) in GitHub › Settings › Secrets, then re-run the deploy.\",\"missing\":[\"DAYLIGHT_EMAIL_DOMAIN\"],\"feature\":\"email\"}}"
+        },
+        "error": {
+          "code": "NOT_CONFIGURED",
+          "status": 409,
+          "feature": "email",
+          "missing": [
+            "DAYLIGHT_EMAIL_DOMAIN"
+          ]
+        },
+        "expect": {
+          "state": "needs-domain",
+          "message": "Needs an email domain. Add DAYLIGHT_EMAIL_DOMAIN (a domain on your Cloudflare account) in GitHub › Settings › Secrets, then re-run the deploy."
+        },
+        "noteError": {
+          "cache": "updated",
+          "feature": "email",
+          "refresh": true
+        }
+      },
+      {
+        "name": "409 NOT_CONFIGURED, missing R2",
+        "feature": "files",
+        "response": {
+          "status": 409,
+          "body": "{\"error\":{\"code\":\"NOT_CONFIGURED\",\"message\":\"Needs R2 storage on your Cloudflare account. Turn on R2 in the Cloudflare dashboard (it asks for a card; the free tier isn’t charged), then re-run the deploy.\",\"missing\":[\"R2\"],\"feature\":\"files\"}}"
+        },
+        "error": {
+          "code": "NOT_CONFIGURED",
+          "status": 409,
+          "feature": "files",
+          "missing": [
+            "R2"
+          ]
+        },
+        "expect": {
+          "state": "needs-r2",
+          "message": "Needs R2 storage on your Cloudflare account. Turn on R2 in the Cloudflare dashboard (it asks for a card; the free tier isn’t charged), then re-run the deploy."
+        },
+        "noteError": {
+          "cache": "updated",
+          "feature": "files",
+          "refresh": true
+        }
+      },
+      {
+        "name": "409 NOT_CONFIGURED: the email domain is read before R2",
+        "feature": "email",
+        "response": {
+          "status": 409,
+          "body": "{\"error\":{\"code\":\"NOT_CONFIGURED\",\"missing\":[\"R2\",\"DAYLIGHT_EMAIL_DOMAIN\"]}}"
+        },
+        "error": {
+          "code": "NOT_CONFIGURED",
+          "status": 409,
+          "missing": [
+            "R2",
+            "DAYLIGHT_EMAIL_DOMAIN"
+          ]
+        },
+        "expect": {
+          "state": "needs-domain",
+          "message": "Needs an email domain. Add DAYLIGHT_EMAIL_DOMAIN (a domain on your Cloudflare account) in GitHub › Settings › Secrets, then re-run the deploy."
+        },
+        "noteError": {
+          "cache": "updated",
+          "feature": "email",
+          "refresh": true
+        }
+      },
+      {
+        "name": "409 NOT_CONFIGURED: DAYLIGHT_SERVER_CODE is read first",
+        "feature": "email",
+        "response": {
+          "status": 409,
+          "body": "{\"error\":{\"code\":\"NOT_CONFIGURED\",\"missing\":[\"R2\",\"DAYLIGHT_EMAIL_DOMAIN\",\"DAYLIGHT_SERVER_CODE\"]}}"
+        },
+        "error": {
+          "code": "NOT_CONFIGURED",
+          "status": 409,
+          "missing": [
+            "R2",
+            "DAYLIGHT_EMAIL_DOMAIN",
+            "DAYLIGHT_SERVER_CODE"
+          ]
+        },
+        "expect": {
+          "state": "needs-server",
+          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on."
+        },
+        "noteError": {
+          "cache": "dropped",
+          "configRefresh": false
+        }
+      },
+      {
+        "name": "503 NOT_CONFIGURED: a Worker deployed without DAYLIGHT_SERVER_CODE",
+        "feature": "files",
+        "response": {
+          "status": 503,
+          "body": "{\"error\":{\"code\":\"NOT_CONFIGURED\",\"message\":\"Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on.\",\"missing\":[\"DAYLIGHT_SERVER_CODE\"]}}"
+        },
+        "error": {
+          "code": "NOT_CONFIGURED",
+          "status": 503,
+          "missing": [
+            "DAYLIGHT_SERVER_CODE"
+          ]
+        },
+        "expect": {
+          "state": "needs-server",
+          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on."
+        },
+        "noteError": {
+          "cache": "dropped",
+          "configRefresh": false
+        }
+      },
+      {
+        "name": "409 NOT_CONFIGURED with an empty missing list",
+        "feature": "files",
+        "response": {
+          "status": 409,
+          "body": "{\"error\":{\"code\":\"NOT_CONFIGURED\",\"missing\":[]}}"
+        },
+        "error": {
+          "code": "NOT_CONFIGURED",
+          "status": 409,
+          "missing": []
+        },
+        "expect": {
+          "state": "needs-server",
+          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on."
+        },
+        "noteError": {
+          "cache": "dropped",
+          "configRefresh": false
+        }
+      },
+      {
+        "name": "409 NOT_CONFIGURED whose missing is a string, not a list",
+        "feature": "files",
+        "response": {
+          "status": 409,
+          "body": "{\"error\":{\"code\":\"NOT_CONFIGURED\",\"missing\":\"R2\"}}"
+        },
+        "error": {
+          "code": "NOT_CONFIGURED",
+          "status": 409,
+          "missing": "R2"
+        },
+        "expect": {
+          "state": "needs-server",
+          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on."
+        },
+        "noteError": {
+          "cache": "dropped",
+          "configRefresh": false
+        }
+      },
+      {
+        "name": "409 NEEDS_LAB_INBOX names deliver; the app asked for ai",
+        "feature": "ai",
+        "response": {
+          "status": 409,
+          "body": "{\"error\":{\"code\":\"NEEDS_LAB_INBOX\",\"message\":\"Needs Lab on your Daylight. Turn on Lab in Daylight Share on the Daylight to receive this.\",\"feature\":\"deliver\"}}"
+        },
+        "error": {
+          "code": "NEEDS_LAB_INBOX",
+          "status": 409,
+          "feature": "deliver"
+        },
+        "expect": {
+          "state": "needs-lab-inbox",
+          "message": "Needs Lab on your Daylight. Turn on Lab in Daylight Share on the Daylight to receive this."
+        },
+        "noteError": {
+          "cache": "updated",
+          "feature": "deliver",
+          "refresh": true
+        }
+      },
+      {
+        "name": "409 NEEDS_LAB_INBOX without a feature",
+        "feature": "feeds",
+        "response": {
+          "status": 409,
+          "body": "{\"error\":{\"code\":\"NEEDS_LAB_INBOX\"}}"
+        },
+        "error": {
+          "code": "NEEDS_LAB_INBOX",
+          "status": 409
+        },
+        "expect": {
+          "state": "needs-lab-inbox",
+          "message": "Needs Lab on your Daylight. Turn on Lab in Daylight Share on the Daylight to receive this."
+        },
+        "noteError": {
+          "cache": "updated",
+          "feature": "feeds",
+          "refresh": true
+        }
+      },
+      {
+        "name": "423 LOCKED",
+        "feature": "ai",
+        "response": {
+          "status": 423,
+          "body": "{\"error\":{\"code\":\"LOCKED\",\"message\":\"The Daylight server was locked when this device was re-paired. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy.\"}}"
+        },
+        "error": {
+          "code": "LOCKED",
+          "status": 423
+        },
+        "expect": {
+          "state": "locked",
+          "message": "The Daylight server was locked when this device was re-paired. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy."
+        },
+        "noteError": {
+          "cache": "dropped",
+          "configRefresh": false
+        }
+      },
+      {
+        "name": "401 BAD_AUTH: the module’s text, whatever the answer says",
+        "feature": "ai",
+        "response": {
+          "status": 401,
+          "body": "{\"error\":{\"code\":\"BAD_AUTH\",\"message\":\"Some other text.\"}}"
+        },
+        "error": {
+          "code": "BAD_AUTH",
+          "status": 401
+        },
+        "expect": {
+          "state": "error",
+          "message": "The Daylight server doesn’t recognise this device’s pairing. Check DAYLIGHT_SERVER_CODE, then re-run the deploy."
+        },
+        "noteError": {
+          "cache": "dropped",
+          "configRefresh": true
+        }
+      },
+      {
+        "name": "401 without a JSON body is BAD_AUTH",
+        "feature": "files",
+        "response": {
+          "status": 401,
+          "body": "Unauthorized"
+        },
+        "error": {
+          "code": "BAD_AUTH",
+          "status": 401
+        },
+        "expect": {
+          "state": "error",
+          "message": "The Daylight server doesn’t recognise this device’s pairing. Check DAYLIGHT_SERVER_CODE, then re-run the deploy."
+        },
+        "noteError": {
+          "cache": "dropped",
+          "configRefresh": true
+        }
+      },
+      {
+        "name": "429 RATE_LIMITED: the feature stays ready",
+        "feature": "feeds",
+        "response": {
+          "status": 429,
+          "body": "{\"error\":{\"code\":\"RATE_LIMITED\",\"message\":\"Too many requests. Try again in a minute.\",\"retryAfter\":60}}"
+        },
+        "error": {
+          "code": "RATE_LIMITED",
+          "status": 429,
+          "retryAfter": 60
+        },
+        "expect": {
+          "state": "error",
+          "message": "Too many requests. Try again in a minute."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "503 AI_BUSY: the feature stays ready",
+        "feature": "ai",
+        "response": {
+          "status": 503,
+          "body": "{\"error\":{\"code\":\"AI_BUSY\",\"message\":\"Claude is busy right now. Try again in a minute.\",\"retryAfter\":30}}"
+        },
+        "error": {
+          "code": "AI_BUSY",
+          "status": 503,
+          "retryAfter": 30
+        },
+        "expect": {
+          "state": "error",
+          "message": "Claude is busy right now. Try again in a minute."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "429 AI_QUEUE_FULL: the feature stays ready",
+        "feature": "ai",
+        "response": {
+          "status": 429,
+          "body": "{\"error\":{\"code\":\"AI_QUEUE_FULL\",\"message\":\"Too many AI requests are waiting. Try again in a few minutes.\",\"retryAfter\":120}}"
+        },
+        "error": {
+          "code": "AI_QUEUE_FULL",
+          "status": 429,
+          "retryAfter": 120
+        },
+        "expect": {
+          "state": "error",
+          "message": "Too many AI requests are waiting. Try again in a few minutes."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "429 AI_DAILY_LIMIT",
+        "feature": "ai",
+        "response": {
+          "status": 429,
+          "body": "{\"error\":{\"code\":\"AI_DAILY_LIMIT\",\"message\":\"Today’s AI limit is used up. It resets at 00:00 UTC, or raise it in Lab settings (up to US$10).\",\"limit\":3,\"resetAt\":\"2026-10-21T00:00:00.000Z\"}}"
+        },
+        "error": {
+          "code": "AI_DAILY_LIMIT",
+          "status": 429,
+          "limit": 3,
+          "resetAt": "2026-10-21T00:00:00.000Z"
+        },
+        "expect": {
+          "state": "error",
+          "message": "Today’s AI limit is used up. It resets at 00:00 UTC, or raise it in Lab settings (up to US$10)."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "503 AI_KEY_INVALID",
+        "feature": "ai",
+        "response": {
+          "status": 503,
+          "body": "{\"error\":{\"code\":\"AI_KEY_INVALID\",\"message\":\"Claude didn’t accept the API key. Check ANTHROPIC_API_KEY in GitHub › Settings › Secrets, then re-run the deploy.\"}}"
+        },
+        "error": {
+          "code": "AI_KEY_INVALID",
+          "status": 503
+        },
+        "expect": {
+          "state": "error",
+          "message": "Claude didn’t accept the API key. Check ANTHROPIC_API_KEY in GitHub › Settings › Secrets, then re-run the deploy."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "409 FEED_EXISTS",
+        "feature": "feeds",
+        "response": {
+          "status": 409,
+          "body": "{\"error\":{\"code\":\"FEED_EXISTS\",\"message\":\"You already follow that feed.\"}}"
+        },
+        "error": {
+          "code": "FEED_EXISTS",
+          "status": 409
+        },
+        "expect": {
+          "state": "error",
+          "message": "You already follow that feed."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "413 TOO_LARGE without a message: the module’s text with the limit",
+        "feature": "files",
+        "response": {
+          "status": 413,
+          "body": "{\"error\":{\"code\":\"TOO_LARGE\",\"limit\":12713984}}"
+        },
+        "error": {
+          "code": "TOO_LARGE",
+          "status": 413,
+          "limit": 12713984
+        },
+        "expect": {
+          "state": "error",
+          "message": "That’s larger than the Daylight server takes (12.7 MB)."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "an unknown code with a message",
+        "feature": "feeds",
+        "response": {
+          "status": 400,
+          "body": "{\"error\":{\"code\":\"FEED_PRIVATE\",\"message\":\"That feed needs a login.\"}}"
+        },
+        "error": {
+          "code": "FEED_PRIVATE",
+          "status": 400
+        },
+        "expect": {
+          "state": "error",
+          "message": "That feed needs a login."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "an unknown code without a message",
+        "feature": "feeds",
+        "response": {
+          "status": 400,
+          "body": "{\"error\":{\"code\":\"FEED_PRIVATE\"}}"
+        },
+        "error": {
+          "code": "FEED_PRIVATE",
+          "status": 400
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (FEED_PRIVATE). Try again later."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "500 without a JSON body is SERVER_ERROR",
+        "feature": "ai",
+        "response": {
+          "status": 500,
+          "body": "<html>Internal error</html>"
+        },
+        "error": {
+          "code": "SERVER_ERROR",
+          "status": 500
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (SERVER_ERROR). Try again later."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "a code that is not a server code is not read (it cannot pose as needs-server)",
+        "feature": "ai",
+        "response": {
+          "status": 502,
+          "body": "{\"error\":{\"code\":\"needs-server\",\"message\":\"Fake.\"}}"
+        },
+        "error": {
+          "code": "SERVER_ERROR",
+          "status": 502
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (SERVER_ERROR). Try again later."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "an error object without a code is not read",
+        "feature": "ai",
+        "response": {
+          "status": 500,
+          "body": "{\"error\":{\"message\":\"No code.\"}}"
+        },
+        "error": {
+          "code": "SERVER_ERROR",
+          "status": 500
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (SERVER_ERROR). Try again later."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "the network failed",
+        "feature": "ai",
+        "network": true,
+        "error": {
+          "code": "OFFLINE",
+          "status": 0
+        },
+        "expect": {
+          "state": "OFFLINE",
+          "message": "Couldn’t reach the Daylight server. Check your connection and try again."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "a gate’s 5 s deadline passed before the server answered",
+        "feature": "ai",
+        "deadline": true,
+        "error": {
+          "code": "OFFLINE",
+          "status": 0
+        },
+        "expect": {
+          "state": "OFFLINE",
+          "message": "Couldn’t reach the Daylight server. Check your connection and try again."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "no config and no pin (4.3)",
+        "feature": "ai",
+        "local": "needs-server",
+        "error": {
+          "code": "needs-server",
+          "status": 0
+        },
+        "expect": {
+          "state": "needs-server",
+          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "the pin belongs to an earlier pairing (4.3)",
+        "feature": "files",
+        "local": "pairing-mismatch",
+        "error": {
+          "code": "pairing-mismatch",
+          "status": 0
+        },
+        "expect": {
+          "state": "pairing-mismatch",
+          "message": "The Daylight server still has your previous pairing. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "the server’s api is below SERVER_API_MIN",
+        "feature": "ai",
+        "local": "server-outdated",
+        "error": {
+          "code": "server-outdated",
+          "status": 0
+        },
+        "expect": {
+          "state": "server-outdated",
+          "message": "Update the Daylight server to use this: open the latest “Reader experiment - Daylight server” run in GitHub › Actions and choose Re-run all jobs."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "the server’s api is above SERVER_API",
+        "feature": "ai",
+        "local": "app-outdated",
+        "error": {
+          "code": "app-outdated",
+          "status": 0
+        },
+        "expect": {
+          "state": "app-outdated",
+          "message": "Update this app to use the Daylight server."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      }
+    ]
   }
 }

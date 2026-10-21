@@ -45,6 +45,8 @@ jobs:
         run: npx tsc --noEmit
       - name: Tests (unit in Node; Worker and end to end in workerd with Miniflare, the mock relay and a mock Claude)
         run: npm test
+      - name: Vectors are up to date (Swift and Kotlin port against them, serverState included)
+        run: npm run vectors && git diff --exit-code -- vectors/server-vectors.json
       - name: Bundle fits the Free plan (3 MB compressed) and carries no test hooks
         env:
           WRANGLER_SEND_METRICS: 'false'

@@ -452,6 +452,14 @@ Inbox's own code path. It is never inferred from API calls, and delivery never d
 Forging a hello or an ack needs `boxKey`, which only the server and paired devices can derive. The worst a forged ack
 does is stop re-sends of an item early.
 
+**Lab frames on the pairing ack topic (v1 delivery).** Under v1 delivery the server reads its acks from the pairing's
+ack topic, where a Lab Inbox also publishes its Lab frames (LAB-PLAN 2.2.1): ack frames with `ids: []` and `x-inbox`
+(the hello, and the frame with `lab: 0` sent when Lab is turned off), some with `x-st` item states. `pollAcks` reads
+only `ids`, so these frames deliver nothing and change no outbox row, even when `x-st` names the server's own items.
+Like any frame with `x-inbox` they count as presence (`inbox.lastSeen`, and `app` clamped to 60 characters). That is
+harmless: v1 delivery never gates on presence, and every Inbox receives its items. `test/worker-outbox.test.mjs` pins
+this. Wave S (LAB-PLAN 4.2, S0) adds the server ack topic in Lab mode, where `x-inbox.lab === 0` ends presence.
+
 ---
 
 ## 6. Large files
@@ -1199,7 +1207,7 @@ Optional fields: `feature`, `missing`, `retryAfter` (seconds; also the `Retry-Af
 
 **`message` is what the apps show** (14.2). Apps act in code only on the codes that change behaviour:
 
-- `NEEDS_KEY`, `NOT_CONFIGURED` and `NEEDS_LAB_INBOX` update the cached feature state;
+- `NEEDS_KEY`, `NOT_CONFIGURED` and `NEEDS_LAB_INBOX` update the cached feature state (`noteError`, 13.1);
 - `RATE_LIMITED`, `AI_BUSY` and `AI_QUEUE_FULL` wait `retryAfter`;
 - `NEED_SOURCE` uploads `missingParts`;
 - `GONE` re-uploads;
@@ -1213,7 +1221,7 @@ Optional fields: `feature`, `missing`, `retryAfter` (seconds; also the `Retry-Af
 | 404 | `NOT_FOUND` | Unknown id or path |
 | 404 | `NEED_SOURCE` | AI source unknown or incomplete (`missingParts`) |
 | 409 | `NEEDS_KEY` | AI without `ANTHROPIC_API_KEY` |
-| 409 | `NOT_CONFIGURED` | A feature that needs setup (`missing`: `DAYLIGHT_EMAIL_DOMAIN`, `R2`) |
+| 409 | `NOT_CONFIGURED` | A feature that needs setup (`missing`: `DAYLIGHT_EMAIL_DOMAIN`, `R2`). A Worker deployed without a valid `DAYLIGHT_SERVER_CODE` answers every authenticated route with `503` and `missing: ["DAYLIGHT_SERVER_CODE"]`. Apps read `missing` in this order: `DAYLIGHT_SERVER_CODE` → `needs-server`, `DAYLIGHT_EMAIL_DOMAIN` → `needs-domain`, `R2` → `needs-r2`, anything else → `needs-server` (`notConfiguredState`). |
 | 409 | `NEEDS_LAB_INBOX` | Delivery to the Daylight before the Lab Inbox said hello (Lab delivery) |
 | 409 | `FEED_EXISTS` | Feed URL already added |
 | 410 | `GONE` | File or source expired |
@@ -1839,6 +1847,14 @@ export function publicUrl(u) {}
 export class ServerError extends Error { /* code, status, message (from the server), feature, missing, retryAfter, limit, resetAt, missingParts */ }
 /** Text for the states the app decides itself (14.1): needs-server, pairing-mismatch, server-outdated, app-outdated, OFFLINE. */
 export function localMessage(state) {}
+/** NOT_CONFIGURED's `missing` -> 'needs-server' | 'needs-domain' | 'needs-r2', read in that order (10.4). */
+export function notConfiguredState(missing) {}
+/** The state mapping (LAB-PLAN 2.6), pure; server-vectors.json › serverState pins it for Swift and Kotlin.
+ *  stateFromStatus: a GET /v1/status body and a feature -> {state, message} (the server's message when it sent one).
+ *  stateFromError: a ServerError (or an error without a code: OFFLINE) -> {state, message}; NEEDS_KEY, NOT_CONFIGURED,
+ *  NEEDS_LAB_INBOX and LOCKED map to their states with the 14.1 text, anything else is 'error' with the server's message. */
+export function stateFromStatus(status, feature) {}
+export function stateFromError(error) {}
 
 export class DaylightServer {
   constructor({ pairing, storage, fetch, now = () => Date.now(), from = '', app = '' }) {}
@@ -1849,8 +1865,15 @@ export class DaylightServer {
   async clearManualUrl() {}
   /** From the cached config and status: 'ready' | 'needs-server' | 'pairing-mismatch' | 'server-outdated' |
    *  'app-outdated' | 'locked' | 'needs-key' | 'needs-domain' | 'needs-r2' | 'needs-lab-inbox' | 'needs-paid' | 'error'
-   *  plus the message to show. Refreshes a status older than 10 min (waiting ≤ 5 s on a tap). */
+   *  plus the message to show. Refreshes a status older than 10 min (waiting ≤ 5 s on a tap). Discovery has no
+   *  deadline of its own, so a gate races state() against 5 s, which gives OFFLINE (LAB-PLAN 2.6). */
   async state(feature) {}                // feature: 'ai' | 'pdf' | 'email' | 'feeds' | 'files' | 'deliver'
+  /** After a call for `feature` failed with `error`: -> stateFromError(error), and updates the cached status. NEEDS_KEY,
+   *  NEEDS_LAB_INBOX and NOT_CONFIGURED (email domain, R2) give the feature the error names (else `feature`) that
+   *  state and mark the status for refresh; LOCKED, BAD_AUTH and NOT_CONFIGURED for DAYLIGHT_SERVER_CODE drop it
+   *  (BAD_AUTH also re-reads the config topic once); anything else keeps it, so the feature stays ready. state() sends
+   *  its own errors through it. Never throws; makes no request. */
+  async noteError(feature, error) {}
   async status() {}
   /** Bearer request; maps error JSON to ServerError; network failure -> ServerError('OFFLINE'). */
   async request(method, path, { json, body, query, headers } = {}) {}
@@ -1868,8 +1891,10 @@ export class DaylightServer {
 Storage keys (the protocol's storage adapter) are:
 
 - `server/config` and `server/configAt`;
-- `server/pin`, holding `{origin, fingerprint}`;
-- `server/status` and `server/statusAt`;
+- `server/pin`, holding `{origin, fingerprint}`, and `server/pendingMove`, holding the `{origin, fingerprint}` of a
+  config that names another origin for the same fingerprint until the user confirms the move (`confirmMove`, 4.3);
+- `server/status` and `server/statusAt`, which only the module writes (`status`, `noteError`, `confirmMove`, the
+  manual address);
 - `server/manualUrl`, `server/hosted` (the hosted outbox) and `server/hostedAckCursor`;
 - `server/emailAddress` (to detect a change);
 - `server/notices` (`{"ai": true, "email": true, "feeds": true, "files": true}` once shown).
@@ -1886,7 +1911,8 @@ With a page, send `text` extracted on the device, or else `url`.
 
 - **Every server feature in Lab is a normal, enabled control.** On tap the app calls `state(feature)`. If the state
   is not `ready`, it shows the message (one line, naming the setting) and stops. If it is `ready`, it shows the
-  first-use notice (14.3) if not yet shown, then calls the server.
+  first-use notice (14.3) if not yet shown, then calls the server. When that call fails with a `ServerError`, the app
+  calls `noteError(feature, error)` and shows the message it returns (waiting `retryAfter` where there is one).
 - **Sending a file over the relay's largest item.** If `state('files')` is `ready`, call `files.sendLarge`. Otherwise
   show the message.
 - **Lab settings › Daylight server** shows:
@@ -1929,6 +1955,11 @@ secret. It holds:
   received" through share/js's v1.0 `Receiver` with `Attach:` messages on the mock relay. Kotlin and Swift run the
   same case.
 - **`publicUrl`**: accepted and refused URLs, including every form in 9.7.
+- **`serverState`** (LAB-PLAN 2.6): `fromStatus`, a status body and a feature → `{state, message}`; `fromError`, the
+  server's answer to a call (HTTP status and body text), a network failure, a gate's deadline or an app-decided state →
+  the error the client makes → `{state, message}`, with what `noteError` does to the cached status (kept, updated and
+  marked for refresh, or dropped). It includes the `NOT_CONFIGURED` order, answers that are not read (a lowercase
+  code, a message that is not a string) and the states that stay ready (`RATE_LIMITED`, `AI_BUSY`, `AI_QUEUE_FULL`).
 
 ---
 
@@ -2072,7 +2103,9 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
     - OPML import.
   - **Outbox**: inline and hosted frames, re-send at 11 h, ack handling, both delivery modes, and the ntfy budget.
     Junk on the ack topic (attachments, 1,000 messages, 300 KiB) is ignored within the caps. The Lab Inbox's hello
-    sets `inbox.lastSeen`.
+    sets `inbox.lastSeen`. Under v1 delivery, Lab frames on the pairing ack topic (a hello, `x-st` naming the
+    server's own items, 24 states, `lab: 0`) deliver nothing and change no row, and the Inbox's own acks after them
+    still deliver (5.5). The client's `noteError` against the Worker's `NEEDS_LAB_INBOX`.
   - **AI**:
     - **the exact request**: model `claude-opus-5-5`, beta `server-side-fallback-2026-07-01`, `fallbacks:
       "default"`, `output_config.effort` set, `format` for summaries, no `thinking`, the document block before the

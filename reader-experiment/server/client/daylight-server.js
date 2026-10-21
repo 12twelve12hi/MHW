@@ -90,13 +90,7 @@ export const ERROR_MESSAGES = {
   BAD_AUTH: () => 'The Daylight server doesn’t recognise this device’s pairing. Check DAYLIGHT_SERVER_CODE, then re-run the deploy.',
   SERVER_LIMIT: () => 'This was too big for the Daylight server on Cloudflare’s Free plan. It works on the Workers Paid plan.',
   NEEDS_KEY: () => STATE_MESSAGES['needs-key'],
-  NOT_CONFIGURED: (x) => {
-    const m = x.missing ?? [];
-    if (m.includes('DAYLIGHT_SERVER_CODE')) return STATE_MESSAGES['needs-server'];
-    if (m.includes('DAYLIGHT_EMAIL_DOMAIN')) return STATE_MESSAGES['needs-domain'];
-    if (m.includes('R2')) return STATE_MESSAGES['needs-r2'];
-    return STATE_MESSAGES['needs-server'];
-  },
+  NOT_CONFIGURED: (x) => STATE_MESSAGES[notConfiguredState(x.missing)],
   NEEDS_LAB_INBOX: () => STATE_MESSAGES['needs-lab-inbox'],
   LOCKED: () => STATE_MESSAGES.locked,
   OFFLINE: () => STATE_MESSAGES.OFFLINE,
@@ -119,6 +113,53 @@ export function errorMessage(code, extra = {}) {
 
 /** Text for the states the app decides itself (14.1): needs-server, pairing-mismatch, server-outdated, app-outdated, OFFLINE. */
 export function localMessage(state) { return STATE_MESSAGES[state] ?? errorMessage(state); }
+
+/**
+ * NOT_CONFIGURED's `missing` -> the state. Read in this order (LAB-PLAN 2.6): DAYLIGHT_SERVER_CODE, then
+ * DAYLIGHT_EMAIL_DOMAIN, then R2; anything else, a `missing` that is not an array included, is needs-server.
+ */
+export function notConfiguredState(missing) {
+  const m = Array.isArray(missing) ? missing : [];
+  if (m.includes('DAYLIGHT_SERVER_CODE')) return 'needs-server';
+  if (m.includes('DAYLIGHT_EMAIL_DOMAIN')) return 'needs-domain';
+  if (m.includes('R2')) return 'needs-r2';
+  return 'needs-server';
+}
+
+const LOCAL_STATES = ['needs-server', 'pairing-mismatch', 'server-outdated', 'app-outdated', 'OFFLINE'];
+const SERVER_CODE = /^[A-Z][A-Z0-9_]{0,39}$/; // what an error JSON's `code` must look like to be read (10.4)
+
+/**
+ * A feature's entry in GET /v1/status -> {state, message} (14.1). `ready` has no message. Other states show the
+ * server's `message` when it sent a non-empty string, else the module's text for the state (`error`: SERVER_ERROR's
+ * sentence; an unknown state: the generic sentence with the state's name). A status without the
+ * feature, or with an entry that has no state, is {error, NOT_FOUND's message}. Pinned by server-vectors.json ›
+ * serverState › fromStatus.
+ */
+export function stateFromStatus(status, feature) {
+  const fs = status && typeof status === 'object' ? status.features : null;
+  const f = fs && typeof fs === 'object' && Object.hasOwn(fs, feature) ? fs[feature] : null;
+  if (!f || typeof f !== 'object' || typeof f.state !== 'string' || !f.state) return { state: 'error', message: errorMessage('NOT_FOUND') };
+  if (f.state === 'ready') return { state: 'ready', message: null };
+  if (typeof f.message === 'string' && f.message) return { state: f.state, message: f.message };
+  return { state: f.state, message: f.state === 'error' ? errorMessage('SERVER_ERROR') : localMessage(f.state) };
+}
+
+/**
+ * An error from the server, the network or discovery -> {state, message} (LAB-PLAN 2.6). The states the app decides
+ * itself and every state an error code maps to show the module's text for that state; `error` shows the server's
+ * message (BAD_AUTH: always the module's). An error without a code is OFFLINE. Pinned by server-vectors.json ›
+ * serverState › fromError.
+ */
+export function stateFromError(err) {
+  const code = typeof err?.code === 'string' && err.code ? err.code : 'OFFLINE';
+  if (LOCAL_STATES.includes(code)) return { state: code, message: localMessage(code) };
+  const mapped = code === 'LOCKED' ? 'locked' : code === 'NEEDS_KEY' ? 'needs-key' : code === 'NEEDS_LAB_INBOX' ? 'needs-lab-inbox'
+    : code === 'NOT_CONFIGURED' ? notConfiguredState(err.missing) : null;
+  if (mapped) return { state: mapped, message: STATE_MESSAGES[mapped] };
+  if (code === 'BAD_AUTH') return { state: 'error', message: errorMessage('BAD_AUTH') };
+  return { state: 'error', message: typeof err.message === 'string' && err.message ? err.message : errorMessage(code, err) };
+}
 
 /** Notices shown once per feature (14.3), with Continue and Cancel. */
 export function noticeText(feature, { delivery = 'lab' } = {}) {
@@ -712,7 +753,14 @@ export class DaylightServer {
     const text = await res.text().catch(() => '');
     let data = null;
     if (text.trim()) { try { data = JSON.parse(text); } catch { data = null; } }
-    if (data?.error) throw new ServerError(data.error.code, { ...data.error, status: res.status });
+    const err = data && typeof data === 'object' ? data.error : null;
+    // Only an error object whose code looks like a server code (10.4) is read, so an answer can never pose as a state
+    // the app decides itself (needs-server, OFFLINE …); a message that is not a string is left out.
+    if (err && typeof err === 'object' && typeof err.code === 'string' && SERVER_CODE.test(err.code)) {
+      const extra = { ...err, status: res.status };
+      if (typeof extra.message !== 'string') delete extra.message;
+      throw new ServerError(err.code, extra);
+    }
     if (!res.ok) throw new ServerError(res.status === 401 ? 'BAD_AUTH' : 'SERVER_ERROR', { status: res.status });
     return data ?? {};
   }
@@ -739,7 +787,9 @@ export class DaylightServer {
   /**
    * From the cached config and status: {state, message} where state is 'ready' | 'needs-server' | 'pairing-mismatch'
    * | 'server-outdated' | 'app-outdated' | 'locked' | 'needs-key' | 'needs-domain' | 'needs-r2' | 'needs-lab-inbox' |
-   * 'needs-paid' | 'error' | 'OFFLINE'. Refreshes a status older than 10 minutes (waiting at most 5 s on a tap).
+   * 'needs-paid' | 'error' | 'OFFLINE'. Refreshes a status older than 10 minutes (the status request waits at most
+   * 5 s). Discovery and its relay poll have no deadline of their own, so a gate races this against its own 5 s
+   * (LAB-PLAN 2.6, labGate). An error goes through noteError, so LOCKED and BAD_AUTH drop the cached status here too.
    */
   async state(feature) {
     let s;
@@ -747,15 +797,41 @@ export class DaylightServer {
       await this._origin();
       s = await this.status();
     } catch (e) {
-      const code = e?.code ?? 'OFFLINE';
-      if (['needs-server', 'pairing-mismatch', 'server-outdated', 'app-outdated', 'OFFLINE'].includes(code)) return { state: code, message: localMessage(code) };
-      if (code === 'LOCKED') return { state: 'locked', message: STATE_MESSAGES.locked };
-      if (code === 'BAD_AUTH') return { state: 'error', message: errorMessage('BAD_AUTH') };
-      return { state: 'error', message: e?.message ?? errorMessage(code) };
+      return this.noteError(feature, e);
     }
-    const f = s?.features?.[feature];
-    if (!f) return { state: 'error', message: errorMessage('NOT_FOUND') };
-    return f.state === 'ready' ? { state: 'ready', message: null } : { state: f.state, message: f.message ?? localMessage(f.state) };
+    return stateFromStatus(s, feature);
+  }
+
+  /**
+   * After a server call for `feature` failed with `err` (LAB-PLAN 2.6, DESIGN 10.4): updates the cached status and
+   * returns {state, message} to show now (stateFromError). Only this module writes `server/status`. Never throws.
+   * - NEEDS_KEY, NEEDS_LAB_INBOX, and NOT_CONFIGURED for the email domain or R2: the feature the server names in the
+   *   error's `feature` (else `feature`) takes that state in the cached status, and the cache is marked for refresh:
+   *   the next state() asks the server, which knows every feature this affects, and falls back to this cache offline.
+   * - LOCKED, BAD_AUTH and NOT_CONFIGURED for DAYLIGHT_SERVER_CODE concern the whole server: the cached status is
+   *   dropped. After BAD_AUTH the next discovery also re-reads the config topic, once (discover({force: true})).
+   * - Anything else (OFFLINE, RATE_LIMITED, AI_BUSY, AI_QUEUE_FULL, TOO_LARGE …) leaves the cache as it is, so the
+   *   feature stays ready; the app shows the message and waits `err.retryAfter` when there is one.
+   */
+  async noteError(feature, err) {
+    const out = stateFromError(err);
+    const code = typeof err?.code === 'string' ? err.code : '';
+    try {
+      if (code === 'LOCKED' || code === 'BAD_AUTH' || (code === 'NOT_CONFIGURED' && out.state === 'needs-server')) {
+        await this.storage.remove(KEY.status);
+        await this.storage.remove(KEY.statusAt);
+        if (code === 'BAD_AUTH') await this.storage.remove(KEY.configAt);
+      } else if (code === 'NEEDS_KEY' || code === 'NEEDS_LAB_INBOX' || code === 'NOT_CONFIGURED') {
+        const key = FEATURES.includes(err.feature) ? err.feature : FEATURES.includes(feature) ? feature : null;
+        const cached = await this._get(KEY.status);
+        if (key && cached && typeof cached === 'object') {
+          const features = cached.features && typeof cached.features === 'object' ? cached.features : {};
+          await this.storage.set(KEY.status, { ...cached, features: { ...features, [key]: { state: out.state, message: out.message } } });
+          await this.storage.remove(KEY.statusAt);
+        }
+      }
+    } catch { /* storage trouble: the message is still shown */ }
+    return out;
   }
 
   /** The first-use notice for a feature (14.3), or null once shown. Call markNoticeShown after Continue. */

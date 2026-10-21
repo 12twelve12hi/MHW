@@ -71,6 +71,20 @@ encrypted; the feed list is kept on the server; large files wait encrypted for u
 carries its own one-line `message`, which the apps show as is; the full table is DESIGN.md section 14 and
 `ERROR_MESSAGES` in the client module.
 
+### For the Lab apps (LAB-PLAN 2.6)
+
+- A tap runs the app's gate, which races `state(feature)` against 5 s (a timeout reads as `OFFLINE`); the state comes
+  from the cached `GET /v1/status` (10 minutes) through `stateFromStatus`.
+- When a server call fails, the app calls `noteError(feature, error)` and shows the `{state, message}` it returns
+  (`stateFromError`). `NEEDS_KEY`, `NOT_CONFIGURED` and `NEEDS_LAB_INBOX` update the cached status for the feature the
+  server names and mark it for refresh; `LOCKED` and `BAD_AUTH` drop it; `RATE_LIMITED`, `AI_BUSY` and the like leave
+  the feature ready. Only the module writes `server/status`.
+- Swift and Kotlin port this W0 subset under the same names and pass `vectors/server-vectors.json`, including its
+  `serverState` section (status JSON or the server's answer in, `{state, message}` and the cache effect out, with
+  `NOT_CONFIGURED`'s order: `DAYLIGHT_SERVER_CODE`, `DAYLIGHT_EMAIL_DOMAIN`, `R2`).
+- Lab frames (`ids: []` with `x-inbox`, maybe `x-st`) on the pairing ack topic deliver nothing on the server or in
+  the hosted outbox (`files.tick`); under v1 delivery they count as the Lab Inbox's presence, which nothing gates on.
+
 ## HTTP API (summary)
 
 All authenticated routes take `Authorization: Bearer <authToken>` (derived from the Server code; apps derive it from the

@@ -99,3 +99,115 @@ test('hosted frames: a v1 Receiver gets the item from Attach: messages and acks 
     assert.deepEqual(got.acked, [V.hosted.itemId]);
   } finally { await relay.close(); }
 });
+
+// ---- serverState (LAB-PLAN 2.6): the cases Swift and Kotlin must map the same way, checked here through a real client.
+
+const SS = V.serverState;
+const ORIGIN = 'https://daylight-6c1f0e9a2b44.example.workers.dev';
+const NOW = Date.parse('2026-10-20T06:00:00.000Z');
+const READY_STATUS = SS.fromStatus[0].status;
+
+/** A client with a manual server address and a fresh cached status in which every feature is ready. */
+async function cachedClient(respond, { status = READY_STATUS } = {}) {
+  const storage = new ds.MemoryStorage();
+  await storage.set('server/manualUrl', ORIGIN);
+  await storage.set('server/configAt', NOW - 60_000);
+  if (status) { await storage.set('server/status', status); await storage.set('server/statusAt', NOW - 60_000); }
+  const requests = [];
+  const fetchFn = async (url, init) => { requests.push(String(url)); return respond(url, init); };
+  return { storage, requests, client: new srv.DaylightServer({ pairing: { secret, relay: ds.DEFAULT_RELAY }, storage, fetch: fetchFn, now: () => NOW }) };
+}
+
+test('serverState › fromStatus: a status body and a feature -> {state, message}', async () => {
+  assert.ok(SS.fromStatus.length >= 15);
+  for (const c of SS.fromStatus) {
+    assert.deepEqual(srv.stateFromStatus(c.status, c.feature), c.expect, c.name);
+    // state() answers the same from a fresh cached status, without a request.
+    const { client, requests } = await cachedClient(() => { throw new Error('no request expected'); }, { status: c.status });
+    assert.deepEqual(await client.state(c.feature), c.expect, `state(): ${c.name}`);
+    assert.deepEqual(requests, []);
+  }
+});
+
+test('serverState › fromError: the answer to a call -> the client’s error -> {state, message}', async () => {
+  assert.ok(SS.fromError.length >= 25);
+  const states = new Set(SS.fromError.map((c) => c.expect.state));
+  for (const s of ['needs-key', 'needs-domain', 'needs-r2', 'needs-server', 'needs-lab-inbox', 'locked', 'error', 'OFFLINE', 'pairing-mismatch', 'server-outdated', 'app-outdated']) {
+    assert.ok(states.has(s), `a case for ${s}`);
+  }
+  for (const c of SS.fromError) {
+    let err;
+    if (c.response || c.network) {
+      const { client } = await cachedClient(async () => {
+        if (c.network) throw new TypeError('Failed to fetch');
+        return new Response(c.response.body, { status: c.response.status });
+      });
+      await assert.rejects(client.request('POST', '/v1/ai', { json: {} }), (e) => { err = e; return true; });
+      assert.ok(err instanceof srv.ServerError, c.name);
+      assert.equal(err.code, c.error.code, c.name);
+      assert.equal(err.status, c.error.status, c.name);
+      for (const k of ['feature', 'missing', 'retryAfter', 'limit', 'resetAt']) assert.deepEqual(err[k], c.error[k], `${c.name}: ${k}`);
+    } else {
+      err = new srv.ServerError(c.error.code, c.local ? { message: srv.localMessage(c.local) } : {});
+    }
+    assert.deepEqual(srv.stateFromError(err), c.expect, c.name);
+    assert.deepEqual(srv.stateFromError({ ...c.error, message: err.message }), c.expect, `${c.name} (plain error object)`);
+  }
+});
+
+test('serverState › fromError: the app-decided states come out of state() exactly so', async () => {
+  const values = await srv.deriveServerValues(await srv.deriveServerSeed(secret));
+  const empty = async () => new Response('');
+  const scenarios = {
+    'needs-server': async (st) => {},
+    'pairing-mismatch': async (st) => st.set('server/pin', { origin: 'https://old.example', fingerprint: '00000000' }),
+    'server-outdated': async (st) => { await st.set('server/config', { server: ORIGIN, api: 0, fingerprint: values.fingerprint, delivery: 'lab' }); await st.set('server/configAt', NOW); },
+    'app-outdated': async (st) => { await st.set('server/config', { server: ORIGIN, api: srv.SERVER_API + 1, fingerprint: values.fingerprint, delivery: 'lab' }); await st.set('server/configAt', NOW); },
+  };
+  for (const c of SS.fromError.filter((x) => x.local)) {
+    const storage = new ds.MemoryStorage();
+    await scenarios[c.local](storage);
+    const client = new srv.DaylightServer({ pairing: { secret, relay: ds.DEFAULT_RELAY }, storage, fetch: empty, now: () => NOW });
+    assert.deepEqual(await client.state(c.feature), c.expect, c.name);
+  }
+  const net = SS.fromError.find((x) => x.network);
+  const { client } = await cachedClient(async () => { throw new TypeError('offline'); }, { status: null });
+  assert.deepEqual(await client.state(net.feature), net.expect, 'no network and no cached status: OFFLINE');
+});
+
+test('serverState › fromError › noteError: what it does to the cached status', async () => {
+  const effects = new Set(SS.fromError.map((c) => c.noteError.cache));
+  assert.deepEqual([...effects].sort(), ['dropped', 'kept', 'updated']);
+  for (const c of SS.fromError) {
+    const { client, storage, requests } = await cachedClient(async () => { throw new TypeError('offline'); });
+    const err = new srv.ServerError(c.error.code, { ...c.error, message: c.expect.state === 'error' ? c.expect.message : undefined });
+    assert.deepEqual(await client.noteError(c.feature, err), c.expect, c.name);
+    assert.deepEqual(requests, [], `${c.name}: noteError makes no request`);
+    const status = await storage.get('server/status');
+    const statusAt = await storage.get('server/statusAt');
+    const configAt = await storage.get('server/configAt');
+    switch (c.noteError.cache) {
+      case 'kept':
+        assert.deepEqual(status, READY_STATUS, c.name);
+        assert.equal(statusAt, NOW - 60_000, c.name);
+        assert.deepEqual(await client.state(c.feature), { state: 'ready', message: null }, `${c.name}: the feature stays ready`);
+        break;
+      case 'updated': {
+        const f = c.noteError.feature;
+        assert.deepEqual(status.features[f], c.expect, c.name);
+        for (const k of Object.keys(READY_STATUS.features)) if (k !== f) assert.deepEqual(status.features[k], READY_STATUS.features[k], `${c.name}: ${k} untouched`);
+        assert.equal(statusAt, undefined, `${c.name}: marked for refresh`);
+        assert.equal(c.noteError.refresh, true);
+        assert.deepEqual(await client.state(f), c.expect, `${c.name}: offline, the next state() falls back to the noted state`);
+        assert.ok(requests.some((u) => u.endsWith('/v1/status')), `${c.name}: the next state() asked the server first`);
+        break;
+      }
+      case 'dropped':
+        assert.equal(status, undefined, c.name);
+        assert.equal(statusAt, undefined, c.name);
+        assert.equal(configAt === undefined, c.noteError.configRefresh, `${c.name}: configAt`);
+        break;
+      default: assert.fail(c.noteError.cache);
+    }
+  }
+});

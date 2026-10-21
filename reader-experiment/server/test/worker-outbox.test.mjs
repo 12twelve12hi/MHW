@@ -45,6 +45,20 @@ test('the client applies the Lab feature states and their messages', async () =>
   assert.deepEqual(await t.client.state('ai'), { state: 'ready', message: null });
 });
 
+test('noteError against the Worker: NEEDS_LAB_INBOX for an AI call marks deliver, not AI, until the next status', async () => {
+  const err = await t.client.ai.summarize({ text: 'Deliver me.' }, { deliver: 'both' }).then(() => null, (e) => e);
+  assert.equal(err?.code, 'NEEDS_LAB_INBOX');
+  assert.equal(err.feature, 'deliver');
+  assert.deepEqual(await t.client.noteError('ai', err), { state: 'needs-lab-inbox', message: srv.STATE_MESSAGES['needs-lab-inbox'] });
+  const cached = await t.client.storage.get('server/status');
+  assert.equal(cached.features.deliver.state, 'needs-lab-inbox');
+  assert.equal(cached.features.ai.state, 'ready');
+  assert.equal(await t.client.storage.get('server/statusAt'), undefined, 'marked for refresh');
+  assert.deepEqual(await t.client.state('ai'), { state: 'ready', message: null });
+  assert.ok(await t.client.storage.get('server/statusAt'), 'refreshed from the Worker');
+  assert.equal((await t.client.state('deliver')).state, 'needs-lab-inbox', 'the Worker says the same');
+});
+
 test('the Lab Inbox’s hello sets inbox.lastSeen and the delivering features become ready', async () => {
   await t.lane.hello('lab-inbox/1.2');
   const r = await t.cron(T0 + 7 * HOUR);
@@ -184,6 +198,57 @@ test('v1 delivery: server items reach any Inbox under the pairing key, acks come
     await v1.cron(T0 + HOUR);
     assert.deepEqual((await v1.rows('SELECT state FROM outbox')).map((r) => r.state), ['delivered', 'delivered']);
     assert.equal((await v1.client.discover({ force: true })).config.delivery, 'v1');
+  } finally { await v1.close(); }
+});
+
+test('v1 delivery: Lab frames on the pairing ack topic deliver nothing and change no row; they count as presence (DESIGN 5.5)', async () => {
+  // LAB-PLAN 2.2.1: a Lab frame is sealed like an ack, with ids [] and x-inbox, and maybe x-st (item states). In v1
+  // mode the server reads this topic for its acks; the Lab Inbox's frames there must not deliver anything.
+  const v1 = await setup({ delivery: 'v1' });
+  try {
+    const ids = [
+      (await enqueue(v1, { origin: 'lab:url', kind: 'url', url: 'https://example.com/lab', title: 'Lab link' })).id,
+      (await enqueue(v1, { origin: 'lab:page', kind: 'page', title: 'Lab page', text: '<p>Lab page</p>' })).id,
+    ];
+    await v1.cron(T0);
+    const rowsOf = () => v1.rows('SELECT id, state, publishes, next_part, last_publish FROM outbox ORDER BY id');
+    const frameCount = async () => (await v1.rows('SELECT COUNT(*) AS n FROM frames'))[0].n;
+    const before = await rowsOf();
+    assert.deepEqual(before.map((r) => r.state), ['sent', 'sent']);
+    const framesBefore = await frameCount();
+    assert.equal((await v1.api('GET', '/v1/status')).json.inbox.lab, false);
+
+    const sent = new Date(T0).toISOString();
+    const xInbox = (lab, app = 'android/1.5.0') => ({ lab, app, caps: lab ? ['st', 'tap', 'reader-link'] : [], poll: sent, live: true });
+    const post = async (extra) => {
+      const header = { v: 1, kind: 'ack', ids: [], sent, from: 'Anjan’s Daylight', ...extra };
+      const frame = await ds.encryptFrame(v1.keys, 'ack', header, new Uint8Array(0));
+      assert.ok(ds.toBase64(frame).length <= 3800, 'a Lab frame is a small frame');
+      assert.equal((await v1.relay.handle(`${RELAY_ORIGIN}/${v1.keys.ackTopic}`, { method: 'POST', body: ds.toBase64(frame) })).status, 200);
+    };
+    const t1 = Math.floor(T0 / 1000);
+    await post({ 'x-inbox': xInbox(1) }); // hello
+    await post({ 'x-inbox': xInbox(1), 'x-st': [{ i: ids[0], s: 'reader', t: t1 }, { i: ids[1], s: 'handed', t: t1 }] }); // states for the server's own items
+    await post({ 'x-inbox': xInbox(1), 'x-st': Array.from({ length: 24 }, (_, n) => ({ i: n.toString(16).padStart(32, '0'), s: 'waiting', t: t1 })) });
+    await post({ 'x-inbox': xInbox(0, 'android/1.5.0-' + 'x'.repeat(80)) }); // Lab turned off on the Daylight
+
+    const r = await v1.cron(T0 + HOUR);
+    assert.equal(r.steps.acks, '0', 'no item delivered');
+    assert.deepEqual(await rowsOf(), before, 'no row changed');
+    assert.equal(await frameCount(), framesBefore, 'no frame deleted');
+    const st = (await v1.api('GET', '/v1/status', { now: T0 + HOUR })).json;
+    assert.equal(st.inbox.lab, true, 'presence, which v1 delivery never gates on');
+    assert.ok(Object.values(st.features).every((f) => f.state === 'ready'), JSON.stringify(st.features));
+    const inbox = JSON.parse((await v1.rows("SELECT v FROM settings WHERE k = 'inbox'"))[0].v);
+    assert.equal(inbox.app.length, 60, 'the 60-character app clamp');
+    const since = JSON.parse((await v1.rows("SELECT v FROM settings WHERE k = 'ackSince'"))[0].v);
+    assert.equal(since, v1.relay.messages(v1.keys.ackTopic).at(-1).id, 'the cursor moved past the Lab frames');
+
+    // The Inbox's own acks still deliver, after the Lab frames.
+    const got = await v1.receiver.pollOnce();
+    assert.deepEqual(got.acked.sort(), [...ids].sort());
+    assert.equal((await v1.cron(T0 + 2 * HOUR)).steps.acks, '2');
+    assert.deepEqual((await rowsOf()).map((x) => x.state), ['delivered', 'delivered']);
   } finally { await v1.close(); }
 });
 

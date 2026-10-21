@@ -18,6 +18,160 @@ const b64 = ds.toBase64;
 
 export async function nonce(label) { return (await ds.sha256(ds.utf8(`server-vector-nonce/${label}`))).slice(0, 12); }
 
+// ---- serverState (LAB-PLAN 2.6): status JSON or an error in, {state, message} out, and what noteError does to the
+// cached status. The expectations come from the module itself; unit-vectors.test.mjs checks them against a client.
+
+export const STATE_NOW = Date.parse('2026-10-20T06:00:00.000Z');
+export const STATE_ORIGIN = 'https://daylight-6c1f0e9a2b44.example.workers.dev';
+
+const ready = { state: 'ready' };
+const withState = (state, message) => ({ state, ...(message === undefined ? {} : { message }) });
+/** A GET /v1/status body as the Worker sends it (10.5), with `features` overridden. */
+export function statusBody(features = {}) {
+  return {
+    server: STATE_ORIGIN, api: 1, fingerprint: '3f9a1c2e', delivery: 'lab', version: 'abc1234', plan: 'free',
+    inbox: { lab: true, lastSeen: '2026-10-20T05:58:00.000Z' },
+    features: { ai: ready, pdf: ready, email: ready, feeds: ready, files: ready, deliver: ready, ...features },
+  };
+}
+
+const errJson = (error) => JSON.stringify({ error });
+const SERVER_TEXT = (code, extra) => srv.errorMessage(code, extra);
+
+/** [name, feature, status] -> fromStatus cases. */
+function statusCases() {
+  const M = srv.STATE_MESSAGES;
+  return [
+    ['ready', 'ai', statusBody()],
+    ['needs-key with the server’s message', 'ai', statusBody({ ai: withState('needs-key', M['needs-key']) })],
+    ['needs-key without a message: the module’s text', 'pdf', statusBody({ pdf: withState('needs-key') })],
+    ['needs-lab-inbox: a newer server’s own text is shown as is', 'deliver', statusBody({ deliver: withState('needs-lab-inbox', 'Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on.') })],
+    ['needs-domain', 'email', statusBody({ email: withState('needs-domain', M['needs-domain']) })],
+    ['needs-r2 without a message', 'files', statusBody({ files: withState('needs-r2') })],
+    ['needs-paid', 'email', statusBody({ email: withState('needs-paid', M['needs-paid']) })],
+    ['error carries the server’s message for the recorded code', 'ai', statusBody({ ai: withState('error', SERVER_TEXT('AI_KEY_INVALID')) })],
+    ['error without a message', 'ai', statusBody({ ai: withState('error') })],
+    ['a message that is not a string is ignored', 'feeds', statusBody({ feeds: { state: 'needs-lab-inbox', message: 42 } })],
+    ['an empty message is ignored', 'files', statusBody({ files: { state: 'needs-r2', message: '' } })],
+    ['an unknown state from a newer server passes through with its message', 'feeds', statusBody({ feeds: withState('needs-dns', 'Add the DNS record your server asks for.') })],
+    ['an unknown state without a message gets the generic sentence', 'feeds', statusBody({ feeds: withState('needs-dns') })],
+    ['a feature the status does not list', 'deliver', (() => { const b = statusBody(); delete b.features.deliver; return b; })()],
+    ['a feature entry without a state', 'ai', statusBody({ ai: { message: 'x' } })],
+    ['a feature entry whose state is not a string', 'ai', statusBody({ ai: { state: true } })],
+    ['a feature entry that is not an object', 'ai', statusBody({ ai: 'ready' })],
+    ['a status without features', 'ai', { server: STATE_ORIGIN, api: 1 }],
+    ['an unknown feature name', 'summaries', statusBody()],
+    ['an inherited name is not a feature', 'constructor', statusBody()],
+  ];
+}
+
+/**
+ * [name, feature, input] -> fromError cases. input: {response: {status, body}} (the server's answer to a call),
+ * {network: true} (fetch failed), {deadline: true} (a gate's 5 s deadline passed first) or {local: state} (decided
+ * by the app before any request, 4.3).
+ */
+function errorCases() {
+  const r = (status, body) => ({ response: { status, body } });
+  return [
+    ['409 NEEDS_KEY names ai; the app asked for pdf', 'pdf', r(409, errJson({ code: 'NEEDS_KEY', message: SERVER_TEXT('NEEDS_KEY'), feature: 'ai', missing: ['ANTHROPIC_API_KEY'] }))],
+    ['409 NEEDS_KEY whose message is not a string', 'ai', r(409, errJson({ code: 'NEEDS_KEY', message: 42, feature: 'ai' }))],
+    ['409 NEEDS_KEY naming an unknown feature: the app’s feature is noted', 'ai', r(409, errJson({ code: 'NEEDS_KEY', feature: 'summaries' }))],
+    ['409 NOT_CONFIGURED, missing the email domain', 'email', r(409, errJson({ code: 'NOT_CONFIGURED', message: SERVER_TEXT('NOT_CONFIGURED', { missing: ['DAYLIGHT_EMAIL_DOMAIN'] }), missing: ['DAYLIGHT_EMAIL_DOMAIN'], feature: 'email' }))],
+    ['409 NOT_CONFIGURED, missing R2', 'files', r(409, errJson({ code: 'NOT_CONFIGURED', message: SERVER_TEXT('NOT_CONFIGURED', { missing: ['R2'] }), missing: ['R2'], feature: 'files' }))],
+    ['409 NOT_CONFIGURED: the email domain is read before R2', 'email', r(409, errJson({ code: 'NOT_CONFIGURED', missing: ['R2', 'DAYLIGHT_EMAIL_DOMAIN'] }))],
+    ['409 NOT_CONFIGURED: DAYLIGHT_SERVER_CODE is read first', 'email', r(409, errJson({ code: 'NOT_CONFIGURED', missing: ['R2', 'DAYLIGHT_EMAIL_DOMAIN', 'DAYLIGHT_SERVER_CODE'] }))],
+    ['503 NOT_CONFIGURED: a Worker deployed without DAYLIGHT_SERVER_CODE', 'files', r(503, errJson({ code: 'NOT_CONFIGURED', message: SERVER_TEXT('NOT_CONFIGURED', { missing: ['DAYLIGHT_SERVER_CODE'] }), missing: ['DAYLIGHT_SERVER_CODE'] }))],
+    ['409 NOT_CONFIGURED with an empty missing list', 'files', r(409, errJson({ code: 'NOT_CONFIGURED', missing: [] }))],
+    ['409 NOT_CONFIGURED whose missing is a string, not a list', 'files', r(409, errJson({ code: 'NOT_CONFIGURED', missing: 'R2' }))],
+    ['409 NEEDS_LAB_INBOX names deliver; the app asked for ai', 'ai', r(409, errJson({ code: 'NEEDS_LAB_INBOX', message: SERVER_TEXT('NEEDS_LAB_INBOX'), feature: 'deliver' }))],
+    ['409 NEEDS_LAB_INBOX without a feature', 'feeds', r(409, errJson({ code: 'NEEDS_LAB_INBOX' }))],
+    ['423 LOCKED', 'ai', r(423, errJson({ code: 'LOCKED', message: SERVER_TEXT('LOCKED') }))],
+    ['401 BAD_AUTH: the module’s text, whatever the answer says', 'ai', r(401, errJson({ code: 'BAD_AUTH', message: 'Some other text.' }))],
+    ['401 without a JSON body is BAD_AUTH', 'files', r(401, 'Unauthorized')],
+    ['429 RATE_LIMITED: the feature stays ready', 'feeds', r(429, errJson({ code: 'RATE_LIMITED', message: SERVER_TEXT('RATE_LIMITED'), retryAfter: 60 }))],
+    ['503 AI_BUSY: the feature stays ready', 'ai', r(503, errJson({ code: 'AI_BUSY', message: SERVER_TEXT('AI_BUSY'), retryAfter: 30 }))],
+    ['429 AI_QUEUE_FULL: the feature stays ready', 'ai', r(429, errJson({ code: 'AI_QUEUE_FULL', message: SERVER_TEXT('AI_QUEUE_FULL'), retryAfter: 120 }))],
+    ['429 AI_DAILY_LIMIT', 'ai', r(429, errJson({ code: 'AI_DAILY_LIMIT', message: SERVER_TEXT('AI_DAILY_LIMIT', { resetAt: '2026-10-21T00:00:00.000Z', ceilingUsd: 10 }), limit: 3, resetAt: '2026-10-21T00:00:00.000Z' }))],
+    ['503 AI_KEY_INVALID', 'ai', r(503, errJson({ code: 'AI_KEY_INVALID', message: SERVER_TEXT('AI_KEY_INVALID') }))],
+    ['409 FEED_EXISTS', 'feeds', r(409, errJson({ code: 'FEED_EXISTS', message: SERVER_TEXT('FEED_EXISTS') }))],
+    ['413 TOO_LARGE without a message: the module’s text with the limit', 'files', r(413, errJson({ code: 'TOO_LARGE', limit: 12713984 }))],
+    ['an unknown code with a message', 'feeds', r(400, errJson({ code: 'FEED_PRIVATE', message: 'That feed needs a login.' }))],
+    ['an unknown code without a message', 'feeds', r(400, errJson({ code: 'FEED_PRIVATE' }))],
+    ['500 without a JSON body is SERVER_ERROR', 'ai', r(500, '<html>Internal error</html>')],
+    ['a code that is not a server code is not read (it cannot pose as needs-server)', 'ai', r(502, errJson({ code: 'needs-server', message: 'Fake.' }))],
+    ['an error object without a code is not read', 'ai', r(500, errJson({ message: 'No code.' }))],
+    ['the network failed', 'ai', { network: true }],
+    ['a gate’s 5 s deadline passed before the server answered', 'ai', { deadline: true }],
+    ['no config and no pin (4.3)', 'ai', { local: 'needs-server' }],
+    ['the pin belongs to an earlier pairing (4.3)', 'files', { local: 'pairing-mismatch' }],
+    ['the server’s api is below SERVER_API_MIN', 'ai', { local: 'server-outdated' }],
+    ['the server’s api is above SERVER_API', 'ai', { local: 'app-outdated' }],
+  ];
+}
+
+/** A client whose request() goes to `respond` and whose cached status is `statusBody()`, fresh at STATE_NOW. */
+export async function stateClient(secret, respond) {
+  const storage = new ds.MemoryStorage();
+  await storage.set('server/manualUrl', STATE_ORIGIN);
+  await storage.set('server/config', { server: STATE_ORIGIN, api: 1, fingerprint: '3f9a1c2e', delivery: 'lab', sent: '2026-10-20T05:00:00.000Z', id: '' });
+  await storage.set('server/configAt', STATE_NOW - 60_000);
+  await storage.set('server/status', statusBody());
+  await storage.set('server/statusAt', STATE_NOW - 60_000);
+  const fetchFn = async (url) => respond(url);
+  return { storage, client: new srv.DaylightServer({ pairing: { secret, relay: ds.DEFAULT_RELAY }, storage, fetch: fetchFn, now: () => STATE_NOW }) };
+}
+
+/** The error a fromError input produces, as the client sees it. */
+export async function errorFor(secret, input) {
+  if (input.local) return new srv.ServerError(input.local, { message: srv.localMessage(input.local) });
+  if (input.deadline) return new srv.ServerError('OFFLINE');
+  const { client } = await stateClient(secret, async () => {
+    if (input.network) throw new TypeError('Failed to fetch');
+    return new Response(input.response.body, { status: input.response.status });
+  });
+  try { await client.request('POST', '/v1/ai', { json: {} }); } catch (e) { return e; }
+  throw new Error('the request did not fail');
+}
+
+/** What noteError(feature, err) did to a fresh cached status: kept, updated (one feature, marked for refresh) or dropped. */
+export async function noteEffect(secret, feature, err) {
+  const { storage, client } = await stateClient(secret, async () => { throw new Error('noteError must not make requests'); });
+  const out = await client.noteError(feature, err);
+  const status = await storage.get('server/status');
+  const statusAt = await storage.get('server/statusAt');
+  const configAt = await storage.get('server/configAt');
+  let effect;
+  if (status === undefined) effect = { cache: 'dropped', configRefresh: configAt === undefined };
+  else if (JSON.stringify(status) === JSON.stringify(statusBody()) && statusAt !== undefined) effect = { cache: 'kept' };
+  else {
+    const changed = Object.keys(status.features).filter((k) => JSON.stringify(status.features[k]) !== JSON.stringify(statusBody().features[k]));
+    effect = { cache: 'updated', feature: changed.join(','), refresh: statusAt === undefined };
+  }
+  return { out, effect };
+}
+
+const errorFields = (e) => {
+  const o = { code: e.code, status: e.status };
+  for (const k of ['feature', 'missing', 'retryAfter', 'limit', 'resetAt']) if (e[k] !== undefined) o[k] = e[k];
+  return o;
+};
+
+export async function serverStateVectors(secret) {
+  const fromStatus = statusCases().map(([name, feature, status]) => ({ name, feature, status, expect: srv.stateFromStatus(status, feature) }));
+  const fromError = [];
+  for (const [name, feature, input] of errorCases()) {
+    const err = await errorFor(secret, input);
+    const { out, effect } = await noteEffect(secret, feature, err);
+    const expect = srv.stateFromError(err);
+    if (JSON.stringify(out) !== JSON.stringify(expect)) throw new Error(`noteError and stateFromError differ for ${name}`);
+    fromError.push({ name, feature, ...input, error: errorFields(err), expect, noteError: effect });
+  }
+  return {
+    note: 'LAB-PLAN 2.6. fromStatus: a GET /v1/status body and a feature -> stateFromStatus. fromError: the server’s answer to a call ({status, body}: body is the response text), a network failure, a gate’s deadline, or a state the app decides before any request -> the error the client makes (code, HTTP status and the fields it keeps) -> stateFromError -> {state, message}; noteError(feature, error) returns the same and does `noteError` to a fresh cached status in which every feature is ready (fromStatus[0].status): kept; updated (that feature now holds `expect`, and server/statusAt is removed so the next state() refreshes); or dropped (server/status and server/statusAt removed; configRefresh: server/configAt removed too, so the next discovery re-reads the config topic).',
+    fromStatus, fromError,
+  };
+}
+
 export async function generate() {
   const secret = ds.fromHex(SECRET_HEX);
   const pairing = await ds.parsePairing(await ds.formatCode(secret));
@@ -109,6 +263,7 @@ export async function generate() {
       expect: 'item received',
     },
     publicUrl: { accepted: accepted.map(([input, output]) => ({ input, output })), refused },
+    serverState: await serverStateVectors(secret),
   };
 }
 

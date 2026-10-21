@@ -255,3 +255,167 @@ test('DaylightServer: TOFU pin, a moved server needs confirmation, newer API maj
   assert.equal(d.config.server, 'https://b.example', 'a config from the future is ignored');
   assert.equal(d.moved, undefined);
 });
+
+// ---- noteError and the state mapping (LAB-PLAN 2.6; the cases themselves are server-vectors.json › serverState)
+
+/** A fake server: GET /v1/status answers `status()`, every other path `call()`; the relay answers `relay()`. */
+async function fakeServer({ status, call, relay } = {}) {
+  const secret = ds.generateSecret();
+  const values = await srv.deriveServerValues(await srv.deriveServerSeed(secret));
+  const log = [];
+  let now = Date.parse('2026-10-20T06:00:00Z');
+  const config = await srv.buildConfigFrame(values, { server: 'https://dls.example', sent: new Date(now - 60_000).toISOString() });
+  const fetchFn = async (url) => {
+    const u = new URL(url);
+    log.push(u.origin === 'https://dls.example' ? u.pathname : `relay${u.pathname}`);
+    if (u.origin === 'https://relay.example') {
+      if (relay) return relay(u);
+      return new Response(JSON.stringify({ id: 'c1', time: 1, event: 'message', message: ds.toBase64(config) }) + '\n');
+    }
+    if (u.pathname === '/v1/status') return status();
+    return call(u);
+  };
+  const storage = new ds.MemoryStorage();
+  const client = new srv.DaylightServer({ pairing: { secret, relay: 'https://relay.example' }, storage, fetch: fetchFn, now: () => now });
+  return { client, storage, log, values, tick: (ms) => { now += ms; } };
+}
+const allReady = (over = {}) => ({ features: { ...Object.fromEntries(srv.FEATURES.map((f) => [f, { state: 'ready' }])), ...over } });
+const errorAnswer = (status, error) => new Response(JSON.stringify({ error }), { status });
+const caught = async (p) => { try { await p; } catch (e) { return e; } assert.fail('expected a rejection'); };
+
+test('noteError: NEEDS_LAB_INBOX marks the feature the server names, and the next state() asks the server', async () => {
+  let server = allReady({ deliver: { state: 'needs-lab-inbox', message: srv.STATE_MESSAGES['needs-lab-inbox'] } });
+  const s = await fakeServer({ status: () => Response.json(server), call: () => errorAnswer(409, { code: 'NEEDS_LAB_INBOX', feature: 'deliver' }) });
+  assert.deepEqual(await s.client.state('ai'), { state: 'ready', message: null });
+  // The cached status is a minute old; the app had cached deliver as ready, as an older server said.
+  await s.storage.set('server/status', allReady());
+  const err = await caught(s.client.ai.summarize({ text: 'x' }, { deliver: 'both' }));
+  assert.equal(err.code, 'NEEDS_LAB_INBOX');
+  s.log.length = 0;
+  assert.deepEqual(await s.client.noteError('ai', err), { state: 'needs-lab-inbox', message: srv.STATE_MESSAGES['needs-lab-inbox'] });
+  assert.deepEqual(s.log, [], 'no request');
+  assert.equal((await s.storage.get('server/status')).features.deliver.state, 'needs-lab-inbox');
+  assert.equal((await s.storage.get('server/status')).features.ai.state, 'ready', 'AI without delivery still works');
+  assert.deepEqual(await s.client.state('ai'), { state: 'ready', message: null });
+  assert.deepEqual(s.log, ['/v1/status'], 'the noted status was refreshed from the server');
+  assert.deepEqual(await s.client.state('deliver'), { state: 'needs-lab-inbox', message: srv.STATE_MESSAGES['needs-lab-inbox'] });
+  assert.deepEqual(s.log, ['/v1/status'], 'then cached again for 10 minutes');
+  server = allReady();
+  s.tick(srv.STATUS_REFRESH_MS);
+  assert.deepEqual(await s.client.state('deliver'), { state: 'ready', message: null }, 'the server’s word wins on the next refresh');
+});
+
+test('noteError: NEEDS_KEY offline keeps the noted state; RATE_LIMITED keeps the feature ready', async () => {
+  let online = true;
+  const s = await fakeServer({
+    status: () => { if (!online) throw new TypeError('offline'); return Response.json(allReady()); },
+    call: (u) => (u.pathname === '/v1/feeds' ? errorAnswer(429, { code: 'RATE_LIMITED', retryAfter: 60 }) : errorAnswer(409, { code: 'NEEDS_KEY', feature: 'ai', missing: ['ANTHROPIC_API_KEY'] })),
+  });
+  assert.equal((await s.client.state('ai')).state, 'ready');
+  const limited = await caught(s.client.feeds.add('https://example.com/feed'));
+  assert.equal(limited.retryAfter, 60);
+  assert.deepEqual(await s.client.noteError('feeds', limited), { state: 'error', message: srv.errorMessage('RATE_LIMITED') });
+  assert.equal(await s.storage.get('server/statusAt'), Date.parse('2026-10-20T06:00:00Z'), 'the cache is kept as it was');
+  assert.equal((await s.client.state('feeds')).state, 'ready');
+  const nokey = await caught(s.client.ai.summarize({ text: 'x' }));
+  online = false;
+  assert.equal((await s.client.noteError('ai', nokey)).state, 'needs-key');
+  assert.deepEqual(await s.client.state('ai'), { state: 'needs-key', message: srv.STATE_MESSAGES['needs-key'] }, 'offline: the noted state');
+  assert.deepEqual(await s.client.state('feeds'), { state: 'ready', message: null });
+});
+
+test('noteError: BAD_AUTH drops the status and re-reads the config topic once; LOCKED from state() drops a stale status', async () => {
+  let statusAnswer = () => Response.json(allReady());
+  const s = await fakeServer({ status: () => statusAnswer(), call: () => errorAnswer(401, { code: 'BAD_AUTH' }) });
+  assert.equal((await s.client.state('files')).state, 'ready');
+  const relayPolls = () => s.log.filter((l) => l.startsWith('relay/')).length;
+  assert.equal(relayPolls(), 1);
+  const err = await caught(s.client.feeds.list());
+  assert.deepEqual(await s.client.noteError('feeds', err), { state: 'error', message: srv.errorMessage('BAD_AUTH') });
+  assert.equal(await s.storage.get('server/status'), undefined);
+  assert.equal((await s.client.state('files')).state, 'ready');
+  assert.equal(relayPolls(), 2, 'the config was read again');
+  assert.equal((await s.client.state('files')).state, 'ready');
+  assert.equal(relayPolls(), 2, 'once');
+
+  s.tick(srv.STATUS_REFRESH_MS + 1);
+  statusAnswer = () => errorAnswer(423, { code: 'LOCKED' });
+  assert.deepEqual(await s.client.state('ai'), { state: 'locked', message: srv.STATE_MESSAGES.locked });
+  assert.equal(await s.storage.get('server/status'), undefined, 'the stale status is gone, so offline it cannot answer ready');
+  statusAnswer = () => { throw new TypeError('offline'); };
+  assert.equal((await s.client.state('ai')).state, 'OFFLINE');
+});
+
+test('noteError never throws: storage that fails, odd errors and odd features', async () => {
+  const broken = { get: async () => { throw new Error('disk'); }, set: async () => { throw new Error('disk'); }, remove: async () => { throw new Error('disk'); } };
+  const c = new srv.DaylightServer({ pairing: { secret: ds.generateSecret(), relay: 'https://relay.example' }, storage: broken, fetch: async () => new Response('') });
+  for (const code of ['NEEDS_KEY', 'NOT_CONFIGURED', 'NEEDS_LAB_INBOX', 'LOCKED', 'BAD_AUTH', 'AI_BUSY']) {
+    assert.ok((await c.noteError('ai', new srv.ServerError(code))).message, code);
+  }
+  assert.equal((await c.noteError('ai', undefined)).state, 'OFFLINE');
+  assert.equal((await c.noteError('ai', new TypeError('x'))).state, 'OFFLINE');
+  assert.equal((await c.noteError('nope', { code: 'NEEDS_KEY' })).state, 'needs-key');
+  assert.deepEqual(await c.noteError('ai', new ds.ShareError('too-large', 'Files can be up to 192 MB through your Daylight server.')),
+    { state: 'error', message: 'Files can be up to 192 MB through your Daylight server.' });
+  const storage = new ds.MemoryStorage();
+  await storage.set('server/status', { features: null });
+  const d = new srv.DaylightServer({ pairing: { secret: ds.generateSecret(), relay: 'https://relay.example' }, storage, fetch: async () => new Response('') });
+  await d.noteError('__proto__', { code: 'NEEDS_KEY' });
+  await d.noteError('files', { code: 'NOT_CONFIGURED', missing: ['R2'] });
+  assert.deepEqual((await storage.get('server/status')).features, { files: { state: 'needs-r2', message: srv.STATE_MESSAGES['needs-r2'] } });
+  assert.equal(Object.getPrototypeOf((await storage.get('server/status')).features), Object.prototype);
+});
+
+test('request(): only an error object with a server-shaped code is read; the message must be a string', async () => {
+  const s = await fakeServer({
+    status: () => Response.json(allReady()),
+    call: (u) => ({
+      '/v1/feeds': () => errorAnswer(400, { code: 'OFFLINE ', message: 'x' }),
+      '/v1/email': () => errorAnswer(409, { code: 'NEEDS_KEY', message: { html: '<b>x</b>' } }),
+      '/v1/settings': () => Response.json({ error: 'not an object', ok: true }),
+    }[u.pathname] ?? (() => errorAnswer(418, { code: 'x'.repeat(41).toUpperCase() })))(),
+  });
+  assert.equal((await caught(s.client.feeds.list())).code, 'SERVER_ERROR');
+  const e = await caught(s.client.email.info());
+  assert.equal(e.code, 'NEEDS_KEY');
+  assert.equal(e.message, srv.STATE_MESSAGES['needs-key']);
+  assert.deepEqual(await s.client.settings.get(), { error: 'not an object', ok: true }, 'a 200 answer is the result');
+  assert.equal((await caught(s.client.feeds.check('a'))).code, 'SERVER_ERROR', 'a code over 40 characters');
+});
+
+test('notConfiguredState and errorMessage read missing in one order: the Server code, the email domain, R2', () => {
+  const cases = [
+    [['R2', 'DAYLIGHT_EMAIL_DOMAIN', 'DAYLIGHT_SERVER_CODE'], 'needs-server'], [['R2', 'DAYLIGHT_EMAIL_DOMAIN'], 'needs-domain'],
+    [['R2'], 'needs-r2'], [[], 'needs-server'], ['R2', 'needs-server'], [undefined, 'needs-server'], [['ANTHROPIC_API_KEY'], 'needs-server'],
+  ];
+  for (const [missing, state] of cases) {
+    assert.equal(srv.notConfiguredState(missing), state, JSON.stringify(missing));
+    assert.equal(srv.errorMessage('NOT_CONFIGURED', { missing }), srv.STATE_MESSAGES[state]);
+    assert.deepEqual(srv.stateFromError({ code: 'NOT_CONFIGURED', missing }), { state, message: srv.STATE_MESSAGES[state] });
+  }
+});
+
+test('files.tick: Lab frames on the pairing ack topic (hello, x-st naming the hosted item, lab: 0) deliver nothing', async () => {
+  const { startRelay, RELAY_ORIGIN } = await import('./relay.mjs');
+  const relay = await startRelay();
+  try {
+    const secret = ds.generateSecret();
+    const keys = await ds.deriveKeys(secret);
+    const storage = new ds.MemoryStorage();
+    const fetchFn = async (url, init) => (new URL(url).origin === RELAY_ORIGIN ? relay.handle(url, init) : new Response('', { status: 404 }));
+    const c = new srv.DaylightServer({ pairing: { secret, relay: RELAY_ORIGIN }, storage, fetch: fetchFn });
+    const id = 'ab'.repeat(16);
+    const now = Date.now();
+    await storage.set('server/hosted', [{ id, fileId: 'cd'.repeat(16), parts: 1, urls: [], name: 'big.pdf', size: 1, title: '', sent: '', created: now, lastPublish: now, status: 'sent' }]);
+    const sent = new Date().toISOString();
+    const info = (lab) => ({ lab, app: 'android/1.5.0', caps: lab ? ['st', 'tap', 'reader-link'] : [], poll: sent, live: true });
+    const post = async (header) => relay.handle(`${RELAY_ORIGIN}/${keys.ackTopic}`, { method: 'POST', body: ds.toBase64(await ds.encryptFrame(keys, 'ack', header, new Uint8Array(0))) });
+    await post({ v: 1, kind: 'ack', ids: [], sent, from: 'Daylight', 'x-inbox': info(1) });
+    await post({ v: 1, kind: 'ack', ids: [], sent, from: 'Daylight', 'x-inbox': info(1), 'x-st': [{ i: id, s: 'reader', t: Math.floor(now / 1000) }] });
+    await post({ v: 1, kind: 'ack', ids: [], sent, from: 'Daylight', 'x-inbox': info(0) });
+    assert.deepEqual(await c.files.tick(), { delivered: 0, republished: 0, expired: 0 });
+    assert.equal((await c.files.list())[0].status, 'sent');
+    await post({ v: 1, kind: 'ack', ids: [id], sent, from: 'Daylight' });
+    assert.equal((await c.files.tick()).delivered, 1, 'the Inbox’s own ack still delivers it');
+  } finally { await relay.close(); }
+});
