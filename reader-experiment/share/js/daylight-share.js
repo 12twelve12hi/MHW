@@ -824,10 +824,11 @@ export class RelayClient {
 
   /**
    * Polls cached messages (PROTOCOL 3.2). since: 'all' | unix seconds. skip(msgId): true for handled messages.
-   * -> [{id, time, attachment, outcome, frame}], one per message line, where outcome is
+   * -> [{id, time, attachment, outcome, frame, status?}], one per message line, where outcome is
    *    'frame' (frame holds the bytes), 'skipped', 'expired' (404/410), 'junk' (not base64, a URL that is not https
    *    or the relay's origin, or over MAX_ATTACHMENT) or 'retry' (429, 5xx, any other status, network error,
-   *    timeout; after a 429 every later attachment entry is 'retry' without a request).
+   *    timeout; after a 429 every later attachment entry is 'retry' without a request). An entry whose attachment
+   *    was requested also has `status`: the download's HTTP status, 0 when there was no answer.
    * Throws ShareError: 'network' (no answer, status 0), 'relay' (an error status, or an answer over 64 MiB).
    */
   async poll(topic, since = 'all', { skip = () => false } = {}) {
@@ -856,6 +857,7 @@ export class RelayClient {
         const d = await this._download(m.attachment.url);
         entry.outcome = d.outcome;
         if (d.frame) entry.frame = d.frame;
+        if (d.status !== undefined) entry.status = d.status;
         if (d.status === 429) stopDownloads = true;
       } else if (typeof m.message === 'string') {
         try { entry.frame = fromBase64(m.message); entry.outcome = 'frame'; } catch { /* junk */ }
@@ -1304,8 +1306,10 @@ export class Receiver {
 
   /**
    * Polls once. -> {items: [{header, content, extras}] (new items, stored), acked: [ids whose ack was published],
-   * ackError: string|null, storeError: string|null, limited: the status (429 or 413) of an ack publish the relay
-   * refused for its limits, else 0}. Throws only when the poll itself fails; acks never throw.
+   * ackError: string|null, storeError: string|null, limited: 429 or 413 when the relay refused this poll's ack
+   * publish for its limits, else 429 when it answered an attachment download with 429 (that item waits for a later
+   * poll), else 0}. A Lab Inbox gives way for an hour after any of them (LAB-PROTOCOL 2.2.4). Throws only when the
+   * poll itself fails (a 429 on the poll is the error's `status`); acks never throw.
    */
   pollOnce() { return locked(this.storage, 'receiver', () => this._pollOnce()); }
 
@@ -1328,9 +1332,10 @@ export class Receiver {
     const items = [];
     const ack = new Set();
     const handled = (ids) => { for (const id of ids) seenMsgs[id] = now; };
-    let newest = 0, held = Infinity, storeError = null;
+    let newest = 0, held = Infinity, storeError = null, downloadLimited = 0;
     for (const m of entries) {
       newest = Math.max(newest, m.time);
+      if (m.status === 429) downloadLimited = 429;
       if (m.outcome === 'skipped') continue;
       if (m.outcome === 'retry') { held = Math.min(held, m.time); continue; }
       if (m.outcome !== 'frame') { handled([m.id]); continue; }
@@ -1367,7 +1372,7 @@ export class Receiver {
 
     const ids = [...ack];
     const acked = [];
-    let ackError = null, limited = 0;
+    let ackError = null, limited = downloadLimited;
     for (let i = 0; i < ids.length; i += MAX_ACK_IDS) {
       const batch = ids.slice(i, i + MAX_ACK_IDS);
       try {

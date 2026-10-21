@@ -44,12 +44,16 @@ spec; `test-vectors.json` did not change.
   `resendDue`'s pass rules (F07).
 - `applyPairingChange` also removes `LAB_STORAGE_KEYS` (and any other `lab/` key when the storage has `keys()`) when
   the secret changes.
-- `Receiver.pollOnce()` also returns `limited`: 429 or 413 when the relay refused an ack publish for its limits.
+- `Receiver.pollOnce()` also returns `limited`: 429 or 413 when the relay refused the poll's ack publish for its
+  limits, else 429 when it answered an attachment download with 429 (that item waits for a later poll), else 0. A
+  Lab Inbox gives way for an hour after any of them (2.2.4). `RelayClient.poll` entries whose attachment was
+  requested carry the download's `status`.
 
 **`daylight-lab.js` (2.7.2, W0 list):** `buildInboxInfo`, `buildLabFrame`, `parseLabAck` (2.2.5 exactly),
 `LabLedger` (per publisher; `snapshot()` reads it all at once) and `labHook`, `describeLabRow`, `labRowA11yLabel`,
 `wantsFastChecks`, `checkedInText`, `inboxLabText`, `LAB_TEXT`, `needsMessage`, `labGate`, `deriveLabTopics`,
-`LabInbox` and `LabInboxSim`. The extension, web and Windows builds copy it next to `daylight-share.js`; every export is
+`LabInbox` and `LabInboxSim`; for the Daylight server's row and section (1.1, 1.4, 2.6) `serverHeadingShort`,
+`serverRowSubtitle`, `serverFeatureShort`, `serverMovedText`, `labInboxSeenText`, `aiTodayText` and `formatUsd`. The extension, web and Windows builds copy it next to `daylight-share.js`; every export is
 a single `export const|function|class`, which their classic bundle needs (a test checks it).
 
 **Choices the reference made where LAB-PROTOCOL leaves room** (the vectors pin them; ports follow):
@@ -66,6 +70,13 @@ a single `export const|function|class`, which their classic bundle needs (a test
   from `ctx.serverMessage` (pass the server module's `localMessage`); `daylight-lab.js` never imports the server module.
 - `needsMessage`: the server's states take the server module's text (`message`); `needs-notifications` on a platform
   without a settings path (Chrome, Safari, web) is the first sentence alone.
+- The server's row and section: `LAB_TEXT.serverSection` holds 2.6's own lines (the move sheet, "Lab Inbox last seen
+  {rel}" and its not-yet line, "AI today: US${used} of US${cap}", and the labels Server code, Copy and Server
+  address). The row's `{short}` is the heading form (`serverRowSubtitle('needs-server')` is "Optional · Not set up");
+  an unknown server state reads as `error`. A server feature's row shows its short state only when its state differs
+  from the heading's (`serverFeatureShort`). `{host}` is the new origin minus its scheme and path, as text.
+  `inbox.lastSeen` is read by rule D. Dollar amounts round n × 100 half up in double precision and drop ".00"
+  (never printf or `toFixed`).
 - `LabInbox` (storage key `lab/out`): one frame per `flush()`; the order is the `lab: 0` frame, digest frames, states,
   then a due hello. The 30 s spacing and giving way apply to every Lab frame; the daily cap counts hellos and state
   frames only. `record()` beats both the pending and the last published entry for the id, and does nothing while Lab

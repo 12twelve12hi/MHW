@@ -460,6 +460,9 @@ must not change:
   - Callers space passes at least 3 minutes apart. In that time ntfy.sh's request bucket refills by 36, so a pass of
     30 never meets an empty bucket.
 - `applyPairingChange` also removes every `lab/*` key when the secret differs.
+- `Receiver.pollOnce()` returns `limited`: `429` or `413` when the relay refused the poll's ack publish for its
+  limits, else `429` when it answered an attachment download with `429`, else `0`. It is the receive side's report
+  of "any `429` or `413` from the relay" (2.2.4): the Inbox passes it to `LabInbox.noteRelayLimit` (F17, K1).
 - W2 (L2): `Sender` and `Receiver` take `lane` (2.4).
 
 **2.7.2 New `share/js/daylight-lab.js`.** No dependencies but `daylight-share.js`. The extension, web and Windows
@@ -483,8 +486,14 @@ export class LabLedger { constructor({ storage, now }) {} async record(header, {
 export function labHook(ledger) {}                                     // -> onAckHeader for the Sender
 export function describeLabRow(row, now, ctx) {}                       // 2.5 -> {label, sentence, action, stepLine, final}
 export function checkedInText(ms, now) {}                              // 2.5
-export const LAB_TEXT = { /* every string of 1.4, 1.6 and 2.5, keyed; LAB_TEXT.short holds the short states */ };
+export const LAB_TEXT = { /* every string of 1.4, 1.6, 2.5 and the 2.6 section, keyed; LAB_TEXT.short holds the
+                              short states, LAB_TEXT.serverSection the Daylight server section's own lines */ };
 export function needsMessage(state, { app, platform, feature, short = false } = {}) {}
+export function serverRowSubtitle(state) {}                            // 1.1: "Optional · Not set up" (heading form)
+export function serverFeatureShort(state, headingState) {}             // 1.4: the row's short state, or null
+export function serverMovedText(moved) {}                              // 2.6: "Your Daylight server moved to {host}. Use it?"
+export function labInboxSeenText(lastSeen, now) {}                     // 2.6: "Lab Inbox last seen {rel}" or the not-yet line
+export function aiTodayText(used, cap) {}                              // 2.6: "AI today: US${used} of US${cap}"
 export async function labGate(feature, ctx) {}                         // -> {ready, state, message, short}
 export async function deriveLabTopics(secret) {}                       // 2.4
 export class LabInbox { constructor({ storage, relay, keys, info, from, now }) {}   // the Inbox side, for the JS

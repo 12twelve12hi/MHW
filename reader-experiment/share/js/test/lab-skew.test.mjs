@@ -224,6 +224,8 @@ async function soak({ instant, force429At = null, days = 7, seed = 7 }) {
   const rc = new ds.RelayClient({ relay: relay.url, ...fast });
   const labFlushes = [];
   const labInbox = new lab.LabInbox({ storage: inboxStorage, relay: rc, keys, info: { lab: 1, app: 'android/1.5.0', caps: ['st', 'tap', 'reader-link'], live: instant }, from: 'Daylight', now, autoFlushMs: null });
+  // Documents = Ask: a file waits for a tap; links and pages go straight to the Reader.
+  const sim = new lab.LabInboxSim({ receiver, labInbox, stateFor: (h) => (h.kind === 'file' ? 'waiting' : 'reader') });
   const serverTopics = { items: 'dls-server-items-' + ds.toHex(ds.randomBytes(4)), acks: 'dls-server-acks-' + ds.toHex(ds.randomBytes(4)) };
   const remembered = []; // [{id, at}] for the v1.1 ack digest
   const ackCycles = [];
@@ -231,12 +233,12 @@ async function soak({ instant, force429At = null, days = 7, seed = 7 }) {
   const events = [];
   const at = (t, fn) => events.push({ t, fn, n: events.length });
 
-  async function flushLab(reason) {
-    const r = await labInbox.flush();
+  function noteFlush(r, reason) {
     labFlushes.push({ t: clock, reason, ...r });
     if (r.reason === 'spacing') at(clock + r.waitMs, () => flushLab('retry'));
     else if (r.published) at(clock + 30 * SEC, () => flushLab('more'));
   }
+  async function flushLab(reason) { noteFlush(await labInbox.flush(), reason); }
 
   async function ackDigest() {
     const ids = remembered.filter((r) => clock - r.at <= 8 * DAY).sort((a, b) => b.at - a.at).slice(0, 280).map((r) => r.id);
@@ -248,25 +250,21 @@ async function soak({ instant, force429At = null, days = 7, seed = 7 }) {
 
   async function daylightPoll() {
     if (lastAckFailed) { await ackDigest(); lastAckFailed = false; }
-    const res = await receiver.pollOnce();
+    // The reference Lab Daylight: the poll and its acks, then the ack outcome and any 429/413 (Receiver limited),
+    // the states, and the Lab flush (after the acks, never before).
+    const res = await sim.pollOnce();
     ackCycles.push({ t: clock, items: res.items.map((i) => i.header.id), acked: res.acked, ackError: res.ackError });
-    await labInbox.notePolled(clock);
-    await labInbox.noteAcksFailed(!!res.ackError);
-    if (res.limited) await labInbox.noteRelayLimit(res.limited);
     lastAckFailed = !!res.ackError;
     for (const it of res.items) {
       remembered.push({ id: it.header.id, at: clock });
       if (it.header.kind === 'file') {
-        await labInbox.record(it.header.id, 'waiting', Math.floor(clock / 1000));
         at(clock + (10 + Math.floor(rand() * 170)) * MIN, async () => { // the notice is tapped
           await labInbox.record(it.header.id, 'handed', Math.floor(clock / 1000));
           await flushLab('handoff');
         });
-      } else {
-        await labInbox.record(it.header.id, 'reader', Math.floor(clock / 1000));
       }
     }
-    await flushLab('poll'); // after the acks, never before
+    noteFlush(res.lab, 'poll');
     // The server lane (S0): poll its topic, ack at most once every 15 minutes while items arrive.
     const entries = await rc.poll(serverTopics.items, serverSince);
     if (entries.length) serverSince = Math.max(...entries.map((e) => e.time)) + 1;

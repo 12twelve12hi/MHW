@@ -310,7 +310,8 @@ export function labHook(ledger) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Copy (1.4, 1.6, 2.5). LAB_TEXT is the one source of every Lab string; the vectors (labText) pin it.
+// Copy (1.4, 1.6, 2.5 and 2.6's Daylight server section). LAB_TEXT is the one source of every Lab string; the vectors
+// (labText) pin it. The server section's state lines are the server module's (STATE_MESSAGES, DESIGN 14.1).
 
 const FEATURE_TEXT = {
   F01: { name: 'Delivery timeline', sentence: 'See each item reach your Daylight and its Reader.' },
@@ -346,6 +347,16 @@ export const LAB_TEXT = {
   serverRow: 'Daylight server',
   serverRowSubtitle: 'Optional · {short}',
   serverHeading: 'With your Daylight server (optional)',
+  // 2.6: the Daylight server section's own lines (W0); serverMovedText, labInboxSeenText and aiTodayText fill them
+  serverSection: {
+    moved: 'Your Daylight server moved to {host}. Use it?',
+    labInboxSeen: 'Lab Inbox last seen {rel}',
+    labInboxNever: 'Your Daylight hasn’t said hello to the server yet.',
+    aiToday: 'AI today: US${used} of US${cap}',
+    serverCode: 'Server code',
+    copy: 'Copy',
+    serverAddress: 'Server address',
+  },
   comfort: 'Comfort',
   comfortFooter: 'Larger text and buttons, more contrast, no motion.',
   labOff: 'Turn on Lab in {app} to use this.',
@@ -467,6 +478,71 @@ export function needsMessage(state, { app, platform, feature, short = false, hea
   }
   if (SERVER_TEXT_STATES.has(state)) return message ?? null;
   return null;
+}
+
+/** A state as a short state knows it: a state of LAB_TEXT.short, else 'error' (as labGate maps an unknown state). */
+const knownShort = (state) => (Object.hasOwn(LAB_TEXT.short, state) ? state : 'error');
+
+/**
+ * The server's short state where it stands for the whole server (1.4): the line under What's in Lab's server heading
+ * and the {short} of the "Daylight server ›" row. needs-server reads "Not set up" here; an unknown state is `error`.
+ */
+export function serverHeadingShort(state) {
+  return needsMessage(knownShort(state), { short: true, heading: true });
+}
+
+/** The "Daylight server ›" row's subtitle (1.1): "Optional · Not set up", "Optional · Ready", … */
+export function serverRowSubtitle(state) {
+  return fill(LAB_TEXT.serverRowSubtitle, { short: serverHeadingShort(state) });
+}
+
+/**
+ * A server feature's row under the server heading (1.4): its own short state ("Needs a Claude key") only when its
+ * state differs from the heading's, else null. Unknown states count as `error` on both sides.
+ */
+export function serverFeatureShort(state, headingState) {
+  const s = knownShort(state);
+  return s === knownShort(headingState) ? null : needsMessage(s, { short: true });
+}
+
+/**
+ * The sheet when the server moved (2.6): "Your Daylight server moved to {host}. Use it?". moved: DaylightServer
+ * discover()'s `moved` (the new origin); {host} is that text without its scheme and anything from the first '/' after
+ * it, read as text (no URL parser: the port stays, as relayHost keeps it).
+ */
+export function serverMovedText(moved) {
+  let host = String(moved ?? '');
+  const scheme = host.indexOf('://');
+  if (scheme >= 0) host = host.slice(scheme + 3);
+  const slash = host.indexOf('/');
+  if (slash >= 0) host = host.slice(0, slash);
+  return fill(LAB_TEXT.serverSection.moved, { host });
+}
+
+/**
+ * The server section's Lab Inbox line (2.6). lastSeen: GET /v1/status's `inbox.lastSeen`, an ISO 8601 UTC time read
+ * as rule D reads `poll` (2.2.5), or ms since 1970. null or anything else gives the not-yet line.
+ */
+export function labInboxSeenText(lastSeen, now = Date.now()) {
+  const ms = typeof lastSeen === 'number' ? (Number.isFinite(lastSeen) ? lastSeen : null) : parseLabTime(lastSeen);
+  if (ms === null) return LAB_TEXT.serverSection.labInboxNever;
+  return fill(LAB_TEXT.serverSection.labInboxSeen, { rel: relativeTime(ms, now) });
+}
+
+/**
+ * A US dollar amount without "US$", for aiTodayText: cents = n × 100 in double precision, rounded half up (never a
+ * printf or toFixed, which round the decimal value differently: 1.005 is "1" and 0.015 is "0.02" here), and ".00"
+ * left out: 0.227 -> "0.23", 2.5 -> "2.50", 3 -> "3". Anything but a finite number above 0 is "0".
+ */
+export function formatUsd(n) {
+  const cents = typeof n === 'number' && Number.isFinite(n) && n > 0 ? Math.round(n * 100) : 0;
+  const whole = Math.floor(cents / 100), frac = cents % 100;
+  return frac ? `${whole}.${String(frac).padStart(2, '0')}` : String(whole);
+}
+
+/** "AI today: US$0.23 of US$3" (2.6): used = status `usage.ai.usd`, cap = `usage.ai.limitUsd`. */
+export function aiTodayText(used, cap) {
+  return fill(LAB_TEXT.serverSection.aiToday, { used: formatUsd(used), cap: formatUsd(cap) });
 }
 
 /** "just now", "{m} min ago", "{h} h ago" or "{d} days ago" (2.5). A time ahead of `now` is "just now". */

@@ -134,6 +134,14 @@ test('lab vectors: text', () => {
   for (const c of V.labText.checkedIn) assert.equal(lab.checkedInText(c.ms, c.now), c.expect);
   for (const c of V.labText.inboxHeader) assert.equal(lab.inboxLabText(c, c.now), c.expect);
   for (const f of V.labText.features) assert.deepEqual(lab.LAB_TEXT.features[f.id], { name: f.name, sentence: f.sentence });
+  for (const c of V.labText.serverRow) {
+    assert.deepEqual([lab.serverHeadingShort(c.state), lab.serverRowSubtitle(c.state)], [c.heading, c.subtitle], c.state);
+  }
+  assert.equal(V.labText.serverRow.find((c) => c.state === 'needs-server').subtitle, 'Optional · Not set up');
+  for (const c of V.labText.serverFeature) assert.equal(lab.serverFeatureShort(c.state, c.headingState), c.expect, JSON.stringify(c));
+  for (const c of V.labText.serverSection.moved) assert.equal(lab.serverMovedText(c.moved), c.expect);
+  for (const c of V.labText.serverSection.labInboxSeen) assert.equal(lab.labInboxSeenText(c.lastSeen, c.now), c.expect, JSON.stringify(c));
+  for (const c of V.labText.serverSection.aiToday) assert.equal(lab.aiTodayText(c.used, c.cap), c.expect, JSON.stringify(c));
   for (const s of Object.values(V.labText.strings)) assert.ok(!/[A-Za-z]'[A-Za-z]/.test(s), `ASCII apostrophe in ${s}`);
 });
 
@@ -657,6 +665,44 @@ test('LabInbox: Lab off sends one lab: 0 frame, repeats it after ack digests for
   assert.equal(frames.at(-1).parsed.inbox.lab, 1, 'turning Lab on sends a hello');
 });
 
+test('LabInbox: the lab: 0 repeats end 48 h after Lab was turned off, even before the fifth', async () => {
+  const { li, frames, advance } = await inbox();
+  await li.flush();
+  advance(30 * SEC);
+  await li.labTurnedOff();
+  const n = frames.length;
+  const offAt = frames.at(-1).at;
+  for (let i = 0; i < 8; i++) { advance(11 * HOUR); await li.digest(); } // the v1.1 ack digest every 11 hours
+  const repeats = frames.slice(n);
+  assert.deepEqual(repeats.map((f) => (f.at - offAt) / HOUR), [11, 22, 33, 44], 'none at 55 h: the window is 48 h');
+  assert.ok(repeats.every((f) => f.parsed.inbox.lab === 0 && f.parsed.inbox.caps.length === 0));
+});
+
+test('LabInbox: digest frames are outside the daily cap, so 30 hellos and state frames still go that day', async () => {
+  const { li, frames, advance, now } = await inbox();
+  advance(DAY - (now() % DAY)); // 00:00 UTC
+  const t = () => Math.floor(now() / 1000);
+  for (let i = 0; i < 30; i++) await li.record(id(i), 'reader', t());
+  assert.deepEqual(await li.flush(), { published: 1, kind: 'states', states: 24, reason: 'sent' });
+  advance(30 * SEC);
+  assert.equal((await li.flush()).states, 6);
+  advance(30 * SEC);
+  const d1 = await li.digest();
+  advance(30 * SEC);
+  const d2 = await li.flush();
+  assert.deepEqual([d1.kind, d1.states, d2.kind, d2.states], ['digest', 24, 'digest', 6]);
+  const reasons = [];
+  for (let i = 30; i < 60; i++) {
+    advance(30 * SEC);
+    await li.record(id(i), 'reader', t());
+    reasons.push((await li.flush()).reason);
+  }
+  assert.equal(reasons.filter((r) => r === 'sent').length, 28, '2 state frames + 28 = 30; the 2 digest frames do not count');
+  assert.deepEqual(reasons.slice(28), ['cap', 'cap']);
+  assert.equal(new Set(frames.map((f) => new Date(f.at).toISOString().slice(0, 10))).size, 1, 'all on one UTC day');
+  assert.equal((await li.debugState()).dayCount, 30);
+});
+
 test('LabInbox: the digest republishes the latest state of items changed in the last 48 h, newest first, 48 at most', async () => {
   const { li, frames, advance, now } = await inbox();
   await li.flush();
@@ -668,13 +714,14 @@ test('LabInbox: the digest republishes the latest state of items changed in the 
   }
   await li.record(id(59), 'reader', t0 + 60 * 30); // pending, not yet published
   advance(10 * SEC);
-  await li.digest(); // spacing: the digest waits its turn
-  advance(20 * SEC);
-  await li.flush();
-  advance(30 * SEC);
-  await li.flush();
-  const digest = frames.slice(-2).flatMap((f) => f.parsed.states);
-  assert.equal(digest.length, 48);
+  const start = frames.length;
+  const kinds = [(await li.digest()).kind]; // the daily cap stopped the state frames long ago; the digest is outside it
+  for (let k = 0; k < 3; k++) { advance(30 * SEC); kinds.push((await li.flush()).kind); }
+  assert.deepEqual(kinds, ['digest', 'digest', null, null], '60 items changed in 48 h: two digest frames, then nothing');
+  assert.equal(frames.length - start, 2);
+  const digest = frames.slice(start).flatMap((f) => f.parsed.states);
+  assert.equal(digest.length, 48, '48 at most');
+  assert.deepEqual(frames.slice(start).map((f) => f.parsed.states.length), [24, 24]);
   assert.deepEqual(digest[0], { id: id(59), s: 'reader', t: t0 + 1800 }, 'pending entries are included');
   assert.ok(digest.every((e, i) => i === 0 || e.t <= digest[i - 1].t), 'newest first');
   advance(49 * HOUR);
@@ -749,6 +796,49 @@ test('a Lab sender and a Lab Daylight: In your Reader for a link, Handed for a P
       'Your Daylight passed it to the Reader. The Reader doesn’t confirm documents yet.', 'Sent ✓ · On your Daylight ✓ · Handed to the Reader', true]);
     assert.equal(lab.checkedInText(snap.checkedIn, now()), 'Your Daylight checked in just now.');
     assert.equal(lab.inboxLabText(snap, now()), 'Your Daylight: Lab on · checked in just now');
+  } finally { await relay.close(); }
+});
+
+test('LabInboxSim gives way for an hour after the Receiver’s limited: a 429 on a download or on an ack publish (2.2.4, F17)', async () => {
+  let failDownloads = false;
+  const { relay, sender, receiver, keys, hooks, advance, now } = await setup({ failDownload: () => (failDownloads ? 429 : null) });
+  try {
+    const rc = new ds.RelayClient({ relay: relay.url, retryDelaysMs: [0, 0, 0] });
+    const li = new lab.LabInbox({ storage: receiver.storage, relay: rc, keys, info: { lab: 1, app: 'android/1.5.0', caps: ['st', 'tap'] }, from: 'Test Daylight', now, autoFlushMs: null });
+    const sim = new lab.LabInboxSim({ receiver, labInbox: li });
+    const ackTopicMessages = async () => (await rc.poll(keys.ackTopic, 'all')).length;
+
+    // A 429 on the PDF's download: the link arrives and is acked, the PDF waits, and Lab gives way.
+    const link = await sender.send({ kind: 'url', url: 'https://example.com/a' });
+    const pdf = await sender.send({ kind: 'file', name: 'p.pdf', mime: 'application/pdf', content: ds.randomBytes(18000) });
+    assert.equal((await sender.list()).find((r) => r.id === pdf.id).attachment, true, 'the PDF goes as an attachment');
+    failDownloads = true;
+    let res = await sim.pollOnce();
+    assert.deepEqual([res.items.map((i) => i.header.id), res.acked, res.ackError, res.limited], [[link.id], [link.id], null, 429]);
+    assert.equal(res.lab.reason, 'yield', 'no Lab frame right after a 429 from the relay');
+    const acksOnly = await ackTopicMessages();
+    failDownloads = false;
+    advance(59 * MIN);
+    res = await sim.pollOnce();
+    assert.deepEqual([res.items.map((i) => i.header.id), res.limited], [[pdf.id], 0]);
+    assert.equal(res.lab.reason, 'yield', 'still within the hour');
+    advance(MIN);
+    res = await sim.pollOnce();
+    assert.deepEqual([res.lab.reason, res.lab.kind, res.lab.states], ['sent', 'states', 2], 'after the hour the kept states go');
+    assert.equal(await ackTopicMessages(), acksOnly + 2, 'the PDF’s ack and one Lab frame');
+
+    // A 429 on the ack publish, then a clean poll: Lab still gives way, for the 429 and not only for the failed acks.
+    advance(MIN);
+    await sender.send({ kind: 'url', url: 'https://example.com/b' });
+    let once = true;
+    hooks.publish = (topic) => (topic === keys.ackTopic && once ? ((once = false), 429) : null);
+    res = await sim.pollOnce();
+    assert.deepEqual([res.items.length, res.limited, res.lab.reason], [1, 429, 'yield']);
+    advance(5 * MIN);
+    res = await sim.pollOnce();
+    assert.deepEqual([res.ackError, res.limited, res.lab.reason], [null, 0, 'yield'], 'acks went out, but the 429 was 5 minutes ago');
+    advance(55 * MIN);
+    assert.equal((await sim.pollOnce()).lab.reason, 'sent');
   } finally { await relay.close(); }
 });
 

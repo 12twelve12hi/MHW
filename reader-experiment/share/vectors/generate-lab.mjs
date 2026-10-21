@@ -484,7 +484,8 @@ assert.equal(RT('failed (network)').action, 'retry-now');
 assert.equal(RT('reader').a11y, 'In your Reader ✓. Saved in the Daylight Reader.');
 
 // ---------------------------------------------------------------------------------------------------------------
-// labText (1.4, 1.6, 2.5): every string id -> text, the per-platform messages, short states and the headers
+// labText (1.4, 1.6, 2.5, 2.6): every string id -> text, the per-platform messages, short states, the headers and the
+// Daylight server section's lines
 
 function flatten(o, prefix = '', out = {}) {
   for (const [k, v] of Object.entries(o)) {
@@ -524,10 +525,39 @@ const checkedIn = [
 const inboxHeader = [
   [true, NOW_ROW - 4 * M], [false, NOW_ROW - 4 * M], [false, null], [true, NOW_ROW - 3 * HR],
 ].map(([inboxLab, at]) => ({ inboxLab, checkedIn: at, now: NOW_ROW, expect: lab.inboxLabText({ inboxLab, checkedIn: at }, NOW_ROW) }));
+// The server's short state for the whole server: What's in Lab's server heading line and the "Daylight server ›" row
+const SERVER_ROW_STATES = ['ready', 'needs-pairing', 'needs-server', 'pairing-mismatch', 'locked', 'server-outdated',
+  'app-outdated', 'needs-key', 'needs-r2', 'needs-domain', 'needs-paid', 'needs-lab-inbox', 'OFFLINE', 'error', 'later', 'nonsense'];
+const serverRow = SERVER_ROW_STATES.map((state) => ({ state, heading: lab.serverHeadingShort(state), subtitle: lab.serverRowSubtitle(state) }));
+const serverFeature = [
+  ['needs-server', 'needs-server'], ['needs-key', 'ready'], ['ready', 'ready'], ['later', 'ready'], ['needs-key', 'needs-key'],
+  ['needs-lab-inbox', 'ready'], ['OFFLINE', 'OFFLINE'], ['needs-r2', 'needs-server'], ['nonsense', 'error'], ['nonsense', 'ready'],
+].map(([state, headingState]) => ({ state, headingState, expect: lab.serverFeatureShort(state, headingState) }));
+const serverSection = {
+  moved: ['https://daylight-3f9a.example.workers.dev', 'https://daylight.example.org:8443', 'https://daylight.example.org/',
+    'daylight.example.org'].map((moved) => ({ moved, expect: lab.serverMovedText(moved) })),
+  labInboxSeen: [
+    [null], ['2026-10-20T08:56:00.000Z'], ['2026-10-20T09:00:00Z'], ['2026-10-19T07:00:00.000Z'], ['2026-10-14T09:00:00.000Z'],
+    [NOW_ROW - 90 * M], ['2026-02-30T00:00:00.000Z'], ['2026-10-20T08:56:00+00:00'], ['yesterday'], [true], [''],
+  ].map(([lastSeen]) => ({ lastSeen, now: NOW_ROW, expect: lab.labInboxSeenText(lastSeen, NOW_ROW) })),
+  aiToday: [
+    [0, 3], [0.227, 3], [2.5, 10], [2.999, 3], [0.004, 3], [1.005, 3], [0.015, 3], [12.345, 10], [3, 3], [null, 3], [-1, 3], ['0.5', 3],
+  ].map(([used, cap]) => ({ used, cap, expect: lab.aiTodayText(used, cap) })),
+};
 const labText = {
-  strings: flatten(lab.LAB_TEXT), messages, checkedIn, inboxHeader,
+  strings: flatten(lab.LAB_TEXT), messages, checkedIn, inboxHeader, serverRow, serverFeature, serverSection,
   features: [...lab.LAB_TEXT.featureOrder, ...lab.LAB_TEXT.serverFeatureOrder].map((id) => ({ id, ...lab.LAB_TEXT.features[id] })),
 };
+assert.equal(serverRow.find((c) => c.state === 'needs-server').subtitle, 'Optional · Not set up', 'plan 1.1');
+assert.equal(serverRow.find((c) => c.state === 'needs-key').subtitle, 'Optional · Needs a Claude key');
+assert.equal(serverFeature[0].expect, null);
+assert.equal(serverFeature[1].expect, 'Needs a Claude key', 'plan 1.4');
+assert.equal(serverSection.moved[0].expect, 'Your Daylight server moved to daylight-3f9a.example.workers.dev. Use it?');
+assert.equal(serverSection.labInboxSeen[0].expect, 'Your Daylight hasn’t said hello to the server yet.');
+assert.equal(serverSection.labInboxSeen[1].expect, 'Lab Inbox last seen 4 min ago');
+assert.equal(serverSection.aiToday[1].expect, 'AI today: US$0.23 of US$3');
+assert.equal(serverSection.aiToday[5].expect, 'AI today: US$1 of US$3', '1.005 × 100 is 100.49999999999999');
+assert.equal(serverSection.aiToday[6].expect, 'AI today: US$0.02 of US$3', '0.015 × 100 is 1.5');
 assert.equal(labText.strings['short.needs-inbox'], 'Needs Lab on your Daylight');
 assert.equal(labText.checkedIn[4].expect, 'Your Daylight checked in 4 min ago.');
 assert.equal(labText.checkedIn[0].expect, 'Your Daylight hasn’t checked in since this device paired.');
@@ -559,7 +589,7 @@ const out = {
     'labGate: build the gate\'s ctx from the stub: lab, paired, caps (hasCap is true for these tokens), local (the app\'s own check answers this state), server (null: no server object; {state, message}: what server.state(key) answers; "never": it never answers, so the gate\'s deadline gives OFFLINE; "throws-offline": it throws an OFFLINE error whose message is the OFFLINE text), serverMessages (the server module\'s texts, for an OFFLINE the deadline decided), built (absent = built) and platform. expect: ready, state, message, short, button, and serverKey (the key server.state was asked for, or null). Run "never" with a short deadline in tests; the real one is GATE_DEADLINE_MS.',
     'labHeaderExtras: checkItemHeader (ItemHeader.check) of headerJson must succeed and its extras must equal expect: x-cap when it is seen, clean, excerpt or test; x-orig when it passes the web URL rule (the trimmed value; receivers do not apply the sender\'s 1,024-character limit); both from part 0 only; every other x- field dropped.',
     'labRowText: describeLabRow(row, now, ctx) (LabRowText) must equal expect.label, sentence, action (null, "retry-now" or "try-again"), stepLine (null for v1.1 rows) and final; expect.a11y is the row\'s accessibility label ("{label}. {sentence}"). ctx.hasCap is the list of tokens for which hasCap is true; ctx.state is {s, t}, a bare token or null; ctx.online false means offline.',
-    'labText: strings is LAB_TEXT flattened to dotted ids (arrays joined with ","); every app shows exactly these. messages: needsMessage(state, {platform, feature, short, heading, message}) -> expect (null = no text of its own: the server module\'s text is used). checkedIn: checkedInText(ms, now). inboxHeader: the What\'s in Lab header line. features: the name and sentence of each Lab feature, in list order (the four server features last).',
+    'labText: strings is LAB_TEXT flattened to dotted ids (arrays joined with ","); every app shows exactly these. messages: needsMessage(state, {platform, feature, short, heading, message}) -> expect (null = no text of its own: the server module\'s text is used). checkedIn: checkedInText(ms, now). inboxHeader: the What\'s in Lab header line. features: the name and sentence of each Lab feature, in list order (the four server features last). serverRow: the server\'s state for the whole server -> heading (serverHeadingShort: the line under What\'s in Lab\'s server heading; needs-server is "Not set up"; an unknown state is error) and subtitle (serverRowSubtitle: the "Daylight server ›" row, "Optional · {short}" with that heading form). serverFeature: serverFeatureShort(state, headingState) -> a server feature row\'s own short state, or null when its state equals the heading\'s (unknown states count as error). serverSection (2.6, the Daylight server section): moved: serverMovedText(moved) fills {host} with discover()\'s new origin minus its scheme and any path, as text (the port stays); labInboxSeen: labInboxSeenText(lastSeen, now) with GET /v1/status\'s inbox.lastSeen (an ISO time read by rule D, or ms; anything else is the not-yet line); aiToday: aiTodayText(used, cap), where an amount is n × 100 in double precision rounded half up to cents (so 1.005 is "1" and 0.015 is "0.02"; never printf or toFixed), ".00" left out, and anything but a finite number above 0 is "0".',
     'v1Safety: each labFrames frame as a v1.0 or v1.1 ack reader sees it: it opens as an ack whose ids are [], so it acks nothing and no row changes. Kotlin\'s AckHeader.idsOf and Swift\'s AckHeader.ids(in:) must return [] for each.',
   ],
   constants, labTopics, labFrames, labParse, labLedger, labGate, labHeaderExtras, labRowText, labText, v1Safety,

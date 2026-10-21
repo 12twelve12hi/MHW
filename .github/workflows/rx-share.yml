@@ -9,6 +9,8 @@ on:
     paths:
       - 'reader-experiment/share/**'
       - '!reader-experiment/share/**/*.md'
+      # lab.test.mjs runs labGate against the server lane's client module (F00.6), so a change there runs this too
+      - 'reader-experiment/server/client/**'
       - '.github/workflows/rx-share.yml'
   workflow_dispatch:
   schedule:

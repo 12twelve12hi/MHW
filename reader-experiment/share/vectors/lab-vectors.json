@@ -12,7 +12,7 @@
     "labGate: build the gate's ctx from the stub: lab, paired, caps (hasCap is true for these tokens), local (the app's own check answers this state), server (null: no server object; {state, message}: what server.state(key) answers; \"never\": it never answers, so the gate's deadline gives OFFLINE; \"throws-offline\": it throws an OFFLINE error whose message is the OFFLINE text), serverMessages (the server module's texts, for an OFFLINE the deadline decided), built (absent = built) and platform. expect: ready, state, message, short, button, and serverKey (the key server.state was asked for, or null). Run \"never\" with a short deadline in tests; the real one is GATE_DEADLINE_MS.",
     "labHeaderExtras: checkItemHeader (ItemHeader.check) of headerJson must succeed and its extras must equal expect: x-cap when it is seen, clean, excerpt or test; x-orig when it passes the web URL rule (the trimmed value; receivers do not apply the sender's 1,024-character limit); both from part 0 only; every other x- field dropped.",
     "labRowText: describeLabRow(row, now, ctx) (LabRowText) must equal expect.label, sentence, action (null, \"retry-now\" or \"try-again\"), stepLine (null for v1.1 rows) and final; expect.a11y is the row's accessibility label (\"{label}. {sentence}\"). ctx.hasCap is the list of tokens for which hasCap is true; ctx.state is {s, t}, a bare token or null; ctx.online false means offline.",
-    "labText: strings is LAB_TEXT flattened to dotted ids (arrays joined with \",\"); every app shows exactly these. messages: needsMessage(state, {platform, feature, short, heading, message}) -> expect (null = no text of its own: the server module's text is used). checkedIn: checkedInText(ms, now). inboxHeader: the What's in Lab header line. features: the name and sentence of each Lab feature, in list order (the four server features last).",
+    "labText: strings is LAB_TEXT flattened to dotted ids (arrays joined with \",\"); every app shows exactly these. messages: needsMessage(state, {platform, feature, short, heading, message}) -> expect (null = no text of its own: the server module's text is used). checkedIn: checkedInText(ms, now). inboxHeader: the What's in Lab header line. features: the name and sentence of each Lab feature, in list order (the four server features last). serverRow: the server's state for the whole server -> heading (serverHeadingShort: the line under What's in Lab's server heading; needs-server is \"Not set up\"; an unknown state is error) and subtitle (serverRowSubtitle: the \"Daylight server ›\" row, \"Optional · {short}\" with that heading form). serverFeature: serverFeatureShort(state, headingState) -> a server feature row's own short state, or null when its state equals the heading's (unknown states count as error). serverSection (2.6, the Daylight server section): moved: serverMovedText(moved) fills {host} with discover()'s new origin minus its scheme and any path, as text (the port stays); labInboxSeen: labInboxSeenText(lastSeen, now) with GET /v1/status's inbox.lastSeen (an ISO time read by rule D, or ms; anything else is the not-yet line); aiToday: aiTodayText(used, cap), where an amount is n × 100 in double precision rounded half up to cents (so 1.005 is \"1\" and 0.015 is \"0.02\"; never printf or toFixed), \".00\" left out, and anything but a finite number above 0 is \"0\".",
     "v1Safety: each labFrames frame as a v1.0 or v1.1 ack reader sees it: it opens as an ack whose ids are [], so it acks nothing and no row changes. Kotlin's AckHeader.idsOf and Swift's AckHeader.ids(in:) must return [] for each."
   ],
   "constants": {
@@ -5286,6 +5286,13 @@
       "serverRow": "Daylight server",
       "serverRowSubtitle": "Optional · {short}",
       "serverHeading": "With your Daylight server (optional)",
+      "serverSection.moved": "Your Daylight server moved to {host}. Use it?",
+      "serverSection.labInboxSeen": "Lab Inbox last seen {rel}",
+      "serverSection.labInboxNever": "Your Daylight hasn’t said hello to the server yet.",
+      "serverSection.aiToday": "AI today: US${used} of US${cap}",
+      "serverSection.serverCode": "Server code",
+      "serverSection.copy": "Copy",
+      "serverSection.serverAddress": "Server address",
       "comfort": "Comfort",
       "comfortFooter": "Larger text and buttons, more contrast, no motion.",
       "labOff": "Turn on Lab in {app} to use this.",
@@ -5992,6 +5999,279 @@
         "expect": "Your Daylight: Lab on · checked in 3 h ago"
       }
     ],
+    "serverRow": [
+      {
+        "state": "ready",
+        "heading": "Ready",
+        "subtitle": "Optional · Ready"
+      },
+      {
+        "state": "needs-pairing",
+        "heading": "Pair first",
+        "subtitle": "Optional · Pair first"
+      },
+      {
+        "state": "needs-server",
+        "heading": "Not set up",
+        "subtitle": "Optional · Not set up"
+      },
+      {
+        "state": "pairing-mismatch",
+        "heading": "Needs the new Server code",
+        "subtitle": "Optional · Needs the new Server code"
+      },
+      {
+        "state": "locked",
+        "heading": "Needs the new Server code",
+        "subtitle": "Optional · Needs the new Server code"
+      },
+      {
+        "state": "server-outdated",
+        "heading": "Server needs an update",
+        "subtitle": "Optional · Server needs an update"
+      },
+      {
+        "state": "app-outdated",
+        "heading": "Update this app",
+        "subtitle": "Optional · Update this app"
+      },
+      {
+        "state": "needs-key",
+        "heading": "Needs a Claude key",
+        "subtitle": "Optional · Needs a Claude key"
+      },
+      {
+        "state": "needs-r2",
+        "heading": "Needs R2 storage",
+        "subtitle": "Optional · Needs R2 storage"
+      },
+      {
+        "state": "needs-domain",
+        "heading": "Needs an email domain",
+        "subtitle": "Optional · Needs an email domain"
+      },
+      {
+        "state": "needs-paid",
+        "heading": "Needs Workers Paid",
+        "subtitle": "Optional · Needs Workers Paid"
+      },
+      {
+        "state": "needs-lab-inbox",
+        "heading": "Waiting to hear from your Daylight",
+        "subtitle": "Optional · Waiting to hear from your Daylight"
+      },
+      {
+        "state": "OFFLINE",
+        "heading": "Can’t reach the server",
+        "subtitle": "Optional · Can’t reach the server"
+      },
+      {
+        "state": "error",
+        "heading": "Server problem",
+        "subtitle": "Optional · Server problem"
+      },
+      {
+        "state": "later",
+        "heading": "In a later update",
+        "subtitle": "Optional · In a later update"
+      },
+      {
+        "state": "nonsense",
+        "heading": "Server problem",
+        "subtitle": "Optional · Server problem"
+      }
+    ],
+    "serverFeature": [
+      {
+        "state": "needs-server",
+        "headingState": "needs-server",
+        "expect": null
+      },
+      {
+        "state": "needs-key",
+        "headingState": "ready",
+        "expect": "Needs a Claude key"
+      },
+      {
+        "state": "ready",
+        "headingState": "ready",
+        "expect": null
+      },
+      {
+        "state": "later",
+        "headingState": "ready",
+        "expect": "In a later update"
+      },
+      {
+        "state": "needs-key",
+        "headingState": "needs-key",
+        "expect": null
+      },
+      {
+        "state": "needs-lab-inbox",
+        "headingState": "ready",
+        "expect": "Waiting to hear from your Daylight"
+      },
+      {
+        "state": "OFFLINE",
+        "headingState": "OFFLINE",
+        "expect": null
+      },
+      {
+        "state": "needs-r2",
+        "headingState": "needs-server",
+        "expect": "Needs R2 storage"
+      },
+      {
+        "state": "nonsense",
+        "headingState": "error",
+        "expect": null
+      },
+      {
+        "state": "nonsense",
+        "headingState": "ready",
+        "expect": "Server problem"
+      }
+    ],
+    "serverSection": {
+      "moved": [
+        {
+          "moved": "https://daylight-3f9a.example.workers.dev",
+          "expect": "Your Daylight server moved to daylight-3f9a.example.workers.dev. Use it?"
+        },
+        {
+          "moved": "https://daylight.example.org:8443",
+          "expect": "Your Daylight server moved to daylight.example.org:8443. Use it?"
+        },
+        {
+          "moved": "https://daylight.example.org/",
+          "expect": "Your Daylight server moved to daylight.example.org. Use it?"
+        },
+        {
+          "moved": "daylight.example.org",
+          "expect": "Your Daylight server moved to daylight.example.org. Use it?"
+        }
+      ],
+      "labInboxSeen": [
+        {
+          "lastSeen": null,
+          "now": 1792486800000,
+          "expect": "Your Daylight hasn’t said hello to the server yet."
+        },
+        {
+          "lastSeen": "2026-10-20T08:56:00.000Z",
+          "now": 1792486800000,
+          "expect": "Lab Inbox last seen 4 min ago"
+        },
+        {
+          "lastSeen": "2026-10-20T09:00:00Z",
+          "now": 1792486800000,
+          "expect": "Lab Inbox last seen just now"
+        },
+        {
+          "lastSeen": "2026-10-19T07:00:00.000Z",
+          "now": 1792486800000,
+          "expect": "Lab Inbox last seen 26 h ago"
+        },
+        {
+          "lastSeen": "2026-10-14T09:00:00.000Z",
+          "now": 1792486800000,
+          "expect": "Lab Inbox last seen 6 days ago"
+        },
+        {
+          "lastSeen": 1792481400000,
+          "now": 1792486800000,
+          "expect": "Lab Inbox last seen 1 h ago"
+        },
+        {
+          "lastSeen": "2026-02-30T00:00:00.000Z",
+          "now": 1792486800000,
+          "expect": "Your Daylight hasn’t said hello to the server yet."
+        },
+        {
+          "lastSeen": "2026-10-20T08:56:00+00:00",
+          "now": 1792486800000,
+          "expect": "Your Daylight hasn’t said hello to the server yet."
+        },
+        {
+          "lastSeen": "yesterday",
+          "now": 1792486800000,
+          "expect": "Your Daylight hasn’t said hello to the server yet."
+        },
+        {
+          "lastSeen": true,
+          "now": 1792486800000,
+          "expect": "Your Daylight hasn’t said hello to the server yet."
+        },
+        {
+          "lastSeen": "",
+          "now": 1792486800000,
+          "expect": "Your Daylight hasn’t said hello to the server yet."
+        }
+      ],
+      "aiToday": [
+        {
+          "used": 0,
+          "cap": 3,
+          "expect": "AI today: US$0 of US$3"
+        },
+        {
+          "used": 0.227,
+          "cap": 3,
+          "expect": "AI today: US$0.23 of US$3"
+        },
+        {
+          "used": 2.5,
+          "cap": 10,
+          "expect": "AI today: US$2.50 of US$10"
+        },
+        {
+          "used": 2.999,
+          "cap": 3,
+          "expect": "AI today: US$3 of US$3"
+        },
+        {
+          "used": 0.004,
+          "cap": 3,
+          "expect": "AI today: US$0 of US$3"
+        },
+        {
+          "used": 1.005,
+          "cap": 3,
+          "expect": "AI today: US$1 of US$3"
+        },
+        {
+          "used": 0.015,
+          "cap": 3,
+          "expect": "AI today: US$0.02 of US$3"
+        },
+        {
+          "used": 12.345,
+          "cap": 10,
+          "expect": "AI today: US$12.35 of US$10"
+        },
+        {
+          "used": 3,
+          "cap": 3,
+          "expect": "AI today: US$3 of US$3"
+        },
+        {
+          "used": null,
+          "cap": 3,
+          "expect": "AI today: US$0 of US$3"
+        },
+        {
+          "used": -1,
+          "cap": 3,
+          "expect": "AI today: US$0 of US$3"
+        },
+        {
+          "used": "0.5",
+          "cap": 3,
+          "expect": "AI today: US$0 of US$3"
+        }
+      ]
+    },
     "features": [
       {
         "id": "F01",
