@@ -53,3 +53,28 @@ Found:
     does for links and pages; for documents, only the Reader-side Lab inbox can.
 - **The web sender says "up to 64 MB",** but ntfy.sh takes about 2 MB until protocol v1.1. v1.1 sets one 9 MB
   limit and shared wording for every app (protocol port).
+
+## Round 3 (Oct 21): Mac app build 12, the upgrade path
+
+First pass, with the Mac at its lock screen.
+
+- Installed over build 7, leaving `~/Library/Containers/com.daylight.share.mac` and the `group.com.daylight.share`
+  container in place. CFBundleVersion 12; the app and its extensions carry no application-groups entitlement
+  (ad-hoc signed).
+- **Launch: no hang.** The process was up in 0.08 s, and a main-thread sample shows the normal idle event loop. Build 7
+  was stuck in `SharedStore.isWritable`.
+- Pairing through `open daylightshare://pair?c=…` worked (Inbox: "inbox: new pairing dls-30ecf2be…").
+
+| Sender | Item | Send to hand-off | Result |
+|---|---|---|---|
+| Mac app (`open -a`) | PDF, 18 KB | ~4 s | handed to `com.daylightcomputer.reader`, imported (sha = file) |
+| Mac app (`open -a`) | link | ~7 s | `save_page` saved, imported |
+
+Still to check once the Mac is unlocked:
+- how long until the window is usable;
+- any "differs from previous versions / data from other apps" prompt;
+- "Delivered ✓" in the history;
+- Finder › Share › Daylight.
+
+Rooted 2 is back at its baseline (`library=41 deleted=4 total=45 ids=92fc8f4b85f39eea`), Daylight Share is
+uninstalled, and the lock is released.
