@@ -6,9 +6,11 @@ import FoundationNetworking
 /// The sender side of PROTOCOL 3.3, exactly the pseudo-code of CHANGES-v1.1 2.4: publish, read acks, re-send, expire.
 /// Mirrors the JS reference's `Sender`.
 ///
-/// Every public method runs under a lock shared by every `ShareSender` on the same outbox directory in this process,
-/// so a share, a maintenance pass and a tap on "Retry now" take turns. Across processes (the app and its share
-/// extension) the outbox file is coordinated row by row, and a `sending` row is only taken over once it is stale.
+/// Every public method runs under a lock shared by every `ShareSender` on the same outbox directory in this process
+/// (`OutboxStore.whileLocked`), so a share, a maintenance pass, a tap on "Retry now", "Remove", "Clear" and a pairing
+/// change take turns. Across processes (the app and its share extension) the outbox file is coordinated row by row: a
+/// `sending` row is only taken over once it is stale, and an attempt only updates rows the outbox still holds, so a
+/// row removed meanwhile never comes back (only `send` adds rows).
 public final class ShareSender {
     public let pairing: Pairing
     public let keys: ShareKeys
@@ -63,12 +65,15 @@ public final class ShareSender {
 
     // MARK: One attempt
 
-    /// Publishes the frames in part order and records the outcome (CHANGES-v1.1 2.4 `attempt`).
+    /// Publishes the frames in part order and records the outcome (CHANGES-v1.1 2.4 `attempt`). Stops without
+    /// publishing more when the row was removed meanwhile (by another process: in this one, removing waits for the
+    /// lock) or delivered meanwhile; the removed row is not saved again.
     private func attempt(_ start: OutboxRow, _ prepared: PreparedItem) async -> (row: OutboxRow, error: ShareError?) {
         var row = start
         row.status = .sending
         row.attemptStarted = now()
-        row = persist(row)
+        guard let begun = persist(row) else { return (row, nil) }
+        row = begun
         if row.status == .delivered { return (row, nil) }
         var failure: ShareError?
         do {
@@ -77,7 +82,9 @@ public final class ShareSender {
                 let frame = try prepared.frame(part: i, keys: keys, chunkSize: chunkSize)
                 try await relay.publish(topic: keys.inboxTopic, frame: frame)
                 row.attemptStarted = now() // progress: `sending` is stale 15 minutes after this
-                row = persist(row)
+                guard let saved = persist(row) else { return (row, nil) }
+                row = saved
+                if row.status == .delivered { return (row, nil) }
             }
         } catch let e as ShareError {
             failure = e
@@ -100,15 +107,17 @@ public final class ShareSender {
             row.error = ""
         }
         row.lastPublish = now()
-        return (persist(row), failure)
+        return (persist(row) ?? row, failure)
     }
 
-    /// Saves a row, unless the stored one was delivered meanwhile (an ack read by another process): that one wins.
-    private func persist(_ row: OutboxRow) -> OutboxRow {
-        outbox.update { state -> OutboxRow in
-            if let stored = state.rows.first(where: { $0.id == row.id }), stored.status == .delivered { return stored }
-            state.rows.removeAll { $0.id == row.id }
-            state.rows.append(row)
+    /// Updates a row the outbox still holds; only `send` adds one. A row removed meanwhile ("Remove", "Clear", a
+    /// pairing with another secret, perhaps in another process) is not brought back: nil. A row delivered meanwhile
+    /// (an ack read by another process) wins: the stored one is returned.
+    private func persist(_ row: OutboxRow) -> OutboxRow? {
+        outbox.update { state -> OutboxRow? in
+            guard let i = state.rows.firstIndex(where: { $0.id == row.id }) else { return nil }
+            if state.rows[i].status == .delivered { return state.rows[i] }
+            state.rows[i] = row
             return row
         }
     }
@@ -119,7 +128,7 @@ public final class ShareSender {
         row.status = .expired
         row.errorCode = errorCode
         if dropContent { row.hasBody = false }
-        row = persist(row)
+        row = persist(row) ?? row
         if dropContent { outbox.removeBodyFile(row.id) }
         return row
     }
@@ -300,20 +309,12 @@ public final class ShareSender {
     // MARK: Lock
 
     private func locked<T>(_ body: () async throws -> T) async rethrows -> T {
-        let lock = OutboxLock.lock(for: outbox.directory)
-        await lock.acquire()
-        do {
-            let value = try await body()
-            await lock.release()
-            return value
-        } catch {
-            await lock.release()
-            throw error
-        }
+        try await outbox.whileLocked(body)
     }
 }
 
-/// One async lock per outbox directory in this process (CHANGES-v1.1 note a: the library serialises).
+/// One async lock per outbox directory in this process (CHANGES-v1.1 note a: the library serialises). Senders,
+/// "Remove", "Clear" and pairing changes take it (`OutboxStore.whileLocked`); waiters get it in the order they asked.
 actor OutboxLock {
     private static let registry = NSLock()
     private static var locks: [String: OutboxLock] = [:]

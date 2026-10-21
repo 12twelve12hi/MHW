@@ -9,7 +9,7 @@ and travel through an ntfy relay to the **Daylight Share** inbox on the tablet, 
 | Target | What it does |
 |---|---|
 | **Send to Daylight** (iPhone, iOS 16+) | Pair by scanning the Daylight's QR code, typing/pasting the code, or opening a `daylightshare://pair?…` link (which asks first). Send a link or a file (PDF, EPUB, DOCX, Markdown, HTML, text… up to 9 MB). History with the same words as every Send to Daylight app (*Sent · waiting for your Daylight*, *Delivered ✓*, *Waiting to send*, *Not delivered*, with *Retry now* or *Try again* where they help). Settings: this device's name, the relay, unpair. Re-sends what the Daylight has not acknowledged on launch, while open, and with background app refresh. |
-| **Daylight** share sheet item (iOS Share Extension) | In the share sheet of Safari and other apps for web pages, links and documents. From Safari it sends the page as you see it (its HTML, captured by `GetPage.js`), so paywalled and logged-in articles work; links from other apps go as links; files as files (up to 9 MB, refused at once above). Shows "Sending to <your Daylight>… → Sent ✓" and closes, or the item's status and sentence when it could not go yet. If the app isn't paired yet, you can paste the code right there; a shared `daylightshare://` link pairs after you confirm. |
+| **Daylight** share sheet item (iOS Share Extension) | In the share sheet of Safari and other apps for web pages, links and documents. From Safari it sends the page as you see it (its HTML, captured by `GetPage.js`), so paywalled and logged-in articles work; links from other apps go as links; files as files (up to 9 MB, refused at once above). Shows "Sending to <your Daylight>…", then the item's status in the words the app's history uses (*Sent · waiting for your Daylight*: it reached the relay, not yet the Daylight; *Delivered ✓* if the Daylight already acknowledged it) and closes, or the item's status and sentence when it could not go yet (or *This device is out of space, so it can’t send this.* when the file cannot be copied). If the app isn't paired yet, you can paste the code right there; a shared `daylightshare://` link pairs after you confirm. |
 | **Send to Daylight** Safari extension (iOS) | The shared WebExtension from [`../extension`](../extension) packaged for Safari on iPhone. It reads the pairing from the app, so you pair once. |
 | **Send to Daylight** (Mac, macOS 13+) | A window and a menu bar item. Pair by pasting the code or a `daylightshare://` link. Drop PDFs, documents, `.webloc` files or links on the window or on the Dock icon; "Send Clipboard Link" (⇧⌘L in the menu bar item); history; settings. Re-sends unacknowledged items every minute while it runs. |
 | **Daylight** Share menu item (macOS Share Extension) | Share › Daylight in Safari, Finder, Preview and other apps: links, pages and files. Team-signed builds use the app's pairing; the released (ad-hoc) build asks for the code once and remembers it. |
@@ -73,6 +73,10 @@ code (or the `daylightshare://` link) from the Daylight into the app again, and 
 1.0 had not delivered are not carried over; send them again. The old container can then be moved to the Trash. (If you
 never clicked *Allow*, 1.0 never got that far and there is nothing to move.) iPhone builds keep their App Group, so
 the iPhone app stays paired.
+
+A relay address that 1.0 accepted but 1.1 refuses when typed (for example one with an underscore in its host name,
+such as `http://ntfy_box:8080`) keeps working: a saved pairing is read with the relay as 1.0 saved it, so updating
+never quietly unpairs anyone or drops the items still on their way.
 
 ## Install on a Mac
 
@@ -170,6 +174,9 @@ receiver gets and acks, and then show that history row as *Delivered ✓*.
 pairing must still work (into the group once found, or into the app's own storage after the 2-second timeout). It also
 requires that the app model never reads or writes storage on the main thread (`StorageAudit` records any access made
 there), and the Mac smoke test checks the same in the running app after launch and after it delivered an item.
+`OutboxLockTests` pin the pairing-change and removal rules against an upload in flight; `DownloadRuleTests` pin the
+download rule (https or the relay's own origin, the 12,713,984-byte and 64 MiB caps, the stop after a 429) and the
+takeover of a `sending` row 15 minutes after its last progress.
 
 Launch arguments for testing and debugging (only whoever starts the app can pass them): `-DLSPairLink <link>` pairs,
 `-DLSSendLink <url>` sends a link, and `-DLSStatusDump` makes the app write `debug-status.json` (storage, pairing,
@@ -186,7 +193,12 @@ history rows with their labels, and a once-a-second heartbeat) to its Applicatio
   change answers with a `notice`), and `{type: "ping"}` reports the app version and the storage in use. It answers once
   storage is settled, never touching the App Group on its own thread.
 - Pairing again with the same code keeps the items still waiting (they go through the new relay); another code
-  deletes them (PROTOCOL 3.3).
+  deletes them (PROTOCOL 3.3). Switching Daylights, unpairing, *Remove* and *Clear delivered and expired* wait for an
+  upload in progress in the same app (the outbox lock, as in the JavaScript reference), and an upload never writes
+  back a row that was removed meanwhile, even by the share extension in another process. So an item meant for one
+  Daylight is never sent to another.
+- Every sheet of an app window (Settings, the file picker, the QR scanner) is presented from one place, together
+  with the pairing question: a `daylightshare://` link that arrives while one is open replaces it with the question.
 - Items not delivered within 7 days keep their content until 14 days after they were shared, so *Try again* still
   works; delivered items keep only a history row. The history keeps every item still on its way and the newest 200
   finished ones.

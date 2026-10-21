@@ -5,8 +5,6 @@ import SwiftUI
 /// First run: scan the Daylight's QR code, or type/paste its code.
 struct PairView: View {
     @EnvironmentObject var model: AppModel
-    @State private var scanning = false
-    @State private var scanError: String?
 
     var body: some View {
         NavigationStack {
@@ -23,16 +21,12 @@ struct PairView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     PairingHelp()
                     Button {
-                        scanError = nil
-                        scanning = true
+                        model.sheet = .scanner
                     } label: {
                         Label("Scan the QR code", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    if let scanError {
-                        Text(scanError).font(.footnote).foregroundColor(.red)
-                    }
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Or type the code").font(.headline)
                         PairingForm { model.pair($0) }
@@ -45,12 +39,8 @@ struct PairView: View {
             }
             .navigationTitle("Send to Daylight")
             .navigationBarTitleDisplayMode(.inline)
-            .sheet(isPresented: $scanning) {
-                ScannerSheet { value in
-                    scanning = false
-                    if let error = model.pair(value) { scanError = error }
-                }
-            }
+            // The scanner is presented by RootView (`appSheets`); a code it reads that is not a pairing code shows
+            // in the banner.
         }
     }
 }

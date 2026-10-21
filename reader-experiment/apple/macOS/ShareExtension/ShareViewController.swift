@@ -2,7 +2,8 @@ import AppKit
 import DaylightShareUI
 import SwiftUI
 
-/// The Share menu item (Safari, Finder, Preview, …): "Sending to <Daylight>… → Sent ✓", then it closes itself.
+/// The Share menu item (Safari, Finder, Preview, …): "Sending to <Daylight>…", then the item's status ("Sent · waiting for your Daylight"),
+/// then it closes itself.
 final class ShareViewController: NSViewController {
     private let model = ShareExtensionModel()
 

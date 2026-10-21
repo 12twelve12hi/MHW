@@ -157,22 +157,34 @@ public struct PairingConfirmationView: View {
     }
 }
 
-/// Shows the app model's pending pairing question as a sheet (dismissing it cancels).
-struct PairingConfirmationSheet: ViewModifier {
+/// Every sheet of an app window, from one presentation point: `model.presented`, which is the pairing question when
+/// one waits (PROTOCOL 1.3) and otherwise `model.sheet`. SwiftUI shows one sheet at a time, and a sheet presented from
+/// a view that already shows one does not appear; with a single `sheet(item:)`, a pairing link that arrives while
+/// Settings, the file picker or the scanner is open replaces it with the question.
+struct AppSheets<SheetContent: View>: ViewModifier {
     @ObservedObject var model: AppModel
+    let sheetContent: (AppModel.Sheet) -> SheetContent
 
     func body(content: Content) -> some View {
-        content.sheet(item: $model.pendingPairing) { pending in
-            PairingConfirmationView(confirmation: pending.confirmation, onConfirm: { model.confirmPairing() },
-                                    onCancel: { model.cancelPairing() })
+        content.sheet(item: $model.presented) { presented in
+            switch presented {
+            case let .pairing(pending):
+                // Answered only with its buttons ("Cancel" also on Escape): a swipe cannot leave it half decided.
+                PairingConfirmationView(confirmation: pending.confirmation, onConfirm: { model.confirmPairing() },
+                                        onCancel: { model.cancelPairing() })
+                    .interactiveDismissDisabled()
+            case let .sheet(sheet):
+                sheetContent(sheet)
+            }
         }
     }
 }
 
 extension View {
-    /// Asks before a pairing takes effect, whenever `model.pendingPairing` is set (PROTOCOL 1.3).
-    public func pairingConfirmation(_ model: AppModel) -> some View {
-        modifier(PairingConfirmationSheet(model: model))
+    /// Presents the app's sheets (`model.sheet`, built by `content`) and the question before a pairing takes effect,
+    /// all from this one view: attach it to the window's root view only, and open sheets by setting `model.sheet`.
+    public func appSheets<S: View>(_ model: AppModel, @ViewBuilder content: @escaping (AppModel.Sheet) -> S) -> some View {
+        modifier(AppSheets(model: model, sheetContent: content))
     }
 }
 

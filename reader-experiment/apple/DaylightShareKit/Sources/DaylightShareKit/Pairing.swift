@@ -117,11 +117,13 @@ public struct Pairing: Equatable, Codable {
 
     private enum CodingKeys: String, CodingKey { case code, relay, name }
 
+    /// A stored pairing keeps a relay that 1.0 accepted even when the 1.1 rule refuses it (`ShareText.storedRelay`):
+    /// reading it never fails over the stricter rule, which would look like "not paired" after an update.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        let secret = try PairingCode.parse(try c.decode(String.self, forKey: .code))
-        try self.init(secret: secret, relay: try c.decodeIfPresent(String.self, forKey: .relay) ?? "",
-                      name: try c.decodeIfPresent(String.self, forKey: .name) ?? "")
+        secret = try PairingCode.parse(try c.decode(String.self, forKey: .code))
+        relay = try ShareText.storedRelay(try c.decodeIfPresent(String.self, forKey: .relay) ?? "")
+        name = ShareText.cleanName(try c.decodeIfPresent(String.self, forKey: .name) ?? "")
     }
 
     public func encode(to encoder: Encoder) throws {

@@ -13,6 +13,9 @@ public enum SharePayload: Equatable {
     case text(String)
     /// A file over 9 MB: refused before it is read or copied (CHANGES-v1.1 2.2).
     case tooLarge(name: String, size: Int)
+    /// A file that could not be copied out of the share sheet: `message` says why ("This device is out of space, so
+    /// it can’t send this." when the disk is full).
+    case unreadable(name: String, message: String)
     /// A `daylightshare://` pairing link (shared from the camera, Messages, …): it pairs, after the user confirms.
     case pairing(String)
 }
@@ -39,7 +42,7 @@ public enum SharePayloadReader {
         if let page = all.first(where: { if case .page = $0 { return true } else { return false } }) { return [page] }
         let files = all.filter {
             switch $0 {
-            case .file, .tooLarge: return true
+            case .file, .tooLarge, .unreadable: return true
             default: return false
             }
         }
@@ -52,8 +55,17 @@ public enum SharePayloadReader {
         return []
     }
 
+    /// A file that cannot be copied from one representation is tried in the next (a file URL the extension may not
+    /// read can still come as data); only when none works is it reported as `.unreadable`, never dropped.
     static func read(_ provider: NSItemProvider, itemTitle: String?) async -> SharePayload? {
         let types = provider.registeredTypeIdentifiers
+        var unreadable: SharePayload?
+        /// The payload, or nil after noting an unreadable one (out of space is the reason worth keeping).
+        func usable(_ p: SharePayload) -> SharePayload? {
+            guard case let .unreadable(_, message) = p else { return p }
+            if unreadable == nil || message == ShareError.outOfSpace.message { unreadable = p }
+            return nil
+        }
         // 1. Safari's JavaScript preprocessing results (GetPage.js).
         if provider.hasItemConformingToTypeIdentifier(propertyList),
            let dict = await loadItem(provider, propertyList) as? NSDictionary,
@@ -68,15 +80,19 @@ public enum SharePayloadReader {
         // 2. Files (their size is checked before they are copied).
         if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier),
            let url = await loadURL(provider, UTType.fileURL.identifier), url.isFileURL,
-           let file = filePayload(url, suggestedName: provider.suggestedName) {
+           let file = filePayload(url, suggestedName: provider.suggestedName).flatMap(usable) {
             return file
         }
         // 3. Web links (and pairing links).
         if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier),
            let url = await loadURL(provider, UTType.url.identifier) {
-            if url.isFileURL, let file = filePayload(url, suggestedName: provider.suggestedName) { return file }
-            if url.scheme?.lowercased() == "daylightshare" { return .pairing(url.absoluteString) }
-            if let link = ShareText.webURL(url.absoluteString) { return .link(url: link, title: itemTitle) }
+            if url.isFileURL {
+                if let file = filePayload(url, suggestedName: provider.suggestedName).flatMap(usable) { return file }
+            } else if url.scheme?.lowercased() == "daylightshare" {
+                return .pairing(url.absoluteString)
+            } else if let link = ShareText.webURL(url.absoluteString) {
+                return .link(url: link, title: itemTitle)
+            }
         }
         // 4. Documents given as data (Files, Mail, Books, …), by their most specific type.
         let docType = types.first { id in
@@ -84,7 +100,7 @@ public enum SharePayloadReader {
             return !t.conforms(to: .url) && (t.conforms(to: .data) || t.conforms(to: .content))
                 && !(t.conforms(to: .plainText) && types.contains(UTType.url.identifier))
         }
-        if let docType, let file = await loadFile(provider, docType) { return file }
+        if let docType, let file = (await loadFile(provider, docType)).flatMap(usable) { return file }
         // 5. Plain text.
         if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
             let value = await loadItem(provider, UTType.plainText.identifier)
@@ -95,7 +111,7 @@ public enum SharePayloadReader {
                 return file
             }
         }
-        return nil
+        return unreadable
     }
 
     /// A pairing link is a pairing; short text that holds a link is the link; anything else is sent as a text file.
@@ -150,17 +166,32 @@ public enum SharePayloadReader {
     }
 
     /// A file to send: refused up front when it is over `DLS.maxItem` (nothing is read or copied), else copied to a
-    /// temporary location.
+    /// temporary location. A copy that fails is reported, never dropped: on a full disk with the shared sentence
+    /// (CHANGES-v1.1 2.5, "This device is out of space, so it can’t send this.").
     static func filePayload(_ url: URL, suggestedName: String?) -> SharePayload? {
+        let name = ShareText.safeFileName(url.lastPathComponent.isEmpty ? (suggestedName ?? "") : url.lastPathComponent)
         if let size = fileSize(url), size > DLS.maxItem {
-            let name = url.lastPathComponent.isEmpty ? (suggestedName ?? "") : url.lastPathComponent
-            return .tooLarge(name: ShareText.safeFileName(name), size: size)
+            return .tooLarge(name: name, size: size)
         }
-        guard let copy = copyToTemporary(url, suggestedName: suggestedName) else { return nil }
-        return .file(url: copy, name: copy.lastPathComponent)
+        do {
+            let copy = try copyToTemporary(url, suggestedName: suggestedName)
+            return .file(url: copy, name: copy.lastPathComponent)
+        } catch {
+            return .unreadable(name: name, message: isOutOfSpace(error) ? ShareError.outOfSpace.message
+                                   : "Couldn’t read “\(name)”.")
+        }
     }
 
-    static func copyToTemporary(_ url: URL, suggestedName: String?) -> URL? {
+    /// Whether a file error means the disk is full (Cocoa's out-of-space error, or ENOSPC underneath).
+    static func isOutOfSpace(_ error: Error) -> Bool {
+        let e = error as NSError
+        if e.domain == NSCocoaErrorDomain && e.code == NSFileWriteOutOfSpaceError { return true }
+        if e.domain == NSPOSIXErrorDomain && e.code == Int(ENOSPC) { return true }
+        if let underlying = e.userInfo[NSUnderlyingErrorKey] as? Error { return isOutOfSpace(underlying) }
+        return false
+    }
+
+    static func copyToTemporary(_ url: URL, suggestedName: String?) throws -> URL {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         let fm = FileManager.default
@@ -176,7 +207,8 @@ public enum SharePayloadReader {
             try fm.copyItem(at: url, to: dest)
             return dest
         } catch {
-            return nil
+            try? fm.removeItem(at: dir)
+            throw error
         }
     }
 }
@@ -195,7 +227,9 @@ public final class ShareExtensionModel: ObservableObject {
         /// Paired from a shared link: the notice ("Paired with …", "Pairing updated: …").
         case paired(String)
         case sending
-        case sent
+        /// Everything went: the row's label and sentence (CHANGES-v1.1 2.5), "Sent · waiting for your Daylight", or
+        /// "Delivered ✓" when the Daylight acked it at once.
+        case sent(RowText)
         /// Not everything went now: a title (the row's label, or "Not sent") and what to know (the row's sentence,
         /// or why it was refused).
         case result(title: String, message: String)
@@ -291,7 +325,7 @@ public final class ShareExtensionModel: ObservableObject {
 
     private func apply(_ p: Pairing, notice: String?, thenSend: Bool) async {
         let store = self.store
-        await AppModel.onStorage { store.pair(p) }
+        _ = await AppModel.offMain { await store.pair(p) }
         daylightName = p.displayName
         if thenSend {
             await send()
@@ -309,6 +343,7 @@ public final class ShareExtensionModel: ObservableObject {
         }
         phase = .sending
         var problems: [(title: String, message: String)] = []
+        var sent: [OutboxRow] = []
         for payload in payloads {
             do {
                 let input = try await AppModel.onStorage { Result { try Self.input(for: payload) } }.get()
@@ -316,17 +351,27 @@ public final class ShareExtensionModel: ObservableObject {
                 if row.status != .sent && row.status != .delivered {
                     let text = RowText(row: row)
                     problems.append((text.label, text.sentence ?? ""))
+                } else {
+                    sent.append(row)
                 }
             } catch {
                 problems.append(("Not sent", (error as? ShareError)?.message ?? error.localizedDescription))
             }
         }
         cleanUpTemporaryFiles()
-        if problems.isEmpty {
-            phase = .sent
+        if problems.isEmpty, let first = sent.first {
+            // The row's own words: it reached the relay and waits for the Daylight ("Sent · waiting for your
+            // Daylight"), not that it arrived.
+            phase = .sent(RowText(row: first))
             // PROTOCOL 3.3: check for acks right after sending (the Daylight may be online and quick).
             _ = try? await sender.checkAcks()
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            let ids = sent.map(\.id)
+            let outbox = sender.outbox
+            let now = await AppModel.onStorage { ids.compactMap { outbox.row($0) } }
+            if now.count == ids.count, now.allSatisfy({ $0.status == .delivered }), let row = now.first {
+                phase = .sent(RowText(row: row))
+            }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
             onFinish()
         } else {
             let titles = Set(problems.map { $0.title })
@@ -369,6 +414,8 @@ public final class ShareExtensionModel: ObservableObject {
             return .file(Data(text.utf8), name: name, mime: "text/plain", title: String(firstLine.prefix(120)))
         case let .tooLarge(_, size):
             throw ShareError.tooLarge(size)
+        case let .unreadable(_, message):
+            throw message == ShareError.outOfSpace.message ? ShareError.outOfSpace : ShareError("read", message)
         case .pairing:
             throw ShareError("pairing", "A pairing link isn’t something to send.")
         }
@@ -383,13 +430,15 @@ public final class ShareExtensionModel: ObservableObject {
         case let .file(_, name): return name
         case let .text(t): return String(t.prefix(80))
         case let .tooLarge(name, _): return name
+        case let .unreadable(name, _): return name
         case .pairing: return ""
         }
     }
 }
 
-/// The share extensions' small UI: "Sending to <Daylight>… → Sent ✓", the row's label and sentence when it did not
-/// go now, the pairing form when not paired yet, or the question before a pairing takes effect.
+/// The share extensions' small UI: "Sending to <Daylight>…", then the row's label and sentence (CHANGES-v1.1 2.5:
+/// "Sent · waiting for your Daylight", or why it did not go now), the pairing form when not paired yet, or the
+/// question before a pairing takes effect.
 public struct ShareExtensionView: View {
     @ObservedObject var model: ShareExtensionModel
 
@@ -404,10 +453,15 @@ public struct ShareExtensionView: View {
                 ProgressView()
                 Text("Sending to \(model.daylightName)…").font(.headline)
                 summaryText
-            case .sent:
-                Image(systemName: "checkmark.circle.fill").font(.system(size: 44)).foregroundColor(.green)
-                Text("Sent ✓").font(.headline)
+            case let .sent(text):
+                Image(systemName: text.label == "Delivered ✓" ? "checkmark.circle.fill" : "paperplane.circle.fill")
+                    .font(.system(size: 44))
+                    .foregroundColor(text.label == "Delivered ✓" ? .green : .accentColor)
+                Text(text.label).font(.headline).multilineTextAlignment(.center)
                 summaryText
+                if let sentence = text.sentence {
+                    Text(sentence).font(.callout).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                }
             case let .result(title, message):
                 Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 40)).foregroundColor(.orange)
                 Text(title).font(.headline).multilineTextAlignment(.center)

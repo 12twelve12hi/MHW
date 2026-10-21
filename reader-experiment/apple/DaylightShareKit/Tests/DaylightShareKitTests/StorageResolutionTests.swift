@@ -200,7 +200,7 @@ final class StorageResolutionTests: XCTestCase {
         let ownDir = root.appendingPathComponent("own")
         let earlier = SharedStore(defaults: own, directory: ownDir)
         let pairing = try Pairing.generate(relay: "https://relay.test", name: "Desk")
-        earlier.pair(pairing)
+        await earlier.pair(pairing)
         earlier.deviceName = "Studio Mac"
         let sender = try ShareSender(pairing: pairing, outbox: OutboxStore(store: earlier), session: FakeRelay.session)
         sender.relay.sleep = { _ in }
@@ -223,7 +223,7 @@ final class StorageResolutionTests: XCTestCase {
         // A group that already has a pairing keeps it.
         let other = try Pairing.generate(relay: "https://relay.test", name: "Other")
         let own2 = makeDefaults()
-        SharedStore(defaults: own2, directory: root.appendingPathComponent("own2")).pair(other)
+        await SharedStore(defaults: own2, directory: root.appendingPathComponent("own2")).pair(other)
         let store2 = SharedStore(resolver: resolver(delay: 0, probe: Probe(), groupDefaults: groupDefaults),
                                  privateDefaults: own2, privateDirectory: root.appendingPathComponent("own2"))
         await store2.ready()
@@ -279,7 +279,7 @@ final class StorageResolutionTests: XCTestCase {
         let header = ItemHeader(id: "00112233445566778899aabbccddeeff", kind: .url, url: "https://e.com", sent: "")
         await Task.detached {
             let earlier = SharedStore(defaults: own, directory: ownDir)
-            earlier.pair(first)
+            await earlier.pair(first)
             OutboxStore(store: earlier).save(OutboxRow(id: header.id, kind: .url, url: "https://e.com", header: header,
                                                        created: Date(), status: .delivered))
         }.value

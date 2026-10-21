@@ -208,13 +208,40 @@ public final class OutboxStore {
         }
     }
 
-    public func remove(_ id: String) {
-        update { state in state.rows.removeAll { $0.id == id } }
-        removeBodyFile(id)
+    // MARK: Removing (under the outbox lock)
+    //
+    // Removing waits for an attempt in flight in this process (`whileLocked`), as the JS reference's `Sender.remove()`
+    // and `applyPairingChange()` do, so an attempt never writes a removed row back. An attempt in another process (the
+    // share extension) cannot write it back either: `ShareSender` only updates rows the outbox still holds.
+
+    /// "Remove": the row and its stored body. Returns whether there was such a row.
+    @discardableResult
+    public func remove(_ id: String) async -> Bool {
+        await whileLocked { removeUnlocked(id) }
     }
 
-    /// Removes delivered and expired rows (and any bodies they still have).
-    public func clearFinished() {
+    /// "Clear delivered and expired": those rows and any bodies they still have.
+    public func clearFinished() async {
+        await whileLocked { clearFinishedUnlocked() }
+    }
+
+    /// Every row, every stored body and the ack cursor (unpairing, or pairing with another secret).
+    public func removeAll() async {
+        await whileLocked { removeAllUnlocked() }
+    }
+
+    @discardableResult
+    func removeUnlocked(_ id: String) -> Bool {
+        let found: Bool = update { state in
+            let had = state.rows.contains { $0.id == id }
+            state.rows.removeAll { $0.id == id }
+            return had
+        }
+        removeBodyFile(id)
+        return found
+    }
+
+    func clearFinishedUnlocked() {
         let gone: [String] = update { state in
             let ids = state.rows.filter { $0.status == .delivered || $0.status == .expired }.map(\.id)
             state.rows.removeAll { $0.status == .delivered || $0.status == .expired }
@@ -223,11 +250,26 @@ public final class OutboxStore {
         gone.forEach(removeBodyFile)
     }
 
-    /// Removes every row, every stored body and the ack cursor (unpairing, or pairing with another secret).
-    public func removeAll() {
+    func removeAllUnlocked() {
         update { state in state = State() }
         try? FileManager.default.removeItem(at: bodiesURL)
         try? FileManager.default.createDirectory(at: bodiesURL, withIntermediateDirectories: true)
+    }
+
+    /// Runs `body` under the lock every `ShareSender` on this outbox directory holds while it works (in this process):
+    /// it waits for an attempt in flight, and no attempt starts until `body` returns. Not reentrant: `body` must not
+    /// call a locked method on the same outbox (use the `…Unlocked` ones).
+    public func whileLocked<T>(_ body: () async throws -> T) async rethrows -> T {
+        let lock = OutboxLock.lock(for: directory)
+        await lock.acquire()
+        do {
+            let value = try await body()
+            await lock.release()
+            return value
+        } catch {
+            await lock.release()
+            throw error
+        }
     }
 
     // MARK: Bodies

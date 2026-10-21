@@ -2,7 +2,8 @@ import DaylightShareUI
 import SwiftUI
 import UIKit
 
-/// The share sheet item: "Sending to <Daylight>… → Sent ✓", then it closes itself.
+/// The share sheet item: "Sending to <Daylight>…", then the item's status ("Sent · waiting for your Daylight"),
+/// then it closes itself.
 final class ShareViewController: UIViewController {
     private let model = ShareExtensionModel()
 

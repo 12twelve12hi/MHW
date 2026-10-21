@@ -25,7 +25,22 @@ struct MacRootView: View {
         }
         .frame(minWidth: 440, minHeight: 480)
         .animation(.default, value: model.banner)
-        .pairingConfirmation(model)
+        // Every sheet of the window comes from here: Settings, and the pairing question, which replaces Settings when
+        // a daylightshare:// link arrives while it is open.
+        .appSheets(model) { sheet in
+            if sheet == .settings {
+                VStack(spacing: 0) {
+                    MacSettingsView()
+                    HStack {
+                        Spacer()
+                        Button("Done") { model.sheet = nil }.keyboardShortcut(.defaultAction)
+                    }
+                    .padding()
+                }
+                .frame(width: 460)
+                .environmentObject(model)
+            }
+        }
         .onAppear { model.noteRendered() }
     }
 }
@@ -59,7 +74,6 @@ struct MacHomeView: View {
     @EnvironmentObject var model: AppModel
     @State private var link = ""
     @State private var targeted = false
-    @State private var showSettings = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -67,7 +81,7 @@ struct MacHomeView: View {
                 Text("Sending to \(model.daylightName)").font(.headline)
                 Spacer()
                 if model.sendingCount > 0 { ProgressView().controlSize(.small) }
-                Button { showSettings = true } label: { Image(systemName: "gearshape") }
+                Button { model.sheet = .settings } label: { Image(systemName: "gearshape") }
                     .buttonStyle(.borderless)
                     .help("Settings")
             }
@@ -101,25 +115,14 @@ struct MacHomeView: View {
                                     NSPasteboard.general.setString(row.url, forType: .string)
                                 }
                             }
-                            Button("Remove from History") { model.delete(row) }
+                            Button("Remove") { model.delete(row) }
                         }
                 }
             }
             .listStyle(.inset)
         }
         .padding(18)
-        .sheet(isPresented: $showSettings) {
-            VStack(spacing: 0) {
-                MacSettingsView()
-                HStack {
-                    Spacer()
-                    Button("Done") { showSettings = false }.keyboardShortcut(.defaultAction)
-                }
-                .padding()
-            }
-            .frame(width: 460)
-            .environmentObject(model)
-        }
+        // Settings opens as a sheet of MacRootView (`appSheets`).
     }
 
     private var dropZone: some View {

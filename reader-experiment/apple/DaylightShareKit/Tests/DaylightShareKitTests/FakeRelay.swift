@@ -19,12 +19,27 @@ final class FakeRelay: URLProtocol {
         var messageMaxBytes = 4096
         /// ntfy.sh's per-file limit as CHANGES-v1.1 reads it: a larger PUT gets 413.
         var attachmentMaxBytes = 2_000_000
+        /// Whole answers to attachment downloads, by message id: status, headers (e.g. a `Content-Length`) and body.
+        var downloadAnswer: [String: (status: Int, headers: [String: String], body: Data)] = [:]
+        /// The whole answer to the next topic polls (instead of the topic's messages), with its headers.
+        var pollAnswer: (headers: [String: String], body: Data)?
+        /// Seconds each publish takes (the request thread waits), so a test can act while an attempt is in flight.
+        var publishDelay: TimeInterval = 0
+        /// Publishes answered so far (counted just before the answer goes out).
+        var answeredPublishes = 0
     }
 
+    /// Runs on the request's thread when a publish arrives, before it is answered (another "process" acting mid-attempt).
+    static var onPublish: ((_ method: String, _ topic: String) -> Void)? {
+        get { with { _ in hook } }
+        set { with { _ in hook = newValue } }
+    }
+    private static var hook: ((String, String) -> Void)?
+
     /// Adds a message to a topic as the relay would list it: the frame as message text, or (`attachment`) as an
-    /// attachment to download. Returns its id.
+    /// attachment to download (at `url`, by default the relay's own https://relay.test/file/<id>.bin). Returns its id.
     @discardableResult
-    static func inject(topic: String, frame: Data, time: Int, attachment: Bool) -> String {
+    static func inject(topic: String, frame: Data, time: Int, attachment: Bool, url: String? = nil) -> String {
         with { s in
             s.nextID += 1
             let id = "m\(s.nextID)"
@@ -32,7 +47,7 @@ final class FakeRelay: URLProtocol {
             if attachment {
                 s.files[id] = frame
                 m["message"] = "dls1"
-                m["attachment"] = ["name": "dls1.bin", "size": frame.count, "url": "https://relay.test/file/\(id).bin"]
+                m["attachment"] = ["name": "dls1.bin", "size": frame.count, "url": url ?? "https://relay.test/file/\(id).bin"]
             } else {
                 m["message"] = Base64.encode(frame)
             }
@@ -44,7 +59,12 @@ final class FakeRelay: URLProtocol {
     private static let lock = NSLock()
     private static var _state = State()
 
-    static func reset() { with { $0 = State() } }
+    static func reset() {
+        with { s in
+            s = State()
+            hook = nil
+        }
+    }
 
     @discardableResult
     static func with<T>(_ body: (inout State) -> T) -> T {
@@ -72,11 +92,16 @@ final class FakeRelay: URLProtocol {
 
         if method == "GET", parts.count == 2, parts[0] == "file" {
             let id = String(parts[1].dropLast(4))
+            if let a = Self.with({ $0.downloadAnswer[id] }) { return respond(a.status, a.body, headers: a.headers) }
             if let status = Self.with({ $0.downloadStatus[id] }) { return respond(status, Data("{}".utf8)) }
             if let data = Self.with({ $0.files[id] }) { return respond(200, data) }
             return respond(404, Data("{\"error\":\"not found\"}".utf8))
         }
         if (method == "POST" || method == "PUT"), parts.count == 1 {
+            if let hook = Self.onPublish { hook(method, parts[0]) }
+            let delay = Self.with { $0.publishDelay }
+            if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+            Self.with { $0.answeredPublishes += 1 }
             if let status = Self.with({ s -> Int? in s.failNext.isEmpty ? nil : s.failNext.removeFirst() }) {
                 return respond(status, Data("{}".utf8), headers: status == 429 ? ["Retry-After": "1"] : [:])
             }
@@ -104,6 +129,7 @@ final class FakeRelay: URLProtocol {
             return respond(200, try! JSONSerialization.data(withJSONObject: msg))
         }
         if method == "GET", parts.count == 2, parts[1] == "json" {
+            if let a = Self.with({ $0.pollAnswer }) { return respond(200, a.body, headers: a.headers) }
             let since = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "since" }?.value ?? "all"
             let list = Self.with { $0.topics[parts[0]] ?? [] }
             let filtered = list.filter { m in

@@ -463,7 +463,7 @@ final class SenderTests: XCTestCase {
         let sender = try makeSender(try Pairing.generate(relay: "https://relay.test"))
         try await sender.send(.file(Data("x".utf8), name: "a.txt"))
         XCTAssertEqual(sender.outbox.rows.count, 1)
-        sender.outbox.removeAll()
+        await sender.outbox.removeAll()
         XCTAssertTrue(sender.outbox.rows.isEmpty)
     }
 
@@ -489,27 +489,30 @@ final class SenderTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = SharedStore(defaults: defaults, directory: dir)
-        XCTAssertEqual(SafariNativeMessaging.answer(["type": "getPairing"], store: store)["paired"] as? Bool, false)
+        let unpaired = await SafariNativeMessaging.answer(["type": "getPairing"], store: store)
+        XCTAssertEqual(unpaired["paired"] as? Bool, false)
 
         let p = try Pairing.generate(relay: "https://relay.test", name: "Desk Daylight")
-        XCTAssertEqual(SafariNativeMessaging.answer(["type": "setPairing", "link": p.link], store: store)["ok"] as? Bool, true)
-        let a = SafariNativeMessaging.answer(["type": "getPairing"], store: store)
+        let set = await SafariNativeMessaging.answer(["type": "setPairing", "link": p.link], store: store)
+        XCTAssertEqual(set["ok"] as? Bool, true)
+        let a = await SafariNativeMessaging.answer(["type": "getPairing"], store: store)
         let got = a["pairing"] as? [String: Any]
         XCTAssertEqual(got?["code"] as? String, p.code)
         XCTAssertEqual(got?["relay"] as? String, "https://relay.test")
         XCTAssertEqual(got?["name"] as? String, "Desk Daylight")
         XCTAssertEqual(try Pairing.parse(got?["link"] as? String ?? ""), p)
-        XCTAssertEqual(SafariNativeMessaging.answer(["type": "setPairing", "code": "nope"], store: store)["ok"] as? Bool, false)
+        let bad = await SafariNativeMessaging.answer(["type": "setPairing", "code": "nope"], store: store)
+        XCTAssertEqual(bad["ok"] as? Bool, false)
 
         // Re-pairing with the same code keeps the name and the outbox, also with a new relay (the items then go
         // through it); another code drops queued items.
         let sender = try ShareSender(pairing: p, outbox: OutboxStore(store: store), session: FakeRelay.session)
         sender.relay.sleep = { _ in }
         try await sender.send(.link("https://example.com/q"))
-        store.pair(try Pairing(secret: p.secret, relay: p.relay))
+        await store.pair(try Pairing(secret: p.secret, relay: p.relay))
         XCTAssertEqual(store.pairing?.name, "Desk Daylight")
         XCTAssertEqual(OutboxStore(store: store).rows.count, 1)
-        let moved = SafariNativeMessaging.answer(["type": "setPairing", "link": try Pairing(secret: p.secret, relay: "https://relay2.test", name: "Desk Daylight").link], store: store)
+        let moved = await SafariNativeMessaging.answer(["type": "setPairing", "link": try Pairing(secret: p.secret, relay: "https://relay2.test", name: "Desk Daylight").link], store: store)
         XCTAssertEqual(moved["ok"] as? Bool, true)
         XCTAssertEqual(moved["notice"] as? String, "Pairing updated: now sending through relay2.test.")
         XCTAssertEqual(store.pairing?.relay, "https://relay2.test")
@@ -517,7 +520,7 @@ final class SenderTests: XCTestCase {
 
         // A different code from the extension's field asks first, and pairs only when confirmed.
         let other = try Pairing.generate(relay: "https://relay.test", name: "Kitchen Daylight")
-        let asked = SafariNativeMessaging.answer(["type": "setPairing", "code": other.code], store: store)
+        let asked = await SafariNativeMessaging.answer(["type": "setPairing", "code": other.code], store: store)
         XCTAssertEqual(asked["ok"] as? Bool, false)
         let confirm = try XCTUnwrap(asked["needsConfirm"] as? [String: Any])
         XCTAssertEqual(confirm["button"] as? String, "Switch")
@@ -525,11 +528,11 @@ final class SenderTests: XCTestCase {
                        "This replaces Desk Daylight. Items not yet delivered to it will not be sent.")
         XCTAssertEqual(store.pairing?.secret, p.secret, "not paired without confirmation")
         XCTAssertEqual(OutboxStore(store: store).rows.count, 1)
-        let switched = SafariNativeMessaging.answer(["type": "setPairing", "code": other.code, "confirm": true], store: store)
+        let switched = await SafariNativeMessaging.answer(["type": "setPairing", "code": other.code, "confirm": true], store: store)
         XCTAssertEqual(switched["ok"] as? Bool, true)
         XCTAssertEqual(store.pairing?.secret, other.secret)
         XCTAssertEqual(OutboxStore(store: store).rows.count, 0, "another secret deletes the outbox")
-        store.unpair()
+        await store.unpair()
         XCTAssertNil(store.pairing)
     }
 

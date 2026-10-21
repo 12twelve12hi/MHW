@@ -2,6 +2,8 @@ import BackgroundTasks
 import DaylightShareKit
 import DaylightShareUI
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 @main
 struct SendToDaylightApp: App {
@@ -72,7 +74,59 @@ struct RootView: View {
         }
         .animation(.default, value: model.banner)
         .animation(.default, value: model.isPaired)
-        .pairingConfirmation(model)
+        // Every sheet comes from here (Settings, the file picker, the scanner, and the pairing question, which
+        // replaces whichever is open when a daylightshare:// link arrives).
+        .appSheets(model) { sheet in
+            switch sheet {
+            case .settings:
+                SettingsView().environmentObject(model)
+            case .files:
+                DocumentPicker(types: HomeView.fileTypes) { urls in
+                    model.sheet = nil
+                    if !urls.isEmpty { Task { await model.sendFiles(urls) } }
+                }
+                .ignoresSafeArea()
+            case .scanner:
+                ScannerSheet { value in
+                    model.sheet = nil
+                    if let error = model.pair(value) { model.show(error, error: true) }
+                }
+            }
+        }
         .onAppear { model.noteRendered() }
+    }
+}
+
+/// "Send a file…": the system document picker, presented as one of the app's sheets. It hands over copies of the
+/// chosen files (readable without security-scoped access); `onPick` gets them, or no URLs on Cancel.
+struct DocumentPicker: UIViewControllerRepresentable {
+    let types: [UTType]
+    let onPick: ([URL]) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick) }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+        picker.allowsMultipleSelection = true
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: ([URL]) -> Void
+
+        init(onPick: @escaping ([URL]) -> Void) {
+            self.onPick = onPick
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            onPick(urls)
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onPick([])
+        }
     }
 }

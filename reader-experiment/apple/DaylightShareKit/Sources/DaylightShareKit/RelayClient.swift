@@ -41,8 +41,10 @@ public final class RelayClient {
     /// The waits before the in-call retries of a publish after a network error, 408 or 5xx (PROTOCOL 3.1).
     public var retryDelays: [TimeInterval] = [1, 2, 4]
 
+    /// `relay` goes through the relay rule; a relay saved by 1.0 that the 1.1 rule refuses is used as saved
+    /// (`ShareText.storedRelay`).
     public init(relay: String = DLS.defaultRelay, session: URLSession? = nil) throws {
-        let normalized = try ShareText.normalizeRelay(relay)
+        let normalized = try ShareText.storedRelay(relay)
         self.relay = normalized
         self.session = session ?? RelayClient.defaultSession
         origin = URL(string: normalized).flatMap { RelayClient.origin($0) }
@@ -240,8 +242,10 @@ public final class RelayClient {
         }
         return (http, Data(buffer))
         #else
+        // No streaming in swift-corelibs-foundation: the same answers, from the whole body.
         let (data, http) = try await perform(request, body: nil)
-        return (http, (200..<300).contains(http.statusCode) && data.count > cap ? nil : data)
+        guard (200..<300).contains(http.statusCode) else { return (http, Data()) }
+        return (http, http.expectedContentLength > Int64(cap) || data.count > cap ? nil : data)
         #endif
     }
 

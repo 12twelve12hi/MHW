@@ -56,7 +56,15 @@ jobs:
           for i in 1 2 3 4 5 6 7 8 9 10; do curl -fsS "http://127.0.0.1:$RELAY_PORT/v1/health" && break; sleep 1; done
           DLS_E2E_RELAY="http://127.0.0.1:$RELAY_PORT" swift test 2>&1 | tee "$RUNNER_TEMP/swift-test.log"
           grep -E "Executed [0-9]+ tests" "$RUNNER_TEMP/swift-test.log" | tail -1
-          if grep -q "EndToEndTests.*skipped" "$RUNNER_TEMP/swift-test.log"; then echo "::error::the end-to-end test was skipped"; exit 1; fi
+          if grep -qE "(EndToEndTests|testTheShareSheetSaysWhatTheRowSays).*skipped" "$RUNNER_TEMP/swift-test.log"; then
+            echo "::error::a test that needs the mock relay was skipped"; exit 1
+          fi
+          # The 1.1 review's rules, each pinned by a test that must have run: the outbox lock and removal guard, the
+          # download rule and caps, the sending takeover, the single sheet presentation point, the share sheet's words.
+          for t in OutboxLockTests DownloadRuleTests AppModelTests testTheShareSheetSaysWhatTheRowSays \
+                   testAFileThatCannotBeCopiedIsReported testAnUnreadableFileURLFallsBackToTheItemsData; do
+            grep -qE "Test (Case|case) .*$t.* passed" "$RUNNER_TEMP/swift-test.log" || { echo "::error::$t did not run and pass"; exit 1; }
+          done
 
       - name: Build the Safari web extension (when its build script exists)
         run: |

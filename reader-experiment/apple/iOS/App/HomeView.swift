@@ -7,8 +7,6 @@ import UniformTypeIdentifiers
 struct HomeView: View {
     @EnvironmentObject var model: AppModel
     @State private var link = ""
-    @State private var importing = false
-    @State private var showSettings = false
     @FocusState private var linkFocused: Bool
 
     var body: some View {
@@ -35,7 +33,7 @@ struct HomeView: View {
                     }
                     .disabled(link.trimmingCharacters(in: .whitespaces).isEmpty)
                     Button {
-                        importing = true
+                        model.sheet = .files
                     } label: {
                         Label("Send a file…", systemImage: "doc.badge.plus")
                     }
@@ -52,7 +50,7 @@ struct HomeView: View {
                     ForEach(model.rows) { row in
                         HistoryRowView(row: row) { Task { await model.retry(row) } }
                             .swipeActions {
-                                Button(role: .destructive) { model.delete(row) } label: { Label("Delete", systemImage: "trash") }
+                                Button(role: .destructive) { model.delete(row) } label: { Label("Remove", systemImage: "trash") }
                             }
                     }
                 } header: {
@@ -67,14 +65,11 @@ struct HomeView: View {
             .refreshable { await model.refresh() }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button { showSettings = true } label: { Image(systemName: "gearshape") }
+                    Button { model.sheet = .settings } label: { Image(systemName: "gearshape") }
                         .accessibilityLabel("Settings")
                 }
             }
-            .sheet(isPresented: $showSettings) { SettingsView().environmentObject(model) }
-            .fileImporter(isPresented: $importing, allowedContentTypes: Self.fileTypes, allowsMultipleSelection: true) { result in
-                if case let .success(urls) = result { Task { await model.sendFiles(urls) } }
-            }
+            // Settings and the file picker are presented by RootView (`appSheets`), with the pairing question.
         }
     }
 

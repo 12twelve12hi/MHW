@@ -63,7 +63,7 @@ final class ShareUITests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let src = dir.appendingPathComponent("tmp-1234.pdf")
         try Data("%PDF".utf8).write(to: src)
-        let copy = try XCTUnwrap(SharePayloadReader.copyToTemporary(src, suggestedName: "Annual report.pdf"))
+        let copy = try SharePayloadReader.copyToTemporary(src, suggestedName: "Annual report.pdf")
         XCTAssertEqual(copy.lastPathComponent, "Annual report.pdf")
         XCTAssertEqual(try Data(contentsOf: copy), Data("%PDF".utf8))
         try? FileManager.default.removeItem(at: copy.deletingLastPathComponent())
@@ -96,6 +96,81 @@ final class ShareUITests: XCTestCase {
         let small = dir.appendingPathComponent("small.pdf")
         try Data("%PDF".utf8).write(to: small)
         guard case .file = SharePayloadReader.filePayload(small, suggestedName: nil) else { return XCTFail("small file") }
+    }
+
+    /// A file the share sheet hands over that cannot be copied is reported, not dropped: with the shared sentence
+    /// when the disk is full (CHANGES-v1.1 2.5).
+    @MainActor
+    func testAFileThatCannotBeCopiedIsReported() throws {
+        let missing = URL(fileURLWithPath: "/nonexistent-\(UUID().uuidString)/paper.pdf")
+        XCTAssertEqual(SharePayloadReader.filePayload(missing, suggestedName: nil),
+                       .unreadable(name: "paper.pdf", message: "Couldn’t read “paper.pdf”."))
+        XCTAssertEqual(SharePayloadReader.best([.link(url: "https://e.com", title: nil),
+                                                .unreadable(name: "paper.pdf", message: "x")]),
+                       [.unreadable(name: "paper.pdf", message: "x")], "it counts as the shared file")
+        XCTAssertTrue(SharePayloadReader.isOutOfSpace(NSError(domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError)))
+        XCTAssertTrue(SharePayloadReader.isOutOfSpace(NSError(domain: NSPOSIXErrorDomain, code: Int(ENOSPC))))
+        XCTAssertTrue(SharePayloadReader.isOutOfSpace(NSError(domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError,
+            userInfo: [NSUnderlyingErrorKey: NSError(domain: NSPOSIXErrorDomain, code: Int(ENOSPC))])))
+        XCTAssertFalse(SharePayloadReader.isOutOfSpace(NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoSuchFileError)))
+        XCTAssertThrowsError(try ShareExtensionModel.input(for: .unreadable(name: "a.pdf", message: ShareError.outOfSpace.message))) { e in
+            XCTAssertEqual(e as? ShareError, ShareError.outOfSpace)
+            XCTAssertEqual((e as? ShareError)?.message, "This device is out of space, so it can’t send this.")
+        }
+        XCTAssertEqual(ShareExtensionModel.describe([.unreadable(name: "a.pdf", message: "x")]), "a.pdf")
+    }
+
+    /// A file URL the extension cannot copy is not the end of it: the item's data is used when it has some, and only
+    /// when nothing works is the file reported (not dropped).
+    func testAnUnreadableFileURLFallsBackToTheItemsData() async throws {
+        let missing = URL(fileURLWithPath: "/nonexistent-\(UUID().uuidString)/paper.pdf") as NSURL
+        let onlyURL = NSItemProvider(item: missing, typeIdentifier: "public.file-url")
+        let reported = await SharePayloadReader.read(onlyURL, itemTitle: nil)
+        XCTAssertEqual(reported, .unreadable(name: "paper.pdf", message: "Couldn’t read “paper.pdf”."))
+
+        let withData = NSItemProvider(item: missing, typeIdentifier: "public.file-url")
+        withData.registerDataRepresentation(forTypeIdentifier: "com.adobe.pdf", visibility: .all) { done in
+            done(Data("%PDF-1.4".utf8), nil)
+            return nil
+        }
+        withData.suggestedName = "paper.pdf"
+        let payload = await SharePayloadReader.read(withData, itemTitle: nil)
+        guard case let .file(url, _)? = payload else { return XCTFail("the data was not used: \(String(describing: payload))") }
+        XCTAssertEqual(try Data(contentsOf: url), Data("%PDF-1.4".utf8))
+        try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+    }
+
+    /// After a share the extension shows the row's own words: "Sent · waiting for your Daylight" (it reached the
+    /// relay), never a "Sent ✓" that reads like "Delivered ✓". Needs the mock relay (CI sets DLS_E2E_RELAY).
+    @MainActor
+    func testTheShareSheetSaysWhatTheRowSays() async throws {
+        guard let relay = ProcessInfo.processInfo.environment["DLS_E2E_RELAY"], !relay.isEmpty else {
+            throw XCTSkip("DLS_E2E_RELAY is not set")
+        }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("dls-ui-\(UUID().uuidString)")
+        let suite = "dls-tests-\(UUID().uuidString)"
+        defer {
+            UserDefaults.standard.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let store = SharedStore(defaults: UserDefaults(suiteName: suite)!, directory: dir)
+        await store.pair(try Pairing.generate(relay: relay, name: "CI Daylight"))
+        let model = ShareExtensionModel(store: store)
+        let finished = expectation(description: "finished")
+        model.onFinish = { finished.fulfill() }
+        let item = NSExtensionItem()
+        item.attachments = [NSItemProvider(object: NSURL(string: "https://example.com/from-the-share-sheet")!)]
+        model.start(inputItems: [item])
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline {
+            if case .sent = model.phase { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case let .sent(text) = model.phase else { return XCTFail("not sent: \(model.phase)") }
+        XCTAssertEqual(text.label, "Sent · waiting for your Daylight")
+        XCTAssertNil(text.sentence)
+        XCTAssertEqual(OutboxStore(store: store).rows.first?.url, "https://example.com/from-the-share-sheet")
+        await fulfillment(of: [finished], timeout: 10)
     }
 
     @MainActor

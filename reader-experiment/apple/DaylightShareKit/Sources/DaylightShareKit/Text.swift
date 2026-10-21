@@ -281,6 +281,21 @@ public enum ShareText {
         return scheme + "://" + host + (shownPort.isEmpty ? "" : ":" + shownPort) + string(path)
     }
 
+    /// A relay read back from storage: the 1.1 rule's result, or — when that stricter rule refuses a relay 1.0 accepted
+    /// and saved, such as `http://ntfy_box:8080` (an underscore in the host) — the saved text unchanged, so updating
+    /// never quietly unpairs anyone. 1.0 saved only `http(s)://host[:port][/path]` with no query, fragment, user info,
+    /// whitespace or trailing slash; anything else still throws ShareError("relay"). New input (a typed relay, a
+    /// pairing link) always goes through `normalizeRelay`.
+    public static func storedRelay(_ relay: String) throws -> String {
+        if let r = try? normalizeRelay(relay) { return r }
+        guard !relay.unicodeScalars.contains(where: isSpaceOrControl), !relay.hasSuffix("/"),
+              let c = URLComponents(string: relay), let scheme = c.scheme, scheme == "http" || scheme == "https",
+              let host = c.host, !host.isEmpty, c.query == nil, c.fragment == nil, c.user == nil, c.password == nil,
+              relay.lowercased().hasPrefix(scheme + "://")
+        else { throw ShareError("relay", "That relay address isn’t valid.") }
+        return relay
+    }
+
     /// The relay as people see it: the normalised relay's host and port, as text ("relay.example.org",
     /// "relay.example.org:8443", "[::1]:8080"). Not `URL.host`, which drops the port. Throws like `normalizeRelay`.
     public static func relayHost(_ relay: String?) throws -> String {

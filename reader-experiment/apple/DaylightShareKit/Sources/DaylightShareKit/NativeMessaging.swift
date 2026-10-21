@@ -3,20 +3,35 @@ import Foundation
 extension SharedStore {
     /// Saves a pairing (PROTOCOL 3.3 step 6). The same secret (a new relay or name) keeps the outbox, so pending items
     /// go through the new relay; another secret deletes every row, its stored content and the ack cursor. Pairing again
-    /// with the same code keeps the known Daylight name when the new one has none.
-    /// Whether to ask first is `PairingConfirmation`'s decision, made before this is called.
-    public func pair(_ newPairing: Pairing) {
-        var p = newPairing
-        let old = pairing
-        if let old, old.secret == p.secret, p.name.isEmpty { p.name = old.name }
-        if old?.secret != p.secret { OutboxStore(store: self).removeAll() }
-        pairing = p
+    /// with the same code keeps the known Daylight name when the new one has none. Returns whether the outbox was
+    /// deleted. Whether to ask first is `PairingConfirmation`'s decision, made before this is called.
+    ///
+    /// Runs under the outbox lock (as the JS `applyPairingChange`), after any attempt in flight in this process, so an
+    /// item meant for one Daylight never comes back to be sealed for another. Touches storage: call it off the main
+    /// thread.
+    @discardableResult
+    public func pair(_ newPairing: Pairing) async -> Bool {
+        await ready()
+        let outbox = OutboxStore(store: self)
+        return await outbox.whileLocked {
+            var p = newPairing
+            let old = pairing
+            if let old, old.secret == p.secret, p.name.isEmpty { p.name = old.name }
+            let other = old?.secret != p.secret
+            if other { outbox.removeAllUnlocked() }
+            pairing = p
+            return other
+        }
     }
 
-    /// Forgets the pairing and the outbox.
-    public func unpair() {
-        OutboxStore(store: self).removeAll()
-        pairing = nil
+    /// Forgets the pairing and the outbox (under the outbox lock, like `pair`).
+    public func unpair() async {
+        await ready()
+        let outbox = OutboxStore(store: self)
+        await outbox.whileLocked {
+            outbox.removeAllUnlocked()
+            pairing = nil
+        }
     }
 }
 
@@ -37,10 +52,13 @@ public enum SafariNativeMessaging {
     /// `SharedStore.resolutionTimeout`): the native handler never touches the App Group container on its own thread.
     public static func answerWhenReady(_ message: Any?, store: SharedStore = .shared,
                                        reply: @escaping ([String: Any]) -> Void) {
-        store.whenReady { reply(answer(message, store: store)) }
+        store.whenReady {
+            Task { reply(await answer(message, store: store)) }
+        }
     }
 
-    public static func answer(_ message: Any?, store: SharedStore = .shared) -> [String: Any] {
+    /// The answer to one message. Touches storage (a pairing change waits for the outbox lock): off the main thread.
+    public static func answer(_ message: Any?, store: SharedStore = .shared) async -> [String: Any] {
         let m = message as? [String: Any] ?? [:]
         let type = (m["type"] as? String) ?? (m["action"] as? String) ?? (message as? String) ?? ""
         switch type {
@@ -64,7 +82,7 @@ public enum SafariNativeMessaging {
                     return ["ok": false, "error": ([c.title ?? ""] + c.lines).joined(separator: " "),
                             "needsConfirm": needsConfirm]
                 }
-                store.pair(p)
+                await store.pair(p)
                 var answer: [String: Any] = ["ok": true]
                 if let notice = c.notice { answer["notice"] = notice }
                 return answer

@@ -27,6 +27,45 @@ public final class AppModel: ObservableObject {
     /// would replace a Daylight with another secret. The views show `PairingConfirmationView` for it; setting it to
     /// nil cancels.
     @Published public var pendingPairing: PendingPairing?
+    /// The sheet the window shows (Settings, the file picker, the QR scanner), or nil. Every sheet, and the pairing
+    /// question, is presented from one place (`View.appSheets`): SwiftUI shows one sheet at a time, so a pairing link
+    /// that arrives while one is open closes it and asks instead (`presented`).
+    @Published public var sheet: Sheet?
+
+    public enum Sheet: String, Identifiable {
+        case settings
+        /// "Send a file…" (iPhone).
+        case files
+        /// "Scan the QR code" (iPhone).
+        case scanner
+        public var id: String { rawValue }
+    }
+
+    /// What the window presents (`presented`): the pairing question when one waits (it takes the place of any other
+    /// sheet), else `sheet`.
+    public enum Presented: Identifiable, Equatable {
+        case pairing(PendingPairing)
+        case sheet(Sheet)
+
+        public var id: String {
+            switch self {
+            case let .pairing(p): return "pairing-\(p.id)"
+            case let .sheet(s): return s.rawValue
+            }
+        }
+    }
+
+    /// Setting it to nil (SwiftUI does when a sheet is dismissed) closes `sheet`; the pairing question is answered
+    /// only with its buttons (`confirmPairing`, `cancelPairing`).
+    public var presented: Presented? {
+        get {
+            if let pendingPairing { return .pairing(pendingPairing) }
+            return sheet.map { .sheet($0) }
+        }
+        set {
+            if newValue == nil { sheet = nil }
+        }
+    }
 
     public struct Banner: Equatable, Identifiable {
         public let id = UUID()
@@ -132,6 +171,20 @@ public final class AppModel: ObservableObject {
         await reloadNow()
     }
 
+    /// Runs one of the kit's locked changes (pairing, unpairing, removing: they wait for an attempt in flight) off the
+    /// main thread once storage is settled, then publishes the new state.
+    private func change(_ body: @escaping @Sendable (SharedStore) async -> Void) async {
+        let store = self.store
+        await store.ready()
+        await Self.offMain { await body(store) }
+        await reloadNow()
+    }
+
+    /// Runs `body` in a detached task: never on the main thread, whoever awaits it.
+    public nonisolated static func offMain<T: Sendable>(_ body: @escaping @Sendable () async -> T) async -> T {
+        await Task.detached(priority: .userInitiated) { await body() }.value
+    }
+
     public func show(_ text: String, error: Bool = false) {
         banner = Banner(text: text, isError: error)
         bannerTask?.cancel()
@@ -165,6 +218,8 @@ public final class AppModel: ObservableObject {
         let current = await Self.onStorage { store.pairing }
         let confirmation = PairingConfirmation(current: current, next: p, source: source)
         if confirmation.ask {
+            // In one update: the open sheet (Settings, the file picker, the scanner) gives way to the question.
+            sheet = nil
             pendingPairing = PendingPairing(pairing: p, confirmation: confirmation)
         } else {
             await apply(p, notice: confirmation.notice)
@@ -184,13 +239,15 @@ public final class AppModel: ObservableObject {
     }
 
     private func apply(_ p: Pairing, notice: String?) async {
-        await write { $0.pair(p) }
+        await change { _ = await $0.pair(p) }
         show(notice ?? "Paired with \(p.displayName).")
         await refresh()
     }
 
+    /// Unpairs (the outbox goes too) and closes Settings, where Unpair is: there is nothing left to set.
     public func unpair() {
-        Task { await write { $0.unpair() } }
+        sheet = nil
+        Task { await change { await $0.unpair() } }
     }
 
     public func setDeviceName(_ name: String) {
@@ -205,7 +262,7 @@ public final class AppModel: ObservableObject {
             p.relay = try ShareText.normalizeRelay(relay)
             let changed = p
             Task {
-                await write { $0.pair(changed) }
+                await change { _ = await $0.pair(changed) }
                 await refresh()
             }
             return nil
@@ -343,13 +400,14 @@ public final class AppModel: ObservableObject {
         }
     }
 
+    /// "Remove": waits for an attempt in flight, so the row does not come back.
     public func delete(_ row: OutboxRow) {
         let id = row.id
-        Task { await write { OutboxStore(store: $0).remove(id) } }
+        Task { await change { _ = await OutboxStore(store: $0).remove(id) } }
     }
 
     public func clearFinished() {
-        Task { await write { OutboxStore(store: $0).clearFinished() } }
+        Task { await change { await OutboxStore(store: $0).clearFinished() } }
     }
 
     private var launchArgumentsHandled = false
@@ -367,7 +425,7 @@ public final class AppModel: ObservableObject {
         if let link = value("-DLSPairLink") {
             do {
                 let p = try Pairing.parse(link)
-                await write { $0.pair(p) }
+                await change { _ = await $0.pair(p) }
             } catch {
                 show((error as? ShareError)?.message ?? error.localizedDescription, error: true)
             }
