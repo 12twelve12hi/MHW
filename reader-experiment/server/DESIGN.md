@@ -1212,7 +1212,12 @@ Optional fields: `feature`, `missing`, `retryAfter` (seconds; also the `Retry-Af
 - `NEED_SOURCE` uploads `missingParts`;
 - `GONE` re-uploads;
 - `LOCKED` shows the lock message;
-- `BAD_AUTH` triggers a config refresh.
+- `BAD_AUTH` triggers a config refresh, once per episode: until a `GET /v1/status` succeeds again, further `BAD_AUTH`
+  answers do not re-read the config topic (`server/badAuthAt`, 13.1).
+
+Apps read `error` only when `code` is a server code: 1 to 40 characters of `A-Z`, `0-9` and `_`, starting with a
+letter, and not `OFFLINE`, which only the app decides (`isServerCode`). Otherwise the error is `BAD_AUTH` for a `401`
+and `SERVER_ERROR` for any other status that is not 2xx, so no answer can pose as a state the app decides itself.
 
 | HTTP | `code` | When |
 |---|---|---|
@@ -1845,12 +1850,20 @@ export async function buildHostedFrames(pairingKeys, item, { nonces } = {}) {}
 export function publicUrl(u) {}
 
 export class ServerError extends Error { /* code, status, message (from the server), feature, missing, retryAfter, limit, resetAt, missingParts */ }
+/** Whether an error JSON's code is read (10.4): ^[A-Z][A-Z0-9_]{0,39}$ and not OFFLINE. */
+export function isServerCode(code) {}
+/** Every state state() and noteError() return, a closed set: 'ready', 'needs-server', 'pairing-mismatch',
+ *  'server-outdated', 'app-outdated', 'needs-key', 'needs-domain', 'needs-r2', 'needs-lab-inbox', 'needs-paid',
+ *  'locked', 'error', 'OFFLINE'. */
+export const SERVER_STATES = [];
 /** Text for the states the app decides itself (14.1): needs-server, pairing-mismatch, server-outdated, app-outdated, OFFLINE. */
 export function localMessage(state) {}
 /** NOT_CONFIGURED's `missing` -> 'needs-server' | 'needs-domain' | 'needs-r2', read in that order (10.4). */
 export function notConfiguredState(missing) {}
 /** The state mapping (LAB-PLAN 2.6), pure; server-vectors.json › serverState pins it for Swift and Kotlin.
- *  stateFromStatus: a GET /v1/status body and a feature -> {state, message} (the server's message when it sent one).
+ *  stateFromStatus: a GET /v1/status body and a feature -> {state, message}: ready; needs-key, needs-domain, needs-r2,
+ *  needs-lab-inbox, needs-paid and locked with the 14.1 text (whatever the server sent); any other state, a state the
+ *  app decides or one it does not know included, is 'error' with the server's message (else SERVER_ERROR's sentence).
  *  stateFromError: a ServerError (or an error without a code: OFFLINE) -> {state, message}; NEEDS_KEY, NOT_CONFIGURED,
  *  NEEDS_LAB_INBOX and LOCKED map to their states with the 14.1 text, anything else is 'error' with the server's message. */
 export function stateFromStatus(status, feature) {}
@@ -1871,7 +1884,8 @@ export class DaylightServer {
   /** After a call for `feature` failed with `error`: -> stateFromError(error), and updates the cached status. NEEDS_KEY,
    *  NEEDS_LAB_INBOX and NOT_CONFIGURED (email domain, R2) give the feature the error names (else `feature`) that
    *  state and mark the status for refresh; LOCKED, BAD_AUTH and NOT_CONFIGURED for DAYLIGHT_SERVER_CODE drop it
-   *  (BAD_AUTH also re-reads the config topic once); anything else keeps it, so the feature stays ready. state() sends
+   *  (the first BAD_AUTH of an episode also sets server/badAuthAt and removes server/configAt, so the config topic is
+   *  re-read once); anything else keeps it, so the feature stays ready. state() sends
    *  its own errors through it. Never throws; makes no request. */
   async noteError(feature, error) {}
   async status() {}
@@ -1895,6 +1909,9 @@ Storage keys (the protocol's storage adapter) are:
   config that names another origin for the same fingerprint until the user confirms the move (`confirmMove`, 4.3);
 - `server/status` and `server/statusAt`, which only the module writes (`status`, `noteError`, `confirmMove`, the
   manual address);
+- `server/badAuthAt`, the time of the `BAD_AUTH` that began the current episode. `noteError` sets it when it is absent
+  and only then removes `server/configAt`, so the next discovery re-reads the config topic once per episode. A
+  successful `GET /v1/status` and `lockBeforeRepair` remove it;
 - `server/manualUrl`, `server/hosted` (the hosted outbox) and `server/hostedAckCursor`;
 - `server/emailAddress` (to detect a change);
 - `server/notices` (`{"ai": true, "email": true, "feeds": true, "files": true}` once shown).
@@ -1958,8 +1975,11 @@ secret. It holds:
 - **`serverState`** (LAB-PLAN 2.6): `fromStatus`, a status body and a feature → `{state, message}`; `fromError`, the
   server's answer to a call (HTTP status and body text), a network failure, a gate's deadline or an app-decided state →
   the error the client makes → `{state, message}`, with what `noteError` does to the cached status (kept, updated and
-  marked for refresh, or dropped). It includes the `NOT_CONFIGURED` order, answers that are not read (a lowercase
-  code, a message that is not a string) and the states that stay ready (`RATE_LIMITED`, `AI_BUSY`, `AI_QUEUE_FULL`).
+  marked for refresh, or dropped, with `server/badAuthAt` and whether the config is re-read). `states` lists the closed
+  set of states. It includes the `NOT_CONFIGURED` order, answers that are not read (a lowercase code, `OFFLINE`, a code
+  of 41 characters, a message that is not a string), a second `BAD_AUTH` in one episode, status states that become
+  `error` (the app's own states, Lab states, unknown states) and the states that stay ready (`RATE_LIMITED`,
+  `AI_BUSY`, `AI_QUEUE_FULL`).
 
 ---
 
@@ -1982,7 +2002,7 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
 | `needs-r2` | server | Needs R2 storage on your Cloudflare account. Turn on R2 in the Cloudflare dashboard (it asks for a card; the free tier isn't charged), then re-run the deploy. |
 | `needs-lab-inbox` | server | Needs Lab on your Daylight. Turn on Lab in Daylight Share on the Daylight to receive this. |
 | `needs-paid` | server | Email-in needs Cloudflare's Workers Paid plan. Subscribe in the Cloudflare dashboard, set the variable DAYLIGHT_WORKERS_PLAN to paid in GitHub › Settings, then re-run the deploy. |
-| `error` | server | The server's `message` for the recorded code (e.g. `AI_KEY_INVALID`). |
+| `error` | server | The server's `message` for the recorded code (e.g. `AI_KEY_INVALID`). A state in `GET /v1/status` that is not in this table's server rows (a newer server's, or one the app decides) is shown as `error` too. |
 | `OFFLINE` (network) | app | Couldn't reach the Daylight server. Check your connection and try again. |
 
 "Re-run the deploy" in the app links to a one-line help text: "In GitHub › Actions, open the latest

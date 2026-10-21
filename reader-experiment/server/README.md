@@ -68,17 +68,19 @@ Every server feature is a normal, enabled control in Lab. Tapping one that is no
 "Re-run the deploy" means: in GitHub › Actions, open the latest "Reader experiment - Daylight server" run and choose
 Re-run all jobs. The first time a feature is used the app shows its notice (AI and email are not end-to-end
 encrypted; the feed list is kept on the server; large files wait encrypted for up to 14 days). Every server error
-carries its own one-line `message`, which the apps show as is; the full table is DESIGN.md section 14 and
-`ERROR_MESSAGES` in the client module.
+carries its own one-line `message`, which the apps show as is; the states above always show the client module's
+text for them. The full table is DESIGN.md section 14 and `ERROR_MESSAGES` in the client module.
 
 ### For the Lab apps (LAB-PLAN 2.6)
 
 - A tap runs the app's gate, which races `state(feature)` against 5 s (a timeout reads as `OFFLINE`); the state comes
-  from the cached `GET /v1/status` (10 minutes) through `stateFromStatus`.
+  from the cached `GET /v1/status` (10 minutes) through `stateFromStatus`. The states form a closed set
+  (`SERVER_STATES`): a status state the app decides itself, a Lab state or an unknown one reads as `error`.
 - When a server call fails, the app calls `noteError(feature, error)` and shows the `{state, message}` it returns
   (`stateFromError`). `NEEDS_KEY`, `NOT_CONFIGURED` and `NEEDS_LAB_INBOX` update the cached status for the feature the
-  server names and mark it for refresh; `LOCKED` and `BAD_AUTH` drop it; `RATE_LIMITED`, `AI_BUSY` and the like leave
-  the feature ready. Only the module writes `server/status`.
+  server names and mark it for refresh; `LOCKED` and `BAD_AUTH` drop it (the first `BAD_AUTH` until the status
+  answers again also re-reads the config topic, once); `RATE_LIMITED`, `AI_BUSY` and the like leave the feature ready.
+  Only the module writes `server/status`. An error JSON whose `code` is `OFFLINE`, or not a server code, is not read.
 - Swift and Kotlin port this W0 subset under the same names and pass `vectors/server-vectors.json`, including its
   `serverState` section (status JSON or the server's answer in, `{state, message}` and the cache effect out, with
   `NOT_CONFIGURED`'s order: `DAYLIGHT_SERVER_CODE`, `DAYLIGHT_EMAIL_DOMAIN`, `R2`).

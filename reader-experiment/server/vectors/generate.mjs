@@ -45,16 +45,27 @@ function statusCases() {
     ['ready', 'ai', statusBody()],
     ['needs-key with the server’s message', 'ai', statusBody({ ai: withState('needs-key', M['needs-key']) })],
     ['needs-key without a message: the module’s text', 'pdf', statusBody({ pdf: withState('needs-key') })],
-    ['needs-lab-inbox: a newer server’s own text is shown as is', 'deliver', statusBody({ deliver: withState('needs-lab-inbox', 'Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on.') })],
+    ['needs-lab-inbox: the module’s text, not the server’s', 'deliver', statusBody({ deliver: withState('needs-lab-inbox', 'Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on.') })],
     ['needs-domain', 'email', statusBody({ email: withState('needs-domain', M['needs-domain']) })],
     ['needs-r2 without a message', 'files', statusBody({ files: withState('needs-r2') })],
-    ['needs-paid', 'email', statusBody({ email: withState('needs-paid', M['needs-paid']) })],
+    ['needs-paid with other text: the module’s text', 'email', statusBody({ email: withState('needs-paid', 'Upgrade now.') })],
+    ['locked: the module’s text', 'ai', statusBody({ ai: withState('locked', 'Locked.') })],
+    ['ready with a message: no message', 'ai', statusBody({ ai: withState('ready', 'All good.') })],
     ['error carries the server’s message for the recorded code', 'ai', statusBody({ ai: withState('error', SERVER_TEXT('AI_KEY_INVALID')) })],
     ['error without a message', 'ai', statusBody({ ai: withState('error') })],
+    ['error whose message is not a string', 'ai', statusBody({ ai: { state: 'error', message: { text: 'x' } } })],
     ['a message that is not a string is ignored', 'feeds', statusBody({ feeds: { state: 'needs-lab-inbox', message: 42 } })],
     ['an empty message is ignored', 'files', statusBody({ files: { state: 'needs-r2', message: '' } })],
-    ['an unknown state from a newer server passes through with its message', 'feeds', statusBody({ feeds: withState('needs-dns', 'Add the DNS record your server asks for.') })],
-    ['an unknown state without a message gets the generic sentence', 'feeds', statusBody({ feeds: withState('needs-dns') })],
+    ['an unknown state from a newer server is error, with its message', 'feeds', statusBody({ feeds: withState('needs-dns', 'Add the DNS record your server asks for.') })],
+    ['an unknown state without a message is error with SERVER_ERROR’s sentence', 'feeds', statusBody({ feeds: withState('needs-dns') })],
+    ['needs-server is decided by the app, never by the status: error', 'ai', statusBody({ ai: withState('needs-server', M['needs-server']) })],
+    ['OFFLINE is decided by the app, never by the status: error', 'ai', statusBody({ ai: withState('OFFLINE') })],
+    ['pairing-mismatch is decided by the app, never by the status: error', 'files', statusBody({ files: withState('pairing-mismatch', 'Fake.') })],
+    ['server-outdated is decided by the app, never by the status: error', 'files', statusBody({ files: withState('server-outdated') })],
+    ['app-outdated is decided by the app, never by the status: error', 'files', statusBody({ files: withState('app-outdated') })],
+    ['a Lab state the app decides (needs-pairing) from the status: error', 'deliver', statusBody({ deliver: withState('needs-pairing') })],
+    ['a Lab state the app decides (later) from the status: error', 'deliver', statusBody({ deliver: withState('later', 'Later.') })],
+    ['a state in another case is not a state: error', 'ai', statusBody({ ai: withState('Needs-Key') })],
     ['a feature the status does not list', 'deliver', (() => { const b = statusBody(); delete b.features.deliver; return b; })()],
     ['a feature entry without a state', 'ai', statusBody({ ai: { message: 'x' } })],
     ['a feature entry whose state is not a string', 'ai', statusBody({ ai: { state: true } })],
@@ -68,7 +79,7 @@ function statusCases() {
 /**
  * [name, feature, input] -> fromError cases. input: {response: {status, body}} (the server's answer to a call),
  * {network: true} (fetch failed), {deadline: true} (a gate's 5 s deadline passed first) or {local: state} (decided
- * by the app before any request, 4.3).
+ * by the app before any request, 4.3); `before`: storage keys set on top of the fresh cached status before noteError.
  */
 function errorCases() {
   const r = (status, body) => ({ response: { status, body } });
@@ -88,6 +99,7 @@ function errorCases() {
     ['423 LOCKED', 'ai', r(423, errJson({ code: 'LOCKED', message: SERVER_TEXT('LOCKED') }))],
     ['401 BAD_AUTH: the module’s text, whatever the answer says', 'ai', r(401, errJson({ code: 'BAD_AUTH', message: 'Some other text.' }))],
     ['401 without a JSON body is BAD_AUTH', 'files', r(401, 'Unauthorized')],
+    ['401 BAD_AUTH again in the same episode: the config is not re-read again', 'ai', { ...r(401, errJson({ code: 'BAD_AUTH' })), before: { 'server/badAuthAt': STATE_NOW - 60_000 } }],
     ['429 RATE_LIMITED: the feature stays ready', 'feeds', r(429, errJson({ code: 'RATE_LIMITED', message: SERVER_TEXT('RATE_LIMITED'), retryAfter: 60 }))],
     ['503 AI_BUSY: the feature stays ready', 'ai', r(503, errJson({ code: 'AI_BUSY', message: SERVER_TEXT('AI_BUSY'), retryAfter: 30 }))],
     ['429 AI_QUEUE_FULL: the feature stays ready', 'ai', r(429, errJson({ code: 'AI_QUEUE_FULL', message: SERVER_TEXT('AI_QUEUE_FULL'), retryAfter: 120 }))],
@@ -99,6 +111,12 @@ function errorCases() {
     ['an unknown code without a message', 'feeds', r(400, errJson({ code: 'FEED_PRIVATE' }))],
     ['500 without a JSON body is SERVER_ERROR', 'ai', r(500, '<html>Internal error</html>')],
     ['a code that is not a server code is not read (it cannot pose as needs-server)', 'ai', r(502, errJson({ code: 'needs-server', message: 'Fake.' }))],
+    ['500 whose code is OFFLINE, a state the app decides, is not read: SERVER_ERROR', 'ai', r(500, errJson({ code: 'OFFLINE', message: 'Fake.' }))],
+    ['401 whose code is OFFLINE is not read: BAD_AUTH', 'ai', r(401, errJson({ code: 'OFFLINE' }))],
+    ['a code of 40 characters is read: an unknown code', 'feeds', r(400, errJson({ code: 'A' + 'B'.repeat(39), message: 'Forty.' }))],
+    ['a code of 41 characters is not read', 'feeds', r(400, errJson({ code: 'A' + 'B'.repeat(40), message: 'Forty-one.' }))],
+    ['a code with a trailing space is not read', 'feeds', r(400, errJson({ code: 'OFFLINE ', message: 'x' }))],
+    ['a code that starts with a digit is not read', 'feeds', r(400, errJson({ code: '9LIVES', message: 'x' }))],
     ['an error object without a code is not read', 'ai', r(500, errJson({ message: 'No code.' }))],
     ['the network failed', 'ai', { network: true }],
     ['a gate’s 5 s deadline passed before the server answered', 'ai', { deadline: true }],
@@ -134,14 +152,16 @@ export async function errorFor(secret, input) {
 }
 
 /** What noteError(feature, err) did to a fresh cached status: kept, updated (one feature, marked for refresh) or dropped. */
-export async function noteEffect(secret, feature, err) {
+export async function noteEffect(secret, feature, err, before = {}) {
   const { storage, client } = await stateClient(secret, async () => { throw new Error('noteError must not make requests'); });
+  for (const [k, v] of Object.entries(before)) await storage.set(k, v);
   const out = await client.noteError(feature, err);
   const status = await storage.get('server/status');
   const statusAt = await storage.get('server/statusAt');
   const configAt = await storage.get('server/configAt');
+  const badAuthAt = await storage.get('server/badAuthAt');
   let effect;
-  if (status === undefined) effect = { cache: 'dropped', configRefresh: configAt === undefined };
+  if (status === undefined) effect = { cache: 'dropped', configRefresh: configAt === undefined, badAuthAt: badAuthAt ?? null };
   else if (JSON.stringify(status) === JSON.stringify(statusBody()) && statusAt !== undefined) effect = { cache: 'kept' };
   else {
     const changed = Object.keys(status.features).filter((k) => JSON.stringify(status.features[k]) !== JSON.stringify(statusBody().features[k]));
@@ -160,14 +180,19 @@ export async function serverStateVectors(secret) {
   const fromStatus = statusCases().map(([name, feature, status]) => ({ name, feature, status, expect: srv.stateFromStatus(status, feature) }));
   const fromError = [];
   for (const [name, feature, input] of errorCases()) {
-    const err = await errorFor(secret, input);
-    const { out, effect } = await noteEffect(secret, feature, err);
+    const { before, ...answer } = input;
+    const err = await errorFor(secret, answer);
+    const { out, effect } = await noteEffect(secret, feature, err, before);
     const expect = srv.stateFromError(err);
     if (JSON.stringify(out) !== JSON.stringify(expect)) throw new Error(`noteError and stateFromError differ for ${name}`);
     fromError.push({ name, feature, ...input, error: errorFields(err), expect, noteError: effect });
   }
+  const states = new Set([...fromStatus, ...fromError].map((c) => c.expect.state));
+  for (const s of states) if (!srv.SERVER_STATES.includes(s)) throw new Error(`a state outside SERVER_STATES: ${s}`);
   return {
-    note: 'LAB-PLAN 2.6. fromStatus: a GET /v1/status body and a feature -> stateFromStatus. fromError: the server’s answer to a call ({status, body}: body is the response text), a network failure, a gate’s deadline, or a state the app decides before any request -> the error the client makes (code, HTTP status and the fields it keeps) -> stateFromError -> {state, message}; noteError(feature, error) returns the same and does `noteError` to a fresh cached status in which every feature is ready (fromStatus[0].status): kept; updated (that feature now holds `expect`, and server/statusAt is removed so the next state() refreshes); or dropped (server/status and server/statusAt removed; configRefresh: server/configAt removed too, so the next discovery re-reads the config topic).',
+    note: 'LAB-PLAN 2.6. states: every state state() and noteError() can return (a closed set). fromStatus: a GET /v1/status body and a feature -> stateFromStatus: ready; needs-key, needs-domain, needs-r2, needs-lab-inbox, needs-paid and locked with the module’s text; anything else is error, with the server’s message when it is a non-empty string. fromError: the server’s answer to a call ({status, body}: body is the response text), a network failure, a gate’s deadline, or a state the app decides before any request -> the error the client makes (code, HTTP status and the fields it keeps; a code is read only when it matches ^[A-Z][A-Z0-9_]{0,39}$ and is not OFFLINE, else the error is BAD_AUTH for 401 and SERVER_ERROR otherwise) -> stateFromError -> {state, message}; noteError(feature, error) returns the same and does `noteError` to a fresh cached status in which every feature is ready (fromStatus[0].status), with the storage keys in `before` set too: kept; updated (that feature now holds `expect`, and server/statusAt is removed so the next state() refreshes); or dropped (server/status and server/statusAt removed). For dropped, badAuthAt is server/badAuthAt afterwards (null: absent; the first BAD_AUTH of an episode sets it to now, STATE_NOW) and configRefresh says whether server/configAt was removed, so that the next discovery re-reads the config topic: only when server/badAuthAt was absent. A successful GET /v1/status removes server/badAuthAt.',
+    now: STATE_NOW,
+    states: srv.SERVER_STATES,
     fromStatus, fromError,
   };
 }

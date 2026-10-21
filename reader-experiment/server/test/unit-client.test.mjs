@@ -333,8 +333,10 @@ test('noteError: BAD_AUTH drops the status and re-reads the config topic once; L
   const err = await caught(s.client.feeds.list());
   assert.deepEqual(await s.client.noteError('feeds', err), { state: 'error', message: srv.errorMessage('BAD_AUTH') });
   assert.equal(await s.storage.get('server/status'), undefined);
+  assert.equal(typeof (await s.storage.get('server/badAuthAt')), 'number', 'a BAD_AUTH episode began');
   assert.equal((await s.client.state('files')).state, 'ready');
   assert.equal(relayPolls(), 2, 'the config was read again');
+  assert.equal(await s.storage.get('server/badAuthAt'), undefined, 'the status answered, so the episode is over');
   assert.equal((await s.client.state('files')).state, 'ready');
   assert.equal(relayPolls(), 2, 'once');
 
@@ -344,6 +346,86 @@ test('noteError: BAD_AUTH drops the status and re-reads the config topic once; L
   assert.equal(await s.storage.get('server/status'), undefined, 'the stale status is gone, so offline it cannot answer ready');
   statusAnswer = () => { throw new TypeError('offline'); };
   assert.equal((await s.client.state('ai')).state, 'OFFLINE');
+});
+
+test('BAD_AUTH: a server that keeps answering 401 makes one config re-read per episode, not one per state()', async () => {
+  let statusAnswer = () => errorAnswer(401, { code: 'BAD_AUTH' });
+  const s = await fakeServer({ status: () => statusAnswer(), call: () => errorAnswer(401, { code: 'BAD_AUTH' }) });
+  const relayPolls = () => s.log.filter((l) => l.startsWith('relay/')).length;
+  const statusCalls = () => s.log.filter((l) => l === '/v1/status').length;
+  const badAuth = { state: 'error', message: srv.errorMessage('BAD_AUTH') };
+  // What's in Lab refreshing its four server rows, twice, an hour apart.
+  for (const f of ['ai', 'email', 'feeds', 'files']) assert.deepEqual(await s.client.state(f), badAuth, f);
+  assert.equal(relayPolls(), 2, 'the first discovery and one forced re-read');
+  assert.equal(statusCalls(), 4);
+  const episode = await s.storage.get('server/badAuthAt');
+  assert.equal(typeof episode, 'number');
+  s.tick(3600e3);
+  for (const f of ['ai', 'email', 'feeds', 'files']) assert.deepEqual(await s.client.state(f), badAuth, f);
+  const err = await caught(s.client.feeds.list());
+  assert.deepEqual(await s.client.noteError('feeds', err), badAuth);
+  assert.equal(relayPolls(), 2, 'no more relay polls in the same episode');
+  assert.equal(await s.storage.get('server/badAuthAt'), episode, 'the episode keeps its start');
+  assert.ok(await s.storage.get('server/configAt'), 'the re-read config is kept');
+
+  // After CONFIG_REFRESH_MS the config is refreshed as usual, once.
+  s.tick(srv.CONFIG_REFRESH_MS);
+  await s.client.state('ai'); await s.client.state('files');
+  assert.equal(relayPolls(), 3, 'the six-hourly refresh');
+
+  // The server knows this device again: the episode ends, and a new one re-reads the config once more.
+  statusAnswer = () => Response.json(allReady());
+  assert.deepEqual(await s.client.state('ai'), { state: 'ready', message: null });
+  assert.equal(await s.storage.get('server/badAuthAt'), undefined);
+  statusAnswer = () => errorAnswer(401, { code: 'BAD_AUTH' });
+  await s.client.noteError('ai', await caught(s.client.feeds.list()));
+  for (const f of ['ai', 'email', 'feeds', 'files']) assert.deepEqual(await s.client.state(f), badAuth, f);
+  assert.equal(relayPolls(), 4, 'one re-read for the new episode');
+
+  // lockBeforeRepair ends the episode too, so the next pairing starts clean.
+  await s.client.lockBeforeRepair();
+  assert.equal(await s.storage.get('server/badAuthAt'), undefined);
+});
+
+test('state(): a /v1/status answer cannot pose as OFFLINE and so revive an hour-old cached status', async () => {
+  let statusAnswer = () => Response.json(allReady());
+  const s = await fakeServer({ status: () => statusAnswer(), call: () => errorAnswer(500, { code: 'OFFLINE' }) });
+  assert.deepEqual(await s.client.state('ai'), { state: 'ready', message: null });
+  s.tick(3600e3);
+  statusAnswer = () => errorAnswer(500, { code: 'OFFLINE', message: 'Fake.' });
+  const err = await caught(s.client.status());
+  assert.equal(err.code, 'SERVER_ERROR', 'the code OFFLINE is not read');
+  assert.equal(err.status, 500);
+  const generic = { state: 'error', message: srv.errorMessage('SERVER_ERROR') };
+  assert.deepEqual(await s.client.state('ai'), generic, 'a server error, not the cached ready');
+  assert.deepEqual(srv.stateFromError(err), generic, 'and not OFFLINE');
+  assert.equal((await caught(s.client.feeds.list())).code, 'SERVER_ERROR');
+  // A real network failure still falls back to the cached status.
+  statusAnswer = () => { throw new TypeError('offline'); };
+  assert.deepEqual(await s.client.state('ai'), { state: 'ready', message: null });
+});
+
+test('state(): the status path keeps to the closed set and the module’s text', async () => {
+  const s = await fakeServer({
+    status: () => Response.json(allReady({
+      ai: { state: 'needs-server', message: srv.STATE_MESSAGES['needs-server'] },
+      email: { state: 'needs-pairing' },
+      feeds: { state: 'needs-lab-inbox', message: 'A newer server’s own text.' },
+      files: { state: 'OFFLINE' },
+      deliver: { state: 'needs-dns', message: 'Add the DNS record.' },
+    })),
+    call: () => Response.json({}),
+  });
+  const generic = srv.errorMessage('SERVER_ERROR');
+  assert.deepEqual(await s.client.state('ai'), { state: 'error', message: srv.STATE_MESSAGES['needs-server'] });
+  assert.deepEqual(await s.client.state('email'), { state: 'error', message: generic });
+  assert.deepEqual(await s.client.state('feeds'), { state: 'needs-lab-inbox', message: srv.STATE_MESSAGES['needs-lab-inbox'] });
+  assert.deepEqual(await s.client.state('files'), { state: 'error', message: generic });
+  assert.deepEqual(await s.client.state('deliver'), { state: 'error', message: 'Add the DNS record.' });
+  for (const f of srv.FEATURES) assert.ok(srv.SERVER_STATES.includes((await s.client.state(f)).state), f);
+  // noteError's text and the status path's text agree for a state the server decides.
+  const noted = await s.client.noteError('feeds', new srv.ServerError('NEEDS_LAB_INBOX', { message: 'A newer server’s own text.' }));
+  assert.deepEqual(noted, await s.client.state('feeds'));
 });
 
 test('noteError never throws: storage that fails, odd errors and odd features', async () => {
@@ -371,6 +453,8 @@ test('request(): only an error object with a server-shaped code is read; the mes
     status: () => Response.json(allReady()),
     call: (u) => ({
       '/v1/feeds': () => errorAnswer(400, { code: 'OFFLINE ', message: 'x' }),
+      '/v1/feeds/import': () => errorAnswer(500, { code: 'OFFLINE', message: 'x' }),
+      '/v1/digest/send': () => errorAnswer(400, { code: 'A'.repeat(40), message: 'Forty.' }),
       '/v1/email': () => errorAnswer(409, { code: 'NEEDS_KEY', message: { html: '<b>x</b>' } }),
       '/v1/settings': () => Response.json({ error: 'not an object', ok: true }),
     }[u.pathname] ?? (() => errorAnswer(418, { code: 'x'.repeat(41).toUpperCase() })))(),
@@ -381,6 +465,10 @@ test('request(): only an error object with a server-shaped code is read; the mes
   assert.equal(e.message, srv.STATE_MESSAGES['needs-key']);
   assert.deepEqual(await s.client.settings.get(), { error: 'not an object', ok: true }, 'a 200 answer is the result');
   assert.equal((await caught(s.client.feeds.check('a'))).code, 'SERVER_ERROR', 'a code over 40 characters');
+  assert.equal((await caught(s.client.feeds.importOpml('<opml/>'))).code, 'SERVER_ERROR', 'OFFLINE is the app’s, never the server’s');
+  const forty = await caught(s.client.feeds.sendDigestNow());
+  assert.equal(forty.code, 'A'.repeat(40), 'a code of 40 characters is read');
+  assert.equal(forty.message, 'Forty.');
 });
 
 test('notConfiguredState and errorMessage read missing in one order: the Server code, the email domain, R2', () => {

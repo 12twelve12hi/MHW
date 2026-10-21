@@ -41,7 +41,8 @@ const label = (name) => utf8(`dlshare/v1/${name}\0`);
 const subtle = () => globalThis.crypto.subtle;
 
 // ---------------------------------------------------------------------------------------------------------------
-// User-facing messages (14). The server sends `message` for the states and codes it decides; the apps show it as is.
+// User-facing messages (14). The apps show the server's `message` for an error code (14.2) and for the state `error`;
+// every other state shows this module's text for it (STATE_MESSAGES), whatever the server sent with it.
 
 export const RERUN_HELP = 'In GitHub › Actions, open the latest ‘Reader experiment - Daylight server’ run and choose Re-run all jobs.';
 
@@ -126,23 +127,38 @@ export function notConfiguredState(missing) {
   return 'needs-server';
 }
 
+/** The states the app decides itself (4.3, 14.1). No answer from the server can give one of them. */
 const LOCAL_STATES = ['needs-server', 'pairing-mismatch', 'server-outdated', 'app-outdated', 'OFFLINE'];
+/** The states GET /v1/status may give a feature besides `ready` and `error` (10.5, 14.1). Any other is `error`. */
+const STATUS_STATES = ['needs-key', 'needs-domain', 'needs-r2', 'needs-lab-inbox', 'needs-paid', 'locked'];
+/** Every state state() and noteError() return: a closed set (server-vectors.json › serverState › states). */
+export const SERVER_STATES = ['ready', 'needs-server', 'pairing-mismatch', 'server-outdated', 'app-outdated', 'needs-key',
+  'needs-domain', 'needs-r2', 'needs-lab-inbox', 'needs-paid', 'locked', 'error', 'OFFLINE'];
 const SERVER_CODE = /^[A-Z][A-Z0-9_]{0,39}$/; // what an error JSON's `code` must look like to be read (10.4)
 
 /**
- * A feature's entry in GET /v1/status -> {state, message} (14.1). `ready` has no message. Other states show the
- * server's `message` when it sent a non-empty string, else the module's text for the state (`error`: SERVER_ERROR's
- * sentence; an unknown state: the generic sentence with the state's name). A status without the
- * feature, or with an entry that has no state, is {error, NOT_FOUND's message}. Pinned by server-vectors.json ›
- * serverState › fromStatus.
+ * Whether an error JSON's `code` is read (10.4): 1 to 40 characters of A-Z, 0-9 and _, starting with a letter, and not
+ * a state the app decides itself (OFFLINE), so a server's answer can never pose as one.
+ */
+export function isServerCode(code) {
+  return typeof code === 'string' && SERVER_CODE.test(code) && !LOCAL_STATES.includes(code);
+}
+
+/**
+ * A feature's entry in GET /v1/status -> {state, message} (14.1). `ready` has no message. needs-key, needs-domain,
+ * needs-r2, needs-lab-inbox, needs-paid and locked show this module's text for the state, whatever the server sent.
+ * `error` shows the server's `message` when it is a non-empty string, else SERVER_ERROR's sentence. Any other state
+ * (a state the app decides itself, such as needs-server or OFFLINE, a Lab state such as needs-pairing, a state of a
+ * newer server) is `error` in the same way, so the set of states stays closed. A status without the feature, or with
+ * an entry that has no state, is {error, NOT_FOUND's message}. Pinned by server-vectors.json › serverState › fromStatus.
  */
 export function stateFromStatus(status, feature) {
   const fs = status && typeof status === 'object' ? status.features : null;
   const f = fs && typeof fs === 'object' && Object.hasOwn(fs, feature) ? fs[feature] : null;
   if (!f || typeof f !== 'object' || typeof f.state !== 'string' || !f.state) return { state: 'error', message: errorMessage('NOT_FOUND') };
   if (f.state === 'ready') return { state: 'ready', message: null };
-  if (typeof f.message === 'string' && f.message) return { state: f.state, message: f.message };
-  return { state: f.state, message: f.state === 'error' ? errorMessage('SERVER_ERROR') : localMessage(f.state) };
+  if (STATUS_STATES.includes(f.state)) return { state: f.state, message: STATE_MESSAGES[f.state] };
+  return { state: 'error', message: typeof f.message === 'string' && f.message ? f.message : errorMessage('SERVER_ERROR') };
 }
 
 /**
@@ -537,7 +553,7 @@ export function publicUrl(u) {
 
 const KEY = {
   config: 'server/config', configAt: 'server/configAt', pin: 'server/pin', pendingMove: 'server/pendingMove',
-  status: 'server/status', statusAt: 'server/statusAt', manualUrl: 'server/manualUrl', hosted: 'server/hosted',
+  status: 'server/status', statusAt: 'server/statusAt', badAuthAt: 'server/badAuthAt', manualUrl: 'server/manualUrl', hosted: 'server/hosted',
   hostedAckCursor: 'server/hostedAckCursor', emailAddress: 'server/emailAddress', notices: 'server/notices',
 };
 
@@ -754,9 +770,9 @@ export class DaylightServer {
     let data = null;
     if (text.trim()) { try { data = JSON.parse(text); } catch { data = null; } }
     const err = data && typeof data === 'object' ? data.error : null;
-    // Only an error object whose code looks like a server code (10.4) is read, so an answer can never pose as a state
-    // the app decides itself (needs-server, OFFLINE …); a message that is not a string is left out.
-    if (err && typeof err === 'object' && typeof err.code === 'string' && SERVER_CODE.test(err.code)) {
+    // Only an error object whose code is a server code (isServerCode, 10.4) is read, so an answer can never pose as a
+    // state the app decides itself (needs-server, OFFLINE …); a message that is not a string is left out.
+    if (err && typeof err === 'object' && isServerCode(err.code)) {
       const extra = { ...err, status: res.status };
       if (typeof extra.message !== 'string') delete extra.message;
       throw new ServerError(err.code, extra);
@@ -777,6 +793,7 @@ export class DaylightServer {
       ]);
       await this.storage.set(KEY.status, s);
       await this.storage.set(KEY.statusAt, this.now());
+      await this.storage.remove(KEY.badAuthAt); // the server knows this device again: a later BAD_AUTH re-reads the config
       return s;
     } catch (e) {
       if (cached && e?.code === 'OFFLINE') return cached;
@@ -809,7 +826,10 @@ export class DaylightServer {
    *   error's `feature` (else `feature`) takes that state in the cached status, and the cache is marked for refresh:
    *   the next state() asks the server, which knows every feature this affects, and falls back to this cache offline.
    * - LOCKED, BAD_AUTH and NOT_CONFIGURED for DAYLIGHT_SERVER_CODE concern the whole server: the cached status is
-   *   dropped. After BAD_AUTH the next discovery also re-reads the config topic, once (discover({force: true})).
+   *   dropped. The first BAD_AUTH of an episode also sets server/badAuthAt and removes server/configAt, so the next
+   *   discovery re-reads the config topic (discover({force: true}), once); while server/badAuthAt is set, a later
+   *   BAD_AUTH leaves the config alone, so a server that keeps answering 401 costs no more relay polls. A successful
+   *   GET /v1/status (and lockBeforeRepair) removes server/badAuthAt and so ends the episode.
    * - Anything else (OFFLINE, RATE_LIMITED, AI_BUSY, AI_QUEUE_FULL, TOO_LARGE …) leaves the cache as it is, so the
    *   feature stays ready; the app shows the message and waits `err.retryAfter` when there is one.
    */
@@ -820,7 +840,10 @@ export class DaylightServer {
       if (code === 'LOCKED' || code === 'BAD_AUTH' || (code === 'NOT_CONFIGURED' && out.state === 'needs-server')) {
         await this.storage.remove(KEY.status);
         await this.storage.remove(KEY.statusAt);
-        if (code === 'BAD_AUTH') await this.storage.remove(KEY.configAt);
+        if (code === 'BAD_AUTH' && (await this._get(KEY.badAuthAt)) === undefined) {
+          await this.storage.set(KEY.badAuthAt, this.now());
+          await this.storage.remove(KEY.configAt);
+        }
       } else if (code === 'NEEDS_KEY' || code === 'NEEDS_LAB_INBOX' || code === 'NOT_CONFIGURED') {
         const key = FEATURES.includes(err.feature) ? err.feature : FEATURES.includes(feature) ? feature : null;
         const cached = await this._get(KEY.status);
@@ -850,7 +873,7 @@ export class DaylightServer {
 
   /** Before re-pairing: POST /v1/admin/lock with the old token (3.4). Never throws. */
   async lockBeforeRepair() {
-    try { await this.storage.remove(KEY.status); } catch { /* ignore */ }
+    try { await this.storage.remove(KEY.status); await this.storage.remove(KEY.badAuthAt); } catch { /* ignore */ }
     try { await this.request('POST', '/v1/admin/lock', { json: {} }); return true; } catch { return false; }
   }
 

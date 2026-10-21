@@ -270,7 +270,23 @@
     ]
   },
   "serverState": {
-    "note": "LAB-PLAN 2.6. fromStatus: a GET /v1/status body and a feature -> stateFromStatus. fromError: the server’s answer to a call ({status, body}: body is the response text), a network failure, a gate’s deadline, or a state the app decides before any request -> the error the client makes (code, HTTP status and the fields it keeps) -> stateFromError -> {state, message}; noteError(feature, error) returns the same and does `noteError` to a fresh cached status in which every feature is ready (fromStatus[0].status): kept; updated (that feature now holds `expect`, and server/statusAt is removed so the next state() refreshes); or dropped (server/status and server/statusAt removed; configRefresh: server/configAt removed too, so the next discovery re-reads the config topic).",
+    "note": "LAB-PLAN 2.6. states: every state state() and noteError() can return (a closed set). fromStatus: a GET /v1/status body and a feature -> stateFromStatus: ready; needs-key, needs-domain, needs-r2, needs-lab-inbox, needs-paid and locked with the module’s text; anything else is error, with the server’s message when it is a non-empty string. fromError: the server’s answer to a call ({status, body}: body is the response text), a network failure, a gate’s deadline, or a state the app decides before any request -> the error the client makes (code, HTTP status and the fields it keeps; a code is read only when it matches ^[A-Z][A-Z0-9_]{0,39}$ and is not OFFLINE, else the error is BAD_AUTH for 401 and SERVER_ERROR otherwise) -> stateFromError -> {state, message}; noteError(feature, error) returns the same and does `noteError` to a fresh cached status in which every feature is ready (fromStatus[0].status), with the storage keys in `before` set too: kept; updated (that feature now holds `expect`, and server/statusAt is removed so the next state() refreshes); or dropped (server/status and server/statusAt removed). For dropped, badAuthAt is server/badAuthAt afterwards (null: absent; the first BAD_AUTH of an episode sets it to now, STATE_NOW) and configRefresh says whether server/configAt was removed, so that the next discovery re-reads the config topic: only when server/badAuthAt was absent. A successful GET /v1/status removes server/badAuthAt.",
+    "now": 1792476000000,
+    "states": [
+      "ready",
+      "needs-server",
+      "pairing-mismatch",
+      "server-outdated",
+      "app-outdated",
+      "needs-key",
+      "needs-domain",
+      "needs-r2",
+      "needs-lab-inbox",
+      "needs-paid",
+      "locked",
+      "error",
+      "OFFLINE"
+    ],
     "fromStatus": [
       {
         "name": "ready",
@@ -394,7 +410,7 @@
         }
       },
       {
-        "name": "needs-lab-inbox: a newer server’s own text is shown as is",
+        "name": "needs-lab-inbox: the module’s text, not the server’s",
         "feature": "deliver",
         "status": {
           "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
@@ -431,7 +447,7 @@
         },
         "expect": {
           "state": "needs-lab-inbox",
-          "message": "Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on."
+          "message": "Needs Lab on your Daylight. Turn on Lab in Daylight Share on the Daylight to receive this."
         }
       },
       {
@@ -516,7 +532,7 @@
         }
       },
       {
-        "name": "needs-paid",
+        "name": "needs-paid with other text: the module’s text",
         "feature": "email",
         "status": {
           "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
@@ -538,7 +554,7 @@
             },
             "email": {
               "state": "needs-paid",
-              "message": "Email-in needs Cloudflare’s Workers Paid plan. Subscribe in the Cloudflare dashboard, set the variable DAYLIGHT_WORKERS_PLAN to paid in GitHub › Settings, then re-run the deploy."
+              "message": "Upgrade now."
             },
             "feeds": {
               "state": "ready"
@@ -554,6 +570,88 @@
         "expect": {
           "state": "needs-paid",
           "message": "Email-in needs Cloudflare’s Workers Paid plan. Subscribe in the Cloudflare dashboard, set the variable DAYLIGHT_WORKERS_PLAN to paid in GitHub › Settings, then re-run the deploy."
+        }
+      },
+      {
+        "name": "locked: the module’s text",
+        "feature": "ai",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "locked",
+              "message": "Locked."
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "locked",
+          "message": "The Daylight server was locked when this device was re-paired. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy."
+        }
+      },
+      {
+        "name": "ready with a message: no message",
+        "feature": "ai",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready",
+              "message": "All good."
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "ready",
+          "message": null
         }
       },
       {
@@ -614,6 +712,49 @@
           "features": {
             "ai": {
               "state": "error"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (SERVER_ERROR). Try again later."
+        }
+      },
+      {
+        "name": "error whose message is not a string",
+        "feature": "ai",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "error",
+              "message": {
+                "text": "x"
+              }
             },
             "pdf": {
               "state": "ready"
@@ -720,7 +861,7 @@
         }
       },
       {
-        "name": "an unknown state from a newer server passes through with its message",
+        "name": "an unknown state from a newer server is error, with its message",
         "feature": "feeds",
         "status": {
           "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
@@ -756,12 +897,12 @@
           }
         },
         "expect": {
-          "state": "needs-dns",
+          "state": "error",
           "message": "Add the DNS record your server asks for."
         }
       },
       {
-        "name": "an unknown state without a message gets the generic sentence",
+        "name": "an unknown state without a message is error with SERVER_ERROR’s sentence",
         "feature": "feeds",
         "status": {
           "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
@@ -796,8 +937,331 @@
           }
         },
         "expect": {
-          "state": "needs-dns",
-          "message": "Something went wrong on the Daylight server (needs-dns). Try again later."
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (SERVER_ERROR). Try again later."
+        }
+      },
+      {
+        "name": "needs-server is decided by the app, never by the status: error",
+        "feature": "ai",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "needs-server",
+              "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on."
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on."
+        }
+      },
+      {
+        "name": "OFFLINE is decided by the app, never by the status: error",
+        "feature": "ai",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "OFFLINE"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (SERVER_ERROR). Try again later."
+        }
+      },
+      {
+        "name": "pairing-mismatch is decided by the app, never by the status: error",
+        "feature": "files",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "pairing-mismatch",
+              "message": "Fake."
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Fake."
+        }
+      },
+      {
+        "name": "server-outdated is decided by the app, never by the status: error",
+        "feature": "files",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "server-outdated"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (SERVER_ERROR). Try again later."
+        }
+      },
+      {
+        "name": "app-outdated is decided by the app, never by the status: error",
+        "feature": "files",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "app-outdated"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (SERVER_ERROR). Try again later."
+        }
+      },
+      {
+        "name": "a Lab state the app decides (needs-pairing) from the status: error",
+        "feature": "deliver",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "needs-pairing"
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (SERVER_ERROR). Try again later."
+        }
+      },
+      {
+        "name": "a Lab state the app decides (later) from the status: error",
+        "feature": "deliver",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "ready"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "later",
+              "message": "Later."
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Later."
+        }
+      },
+      {
+        "name": "a state in another case is not a state: error",
+        "feature": "ai",
+        "status": {
+          "server": "https://daylight-6c1f0e9a2b44.example.workers.dev",
+          "api": 1,
+          "fingerprint": "3f9a1c2e",
+          "delivery": "lab",
+          "version": "abc1234",
+          "plan": "free",
+          "inbox": {
+            "lab": true,
+            "lastSeen": "2026-10-20T05:58:00.000Z"
+          },
+          "features": {
+            "ai": {
+              "state": "Needs-Key"
+            },
+            "pdf": {
+              "state": "ready"
+            },
+            "email": {
+              "state": "ready"
+            },
+            "feeds": {
+              "state": "ready"
+            },
+            "files": {
+              "state": "ready"
+            },
+            "deliver": {
+              "state": "ready"
+            }
+          }
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (SERVER_ERROR). Try again later."
         }
       },
       {
@@ -1215,7 +1679,8 @@
         },
         "noteError": {
           "cache": "dropped",
-          "configRefresh": false
+          "configRefresh": false,
+          "badAuthAt": null
         }
       },
       {
@@ -1238,7 +1703,8 @@
         },
         "noteError": {
           "cache": "dropped",
-          "configRefresh": false
+          "configRefresh": false,
+          "badAuthAt": null
         }
       },
       {
@@ -1259,7 +1725,8 @@
         },
         "noteError": {
           "cache": "dropped",
-          "configRefresh": false
+          "configRefresh": false,
+          "badAuthAt": null
         }
       },
       {
@@ -1280,7 +1747,8 @@
         },
         "noteError": {
           "cache": "dropped",
-          "configRefresh": false
+          "configRefresh": false,
+          "badAuthAt": null
         }
       },
       {
@@ -1343,7 +1811,8 @@
         },
         "noteError": {
           "cache": "dropped",
-          "configRefresh": false
+          "configRefresh": false,
+          "badAuthAt": null
         }
       },
       {
@@ -1363,7 +1832,8 @@
         },
         "noteError": {
           "cache": "dropped",
-          "configRefresh": true
+          "configRefresh": true,
+          "badAuthAt": 1792476000000
         }
       },
       {
@@ -1383,7 +1853,32 @@
         },
         "noteError": {
           "cache": "dropped",
-          "configRefresh": true
+          "configRefresh": true,
+          "badAuthAt": 1792476000000
+        }
+      },
+      {
+        "name": "401 BAD_AUTH again in the same episode: the config is not re-read again",
+        "feature": "ai",
+        "response": {
+          "status": 401,
+          "body": "{\"error\":{\"code\":\"BAD_AUTH\"}}"
+        },
+        "before": {
+          "server/badAuthAt": 1792475940000
+        },
+        "error": {
+          "code": "BAD_AUTH",
+          "status": 401
+        },
+        "expect": {
+          "state": "error",
+          "message": "The Daylight server doesn’t recognise this device’s pairing. Check DAYLIGHT_SERVER_CODE, then re-run the deploy."
+        },
+        "noteError": {
+          "cache": "dropped",
+          "configRefresh": false,
+          "badAuthAt": 1792475940000
         }
       },
       {
@@ -1592,6 +2087,122 @@
         "error": {
           "code": "SERVER_ERROR",
           "status": 502
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (SERVER_ERROR). Try again later."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "500 whose code is OFFLINE, a state the app decides, is not read: SERVER_ERROR",
+        "feature": "ai",
+        "response": {
+          "status": 500,
+          "body": "{\"error\":{\"code\":\"OFFLINE\",\"message\":\"Fake.\"}}"
+        },
+        "error": {
+          "code": "SERVER_ERROR",
+          "status": 500
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (SERVER_ERROR). Try again later."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "401 whose code is OFFLINE is not read: BAD_AUTH",
+        "feature": "ai",
+        "response": {
+          "status": 401,
+          "body": "{\"error\":{\"code\":\"OFFLINE\"}}"
+        },
+        "error": {
+          "code": "BAD_AUTH",
+          "status": 401
+        },
+        "expect": {
+          "state": "error",
+          "message": "The Daylight server doesn’t recognise this device’s pairing. Check DAYLIGHT_SERVER_CODE, then re-run the deploy."
+        },
+        "noteError": {
+          "cache": "dropped",
+          "configRefresh": true,
+          "badAuthAt": 1792476000000
+        }
+      },
+      {
+        "name": "a code of 40 characters is read: an unknown code",
+        "feature": "feeds",
+        "response": {
+          "status": 400,
+          "body": "{\"error\":{\"code\":\"ABBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\",\"message\":\"Forty.\"}}"
+        },
+        "error": {
+          "code": "ABBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+          "status": 400
+        },
+        "expect": {
+          "state": "error",
+          "message": "Forty."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "a code of 41 characters is not read",
+        "feature": "feeds",
+        "response": {
+          "status": 400,
+          "body": "{\"error\":{\"code\":\"ABBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\",\"message\":\"Forty-one.\"}}"
+        },
+        "error": {
+          "code": "SERVER_ERROR",
+          "status": 400
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (SERVER_ERROR). Try again later."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "a code with a trailing space is not read",
+        "feature": "feeds",
+        "response": {
+          "status": 400,
+          "body": "{\"error\":{\"code\":\"OFFLINE \",\"message\":\"x\"}}"
+        },
+        "error": {
+          "code": "SERVER_ERROR",
+          "status": 400
+        },
+        "expect": {
+          "state": "error",
+          "message": "Something went wrong on the Daylight server (SERVER_ERROR). Try again later."
+        },
+        "noteError": {
+          "cache": "kept"
+        }
+      },
+      {
+        "name": "a code that starts with a digit is not read",
+        "feature": "feeds",
+        "response": {
+          "status": 400,
+          "body": "{\"error\":{\"code\":\"9LIVES\",\"message\":\"x\"}}"
+        },
+        "error": {
+          "code": "SERVER_ERROR",
+          "status": 400
         },
         "expect": {
           "state": "error",

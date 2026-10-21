@@ -118,6 +118,45 @@ async function cachedClient(respond, { status = READY_STATUS } = {}) {
   return { storage, requests, client: new srv.DaylightServer({ pairing: { secret, relay: ds.DEFAULT_RELAY }, storage, fetch: fetchFn, now: () => NOW }) };
 }
 
+test('serverState › states: a closed set that every case stays in', () => {
+  assert.equal(SS.now, NOW);
+  assert.deepEqual(SS.states, srv.SERVER_STATES);
+  assert.deepEqual([...SS.states].sort(), ['OFFLINE', 'app-outdated', 'error', 'locked', 'needs-domain', 'needs-key', 'needs-lab-inbox',
+    'needs-paid', 'needs-r2', 'needs-server', 'pairing-mismatch', 'ready', 'server-outdated']);
+  for (const c of [...SS.fromStatus, ...SS.fromError]) assert.ok(SS.states.includes(c.expect.state), `${c.name}: ${c.expect.state}`);
+  // The status path gives the module's text for every state but error, whatever the server sent.
+  for (const c of SS.fromStatus) {
+    if (c.expect.state === 'ready') assert.equal(c.expect.message, null, c.name);
+    else if (c.expect.state !== 'error') assert.equal(c.expect.message, srv.STATE_MESSAGES[c.expect.state], c.name);
+  }
+  // No state the app decides comes from the status, and no unknown state passes through.
+  const fromStatusStates = new Set(SS.fromStatus.map((c) => c.expect.state));
+  for (const s of ['needs-server', 'pairing-mismatch', 'server-outdated', 'app-outdated', 'OFFLINE']) assert.ok(!fromStatusStates.has(s), s);
+  for (const s of ['needs-server', 'pairing-mismatch', 'server-outdated', 'app-outdated', 'OFFLINE', 'needs-pairing', 'later', 'needs-dns']) {
+    assert.ok(SS.fromStatus.some((c) => c.status.features?.[c.feature]?.state === s && c.expect.state === 'error'), `a case for ${s} in the status`);
+  }
+});
+
+test('serverState › fromError: the codes request() reads', () => {
+  const read = (n) => SS.fromError.find((c) => c.name === n);
+  assert.equal(read('500 whose code is OFFLINE, a state the app decides, is not read: SERVER_ERROR').error.code, 'SERVER_ERROR');
+  assert.equal(read('401 whose code is OFFLINE is not read: BAD_AUTH').error.code, 'BAD_AUTH');
+  assert.equal(read('a code of 40 characters is read: an unknown code').error.code.length, 40);
+  assert.equal(read('a code of 41 characters is not read').error.code, 'SERVER_ERROR');
+  for (const c of SS.fromError) {
+    if (!c.response) continue;
+    let code = null;
+    try { code = JSON.parse(c.response.body)?.error?.code; } catch { /* not JSON */ }
+    const readable = typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,39}$/.test(code) && code !== 'OFFLINE';
+    assert.equal(srv.isServerCode(code), readable, c.name);
+    assert.equal(c.error.code, readable ? code : c.response.status === 401 ? 'BAD_AUTH' : 'SERVER_ERROR', c.name);
+  }
+  for (const code of ['OFFLINE', 'needs-server', 'pairing-mismatch', 'server-outdated', 'app-outdated', '', 'A'.repeat(41), 'NEEDS-KEY', 42, null]) {
+    assert.equal(srv.isServerCode(code), false, String(code));
+  }
+  for (const code of ['A', 'NEEDS_KEY', 'LOCKED', 'A'.repeat(40), 'X9_']) assert.equal(srv.isServerCode(code), true, code);
+});
+
 test('serverState › fromStatus: a status body and a feature -> {state, message}', async () => {
   assert.ok(SS.fromStatus.length >= 15);
   for (const c of SS.fromStatus) {
@@ -178,8 +217,10 @@ test('serverState › fromError: the app-decided states come out of state() exac
 test('serverState › fromError › noteError: what it does to the cached status', async () => {
   const effects = new Set(SS.fromError.map((c) => c.noteError.cache));
   assert.deepEqual([...effects].sort(), ['dropped', 'kept', 'updated']);
+  assert.ok(SS.fromError.some((c) => c.before?.['server/badAuthAt'] !== undefined && c.noteError.configRefresh === false), 'a second BAD_AUTH');
   for (const c of SS.fromError) {
     const { client, storage, requests } = await cachedClient(async () => { throw new TypeError('offline'); });
+    for (const [k, v] of Object.entries(c.before ?? {})) await storage.set(k, v);
     const err = new srv.ServerError(c.error.code, { ...c.error, message: c.expect.state === 'error' ? c.expect.message : undefined });
     assert.deepEqual(await client.noteError(c.feature, err), c.expect, c.name);
     assert.deepEqual(requests, [], `${c.name}: noteError makes no request`);
@@ -206,6 +247,8 @@ test('serverState › fromError › noteError: what it does to the cached status
         assert.equal(status, undefined, c.name);
         assert.equal(statusAt, undefined, c.name);
         assert.equal(configAt === undefined, c.noteError.configRefresh, `${c.name}: configAt`);
+        assert.equal((await storage.get('server/badAuthAt')) ?? null, c.noteError.badAuthAt, `${c.name}: badAuthAt`);
+        assert.equal(c.noteError.configRefresh, c.error.code === 'BAD_AUTH' && c.before?.['server/badAuthAt'] === undefined, c.name);
         break;
       default: assert.fail(c.noteError.cache);
     }
