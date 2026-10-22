@@ -110,6 +110,8 @@ class LabScreensAccessibilityTest {
     /** K5: the Inbox with Lab's rows: an excerpt, a cleaned link, a test article and an item kept for later. */
     private fun inboxWithLabItems() {
         inbox()
+        // Only Lab's rows: with Comfort at the largest text the screen stays within the test window (16000 dp).
+        for (i in app.inbox.items.value) app.inbox.remove(i.id)
         val now = System.currentTimeMillis()
         val r = now - 20 * 60_000L
         fun id(n: Int) = "%032x".format(0x300 + n)

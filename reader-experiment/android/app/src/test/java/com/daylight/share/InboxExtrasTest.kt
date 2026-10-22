@@ -94,10 +94,13 @@ class InboxExtrasTest {
             id = "a".repeat(32), kind = Kind.FILE, name = "Excerpt - a passage.html", mime = "text/html", size = 2_000, from = "Mac",
             extras = mapOf(ItemHeader.X_CAP to "excerpt"), held = true, labState = "held",
         )
-        val back = InboxItem.fromJson(item.toJson())!!
+        // Through items.json's text, as the Inbox stores it.
+        @Suppress("UNCHECKED_CAST")
+        val stored = com.daylight.share.core.Json.parse(com.daylight.share.core.Json.write(item.toJson())) as Map<String, Any?>
+        val back = InboxItem.fromJson(stored)!!
         assertEquals(item, back)
         // Only x-cap and x-orig are read back; anything else in the stored map is dropped.
-        val m = LinkedHashMap(item.toJson())
+        val m = LinkedHashMap(stored)
         m["extras"] = mapOf(ItemHeader.X_CAP to "excerpt", "x-note" to "nope")
         assertEquals(mapOf(ItemHeader.X_CAP to "excerpt"), InboxItem.fromJson(m)!!.extras)
     }
