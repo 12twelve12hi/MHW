@@ -28,9 +28,11 @@ struct MacRootView: View {
             }
         }
         .frame(minWidth: MacRootView.minWidth, minHeight: 480)
-        // The window's content is one group for VoiceOver; it needs a name (F27.2).
+        // The window's content is one group for VoiceOver; it needs a name (F27.2), and so does the AppKit view that
+        // hosts it.
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Send to Daylight")
+        .background(HostingViewLabel(label: "Send to Daylight"))
         // No motion in Comfort (F27); `comfort(_:)` also stops animations when Reduce Motion is on.
         .animation(model.comfort ? nil : .default, value: model.banner)
         .comfort(model.comfort)
@@ -53,6 +55,7 @@ struct MacRootView: View {
                 .frame(width: MacRootView.settingsWidth)
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("Settings")
+                .background(HostingViewLabel(label: "Settings"))
                 .environmentObject(model)
             }
         }
@@ -217,6 +220,33 @@ struct MacHomeView: View {
     }
 }
 
+/// Names the AppKit view that hosts a window's (or a sheet's) SwiftUI content: VoiceOver sees it as a group, and the
+/// accessibility audit wants every group described (F27.2).
+struct HostingViewLabel: NSViewRepresentable {
+    let label: String
+
+    final class Probe: NSView {
+        var label = ""
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            window?.contentView?.setAccessibilityLabel(label)
+        }
+    }
+
+    func makeNSView(context: Context) -> Probe {
+        let view = Probe()
+        view.label = label
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    func updateNSView(_ view: Probe, context: Context) {
+        view.label = label
+        view.window?.contentView?.setAccessibilityLabel(label)
+    }
+}
+
 /// Files, links and text dropped on the window.
 enum DropHandler {
     @MainActor
@@ -308,7 +338,9 @@ struct MacSettingsView: View {
                     Text(Comfort.title).wrapping(Comfort.title)
                 }
                 .accessibilityIdentifier("comfort")
-                Text(Comfort.footer).dlsFont(.footnote).dlsSecondary().wrapping(Comfort.footer)
+            } footer: {
+                Text(Comfort.footer).dlsFont(.callout).dlsSecondary().wrapping(Comfort.footer)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             Section {
                 TextField("This Mac’s name", text: $deviceName, prompt: Text(model.defaultDeviceName))

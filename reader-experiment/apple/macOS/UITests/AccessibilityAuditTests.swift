@@ -29,6 +29,10 @@ final class AccessibilityAuditTests: XCTestCase {
         default:
             break
         }
+        if element.elementType == .group, element.label.isEmpty,
+           ["Send to Daylight", "Settings"].contains(element.children(matching: .any).firstMatch.label) {
+            return "the AppKit view that hosts the SwiftUI content, around the content's named group"
+        }
         if element.label == "emoji & symbols" {
             return "the system's emoji item in the Touch Bar of a text field"
         }
