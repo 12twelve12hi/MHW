@@ -146,6 +146,7 @@ async function main() {
   }
   if (state === 'claimed') {
     mask(code);
+    for (const k of ['c', 'k']) { const v = new RegExp(`[?&]${k}=([^&#]+)`).exec(code)?.[1]; if (v) mask(v, decodeURIComponent(v)); }
     const parsed = await srv.parseServerCode(code);
     const values = await srv.deriveServerValues(parsed.seed);
     mask(ds.toHex(parsed.seed), await srv.formatServerCode(parsed.seed), values.authToken, values.configTopic, values.itemTopic, values.ackTopic, values.emailToken);

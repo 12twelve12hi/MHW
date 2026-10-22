@@ -291,7 +291,8 @@ The Worker handles each request in this order, and nothing touches the body befo
 
 Failures at steps 2 (only for `/f/` and `/o/`) and 3 call the rate-limiting binding, keyed by `CF-Connecting-IP`.
 Over 30 a minute the answer is `429` with no further work. An unauthenticated request therefore costs microseconds of
-CPU and never touches the body or D1. An integration test sends a 50 MB body with a bad token and checks the
+CPU and never touches the body or D1. (Without the secret `DAYLIGHT_SERVER_CODE`, the Server code itself comes from
+D1: one read per isolate every 5 minutes, or every 10 seconds before setup, never per request, 3.5.) An integration test sends a 50 MB body with a bad token and checks the
 rejection: no body read, no D1 call.
 
 Why a bearer token and not request signatures: this is a one-user server behind TLS. Signatures would need an 8-line
