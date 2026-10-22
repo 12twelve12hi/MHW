@@ -111,11 +111,15 @@ enum AXTree {
         e.type == .scrollBar || e.label.hasPrefix("Vertical scroll bar") || e.label.hasPrefix("Horizontal scroll bar")
     }
 
-    /// The app's version ("1.1.0" in the Version row) becomes "<version>": a version bump is not a change of the
-    /// screen (LAB-PLAN 1.7). Dotted numbers that are part of something longer (127.0.0.1) stay as they are.
+    /// What changes with the build or the machine, not with the screen (LAB-PLAN 1.7), in fixed words: the app's
+    /// version ("1.1.0" in the Version row) becomes "<version>" (dotted numbers that are part of something longer, such
+    /// as 127.0.0.1, stay as they are), and the Mac's "Safari extension, On|Off|Unknown" row, which says what Safari
+    /// answers on that runner, becomes "Safari extension, <Safari's answer>".
     static func normalised(_ s: String) -> String {
         s.replacingOccurrences(of: #"(?<![0-9.])[0-9]+\.[0-9]+\.[0-9]+(?![0-9.])"#, with: "<version>",
                                options: .regularExpression)
+            .replacingOccurrences(of: #"^Safari extension, (On|Off|Unknown)$"#, with: "Safari extension, <Safari's answer>",
+                                  options: .regularExpression)
     }
 
     static func text(_ value: Any?) -> String {
@@ -234,7 +238,30 @@ enum UITestSupport {
         if paired { arguments += ["-DLSPairLink", pairingLink] }
         app.launchArguments = arguments + extra
         app.launch()
+        waitUntilReadable(app)
         return app
+    }
+
+    /// Waits until the app answers accessibility queries. Right after the simulator starts, its accessibility server
+    /// can take a while ("kAXErrorServerNotFound"), and the first query of a test then fails. This tries a snapshot
+    /// every second for up to `timeout` seconds and launches the app once more half way; it does not re-run anything a
+    /// test checks.
+    static func waitUntilReadable(_ app: XCUIApplication, timeout: TimeInterval = 60) {
+        _ = app.wait(for: .runningForeground, timeout: 30)
+        let start = Date()
+        var relaunched = false
+        while Date().timeIntervalSince(start) < timeout {
+            if (try? app.snapshot()) != nil { return }
+            if !relaunched && Date().timeIntervalSince(start) > timeout / 2 {
+                relaunched = true
+                print("UI test: the app's accessibility has not answered for \(Int(timeout / 2)) s; launching it again")
+                app.terminate()
+                app.launch()
+                _ = app.wait(for: .runningForeground, timeout: 30)
+            }
+            Thread.sleep(forTimeInterval: 1)
+        }
+        print("UI test: the app's accessibility still does not answer after \(Int(timeout)) s")
     }
 
     /// The app showing the share card's sample `name` (`-DLSShareCard`), unpaired, Comfort off.

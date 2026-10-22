@@ -1,0 +1,96 @@
+{
+  "nodes" : [
+    {
+      "label" : "Send to Daylight",
+      "type" : "window",
+      "value" : ""
+    },
+    {
+      "label" : "Send to Daylight",
+      "type" : "group",
+      "value" : ""
+    },
+    {
+      "label" : "Send to Daylight",
+      "type" : "group",
+      "value" : ""
+    },
+    {
+      "label" : "Sending to Test Daylight",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Settings",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Drop a PDF, document or link here"
+    },
+    {
+      "label" : "Choose File…",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "Send Clipboard Link",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "Paste or type a link",
+      "type" : "textField",
+      "value" : ""
+    },
+    {
+      "label" : "Send",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "History",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Check now",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "History",
+      "type" : "outline",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Nothing sent yet."
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Send to Daylight"
+    }
+  ],
+  "platform" : "macos",
+  "screen" : "main"
+}

@@ -248,8 +248,9 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     of its states (`-DLSShareCard`), and on the Mac the menu bar item's menu. The baselines were recorded from the P0
     close-out (protocol 1.1 and this accessibility baseline) and are re-recorded only with a matching non-Lab change.
     The walk keeps every element that has a label, title or value, whatever its type, and every control even without
-    one; it leaves out only containers without words and the system's scroll bars, and writes the app's version as
-    `<version>` (a version bump is not a screen change).
+    one; it leaves out only containers without words and the system's scroll bars, and writes what depends on the
+    build or the runner in fixed words: the app's version as `<version>` (a version bump is not a screen change) and
+    the Mac's *Safari extension* state as `<Safari's answer>`.
   - **The Lab switch** (for A1 and A2): give the Lab `Toggle` itself `.accessibilityIdentifier("lab-switch")`
     (`AXTree.labSwitchID`, as Android's test tag) and its name `LAB_TEXT.lab`, and nothing else that identifier. With
     Lab off the walk leaves out that one element (with what is inside it) and texts with exactly its words ("Lab" as
@@ -275,7 +276,8 @@ The UI tests run the app on its own storage (`-DLSTestStorage`) paired with the 
 listens on, so every screen reads the same on every run. Screenshots of every screen (and of the truncation audit's
 windows) are uploaded as the `rx-apple-ios-screenshots` and `rx-apple-mac-screenshots` artifacts for review; they are
 never compared. A runner image that changes the iOS or macOS version can change a tree: the test then prints the new
-one, ready to copy. CI does not re-run failed tests, and `scripts/ci-test-summary.sh` fails the job unless
+one, ready to copy. Each launch waits until the app answers accessibility queries (a simulator that has just started
+can take a while; CI also starts it before the tests). CI does not re-run failed tests, and `scripts/ci-test-summary.sh` fails the job unless
 `AccessibilityAuditTests`, `BaselineTests`, `LabOffParityTests`, `TreeWalkTests` and `TruncationAuditTests` each ran
 with every test passed and none skipped (so a runner whose simulator is older than iOS 17, or a macOS older than 14,
 cannot turn the audits into skips).

@@ -115,12 +115,17 @@ final class TreeWalkTests: XCTestCase {
         ])
     }
 
-    /// The app's version reads "<version>"; addresses are left alone.
+    /// The app's version reads "<version>", and the Mac's Safari extension row "<Safari's answer>"; addresses are left
+    /// alone.
     func testTheVersionIsNormalised() {
         XCTAssertEqual(AXTree.normalised("Version, 1.1.0"), "Version, <version>")
         XCTAssertEqual(AXTree.normalised("12.30.4"), "<version>")
         XCTAssertEqual(AXTree.normalised("http://127.0.0.1:9"), "http://127.0.0.1:9")
         XCTAssertEqual(AXTree.normalised("Version 2.0"), "Version 2.0")
+        for state in ["On", "Off", "Unknown"] {
+            XCTAssertEqual(AXTree.normalised("Safari extension, \(state)"), "Safari extension, <Safari's answer>")
+        }
+        XCTAssertEqual(AXTree.normalised("Safari extension, Maybe"), "Safari extension, Maybe")
         let walk = AXTree.walk(settings())
         XCTAssertTrue(walk.nodes.contains(AXNode(type: "staticText", label: "Version, <version>", value: "")))
     }

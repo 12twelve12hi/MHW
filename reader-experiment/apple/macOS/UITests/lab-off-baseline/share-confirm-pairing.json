@@ -1,0 +1,61 @@
+{
+  "nodes" : [
+    {
+      "label" : "Send to Daylight",
+      "type" : "window",
+      "value" : ""
+    },
+    {
+      "label" : "Pair with The Daylight in the reading room upstairs?",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Code starts BEEQ. Check it matches the code on your Daylight."
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Sends through 127.0.0.1:9."
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "This replaces Test Daylight. Items not yet delivered to it will not be sent."
+    },
+    {
+      "label" : "Cancel",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "Switch",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Send to Daylight"
+    }
+  ],
+  "platform" : "macos",
+  "screen" : "share-confirm-pairing"
+}

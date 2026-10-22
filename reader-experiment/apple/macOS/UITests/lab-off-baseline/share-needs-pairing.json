@@ -1,0 +1,81 @@
+{
+  "nodes" : [
+    {
+      "label" : "Send to Daylight",
+      "type" : "window",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Pair with your Daylight"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "This copy of Send to Daylight isn’t signed with a developer team, so the Share menu can’t read the app’s pairing. Paste your pairing code here once; the Share menu remembers it."
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "On your Daylight, open Daylight Share and choose This is my Daylight. It shows a QR code and a 28-character pairing code."
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Everything you send is end-to-end encrypted with a key from that code. Items travel through the free ntfy.sh relay (or your own), which only sees ciphertext."
+    },
+    {
+      "label" : "Pairing code, e.g. ABCD-EFGH-…",
+      "type" : "textField",
+      "value" : ""
+    },
+    {
+      "label" : "Pair",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "Cancel",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Comfort"
+    },
+    {
+      "label" : "Comfort",
+      "type" : "switch",
+      "value" : "0"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Larger text and buttons, more contrast, no motion."
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Send to Daylight"
+    }
+  ],
+  "platform" : "macos",
+  "screen" : "share-needs-pairing"
+}

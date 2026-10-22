@@ -1,0 +1,31 @@
+{
+  "nodes" : [
+    {
+      "label" : "Send to Daylight",
+      "type" : "application",
+      "value" : ""
+    },
+    {
+      "label" : "Sent · waiting for your Daylight",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "A very long article title that goes on for a while, to see that it wraps instead of being cut short",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "The page is larger than 8 MB, so its link was sent.",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Done",
+      "type" : "button",
+      "value" : ""
+    }
+  ],
+  "platform" : "ios",
+  "screen" : "share-sent-note"
+}

@@ -1,0 +1,21 @@
+{
+  "nodes" : [
+    {
+      "label" : "Send to Daylight",
+      "type" : "application",
+      "value" : ""
+    },
+    {
+      "label" : "Sending to Test Daylight…",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "A very long article title that goes on for a while, to see that it wraps instead of being cut short",
+      "type" : "staticText",
+      "value" : ""
+    }
+  ],
+  "platform" : "ios",
+  "screen" : "share-reading"
+}

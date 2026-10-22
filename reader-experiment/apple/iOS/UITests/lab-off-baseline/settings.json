@@ -1,0 +1,136 @@
+{
+  "nodes" : [
+    {
+      "label" : "Send to Daylight",
+      "type" : "application",
+      "value" : ""
+    },
+    {
+      "label" : "Settings",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Done",
+      "type" : "other",
+      "value" : ""
+    },
+    {
+      "label" : "Done",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "YOUR DAYLIGHT",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Name, Test Daylight",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Name",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Test Daylight",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Relay",
+      "type" : "textField",
+      "value" : "http://127.0.0.1:9"
+    },
+    {
+      "label" : "Unpair",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "Comfort",
+      "type" : "switch",
+      "value" : "0"
+    },
+    {
+      "label" : "Comfort",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "switch",
+      "value" : "0"
+    },
+    {
+      "label" : "Larger text and buttons, more contrast, no motion.",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "THIS DEVICE’S NAME",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "This device’s name",
+      "type" : "textField",
+      "value" : ""
+    },
+    {
+      "label" : "Shown on the Daylight as who sent each item.",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "HISTORY",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Clear delivered and expired",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "ABOUT",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Version, <version>",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Version",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "<version>",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Shared with the share extension, No (pair them separately)",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Shared with the share extension",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "No (pair them separately)",
+      "type" : "staticText",
+      "value" : ""
+    }
+  ],
+  "platform" : "ios",
+  "screen" : "settings"
+}

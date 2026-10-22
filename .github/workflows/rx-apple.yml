@@ -193,6 +193,10 @@ jobs:
               print(pick[0][1]["udid"])
               print("simulator:", pick[0][1]["name"], pick[0][0], file=sys.stderr)')
           [ -n "$DEVICE" ] || { echo "::error::no iPhone simulator"; exit 1; }
+          # Started (and finished starting) before the tests, so the first UI test does not meet a simulator whose
+          # accessibility server is still coming up.
+          xcrun simctl boot "$DEVICE" 2>/dev/null || true
+          xcrun simctl bootstatus "$DEVICE" -b > /dev/null
           mkdir -p build/shots build/baselines
           run_tests() {
             rm -rf build/ios-tests.xcresult

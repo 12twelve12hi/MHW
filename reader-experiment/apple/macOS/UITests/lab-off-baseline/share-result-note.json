@@ -1,0 +1,56 @@
+{
+  "nodes" : [
+    {
+      "label" : "Send to Daylight",
+      "type" : "window",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Waiting to send"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "A very long article title that goes on for a while, to see that it wraps instead of being cut short"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Couldn’t send right now. It will try again by itself."
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "The page is larger than 8 MB, so its link was sent."
+    },
+    {
+      "label" : "Done",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Send to Daylight"
+    }
+  ],
+  "platform" : "macos",
+  "screen" : "share-result-note"
+}

@@ -1,0 +1,36 @@
+{
+  "nodes" : [
+    {
+      "label" : "Send",
+      "type" : "statusItem",
+      "value" : ""
+    },
+    {
+      "label" : "Sending to Test Daylight",
+      "type" : "menuItem",
+      "value" : ""
+    },
+    {
+      "label" : "Send Clipboard Link",
+      "type" : "menuItem",
+      "value" : ""
+    },
+    {
+      "label" : "Send a File…",
+      "type" : "menuItem",
+      "value" : ""
+    },
+    {
+      "label" : "Open Send to Daylight",
+      "type" : "menuItem",
+      "value" : ""
+    },
+    {
+      "label" : "Quit Send to Daylight",
+      "type" : "menuItem",
+      "value" : ""
+    }
+  ],
+  "platform" : "macos",
+  "screen" : "menu-bar"
+}
