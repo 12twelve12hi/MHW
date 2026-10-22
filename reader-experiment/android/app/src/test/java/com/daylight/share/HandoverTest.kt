@@ -187,8 +187,8 @@ class HandoverTest {
         return row.id
     }
 
-    /** The relay requests on the Inbox's inbox topic (polls and the live stream). */
-    private fun inboxRequests(): List<String> = relay.requests.toList().filter { it.contains(keys.inboxTopic) }
+    /** The Inbox's reads of its inbox topic (polls and the live stream; a sender's publishes there are not its own). */
+    private fun inboxRequests(): List<String> = relay.requests.toList().filter { it.startsWith("GET ") && it.contains(keys.inboxTopic) }
 
     private fun poll(): Int = runBlocking { app.inbox.pollOnce() }
 
