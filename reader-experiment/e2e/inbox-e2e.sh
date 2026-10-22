@@ -15,16 +15,19 @@
 #  9.  Documents = Add to the library as a batch (docs=quiet, to= Automatic): a PDF goes as SEND_MULTIPLE;
 #  and the phone sees every item delivered.
 # Lab (LAB-PLAN F17, task E0): the phone is a Lab sender. Its ledger reads the Inbox's Lab frames on the ack topic
-# (sender.mjs lab-states / wait-lab), and a second phone on the same pairing is a v1.1 sender (E2E_PLAIN=1):
-#  1b. the v1.1 phone sends a page: delivered, and its row keeps v1.1's words (a Lab Inbox changes nothing for it);
+# (sender.mjs lab-states / wait-lab). Two old phones share the pairing: the v1.0 and v1.1 Senders as they shipped
+# (E2E_PEER, the skew suite's fixtures in share/js/test/fixtures), so the F17.1 matrix runs against the real Inbox:
+#  1b. each old phone sends a page, a link and a 300 KB PDF (one attachment): all reach the Reader and are acked among
+#      the Inbox's Lab frames, and each row keeps its own words (a Lab Inbox changes nothing for apps in the field);
 #  L1. after 1-3, the phone has the Inbox's hello (lab 1, caps st, tap, reader-link) and the states of the page
 #      (reader), the link (reader, or queued without internet) and the PDF (handed);
 #  10. Documents = Ask: the phone sees a PDF `waiting`; a root tap through HandoffActivity hands it over: `handed`;
 #  11. no "Display over other apps" and the Reader in front: a link waits too (`waiting`, a notification alone); a
 #      root tap hands it over: `reader`;
-#  12. Lab off on the Inbox (setup link lab=0): its one lab: 0 frame reaches the phone, a page gets no state; Lab on
-#      again: a hello;
-#  and at the end every item's last state is on the phone, and the Inbox's Lab frames were at least 30 s apart.
+#  12. Lab off on the Inbox (setup link lab=0, Documents = Open): its one lab: 0 frame reaches the phone; a page, a link
+#      and a PDF (send_file) get no state and show v1.1's rows; Lab on again: a hello, and still no state for them;
+#  and at the end every item's last state is on the phone (the old phones' too: the Lab phone hears the states of
+#  every item on the pairing), and the Inbox's Lab frames were at least 30 s apart.
 # Usage: inbox-e2e.sh <daylight-share debug apk> <out dir>
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -35,12 +38,13 @@ SHARE_PKG=com.daylight.share
 RELAY_LOCAL=http://127.0.0.1:8787
 NTFY_ATTACHMENT_MAX=2097152
 SENDER="$here/sender.mjs"
-PLAIN_STATE="$OUT/plain-state.json"
+OLD_PHONES=(v1.0 v1.1)
 
 fails=()
 failed() { echo "FAIL: $*"; fails+=("$*"); }
 sent=()
-plain_sent=()
+# The old phones' items: id -> v1.0 or v1.1.
+declare -A old_of=()
 # The Lab state the phone must end with, per item: reader (pages; links, or queued without internet), handed (PDFs),
 # none (sent while the Inbox's Lab was off).
 declare -A expect=()
@@ -101,8 +105,25 @@ setup_inbox() {
 }
 
 send() { node "$SENDER" "$@"; }
-# The second phone: a v1.1 sender on the same pairing (no Lab ledger), with its own outbox.
-plain() { E2E_STATE="$PLAIN_STATE" E2E_PLAIN=1 node "$SENDER" "$@"; }
+# An old phone ($1 = v1.0 or v1.1): that Sender as it shipped, on the same pairing (no Lab ledger), with its own outbox.
+old() { local v="$1"; shift; E2E_STATE="$OUT/phone-$v-state.json" E2E_PEER="$v" node "$SENDER" "$@"; }
+
+# The old phone $1's rows: each of its items delivered, in its own words: v1.1's "Delivered ✓. Saved on your
+# Daylight."; a v1.0 row, which had no shared words, its status alone.
+check_old_rows() {
+  local v="$1" rows id want words
+  rows="$(old "$v" status || true)"; echo "$rows"
+  if [ "$v" = v1.0 ]; then
+    want=' delivered$'; words='"delivered" (v1.0 had no shared words)'
+  else
+    want=' delivered: Delivered ✓\. Saved on your Daylight\.$'; words="v1.1's \"Delivered ✓. Saved on your Daylight.\""
+  fi
+  for id in "${!old_of[@]}"; do
+    if [ "${old_of[$id]}" = "$v" ] && ! echo "$rows" | grep -q "^$id [a-z]* [0-9]*$want"; then
+      failed "the $v phone's row for $id is not $words"
+    fi
+  done
+}
 
 # Prints "x y" of the first node of package $2 whose text or content-desc matches $1 (a JS regex): from a uiautomator
 # dump of every window (--windows: the card over the Reader takes no focus), else of the active window.
@@ -171,7 +192,8 @@ before="$(count)"
 echo "library before: $(reader_count_line)"
 
 code="$(send pair "$RELAY_LOCAL")"
-cp "$E2E_STATE" "$PLAIN_STATE" # the pairing only, so far: the v1.1 phone starts with the same secret and no rows
+# The pairing only, so far: each old phone starts with the same secret and no rows.
+for v in "${OLD_PHONES[@]}"; do cp "$E2E_STATE" "$OUT/phone-$v-state.json"; done
 echo "pairing code: $code"
 adb shell "am start -n $SHARE_PKG/.ui.MainActivity -a android.intent.action.VIEW -d 'daylightshare://setup?role=inbox&c=$code&r=http%3A%2F%2F10.0.2.2%3A8787&n=CI%20Daylight&instant=1&auto=1'"
 sleep 6
@@ -188,12 +210,32 @@ wait_handoff "$page1" 120 || failed "no hand-off for the page $page1"
 wait_library_at_least $((before + 1)) 90 || failed "the page $page1 did not reach the library"
 sleep 3; shot "$OUT/11-after-page.png"
 
-# 1b. A v1.1 phone on the same pairing (no Lab ledger): its page goes as before (F17.1).
-echo "== 1b. page from a v1.1 phone on the same pairing, Inbox in front"
-n="$(count)"
-pageV11="$(plain send-page v11)"; plain_sent+=("$pageV11"); expect[$pageV11]=reader; echo "sent page $pageV11 (v1.1 phone)"
-wait_handoff "$pageV11" 120 || failed "no hand-off for the v1.1 phone's page $pageV11"
-wait_library_at_least $((n + 1)) 90 || failed "the v1.1 phone's page $pageV11 did not reach the library"
+# 1b. The old phones on the same pairing (F17.1): the v1.0 and v1.1 Senders as they shipped, not today's module. Each
+#     sends a page, a link and a 300 KB PDF (one attachment) with the Inbox in front. Every item reaches the Reader and
+#     is acknowledged while the Inbox publishes Lab frames on the same ack topic, and each row keeps its own words.
+for v in "${OLD_PHONES[@]}"; do
+  echo "== 1b. the $v phone (as shipped) on the same pairing: a page, a link and a PDF, Inbox in front"
+  adb shell "am start -n $SHARE_PKG/.ui.MainActivity" >/dev/null; sleep 2
+  n="$(count)"
+  id="$(old "$v" send-page "$v")"; old_of[$id]=$v; expect[$id]=reader; echo "sent page $id ($v phone)"
+  wait_handoff "$id" 120 || failed "no hand-off for the $v phone's page $id"
+  wait_library_at_least $((n + 1)) 90 || failed "the $v phone's page $id did not reach the library"
+  n="$(count)"
+  id="$(old "$v" send-url "https://example.org/?from=$v")"; old_of[$id]=$v; expect[$id]='reader|queued'; echo "sent link $id ($v phone)"
+  wait_handoff "$id" 120 || failed "no hand-off for the $v phone's link $id"
+  if wait_library_at_least $((n + 1)) 60; then echo "link saved"; else echo "link handed over but not saved (no internet on the emulator?)"; fi
+  adb shell "am start -n $SHARE_PKG/.ui.MainActivity" >/dev/null; sleep 2
+  n="$(count)"
+  id="$(old "$v" send-pdf "$v" 300000 2> "$OUT/phone-$v-pdf.txt")" || { cat "$OUT/phone-$v-pdf.txt"; exit 1; }
+  cat "$OUT/phone-$v-pdf.txt"
+  [ "$(grep -c '^publish PUT ' "$OUT/phone-$v-pdf.txt" || true)" = 1 ] || failed "the $v phone's PDF $id did not go as one attachment"
+  old_of[$id]=$v; expect[$id]=handed; echo "sent pdf $id ($v phone)"
+  wait_handoff "$id" 120 || failed "no hand-off for the $v phone's PDF $id"
+  wait_library_at_least $((n + 1)) 120 || failed "the $v phone's PDF $id did not reach the library"
+  old "$v" wait-acks 3 120 || failed "the $v phone did not see its page, link and PDF delivered"
+  check_old_rows "$v"
+done
+adb shell "am start -n $SHARE_PKG/.ui.MainActivity" >/dev/null; sleep 2 # 2 starts with the Inbox in front again
 
 # 2. A plain link: the Reader fetches it itself (needs the emulator's internet; reported, not required).
 echo "== 2. link, Inbox in front"
@@ -407,49 +449,71 @@ send wait-lab 120 "$url2=reader|queued" || failed "the phone did not see the lin
 adb shell appops set "$SHARE_PKG" SYSTEM_ALERT_WINDOW allow
 sleep 3; shot "$OUT/39-after-link-tap.png"
 
-# 12. Lab off on the Inbox: one lab: 0 frame, which the phone reads as "Lab off"; an item then gets no state (its row
-#     on the phone is v1.1's). Lab on again: a hello, and still no state for that item.
-echo "== 12. Lab off on the Inbox, then on again"
-setup_inbox "&docs=quiet&to=&lab=0"
+# 12. Lab off on the Inbox: one lab: 0 frame, which the phone reads as "Lab off"; a page, a link and a PDF then get no
+#     state (their rows on the phone are v1.1's). Documents = Open as they arrive, so the PDF goes through
+#     HandoffActivity's send_file path. Lab on again: a hello, and still no state for those items.
+echo "== 12. Lab off on the Inbox (a page, a link and a PDF), then on again"
+setup_inbox "&docs=open&to=&lab=0"
 wait_log "lab: hello lab=0" 90 || failed "the Inbox did not send its lab: 0 frame when Lab was turned off"
 send wait-lab 120 lab=0 || failed "the phone did not see the Inbox's Lab turned off"
 n="$(count)"
 pageOff="$(send send-page lab-off)"; sent+=("$pageOff"); expect[$pageOff]=none; echo "sent page $pageOff (the Inbox's Lab off)"
 wait_handoff "$pageOff" 120 || failed "no hand-off for the page $pageOff with the Inbox's Lab off"
 wait_library_at_least $((n + 1)) 90 || failed "the page $pageOff did not reach the library with the Inbox's Lab off"
-if inbox_log | grep "lab: state $pageOff" >/dev/null; then failed "the Inbox recorded a Lab state for $pageOff with Lab off"; fi
-# Delivered, with the Inbox's Lab off: the phone shows v1.1's row (LAB-PLAN 2.5 rule 4).
-if send wait-acks "${#sent[@]}" 120 >/dev/null; then
-  offRow="$(send lab-states "$pageOff" || true)"; echo "$offRow"
-  echo "$offRow" | grep -q "^$pageOff page none: Delivered ✓. Saved on your Daylight.$" \
-    || failed "with the Inbox's Lab off, the phone's row for $pageOff is not v1.1's \"Delivered ✓. Saved on your Daylight.\""
+n="$(count)"
+urlOff="$(send send-url 'https://example.com/?lab=off')"; sent+=("$urlOff"); expect[$urlOff]=none; echo "sent link $urlOff (the Inbox's Lab off)"
+wait_handoff "$urlOff" 120 || failed "no hand-off for the link $urlOff with the Inbox's Lab off"
+if wait_library_at_least $((n + 1)) 60; then echo "link saved"; else echo "link handed over but not saved (no internet on the emulator?)"; fi
+adb shell "am start -n $SHARE_PKG/.ui.MainActivity" >/dev/null; sleep 2
+n="$(count)"
+pdfOff="$(send send-pdf lab-off)"; sent+=("$pdfOff"); expect[$pdfOff]=none; echo "sent pdf $pdfOff (the Inbox's Lab off, Documents = Open)"
+if lineO="$(wait_handoff "$pdfOff" 120)"; then
+  echo "$lineO"
+  echo "$lineO" | grep -q 'via send_file .*docs=open' || failed "the PDF $pdfOff was not handed over through send_file with the Inbox's Lab off"
 else
-  failed "the page $pageOff was not acknowledged with the Inbox's Lab off"
+  failed "no hand-off for the PDF $pdfOff with the Inbox's Lab off"
+fi
+wait_library_at_least $((n + 1)) 120 || failed "the PDF $pdfOff did not reach the library with the Inbox's Lab off"
+for id in "$pageOff" "$urlOff" "$pdfOff"; do
+  if inbox_log | grep "lab: state $id" >/dev/null; then failed "the Inbox recorded a Lab state for $id with Lab off"; fi
+done
+# Delivered, with the Inbox's Lab off: the phone shows v1.1's rows (LAB-PLAN 2.5 rule 4).
+if send wait-acks "${#sent[@]}" 120 >/dev/null; then
+  offRows="$(send lab-states "$pageOff" "$urlOff" "$pdfOff" || true)"; echo "$offRows"
+  for row in "$pageOff page" "$urlOff url" "$pdfOff file"; do
+    echo "$offRows" | grep -q "^$row none: Delivered ✓. Saved on your Daylight.$" \
+      || failed "with the Inbox's Lab off, the phone's row for ${row% *} is not v1.1's \"Delivered ✓. Saved on your Daylight.\""
+  done
+else
+  failed "the page, link and PDF sent with the Inbox's Lab off were not all acknowledged"
 fi
 setup_inbox "&lab=1"
-send wait-lab 120 lab=1 caps=st,tap,reader-link "$pageOff=none" || failed "the phone did not get the Inbox's hello after Lab was turned on again"
+send wait-lab 120 lab=1 caps=st,tap,reader-link "$pageOff=none" "$urlOff=none" "$pdfOff=none" \
+  || failed "the phone did not get the Inbox's hello after Lab was turned on again, or an item sent with Lab off got a state"
 
 # ------------------------------------------------------------------------------------------------------------ results
 echo "== the phone's view"
 send wait-acks "${#sent[@]}" 150 || failed "the phone did not see all ${#sent[@]} items delivered"
 send status || true
 
-# Lab (F17): every item's last state is on the phone; the item sent while the Inbox's Lab was off has none.
+# Lab (F17): every item's last state is on the phone, the old phones' items included; the items sent while the Inbox's
+# Lab was off have none.
 echo "== Lab: every item's last state on the phone"
 wants=()
 for id in "${!expect[@]}"; do wants+=("$id=${expect[$id]}"); done
 send wait-lab 180 lab=1 "${wants[@]}" || failed "the phone did not end with every item's Lab state"
 
-echo "== the v1.1 phone's view"
-plain wait-acks "${#plain_sent[@]}" 120 || failed "the v1.1 phone did not see its ${#plain_sent[@]} item(s) delivered"
-v11="$(plain status || true)"; echo "$v11"
-for id in "${plain_sent[@]}"; do
-  echo "$v11" | grep -q "^$id .* delivered: Delivered ✓. Saved on your Daylight.$" || failed "the v1.1 phone's row for $id is not v1.1's \"Delivered ✓. Saved on your Daylight.\""
+for v in "${OLD_PHONES[@]}"; do
+  echo "== the $v phone's view"
+  k=0
+  for id in "${!old_of[@]}"; do if [ "${old_of[$id]}" = "$v" ]; then k=$((k + 1)); fi; done
+  old "$v" wait-acks "$k" 120 || failed "the $v phone did not see its $k items delivered"
+  check_old_rows "$v"
 done
 
 inbox_log > "$OUT/inbox-log.txt" || true
 echo "--- hand-offs ---"; grep -E "handed to|kept in inbox|waiting for a tap|card: later" "$OUT/inbox-log.txt" || true
-for id in "${sent[@]}" "${plain_sent[@]}"; do
+for id in "${sent[@]}" "${!old_of[@]}"; do
   if grep -q "received $id .*handed to $READER_PKG" "$OUT/inbox-log.txt"; then echo "ok   $id"; else failed "no hand-off to the Reader for $id"; fi
 done
 
@@ -496,4 +560,4 @@ if [ "${#fails[@]}" -gt 0 ]; then
   echo "FAILED (${#fails[@]}):"; printf '  - %s\n' "${fails[@]}"
   exit 1
 fi
-echo "OK: page, link, PDF, background page, a 5 MB PDF in 3 parts, two PDFs 20 s apart, Ask (card and notification) and batch reached the Reader and were acknowledged; Lab: the hello, every item's state on the phone (waiting, then handed or reader after a tap; none with the Inbox's Lab off) and a v1.1 phone unchanged"
+echo "OK: page, link, PDF, background page, a 5 MB PDF in 3 parts, two PDFs 20 s apart, Ask (card and notification) and batch reached the Reader and were acknowledged; the v1.0 and v1.1 phones as shipped delivered a page, a link and a PDF each, unchanged; Lab: the hello, every item's state on the phone (waiting, then handed or reader after a tap; none for a page, a link and a PDF with the Inbox's Lab off)"

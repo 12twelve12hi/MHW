@@ -21,18 +21,27 @@
 //        <id>=<state>[|<state>...]  the item's state is one of these (waiting, held, inbox, handed, failed, queued,
 //                                   reader; "none": no state)
 // Every Sender reads the ack topic through the Lab ledger (Sender onAckHeader = labHook), so no command loses a Lab
-// frame: the ack cursor moves past what it read. E2E_PLAIN=1 makes a v1.1 phone instead (no ledger, v1.1's words, the
-// name "E2E v1.1 phone"): a second phone on the same pairing, to show a Lab Inbox changes nothing for it.
+// frame: the ack cursor moves past what it read.
+// E2E_PEER=v1.0 or v1.1 makes an old phone instead: the Sender as it shipped, from the skew suite's fixtures
+// (share/js/test/fixtures/daylight-share-<v>.js, LAB-PROTOCOL 2.8), not today's module. It has no ledger and no Lab
+// commands, is named "E2E <v> phone", and shows its own words: v1.1's describeRow; v1.0 had no shared words, so a v1.0
+// row shows its status alone. A second and third phone on the same pairing, to show a Lab Inbox changes nothing for
+// apps in the field (F17.1). It sends pages, links and PDFs (check-too-large needs v1.1: v1.0 had no 9 MB limit).
 // Every publish is logged on stderr as `publish <POST|PUT> <bytes> -> <status>`, so a test can see how an item was
 // split into frames (a 5 MB file goes as 3 attachments of at most 1,966,116 bytes).
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import * as ds from '../share/js/daylight-share.js';
 import * as lab from '../share/js/daylight-lab.js';
 import { makePdf } from './make-pdf.mjs';
 
 const STATE = process.env.E2E_STATE || 'e2e-out/sender-state.json';
-const PLAIN = process.env.E2E_PLAIN === '1';
+const PEERS = ['v1.0', 'v1.1'];
+const PEER = process.env.E2E_PEER || '';
+if (PEER && !PEERS.includes(PEER)) {
+  console.error(`E2E_PEER must be ${PEERS.join(' or ')} (an old phone) or unset (the Lab phone), not "${PEER}"`);
+  process.exit(2);
+}
+const ds = await import(PEER ? `../share/js/test/fixtures/daylight-share-${PEER}.js` : '../share/js/daylight-share.js');
 
 class FileStorage {
   constructor(path) { this.path = path; this.data = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}; }
@@ -43,7 +52,7 @@ class FileStorage {
 }
 
 const storage = new FileStorage(STATE);
-const ledger = PLAIN ? null : new lab.LabLedger({ storage });
+const ledger = PEER ? null : new lab.LabLedger({ storage });
 const [cmd, a1, a2, ...rest] = process.argv.slice(2);
 
 // Logs each publish (method, body bytes, answer) on stderr; polls and downloads pass through quietly.
@@ -59,14 +68,18 @@ async function loggingFetch(url, init = {}) {
 async function sender() {
   const pairing = await ds.loadPairing(storage);
   if (!pairing) throw new Error('not paired: run pair first');
-  return new ds.Sender({
-    pairing, storage, from: PLAIN ? 'E2E v1.1 phone' : 'E2E phone', app: 'e2e/1', fetch: loggingFetch,
-    onAckHeader: ledger ? lab.labHook(ledger) : null,
-  });
+  if (PEER) return new ds.Sender({ pairing, storage, from: `E2E ${PEER} phone`, app: 'e2e/1', fetch: loggingFetch });
+  return new ds.Sender({ pairing, storage, from: 'E2E phone', app: 'e2e/1', fetch: loggingFetch, onAckHeader: lab.labHook(ledger) });
 }
 
-// v1.1's words (describeRow), as every sender showed them before Lab.
-const words = (row) => { const d = ds.describeRow(row); return d.sentence ? `${d.label}. ${d.sentence}` : d.label; };
+// v1.1's words (describeRow), as every sender showed them before Lab; null for a v1.0 phone, which had no shared words.
+const words = (row) => {
+  if (typeof ds.describeRow !== 'function') return null;
+  const d = ds.describeRow(row);
+  return d.sentence ? `${d.label}. ${d.sentence}` : d.label;
+};
+// ": <words>", or nothing for a v1.0 row.
+const said = (row) => { const w = words(row); return w === null ? '' : `: ${w}`; };
 
 // The Lab timeline's words for a row (LAB-PLAN 2.5; Lab on in this phone): "{label}. {sentence}" and the step line.
 function labWords(row, snap, now = Date.now()) {
@@ -76,7 +89,7 @@ function labWords(row, snap, now = Date.now()) {
 
 // A send that did not reach the relay fails the step, with the words a user would see and the technical detail.
 function sent(row) {
-  if (row.status !== 'sent') throw new Error(`send failed: ${row.status}/${row.errorCode} (${row.error}): ${words(row)}`);
+  if (row.status !== 'sent') throw new Error(`send failed: ${row.status}/${row.errorCode ?? ''} (${row.error})${said(row)}`);
   console.log(row.id);
 }
 
@@ -138,7 +151,7 @@ const pdf = (tag, bytes = 0) => ({
 
 function needLedger() {
   if (ledger) return;
-  console.error(`${cmd}: a v1.1 phone (E2E_PLAIN=1) has no Lab ledger`);
+  console.error(`${cmd}: an old phone (E2E_PEER=${PEER}) has no Lab ledger`);
   process.exit(2);
 }
 
@@ -158,6 +171,7 @@ if (cmd === 'pair') {
   console.error(`pdf ${item.name}: ${item.content.length} bytes`);
   sent(await s.send(item));
 } else if (cmd === 'check-too-large') {
+  if (typeof ds.tooBigMessage !== 'function') { console.error('check-too-large: a v1.0 phone had no 9 MB limit'); process.exit(2); }
   const s = await sender();
   const before = (await s.list()).length;
   const item = pdf('too-large', Number(a1));
@@ -174,7 +188,7 @@ if (cmd === 'pair') {
   const s = await sender();
   const snap = ledger ? await ledger.snapshot() : null;
   for (const r of await s.list()) {
-    console.log(`${r.id} ${r.kind} ${r.size} ${r.status}${r.errorCode ? '/' + r.errorCode : ''}: ${snap ? labWords(r, snap) : words(r)}`);
+    console.log(`${r.id} ${r.kind} ${r.size} ${r.status}${r.errorCode ? '/' + r.errorCode : ''}${snap ? `: ${labWords(r, snap)}` : said(r)}`);
   }
 } else if (cmd === 'wait-acks') {
   const s = await sender();
@@ -188,7 +202,7 @@ if (cmd === 'pair') {
     await ds.sleep(3000);
   }
   console.error(`acks timed out (want ${want}):`);
-  for (const r of rows) console.error(`  ${r.id} ${r.kind} ${r.status}: ${words(r)}`);
+  for (const r of rows) console.error(`  ${r.id} ${r.kind} ${r.status}${said(r)}`);
   process.exit(1);
 } else if (cmd === 'lab-states') {
   needLedger();
