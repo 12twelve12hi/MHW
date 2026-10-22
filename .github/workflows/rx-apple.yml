@@ -192,13 +192,28 @@ jobs:
               print("simulator:", pick[0][1]["name"], pick[0][0], file=sys.stderr)')
           [ -n "$DEVICE" ] || { echo "::error::no iPhone simulator"; exit 1; }
           mkdir -p build/shots build/baselines
+          run_tests() {
+            rm -rf build/ios-tests.xcresult
+            TEST_RUNNER_DLS_SHOTS="$PWD/build/shots" TEST_RUNNER_DLS_BASELINE_OUT="$PWD/build/baselines" \
+              xcodebuild test -project SendToDaylight.xcodeproj -scheme SendToDaylight-iOS -configuration Debug \
+              -retry-tests-on-failure -test-iterations 2 \
+              -destination "platform=iOS Simulator,id=$DEVICE" -derivedDataPath build/dd-sim \
+              -resultBundlePath build/ios-tests.xcresult CODE_SIGNING_ALLOWED=NO > build/ios-tests.log 2>&1
+          }
           set +e
-          TEST_RUNNER_DLS_SHOTS="$PWD/build/shots" TEST_RUNNER_DLS_BASELINE_OUT="$PWD/build/baselines" \
-            xcodebuild test -project SendToDaylight.xcodeproj -scheme SendToDaylight-iOS -configuration Debug \
-            -retry-tests-on-failure -test-iterations 2 \
-            -destination "platform=iOS Simulator,id=$DEVICE" -derivedDataPath build/dd-sim \
-            -resultBundlePath build/ios-tests.xcresult CODE_SIGNING_ALLOWED=NO > build/ios-tests.log 2>&1
+          run_tests
           status=$?
+          # Now and then the simulator cannot start UI testing at all ("failed to initialize for UI testing"): restart
+          # it and run once more. Any other failure stands.
+          if [ "$status" != "0" ] && grep -qi "failed to initialize for UI testing" build/ios-tests.log; then
+            echo "::warning::the simulator could not start UI testing; restarting it and running the tests again"
+            mv build/ios-tests.log build/ios-tests-first-attempt.log
+            xcrun simctl shutdown "$DEVICE"
+            xcrun simctl boot "$DEVICE"
+            xcrun simctl bootstatus "$DEVICE" -b > /dev/null
+            run_tests
+            status=$?
+          fi
           set -e
           # The UI tests' screenshots (also attached to the result bundle).
           xcrun xcresulttool export attachments --path build/ios-tests.xcresult --output-path build/shots/attachments \
@@ -378,14 +393,25 @@ jobs:
       - name: Mac UI tests and truncation audit (F27.2, F27.4, F00.2)
         run: |
           mkdir -p build/shots build/baselines
+          run_tests() {
+            rm -rf build/mac-tests.xcresult
+            TEST_RUNNER_DLS_SHOTS="$PWD/build/shots" TEST_RUNNER_DLS_BASELINE_OUT="$PWD/build/baselines" \
+              xcodebuild test -project SendToDaylight.xcodeproj -scheme SendToDaylight-macOS -configuration Debug \
+              -retry-tests-on-failure -test-iterations 2 \
+              -destination 'platform=macOS' -derivedDataPath build/dd-mac-test -resultBundlePath build/mac-tests.xcresult \
+              CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
+              > build/mac-tests.log 2>&1
+          }
           set +e
-          TEST_RUNNER_DLS_SHOTS="$PWD/build/shots" TEST_RUNNER_DLS_BASELINE_OUT="$PWD/build/baselines" \
-            xcodebuild test -project SendToDaylight.xcodeproj -scheme SendToDaylight-macOS -configuration Debug \
-            -retry-tests-on-failure -test-iterations 2 \
-            -destination 'platform=macOS' -derivedDataPath build/dd-mac-test -resultBundlePath build/mac-tests.xcresult \
-            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
-            > build/mac-tests.log 2>&1
+          run_tests
           status=$?
+          # Now and then the runner cannot start UI testing at all: run once more. Any other failure stands.
+          if [ "$status" != "0" ] && grep -qiE "failed to initialize for UI testing|enabling automation mode" build/mac-tests.log; then
+            echo "::warning::the runner could not start UI testing; running the tests again"
+            mv build/mac-tests.log build/mac-tests-first-attempt.log
+            run_tests
+            status=$?
+          fi
           set -e
           # The truncation audit runs inside the (sandboxed) app, which keeps its screenshots in its own container; the UI
           # tests' screenshots are in the result bundle (the Mac's test runner may not write outside its sandbox).

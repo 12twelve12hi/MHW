@@ -219,8 +219,17 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
 - `SendToDaylightUITests-iOS` and `SendToDaylightUITests-macOS` (XCUITest; the tree walk and helpers are in
   `Shared/UITests`):
   - `AccessibilityAuditTests` run Xcode's `performAccessibilityAudit()` on Home (the Mac's main window), Settings and
-    the pairing screen, with Comfort off and on (iOS 17+, macOS 14+; F27.2). Every issue is printed as an `AUDIT` line;
-    an issue on an element the system draws can be allowed only with a stated reason (`allowed`).
+    the pairing screen, with Comfort off and on (iOS 17+, macOS 14+; F27.2). Every issue is printed as an `AUDIT` line
+    with the element's value, frame and contents; an issue can be allowed only with a stated reason (`allowed`), which
+    is printed too. Allowed today: on the Mac, the system's Touch Bar and its emoji item, the Settings button's
+    tooltip, the window title the system dims behind a sheet, groups inside the title-bar buttons, a parent/child
+    report that names no element, and text the open Settings sheet covers or has scrolled partly out of view (the
+    audit measures it where it is hidden); on the iPhone, a navigation-bar button's capped text size, and Dynamic
+    Type reports on static text the audit loses at the largest size, which `testEveryTextGrowsWithTheTextSize`
+    covers by measuring every text at the default size and at accessibility3. What the audits found and the apps now
+    do: secondary text and section headers at 72% of the primary colour (the primary colour on the Mac), a tint of
+    #0058CC and a destructive red of #C01010 (both at least 4.5:1, lighter in dark mode), no greyed-out buttons,
+    text fields that grow to more lines, row text that the row sizes, and the navigation title kept in the bar.
   - `BaselineTests`: Comfort is in Settings, off by default, with its footer, and switches on; typing the code pairs.
   - `LabOffParityTests` (F00.2): an explicit walk of the accessibility tree (element type, label and value, in order;
     never `debugDescription`) of each main screen compared with `iOS/UITests/lab-off-baseline/*.json` and
