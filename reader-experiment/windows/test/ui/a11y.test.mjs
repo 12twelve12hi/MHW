@@ -17,7 +17,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
-  startUi, ds, kvOf, pairingValue, historyRows, axeBoth, assertAxeSees, assertNotClipped, clipped, shot, scaleText,
+  startUi, ds, kvOf, pairingValue, historyRows, axeBoth, assertAxeSees, assertNotClipped, clipped, shot, scaleText, settled,
   FIXED_SECRET, OTHER_SECRET, NARROWEST, MIN_WIDTH,
 } from '../helpers/ui.mjs';
 import { startMockRelay } from '../../../share/js/mock-relay.mjs';
@@ -118,6 +118,7 @@ test('paired, every history state: no axe violations, light and dark, Comfort of
     if (comfort) await assertNotClipped(page, 'send, Comfort');
     await shot(page, `send${comfort ? '-comfort' : ''}`);
     await page.emulateMedia({ colorScheme: 'dark' });
+    await settled(page);
     await shot(page, `send${comfort ? '-comfort' : ''}-dark`);
     await page.emulateMedia({ colorScheme: 'light' });
 

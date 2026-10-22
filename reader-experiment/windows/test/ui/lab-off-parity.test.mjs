@@ -15,9 +15,7 @@
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { startUi, kvOf, pairingValue, parityRows, expectBaseline, snapshot, BASELINES } from '../helpers/ui.mjs';
+import { startUi, kvOf, pairingValue, parityRows, expectBaseline, snapshot, readBaseline } from '../helpers/ui.mjs';
 import { startMockRelay } from '../../../share/js/mock-relay.mjs';
 
 const NOW = Date.UTC(2026, 9, 20, 8, 0, 0);
@@ -75,6 +73,6 @@ test('Lab off with Comfort on: the same trees (Comfort changes how it looks, not
   const snap = await snapshot(page);
   assert.ok(snap.includes('- switch "Comfort" [checked]'), snap);
   const got = snap.replace('- switch "Comfort" [checked]', '- switch "Comfort"');
-  assert.equal(got, fs.readFileSync(path.join(BASELINES, 'settings.yml'), 'utf8'));
+  assert.equal(got, readBaseline('settings'));
   await page.context().close();
 });

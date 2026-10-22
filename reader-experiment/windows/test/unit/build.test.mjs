@@ -187,7 +187,8 @@ test('lab-wave.json names no Lab wave, or one the release gate knows (LAB-PLAN 6
   const { wave } = JSON.parse(fs.readFileSync(path.join(root, 'lab-wave.json'), 'utf8'));
   assert.ok(wave === null || typeof gate[wave] === 'boolean', `windows/lab-wave.json: unknown wave ${wave}`);
   // The workflow's publish job reads both files before it uploads the installer.
-  const wf = fs.readFileSync(path.join(root, '..', '..', '.github', 'workflows', 'rx-windows.yml'), 'utf8');
+  // A Windows checkout has CRLF line ends.
+  const wf = fs.readFileSync(path.join(root, '..', '..', '.github', 'workflows', 'rx-windows.yml'), 'utf8').replace(/\r\n/g, '\n');
   assert.ok(wf.includes('reader-experiment/windows/lab-wave.json') && wf.includes('reader-experiment/lab-release-gate.json'));
   const jobs = wf.slice(wf.search(/^jobs:$/m));
   const names = [...jobs.matchAll(/^ {2}([a-z][\w-]*):$/gm)];

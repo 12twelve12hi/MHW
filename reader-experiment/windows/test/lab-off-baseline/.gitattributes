@@ -1,0 +1,2 @@
+# The Lab-off baselines are compared as text: keep LF line ends on every checkout (Windows CI included).
+*.yml text eol=lf

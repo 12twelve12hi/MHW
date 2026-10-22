@@ -177,13 +177,20 @@ export async function assertAxeSees(page) {
   assert.ok(violations.some((v) => v.id === 'label'), 'axe-core found the unlabelled probe');
 }
 
+/** Waits until no CSS transition or animation is running (colours change with a transition when the scheme does). */
+export async function settled(page) {
+  await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'));
+}
+
 /** axe in light and dark, and every control named. */
 export async function axeBoth(page, what) {
   for (const colorScheme of ['light', 'dark']) {
     await page.emulateMedia({ colorScheme });
+    await settled(page);
     await axe(page, `${what} (${colorScheme})`);
   }
   await page.emulateMedia({ colorScheme: 'light' });
+  await settled(page);
   assert.deepEqual(await unnamed(page), [], `${what}: every control has a name`);
 }
 
@@ -308,6 +315,12 @@ export async function expectBaseline(page, name, { omit = [] } = {}) {
     fs.writeFileSync(file, got);
     return;
   }
+  assert.equal(got, readBaseline(name), `${name}: with Lab off the window must equal the non-Lab baseline (LAB-PLAN 1.7)`);
+}
+
+/** lab-off-baseline/<name>.yml, with LF line ends (a Windows checkout has CRLF). */
+export function readBaseline(name) {
+  const file = path.join(BASELINES, `${name}.yml`);
   assert.ok(fs.existsSync(file), `no Lab-off baseline ${name}.yml (record it with UPDATE_LAB_OFF_BASELINE=1, only with a non-Lab change)`);
-  assert.equal(got, fs.readFileSync(file, 'utf8'), `${name}: with Lab off the window must equal the non-Lab baseline (LAB-PLAN 1.7)`);
+  return fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
 }
