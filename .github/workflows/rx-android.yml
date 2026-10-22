@@ -1,8 +1,13 @@
 name: Reader experiment - Android (Daylight Share)
 
 # Builds reader-experiment/android (the Daylight Share APK): runs the protocol tests of :share-core against the shared
-# vectors and the mock ntfy relay, builds the release and debug APKs, publishes daylight-share.apk to the
-# "reader-experiment-latest" release, and tries a live round trip through https://ntfy.sh (allowed to fail).
+# vectors and the mock ntfy relay, builds the release and debug APKs, runs the app's Robolectric tests (screens,
+# accessibility, Lab-off parity), publishes daylight-share.apk to the "reader-experiment-latest" release, and tries a
+# live round trip through https://ntfy.sh (allowed to fail).
+#
+# Lanes (LAB-PLAN 6.1): every job carries a "# lane: <name>" comment and a lane edits only its own blocks. The core
+# lane owns the shared parts (triggers, permissions, concurrency and the publish job). Android is not held by the Lab
+# release gate (LAB-PLAN 6.2): every build that passes is published.
 on:
   push:
     branches: [claude/sweet-goldberg-ej1nb0]
@@ -22,11 +27,50 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  apk:
+  # lane: core
+  core:
+    name: Protocol (share-core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: reader-experiment/android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Without an Android SDK Gradle configures only :share-core (settings.gradle.kts), which is all this job needs.
+      - name: Protocol tests (vectors, mock relay, JS interop)
+        run: ./gradlew --no-daemon -Pdls.skipApp=true :share-core:test
+
+      - name: Live round trip through ntfy.sh (informational)
+        continue-on-error: true
+        env:
+          DLS_LIVE_RELAY: https://ntfy.sh
+        run: ./gradlew --no-daemon -Pdls.skipApp=true :share-core:test --tests 'com.daylight.share.core.LiveRelayTest' --rerun-tasks
+
+      - name: Test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daylight-share-core-test-reports
+          path: reader-experiment/android/share-core/build/reports/tests
+
+  # lane: android-app
+  app:
+    name: App (APKs, Robolectric)
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    permissions:
-      contents: write
     defaults:
       run:
         working-directory: reader-experiment/android
@@ -51,18 +95,31 @@ jobs:
           echo "ANDROID_HOME=$ANDROID_HOME"
           ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools" || true
 
-      - name: Protocol tests (vectors, mock relay, JS interop)
-        run: ./gradlew --no-daemon :share-core:test
-
-      # The app's build and tests run (and report) even when the protocol tests failed; the job still fails, and
-      # nothing is published unless every step passed.
       - name: Build the APKs
-        if: ${{ !cancelled() }}
         run: ./gradlew --no-daemon :app:assembleRelease :app:assembleDebug
 
-      - name: App tests (share parsing, Reader routing, hand-off and notifications; Robolectric)
+      # The app's tests run (and report) even when the build of one APK failed; the job still fails.
+      - name: App tests (share parsing, Reader routing, hand-off and notifications, screens, accessibility, Lab-off parity; Robolectric)
         if: ${{ !cancelled() }}
         run: ./gradlew --no-daemon :app:testDebugUnitTest
+
+      # LAB-PLAN 1.7: a missing or changed Lab-off baseline is written here; the log carries it (non-ASCII as \u
+      # escapes), and so does the artifact, to review and copy into app/src/test/lab-off-baseline.
+      - name: Lab-off trees recorded by this run
+        if: ${{ !cancelled() }}
+        run: |
+          if ls app/build/lab-off-baseline/*.json >/dev/null 2>&1; then
+            for f in app/build/lab-off-baseline/*.json; do echo "=== $f"; cat "$f"; done
+          else
+            echo "None: every main screen matches its Lab-off baseline."
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: daylight-share-lab-off-trees
+          path: reader-experiment/android/app/build/lab-off-baseline
+          if-no-files-found: ignore
 
       - name: Name the APKs
         run: |
@@ -85,24 +142,30 @@ jobs:
           name: daylight-share-debug-apk
           path: reader-experiment/android/out/daylight-share-debug.apk
 
-      - name: Publish to the reader-experiment-latest release
-        working-directory: .
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: bash .github/scripts/rx-publish.sh reader-experiment/android/out/daylight-share.apk
-
-      - name: Live round trip through ntfy.sh (informational)
-        continue-on-error: true
-        env:
-          DLS_LIVE_RELAY: https://ntfy.sh
-        run: ./gradlew --no-daemon :share-core:test --tests 'com.daylight.share.core.LiveRelayTest' --rerun-tasks
-
       - name: Test reports
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: daylight-share-test-reports
-          path: |
-            reader-experiment/android/share-core/build/reports/tests
-            reader-experiment/android/app/build/reports/tests
+          path: reader-experiment/android/app/build/reports/tests
+
+  # lane: core (shared: the release step)
+  publish:
+    name: Publish to the release
+    needs: [core, app]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: daylight-share-apk
+          path: out
+
+      - name: Publish to the reader-experiment-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/scripts/rx-publish.sh out/daylight-share.apk
