@@ -128,7 +128,9 @@ While Lab is on, two rows under the switch open Lab's screens (**Back** or Esc r
 - **What’s in Lab ›**: the features this build has, each with a short state ("Ready", "Pair first", "Not set up", "In a
   later update", …). The header line says whether your Daylight has confirmed Lab ("Your Daylight: Lab on · checked in 4
   min ago", or "Needs Lab on your Daylight · checked in …"), from what Daylight Share on it says on its confirmation
-  channel; opening the screen reads that channel once. In this first Lab build (Wave 0) the list holds the one feature
+  channel. The screen shows the server's last states at once when they are 10 minutes old or less (else *Checking your
+  Daylight server…*), then reads that channel and asks the server, both at once, and updates the lines in place. In
+  this first Lab build (Wave 0) the list holds the one feature
   of your own **Daylight server** that comes to Windows, **Files over 9 MB** (the other server features, Summaries
   with Claude, Email-in and Feeds, are for the phone and browser apps). It is always shown and never greyed out:
   clicking it when something is missing shows one sentence under it, saying what (with **Copy Server code** when there
@@ -145,19 +147,27 @@ While Lab is on, two rows under the switch open Lab's screens (**Back** or Esc r
     address, and only **Use it** sends the server this pairing's Server code (*Setting up…*); the section then reads
     the server again. Your other devices and your Daylight find it on their own.
   - A server that was deployed again at a new address with the same pairing asks *Your Daylight server moved to {host}.
-    Use it?* (**Use it**, **Cancel**).
+    Use it?* (**Use it**, **Cancel**), also while the old address fails or doesn't answer (a deploy with a new setup
+    link deletes the old Worker). **Use it** moves to the new address; **Cancel** changes nothing, and the question
+    comes back the next time the section opens. A typed Server address wins over the server's own announcement, so
+    there is no question while one is typed.
 
 The server is asked only while Lab is on (but for the lock below). An answer is used for 10 minutes; a server that doesn't answer within 5
 seconds reads as *Couldn’t reach the Daylight server* (the screen says *Checking your Daylight server…* meanwhile).
 Before this PC is paired with another Daylight, a server that knows the old pairing is locked (Lab on or off), so a lost
-or replaced pairing can't use it, and a typed Server address (the old server's) is forgotten. Afterwards, while Lab is
+or replaced pairing can't use it, and a typed Server address (the old server's) is forgotten. **Unpair** forgets a
+typed Server address too, without locking anything (the same Daylight may come back): pairing another Daylight then
+finds that one's server, or says the server knows the previous pairing. Afterwards, while Lab is
 on, the send view shows the locked text with the new **Server code**, **Copy** and how to re-run the deploy, under
 *Daylight server*, until **OK** (or until the new server answers).
 
 Whether Lab is on or off, the app keeps what Daylight Share says about Lab on the confirmation channel (whether it has
-Lab, what it can report, and each item's state in the Reader), so turning Lab on shows the right states at once. The
-history still reads as before in this build: the Reader's states come with the delivery timeline, in the next Lab
-build (Wave 1). The one-time "Lab is on" note waits for that build too.
+Lab, what it can report, and each item's state in the Reader) each time it reads that channel, so turning Lab on shows
+what it has heard. In this build the app reads the channel while an item waits for its confirmation, after a send and
+when What's in Lab opens; a state the Daylight reports after confirming an item (the Reader took it later, say) is
+heard the next time one of these happens. The history still reads as before in this build: the Reader's states come
+with the delivery timeline, in the next Lab build (Wave 1), which also reads the channel after delivery. The one-time
+"Lab is on" note waits for that build too.
 
 **Not there yet** (strings the shared copy, `LAB_TEXT`, doesn't have; reported to the share lane): the server setup
 steps in brief, and labels for the delivery mode and for the host and fingerprint line; the Server address field's
@@ -234,7 +244,8 @@ uses an installed Microsoft Edge, the engine of WebView2). Icons come from the e
 
 [`.github/workflows/rx-windows.yml`](../../.github/workflows/rx-windows.yml) (the win lane's, LAB-PLAN 6.1: every job
 carries `# lane: win`) runs for every push that touches this folder, `share/js/`, `server/client/` (the Daylight server's
-client module, which the build copies in) or the Lab release gate. Its jobs:
+client module, which the build copies in), `server/vectors/` (which the Lab tests read) or the Lab release gate. Its
+jobs:
 
 - **app** (`windows-latest`): unit tests (node, and Rust's `args.rs` and `atomic.rs`), `tauri build`, then
   `test/e2e/windows.e2e.mjs` against the mock relay;
@@ -266,8 +277,9 @@ and keeps it) work only in an app started in test mode; otherwise none of these 
    everything;
 8. opens the paired Daylight's link with a new relay and name: no question, *Pairing updated…*, the history kept, and
    the next file goes through the new relay and is acked there; the Daylight there is a Lab one (`daylight-lab.js`'s
-   `LabInbox`), whose hello and the file's state (`handed`) reach the app's ledger (F17), while the rows keep their
-   v1.1 words (the timeline is Wave 1);
+   `LabInbox` and `LabInboxSim`), in the real order: it acks first, and reports the file's state (`handed`) only after
+   the app has read the ack. Sending one more file reads the channel again, and the hello and that state reach the
+   app's ledger (F17), while the rows keep their v1.1 words (the timeline is Wave 1);
 9. turns on start at login with `--e2e-autostart` and checks this user's Run entry;
 10. restarts the app: pairing, history, start at login and what the ledger learnt come back; then restarts it with
     `--e2e-lab 0`: Lab is off and saved, the ledger is kept, and the status file equals the Lab-on one but for Lab's
@@ -315,8 +327,10 @@ Screenshots of every view go to `test-results/a11y/` (a CI artifact, for review;
 and a stand-in Daylight server (`test/helpers/fake-worker.mjs`): Lab on by default and kept across pairing changes;
 no server call with Lab off; What's in Lab's rows and short states; the gate's states (`needs-pairing`, `needs-server`
 with the Server code, `OFFLINE` at once for a refused connection and at 5 s for a relay that never answers, a server's
-own states, `later`); the server section for the vector pairing (its Server code and fingerprint, F00.5), a server
-found on the relay, a move, Set up with a link and a typed address; F17 (every ack-topic frame reaches the ledger, Lab
+own states, `later`); What's in Lab's cached states (10 minutes old or less, with nothing on the network); the server
+section for the vector pairing (its Server code and fingerprint, F00.5), a server found on the relay, a move (also when
+the old address never answers), Set up with a link and a typed address; Unpair forgetting a typed address, so another
+Daylight's pairing says `pairing-mismatch` and finds its own server; F17 (every ack-topic frame reaches the ledger, Lab
 on or off; a later Lab level, junk and a `lab: 0` frame are read safely; no Lab frame delays an ack); an item queued
 offline goes once back online with Lab off (F00.4); the lock before a re-pairing and its follow-up; the build's copies,
 the CSP, that the window's words are `LAB_TEXT`'s, and that the code is Wave 0 (the release gate).
@@ -324,8 +338,10 @@ the CSP, that the window's words are `LAB_TEXT`'s, and that the code is Wave 0 (
 `test/ui/lab.test.mjs` opens the window's page as the accessibility checks do: Lab first in Settings and on by default,
 with no one-time note in this build (F00.1); a switch that can't be saved is put back; What's in Lab with short states
 only, and a click that shows exactly the feature's sentence under it, in a polite live region, with **Copy Server
-code** (F00.3); *Checking your Daylight server…*, then `OFFLINE` at 5 s (F00.6); the server section and **Copy**
-(F00.5), Set up with a link and its question, a typed address that answers Ready; no secret name or needs-setup
+code** (F00.3); *Checking your Daylight server…*, then `OFFLINE` at 5 s (F00.6), and the cached states at once instead
+when the last answer is recent; the server section and **Copy**
+(F00.5), Set up with a link and its question, a typed address that answers Ready, the *moved … Use it?* question
+while the old address never answers (Cancel keeps the pin, Use it moves); no secret name or needs-setup
 sentence on any screen reached without clicking a Lab feature or opening the server section (F00.7); the re-pairing
 follow-up. axe-core finds nothing on each of them, light and dark, and with Comfort at 100%, 200% and 225% text
 nothing is clipped at the narrowest window. `test/ui/lab-off-parity.test.mjs` (above) runs axe-core with Lab off.
@@ -359,8 +375,10 @@ the gate starts the workflow again, which then publishes the held build.
 The gate does not take `lab-wave.json` on trust: [`scripts/lab-wave.mjs`](scripts/lab-wave.mjs) reads the wave from
 the code too, and the publish job holds the build for the later of the two. Any Lab code is W0: `src/lab.js`, a
 `daylight-lab.js` in `src/`, or anything in `src/` or `build.mjs` that names `daylight-lab`. W1 code is `src/` using a
-W1 export of `daylight-lab.js` (those after its `// W1 (L1)` heading), `describeLabRow` (F01's rows) or the Sender's
-F07 calls (`flushNetwork`, `send(…, {defer})`). When the script can't tell (the module or its heading missing), it
+W1 export of `daylight-lab.js` (those after its `// W1 (L1)` heading), `describeLabRow` (F01's rows), the Sender's F07
+calls (`flushNetwork`, `send(…, {defer})`), `LAB_NOTE_ENABLED = true`, a quoted id of a Windows W1 feature (`'F01'`,
+`'F07'`, `'F08'`, `'F09'`, `'F16'`, `'F26'`, `'F33'`) or any feature in `BUILT_FEATURES` (F02's entry point is W1 here).
+When the script can't tell (the module or its heading missing, or a quoted feature id of a wave it doesn't know), it
 fails and nothing is uploaded. Unit tests check the script on made-up trees (WIN0 forgetting `"w0"`, WIN1 leaving it),
 that `lab-wave.json` is not behind the code here and names a wave the gate knows, and that every job carries its lane.
 

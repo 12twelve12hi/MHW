@@ -343,7 +343,8 @@ export function renderServerSection(box, model, on = {}) {
   const setup = on.setupCheck ? setupForm(on) : null;
   if (setup && model.setupFirst) box.append(setup);
   if (model.moved) {
-    // "Your Daylight server moved to {host}. Use it?" (2.6): confirmMove() on yes.
+    // "Your Daylight server moved to {host}. Use it?" (2.6): on.move(true) confirms the move and draws the section
+    // again. Cancel closes the question and changes nothing (it asks again next time); the focus goes to Copy, next.
     const moved = el('div', 'lab-note-body lab-server-moved');
     const q = el('p', 'lab-note-text', model.moved);
     q.id = nextId('lab-moved');
@@ -351,8 +352,17 @@ export function renderServerSection(box, model, on = {}) {
     moved.setAttribute('aria-labelledby', q.id);
     const yes = button(S.setupConfirm, 'btn primary');
     const no = button(S.setupCancel);
-    yes.addEventListener('click', () => on.move?.(true));
-    no.addEventListener('click', () => { moved.remove(); on.move?.(false); });
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      no.disabled = true;
+      try { await on.move?.(true); } finally { yes.disabled = false; no.disabled = false; }
+    });
+    no.addEventListener('click', () => {
+      const next = box.querySelector('.lab-server-copy');
+      moved.remove();
+      on.move?.(false);
+      next?.focus();
+    });
     const acts = el('div', 'row');
     acts.append(yes, no);
     moved.append(q, acts);

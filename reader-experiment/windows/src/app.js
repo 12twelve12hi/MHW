@@ -414,8 +414,13 @@ let refreshTimer = null;
 function onStorageChange(key) {
   if (key.startsWith('lab/')) {
     // The ledger learnt something (LAB-PLAN 2.2.6): What's in Lab's header line follows.
+    // Once the server's live answer is on screen, the rows keep it (the cached states can be older than an answer that
+    // ran out of time).
     if (view === 'view-whats') {
-      app.lab.overview({ refresh: false }).then((m) => { if (m.lab && view === 'view-whats') updateWhats($('whats'), m); }, () => {});
+      app.lab.overview({ refresh: false }).then((m) => {
+        const box = $('whats');
+        if (m.lab && view === 'view-whats') updateWhats(box, box.dataset.fresh === '1' ? { ...m, fresh: false } : m);
+      }, () => {});
     }
     writeStatusSoon();
     return;
@@ -645,13 +650,19 @@ async function onFeature(f, box) {
   writeStatusSoon();
 }
 
-/** A newer What's in Lab answer: lines change in place; a list with other features is drawn again, unless a note is open. */
+/**
+ * A newer What's in Lab answer: lines change in place; a list with other features is drawn again, unless a note is
+ * open. data-fresh="1" once the server's live answer is on screen (not the cached states).
+ */
 function updateWhats(box, model) {
   if (!updateWhatsInLab(box, model) && !box.querySelector('.lab-note > *')) renderWhatsInLab(box, model, { onTap: onFeature });
-  if (model.fresh) box.dataset.fresh = '1';
+  if (model.fresh && !model.cached) box.dataset.fresh = '1';
 }
 
-/** What's in Lab (1.4): short states at once from what is known, then the ack topic and the server are asked. */
+/**
+ * What's in Lab (1.4): the cached states at once (the server's answer of the last 10 minutes, 1.5), else "Checking your
+ * Daylight server…" on the heading; then the ack topic and the server, asked now, update the lines in place.
+ */
 async function openWhats() {
   const seq = ++labSeq;
   show('view-whats');
@@ -689,7 +700,14 @@ async function renderServer() {
   setupSaid = null;
   renderServerSection(box, model, {
     copy: copyText,
-    move: async (yes) => { if (yes) { await app.lab.confirmMove(); await renderServer(); } },
+    // "Moved … Use it?" (2.6): the new address is pinned and the section drawn again from it; the focus goes to its
+    // heading, so the new state is read next.
+    move: async (yes) => {
+      if (!yes) return;
+      note(`server moved: ${await app.lab.confirmMove()}`);
+      await renderServer();
+      $('server-h').focus();
+    },
     setupCheck: (link) => app.lab.checkSetupLink(link),
     setup: async (link) => {
       const r = await app.lab.setupServer(link);

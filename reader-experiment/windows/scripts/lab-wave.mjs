@@ -3,15 +3,19 @@
 //
 //   node scripts/lab-wave.mjs            prints the wave the release gate must hold this build for: the later of
 //                                        lab-wave.json's and the code's, or nothing when neither has Lab code. Says why
-//                                        on stderr. Exits 2 when it can't tell (daylight-lab.js missing or changed).
+//                                        on stderr. Exits 2 when it can't tell (daylight-lab.js missing or changed, or
+//                                        the code names a Lab feature of a wave this script doesn't know yet).
 //   node scripts/lab-wave.mjs --check    the same, but exits 1 when lab-wave.json is behind the code.
 //
-// What counts:
-//   W0 (any Lab code): src/lab.js or a daylight-lab.js in src/; anything in src/ or build.mjs that names daylight-lab
-//       (the module WIN0 copies in).
-//   W1: src/ naming a W1 export of ../share/js/daylight-lab.js (the exports after its "W1 (L1)" heading: smart intake,
-//       excerpts, the test article, diagnostics…), describeLabRow (F01's rows), or the Sender's F07 calls
-//       (flushNetwork, send(…, {defer})).
+// What counts, in src/ (the copied daylight-*.js modules aside) and build.mjs:
+//   W0 (any Lab code): src/lab.js or a daylight-lab.js in src/; anything that names daylight-lab (the module WIN0
+//       copies in).
+//   W1 (in src/*.js): a W1 export of ../share/js/daylight-lab.js (the exports after its "// W1 (L1)" heading: smart
+//       intake, excerpts, the Use switches, the test article, diagnostics…), describeLabRow (F01's rows), the Sender's
+//       F07 calls (flushNetwork, send(…, {defer})), LAB_NOTE_ENABLED = true (1.2: from the first build with F01 or
+//       F04), a quoted id of one of Windows' W1 features ('F01', 'F08', 'F33'… in LAB_FEATURES or anywhere else), or
+//       any feature in BUILT_FEATURES (W0 runs none; F02's entry point is W1 on Windows, LAB-PLAN 3.1).
+// Names are matched in the whole text, comments included, so a mention holds the build rather than letting it through.
 // rx-windows.yml's publish job runs it before it uploads; test/unit/build.test.mjs checks lab-wave.json against it.
 
 import fs from 'node:fs';
@@ -42,28 +46,46 @@ export function w1Names(labSource) {
   return [...new Set(names)];
 }
 
+/** Lab features Windows names from Wave 0 (LAB-PLAN 3.1: F00, F17, F27; 1.4: Files over 9 MB in What's in Lab). */
+export const W0_FEATURES = ['F00', 'F17', 'F27', 'F02'];
+/** Windows' Wave 1 features (LAB-PLAN 3.1; F02's entry point too, which BUILT_FEATURES tells). */
+export const W1_FEATURES = ['F01', 'F07', 'F08', 'F09', 'F16', 'F26', 'F33'];
 /** F01's rows and F07's sending: W1 for Windows (LAB-PLAN 3.1), though their code is in W0's modules. */
 export const W1_CALLS = ['describeLabRow', 'flushNetwork'];
 const DEFER = /\bdefer\s*:/;
+const NOTE_ON = /\bLAB_NOTE_ENABLED\s*=\s*true\b/;
+const QUOTED_FEATURE = /['"`](F\d\d)['"`]/g;
+const BUILT = /\bBUILT_FEATURES\s*=\s*\[([^\]]*)\]/g;
+
+const named = (text, name) => new RegExp(`(?<![\\w$])${name.replace(/\$/g, '\\$')}(?![\\w$])`).test(text);
 
 /**
- * files: [{name, text}] with names relative to this folder (src/…, build.mjs). -> {wave: null | 'w0' | 'w1', why: []}
+ * files: [{name, text}] with names relative to this folder (src/…, build.mjs). w1: w1Names(daylight-lab.js).
+ * -> {wave: null | 'w0' | 'w1', why: []}. Throws when a quoted Lab feature id belongs to no wave this script knows.
  */
 export function codeWave(files, { w1 }) {
   const why = [];
   let wave = null;
-  const src = files.filter((f) => f.name.startsWith('src/') && !/(^|\/)daylight-[\w-]+\.js$/.test(f.name));
+  const own = files.filter((f) => f.name === 'build.mjs' || (f.name.startsWith('src/') && !/(^|\/)daylight-[\w-]+\.js$/.test(f.name)));
   for (const f of files) if (f.name === 'src/lab.js' || /^src\/(.*\/)?daylight-lab\.js$/.test(f.name)) why.push(f.name);
-  for (const f of files) {
-    if ((f.name === 'build.mjs' || f.name.startsWith('src/')) && /daylight-lab/.test(f.text)) why.push(`${f.name} names daylight-lab`);
-  }
+  for (const f of own) if (/daylight-lab/.test(f.text)) why.push(`${f.name} names daylight-lab`);
   if (why.length) wave = 'w0';
   const w1why = [];
-  const names = [...w1, ...W1_CALLS];
-  for (const f of src.filter((x) => /\.m?js$/.test(x.name))) {
-    for (const n of names) if (new RegExp(`(?<![\\w$])${n.replace(/\$/g, '\\$')}(?![\\w$])`).test(f.text)) w1why.push(`${f.name} uses ${n}`);
+  const unknown = [];
+  for (const f of own.filter((x) => x.name.startsWith('src/') && /\.m?js$/.test(x.name))) {
+    for (const n of [...w1, ...W1_CALLS]) if (named(f.text, n)) w1why.push(`${f.name} uses ${n}`);
     if (DEFER.test(f.text)) w1why.push(`${f.name} sends with defer (F07)`);
+    if (NOTE_ON.test(f.text)) w1why.push(`${f.name} sets LAB_NOTE_ENABLED = true`);
+    for (const id of new Set([...f.text.matchAll(QUOTED_FEATURE)].map((m) => m[1]))) {
+      if (W1_FEATURES.includes(id)) w1why.push(`${f.name} names ${id}`);
+      else if (!W0_FEATURES.includes(id)) unknown.push(`${f.name} names ${id}`);
+    }
+    for (const m of f.text.matchAll(BUILT)) {
+      const built = [...m[1].matchAll(QUOTED_FEATURE)].map((x) => x[1]);
+      if (built.length) w1why.push(`${f.name} builds ${built.join(', ')} (BUILT_FEATURES)`);
+    }
   }
+  if (unknown.length) throw new Error(`a Lab feature of a later wave (${unknown.join('; ')}): teach scripts/lab-wave.mjs its wave`);
   if (w1why.length) { wave = 'w1'; why.push(...w1why); }
   return { wave, why };
 }

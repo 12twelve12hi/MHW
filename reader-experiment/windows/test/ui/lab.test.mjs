@@ -214,6 +214,58 @@ test('F00.6: a relay that never answers: “Checking your Daylight server…” 
   } finally { await hang.close(); }
 });
 
+test('What’s in Lab shows the cached states at once (1.5), then the server’s answer of now', { timeout: 60000 }, async () => {
+  const hang = await hangingServer();
+  try {
+    // The server's last answer, 3 minutes old; the relay now never answers.
+    const page = await ui.open({ kv: await paired({ 'lab/server': { state: 'needs-server', at: NOW - 3 * MIN } }, { relayUrl: hang.url }), now: NOW });
+    await openSettings(page);
+    await page.waitForFunction(() => document.querySelector('#server-sub').textContent !== '');
+    assert.equal(await page.textContent('#server-sub'), 'Optional · Not set up');
+    await page.getByRole('button', { name: LAB_TEXT.whatsInLab, exact: true }).click();
+    await page.waitForSelector('#view-whats:not([hidden]) li.lab-feature');
+    assert.equal(await page.textContent('.lab-group-state'), 'Not set up', 'the cached state, not “Checking…”');
+    assert.equal(await page.getAttribute('#whats', 'data-fresh'), '0', 'the server’s answer of now is still on its way');
+    await page.waitForSelector('#whats[data-fresh="1"]', { timeout: 8000 });
+    assert.equal(await page.textContent('.lab-group-state'), LAB_TEXT.short.OFFLINE);
+    assert.deepEqual(page.errors, []);
+    await page.context().close();
+  } finally { await hang.close(); }
+});
+
+test('the Daylight server moved and its old address never answers: “moved … Use it?” still shows; Cancel keeps the pin, Use it moves (2.6)', { timeout: 90000 }, async () => {
+  const values = await S.deriveServerValues(await S.deriveServerSeed(FIXED_SECRET));
+  const old = 'https://daylight-aaaaaaaaaaaa.example.workers.dev';
+  const moved = 'https://daylight-bbbbbbbbbbbb.example.workers.dev';
+  const config = { server: moved, api: S.SERVER_API, fingerprint: values.fingerprint, delivery: 'lab' };
+  const kv = await paired({ 'server/pin': { origin: old, fingerprint: values.fingerprint }, 'server/config': config, 'server/configAt': NOW });
+  const page = await ui.open({ kv, now: NOW });
+  await page.route(`${old}/**`, () => {}); // never answers
+  await page.route(`${moved}/**`, (r) => r.abort('connectionrefused'));
+  await openServer(page);
+  const question = L.serverMovedText(moved);
+  assert.equal(question, 'Your Daylight server moved to daylight-bbbbbbbbbbbb.example.workers.dev. Use it?');
+  assert.equal(await page.textContent('.lab-server-state .lab-note-text'), S.STATE_MESSAGES.OFFLINE);
+  const group = page.getByRole('group', { name: question, exact: true });
+  assert.equal(await group.count(), 1, 'the question names its group');
+  await axeBoth(page, 'Daylight server, moved');
+  await group.getByRole('button', { name: LAB_TEXT.serverSection.setupCancel, exact: true }).click();
+  assert.equal(await page.locator('.lab-server-moved').count(), 0);
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('lab-server-copy')), true, 'the focus goes on to Copy');
+  assert.deepEqual(await stored(page, 'server/pin'), { origin: old, fingerprint: values.fingerprint }, 'Cancel changes nothing');
+
+  // Asked again the next time; Use it pins the new address, and the section reads the server there.
+  await page.locator('#server-back').click();
+  await page.locator('#open-server').click();
+  await page.waitForSelector('#view-server:not([hidden]) #server[data-fresh="1"]', { timeout: 15000 });
+  await page.getByRole('group', { name: question, exact: true }).getByRole('button', { name: LAB_TEXT.serverSection.setupConfirm, exact: true }).click();
+  await page.waitForFunction(() => document.activeElement?.id === 'server-h');
+  assert.deepEqual(await stored(page, 'server/pin'), { origin: moved, fingerprint: values.fingerprint });
+  assert.equal(await page.locator('.lab-server-moved').count(), 0);
+  assert.match(await page.textContent('.lab-server-where'), /^daylight-bbbbbbbbbbbb\.example\.workers\.dev · /);
+  await page.context().close();
+});
+
 test('F00.5: the Daylight server section shows the vector pairing’s Server code and fingerprint, and Copy puts the code on the clipboard', { timeout: 60000 }, async () => {
   // The vectors' pairing is on ntfy.sh, which the tests never reach: the server is OFFLINE, the code derived here.
   const page = await ui.open({ kv: kvOf({ pairing: { code: VEC.pairingCode, relay: ds.normalizeRelay(undefined), name: 'Vector Daylight' } }) });

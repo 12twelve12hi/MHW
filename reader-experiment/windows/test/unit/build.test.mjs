@@ -202,8 +202,21 @@ test('scripts/lab-wave.mjs reads the Lab wave from the code: W0 for any Lab code
   assert.equal(wave([['src/app.js', 'const d = describeLabRow(row, now, ctx);']]), 'w1');
   assert.equal(wave([['src/app.js', 'await sender.flushNetwork();']]), 'w1');
   assert.equal(wave([['src/core.js', 'await sender.send(item, { defer: true });']]), 'w1');
+  // A WIN1 commit that only uses LAB_TEXT strings (F08's toast, F33's label) but turns the note on, lists a W1 feature
+  // or builds one (F02's entry point is W1 on Windows) is W1 all the same.
+  const w0lab = ['src/lab.js', "import { LAB_TEXT } from './daylight-lab.js';\nexport const LAB_NOTE_ENABLED = false;\nexport const LAB_FEATURES = [];\nexport const LAB_SERVER_FEATURES = ['F02'];\nexport const BUILT_FEATURES = [];\n"];
+  assert.equal(wave([w0lab]), 'w0', 'WIN0’s lab.js');
+  assert.equal(wave([['src/lab.js', w0lab[1].replace('LAB_NOTE_ENABLED = false', 'LAB_NOTE_ENABLED = true')]]), 'w1');
+  for (const id of ['F01', 'F07', 'F08', 'F09', 'F16', 'F26', 'F33']) {
+    assert.equal(wave([['src/lab.js', w0lab[1].replace('LAB_FEATURES = []', `LAB_FEATURES = ['${id}']`)]]), 'w1', id);
+  }
+  assert.equal(wave([['src/app.js', 'if (r.feature === "F33") toast(LAB_TEXT.copied);']]), 'w1');
+  assert.equal(wave([['src/lab.js', w0lab[1].replace('BUILT_FEATURES = []', "BUILT_FEATURES = ['F02']")]]), 'w1');
+  // A feature of a later wave, or one Windows doesn't have: the script can't tell, so the publish step fails.
+  assert.throws(() => wave([['src/lab.js', w0lab[1].replace('LAB_FEATURES = []', "LAB_FEATURES = ['F22']")]]), /teach scripts\/lab-wave\.mjs/);
   // A copy of the module itself isn't the app's code; a longer name that merely contains a W1 name isn't one.
   assert.equal(wave([['src/daylight-lab.js', 'export function normaliseShare() {}']]), 'w0');
+  assert.equal(wave([['src/daylight-lab.js', "export const USE_FEATURES = ['F03', 'F33'];"]]), 'w0');
   assert.equal(wave([app, ['src/core.js', 'const myTextFragmentText2 = 1;']]), null);
   assert.equal(laterWave(null, 'w0'), 'w0');
   assert.equal(laterWave('w1', 'w0'), 'w1');
@@ -225,6 +238,11 @@ test('lab-wave.json names the Lab wave of the code here, and one the release gat
   // A Windows checkout has CRLF line ends.
   const wf = fs.readFileSync(path.join(root, '..', '..', '.github', 'workflows', 'rx-windows.yml'), 'utf8').replace(/\r\n/g, '\n');
   assert.ok(wf.includes('reader-experiment/windows/lab-wave.json') && wf.includes('reader-experiment/lab-release-gate.json'));
+  // A change to what the build copies or the tests read runs the workflow (the server lane's module and vectors too).
+  const paths = wf.slice(wf.indexOf('    paths:'), wf.indexOf('  workflow_dispatch:'));
+  for (const p of ['reader-experiment/windows/**', 'reader-experiment/share/js/**', 'reader-experiment/server/client/**', 'reader-experiment/server/vectors/**', 'reader-experiment/lab-release-gate.json']) {
+    assert.ok(paths.includes(`- '${p}'`), `rx-windows runs on ${p}`);
+  }
   // ...and holds the build for the code's own wave too (scripts/lab-wave.mjs, with what it reads checked out).
   for (const p of ['reader-experiment/windows/scripts/lab-wave.mjs', 'reader-experiment/windows/build.mjs', 'reader-experiment/windows/src', 'reader-experiment/share/js/daylight-lab.js']) {
     assert.match(wf, new RegExp(`^ {12}${p.replace(/[.]/g, '\\.')}$`, 'm'), `publish checks out ${p}`);

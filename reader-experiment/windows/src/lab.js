@@ -9,7 +9,8 @@
 //   settings.labNoteShown  the one-time note (1.2), shown only from a build with F01 or F04: LAB_NOTE_ENABLED
 //   lab/inbox, lab/heard, lab/states   the ledger (LabLedger), fed by every ack-topic frame that decrypts, Lab on or
 //                          off, through the Sender's onAckHeader (2.2.6)
-//   lab/server             the last server answer {state, at}, for the "Daylight server ›" row's subtitle
+//   lab/server             the last server answer {state, at}, for the "Daylight server ›" row's subtitle and What's
+//                          in Lab's cached states (with the module's server/status, while 10 minutes old or less, 1.5)
 //   lab/repaired           {at}: this PC re-paired with another Daylight while it knew a Daylight server, which it
 //                          locked first (2.6, DESIGN 3.4). The send view shows the locked text with the new Server code
 //                          and the re-run help (DESIGN 12.7) until OK, or until the new pairing's server answers ready
@@ -18,7 +19,7 @@
 // Discovery and every server call run only with Lab on (DESIGN 4.3). A pairing change with another secret removes the
 // lab/* keys with the outbox (applyPairingChange removes the ledger's; this store can't list its keys, so
 // afterPairingChange removes this file's own); before it, a server that knows the old pairing is locked
-// (lockBeforeRepair, 2.6), Lab on or off, and a typed Server address (the old server's) is forgotten.
+// (lockBeforeRepair, 2.6), Lab on or off, and a typed Server address (the old server's) is forgotten, as on Unpair.
 
 import * as ds from './daylight-share.js';
 import {
@@ -129,12 +130,14 @@ export function createLab({
       return { state, message: localMessage(state) };
     }
     const { config } = d;
-    if (config.api < SERVER_API_MIN) return { state: 'server-outdated', message: localMessage('server-outdated'), config };
-    if (config.api > SERVER_API) return { state: 'app-outdated', message: localMessage('app-outdated'), config };
+    if (config.api < SERVER_API_MIN) return { state: 'server-outdated', message: localMessage('server-outdated'), config, moved: d.moved };
+    if (config.api > SERVER_API) return { state: 'app-outdated', message: localMessage('app-outdated'), config, moved: d.moved };
     try {
       const status = await server.status({ force });
       return { state: 'ready', message: null, config, status, moved: d.moved };
     } catch (e) {
+      // The pinned server may be gone because it moved (a deploy with "New setup link" deletes the old Worker): the
+      // move goes with the error, so the section can ask about it.
       return { ...(await server.noteError('', e)), config, moved: d.moved };
     }
   }
@@ -221,10 +224,24 @@ export function createLab({
   const row = (id, short) => ({ id, name: featureName(id), sentence: LAB_TEXT.features[id].sentence, short });
 
   /**
+   * The server's last answer as a probe result, read from storage without asking anyone (1.5: What's in Lab uses
+   * cached states): lab/server when it is 10 minutes old or less, with the module's cached status for a ready server.
+   * A pairing change with another secret removes lab/server, so it is always this pairing's. -> a probe result, or null
+   */
+  async function cachedProbe() {
+    const last = await get(SERVER_KEY);
+    if (!last?.state || !(now() - (last.at ?? 0) <= STATUS_REFRESH_MS)) return null;
+    if (last.state !== 'ready') return SERVER_WIDE.includes(last.state) ? { state: last.state, message: localMessage(last.state) } : null;
+    const status = await get('server/status');
+    return status && typeof status === 'object' ? { state: 'ready', message: null, status } : null;
+  }
+
+  /**
    * What's in Lab (1.4): the Inbox's Lab state, the features with their short states, then the server group.
-   * refresh: it opened, so read the ack topic first (the header is then current) and ask the server now, each within
-   * the gate's 5 s. Without refresh nothing goes on the network: no short states yet (null; fresh false).
-   * -> {lab, header, fresh, features: [{id, name, sentence, short}], server: {state, short, features: [...]}}
+   * refresh: it opened, so read the ack topic (the header is then current) and ask the server now, both at once and
+   * each within the gate's 5 s. Without refresh nothing goes on the network: the cached states (cachedProbe; `cached`
+   * true), or, with nothing recent, no short states yet (null; fresh false).
+   * -> {lab, header, fresh, cached, features: [{id, name, sentence, short}], server: {state, short, features: [...]}}
    */
   async function overview({ refresh = true } = {}) {
     if (!isLabOn(await settings())) return { lab: false };
@@ -237,9 +254,10 @@ export function createLab({
     let p = null;
     if (!pairing) p = { state: 'needs-pairing' };
     else if (asking) p = await asking;
+    else p = await cachedProbe();
     if (!p) {
       return {
-        lab: true, header, fresh: false,
+        lab: true, header, fresh: false, cached: false,
         features: LAB_FEATURES.map((id) => row(id, null)),
         server: { state: null, short: null, features: LAB_SERVER_FEATURES.map((id) => row(id, null)) },
       };
@@ -249,13 +267,35 @@ export function createLab({
     for (const id of LAB_FEATURES) features.push(row(id, (await gate(id, { probeResult: p })).short ?? LAB_TEXT.ready));
     const serverRows = [];
     for (const id of LAB_SERVER_FEATURES) serverRows.push(row(id, serverFeatureShort((await gate(id, { probeResult: p })).state, heading)));
-    return { lab: true, header, fresh: true, features, server: { state: heading, short: serverHeadingShort(heading), features: serverRows } };
+    return {
+      lab: true, header, fresh: true, cached: !!pairing && !asking, features,
+      server: { state: heading, short: serverHeadingShort(heading), features: serverRows },
+    };
+  }
+
+  /**
+   * The server's new address, when discovery found this pairing's server at another origin than the pinned one and
+   * the user hasn't said yes yet (2.6: server/pendingMove, which the module keeps). Read from storage, so the question
+   * stays when the probe ran out of time (an old address that hangs: the gate's 5 s end before the module's own status
+   * deadline); only while the cached config still names that origin and no Server address is typed (it wins over
+   * discovery). -> the origin, or null
+   */
+  async function pendingMove(server) {
+    try {
+      const [move, pin, config, manual] = await Promise.all(['server/pendingMove', 'server/pin', 'server/config', 'server/manualUrl'].map(get));
+      const { fingerprint } = await server.values();
+      if (manual || !move?.origin || move.fingerprint !== fingerprint) return null;
+      if (pin?.fingerprint !== fingerprint || pin.origin === move.origin) return null;
+      return config?.server === move.origin && config.fingerprint === fingerprint ? move.origin : null;
+    } catch { return null; }
   }
 
   /**
    * The Daylight server section (2.6): where setup happens, so it carries the long texts.
    * -> {lab, paired, state, message, host, fingerprint, delivery, v1Notice, moved, serverCode, labInbox, aiToday,
    *     manualUrl, setupFirst, rerun}
+   * moved: "Your Daylight server moved to {host}. Use it?" while the server moved (2.6), also when the old address
+   * failed or ran out of time (pendingMove); else null.
    */
   async function serverView() {
     if (!isLabOn(await settings())) return { lab: false };
@@ -269,6 +309,7 @@ export function createLab({
     const status = p.status ?? null;
     const manualUrl = (await get('server/manualUrl')) ?? '';
     const badAuth = !!(await get('server/badAuthAt'));
+    const movedTo = p.moved ?? (await pendingMove(server));
     return {
       lab: true, paired: true, state: p.state,
       message: p.state === 'ready' ? LAB_TEXT.ready : (p.message ?? localMessage(p.state)),
@@ -276,7 +317,7 @@ export function createLab({
       fingerprint: showFingerprint((await server.values()).fingerprint),
       delivery: config?.delivery ?? null,
       v1Notice: config?.delivery === 'v1' ? noticeText('v1') : null,
-      moved: p.moved ? serverMovedText(p.moved) : null,
+      moved: movedTo ? serverMovedText(movedTo) : null,
       serverCode: await server.serverCode(),
       labInbox: status ? labInboxSeenText(status.inbox?.lastSeen ?? null, now()) : null,
       aiToday: status?.usage?.ai ? aiTodayText(status.usage.ai.usd, status.usage.ai.limitUsd) : null,
@@ -355,6 +396,8 @@ export function createLab({
    * Never throws; gives up on the lock after `ms`. -> {known: a server was known, locked: the lock request succeeded}
    */
   async function beforeRepair(current, next, ms = 10000) {
+    // A typed address kept with no pairing is an earlier pairing's (only Unpair leaves none, and it forgets it).
+    if (!current && next) await forgetAddress(next);
     if (!current || !next || ds.samePairingSecret(current, next)) return { known: false, locked: false };
     const pin = await get('server/pin');
     const manual = await get('server/manualUrl');
@@ -365,6 +408,30 @@ export function createLab({
     const locked = await withDeadline(server.lockBeforeRepair().catch(() => false), ms, () => false);
     if (manual) { try { await server.clearManualUrl(); } catch { /* kept: the section can clear it */ } }
     return { known: true, locked };
+  }
+
+  /**
+   * Before Unpair removes `current`: a typed Server address is forgotten, as a re-pairing forgets it (beforeRepair).
+   * It is this pairing's server, and the next pairing may be another Daylight's: kept, it would hide that one's server
+   * from discovery (the typed address wins) and answer BAD_AUTH instead of pairing-mismatch. The pin stays (it tells
+   * pairing-mismatch), and nothing is locked: unpairing is not re-pairing, and the same Daylight may come back.
+   * Never throws.
+   */
+  async function beforeUnpair(current) {
+    await forgetAddress(current);
+  }
+
+  /**
+   * Removes a typed Server address, and the status it answered, through the module (clearManualUrl, which doesn't use
+   * the pairing it is made with); the server objects start afresh. Never throws.
+   */
+  async function forgetAddress(pairing) {
+    serverCache = null;
+    probing = null;
+    if (!pairing?.secret || !(await get('server/manualUrl'))) return;
+    try {
+      await new DaylightServer({ pairing, storage, fetch: fetchFn, now, from, app }).clearManualUrl();
+    } catch (e) { log.warn?.('Send to Daylight: the typed Server address was kept', e); }
   }
 
   /**
@@ -424,8 +491,8 @@ export function createLab({
 
   return {
     ledger, hook, ensureDefault, setLab, labOn: () => labOn(storage), state, overview, gate, serverView, serverCode,
-    confirmMove, checkSetupLink, setupServer, setServerAddress, beforeRepair, afterPairingChange, repaired, repairSeen,
-    prune, probe, status,
+    confirmMove, checkSetupLink, setupServer, setServerAddress, beforeRepair, beforeUnpair, afterPairingChange, repaired,
+    repairSeen, prune, probe, status,
   };
 }
 
