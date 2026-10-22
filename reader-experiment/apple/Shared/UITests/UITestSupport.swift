@@ -384,18 +384,37 @@ enum UITestSupport {
 
     /// Runs Xcode's accessibility audit on what the app shows. Every issue is printed; an issue is ignored only when
     /// `allowed` names why (an element the app does not draw), and anything else fails the test.
+    ///
+    /// An audit that the system stops before it finishes ("Audit failed to complete in time", which a simulator that
+    /// has just started can do on the first audit) found nothing either way: it is run again, at most twice, and said
+    /// so in the log. Issues are never run again; any error but that one fails the test.
     @available(iOS 17.0, macOS 14.0, *)
     static func audit(_ app: XCUIApplication, _ screen: String, types: XCUIAccessibilityAuditType = .all,
                       allowed: @escaping (XCUIAccessibilityAuditIssue) -> String? = { _ in nil }) throws {
-        try app.performAccessibilityAudit(for: types) { issue in
-            let description = describe(issue)
-            if let why = allowed(issue) {
-                print("AUDIT \(platform) \(screen) allowed (\(why)): \(description)")
-                return true
+        var attempt = 1
+        while true {
+            do {
+                try app.performAccessibilityAudit(for: types) { issue in
+                    let description = describe(issue)
+                    if let why = allowed(issue) {
+                        print("AUDIT \(platform) \(screen) allowed (\(why)): \(description)")
+                        return true
+                    }
+                    print("AUDIT \(platform) \(screen) issue: \(description)")
+                    return false
+                }
+                return
+            } catch let error as NSError where isAuditTimeout(error) && attempt < 3 {
+                print("AUDIT \(platform) \(screen): the audit did not finish in time (attempt \(attempt)); running it again")
+                attempt += 1
+                Thread.sleep(forTimeInterval: 5)
             }
-            print("AUDIT \(platform) \(screen) issue: \(description)")
-            return false
         }
+    }
+
+    /// XCTest's "Audit failed to complete in time" (com.apple.xcode.xctest.accessibilityAudit, code -56).
+    nonisolated static func isAuditTimeout(_ error: NSError) -> Bool {
+        error.domain == "com.apple.xcode.xctest.accessibilityAudit" && error.code == -56
     }
 
     @available(iOS 17.0, macOS 14.0, *)

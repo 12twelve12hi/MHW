@@ -227,7 +227,8 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
   - `AccessibilityAuditTests` run Xcode's `performAccessibilityAudit()` on Home (the Mac's main window), Settings and
     the pairing screen, with Comfort off and on (iOS 17+, macOS 14+; F27.2). Every issue is printed as an `AUDIT` line
     with the element's value, frame and contents; an issue can be allowed only with a stated reason (`allowed`), which
-    is printed too. Allowed today: on the Mac, the system's Touch Bar and its emoji item, the Settings button's
+    is printed too. An audit the system stops before it finishes ("Audit failed to complete in time", seen on the
+    first audit after the simulator starts) is run again, at most twice; issues are never run again. Allowed today: on the Mac, the system's Touch Bar and its emoji item, the Settings button's
     tooltip, the window title the system dims behind a sheet, groups inside the title-bar buttons, a parent/child
     report that names no element, and text the open Settings sheet covers or has scrolled partly out of view (the
     audit measures it where it is hidden); on the iPhone, a navigation-bar button's capped text size, and Dynamic
