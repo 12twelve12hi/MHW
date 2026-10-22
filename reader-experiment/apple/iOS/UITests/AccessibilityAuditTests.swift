@@ -6,7 +6,14 @@ final class AccessibilityAuditTests: XCTestCase {
     /// Issues the app cannot fix because the system draws the element; each names why. Everything else fails.
     @available(iOS 17.0, *)
     static func allowed(_ issue: XCUIAccessibilityAuditIssue) -> String? {
-        nil
+        guard let element = issue.element, element.exists else { return nil }
+        if issue.auditType == .dynamicType, element.elementType == .button {
+            let bars = XCUIApplication().navigationBars.buttons
+            for i in 0..<bars.count where bars.element(boundBy: i).frame == element.frame {
+                return "a button in the navigation bar, which the system draws and caps in size (it offers the large content viewer instead)"
+            }
+        }
+        return nil
     }
 
     @MainActor

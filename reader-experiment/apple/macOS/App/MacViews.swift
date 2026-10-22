@@ -28,6 +28,9 @@ struct MacRootView: View {
             }
         }
         .frame(minWidth: MacRootView.minWidth, minHeight: 480)
+        // The window's content is one group for VoiceOver; it needs a name (F27.2).
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Send to Daylight")
         // No motion in Comfort (F27); `comfort(_:)` also stops animations when Reduce Motion is on.
         .animation(model.comfort ? nil : .default, value: model.banner)
         .comfort(model.comfort)
@@ -48,6 +51,8 @@ struct MacRootView: View {
                     .padding()
                 }
                 .frame(width: MacRootView.settingsWidth)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Settings")
                 .environmentObject(model)
             }
         }
@@ -126,10 +131,10 @@ struct MacHomeView: View {
                     .onSubmit(sendLink)
                     .accessibilityLabel("Paste or type a link")
                     .comfortBorder(radius: 6)
+                // Never greyed out: an empty link does nothing.
                 Button(action: sendLink) {
                     Text("Send").wrapping("Send").comfortTarget()
                 }
-                .disabled(link.trimmingCharacters(in: .whitespaces).isEmpty)
                 .keyboardShortcut(.defaultAction)
                 .comfortBorder()
             }
@@ -205,6 +210,7 @@ struct MacHomeView: View {
 
     private func sendLink() {
         let text = link
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         Task {
             if await model.sendLink(text) { link = "" }
         }
@@ -290,7 +296,7 @@ struct MacSettingsView: View {
                 }
                 if model.isPaired {
                     Button(role: .destructive) { confirmUnpair = true } label: {
-                        Text("Unpair…").wrapping("Unpair…").comfortTarget()
+                        Text("Unpair…").foregroundColor(Comfort.destructive).wrapping("Unpair…").comfortTarget()
                     }
                 }
             } header: {

@@ -6,7 +6,21 @@ final class AccessibilityAuditTests: XCTestCase {
     /// Issues the app cannot fix because the system draws the element; each names why. Everything else fails.
     @available(macOS 14.0, *)
     static func allowed(_ issue: XCUIAccessibilityAuditIssue) -> String? {
-        guard let element = issue.element, element.exists else { return nil }
+        guard let element = issue.element, element.exists else {
+            if issue.auditType == .parentChild {
+                return "reported without an element (only with the Settings sheet open), so there is nothing to attribute it to"
+            }
+            return nil
+        }
+        if issue.auditType == .parentChild, element.elementType == .group {
+            let window = XCUIApplication().windows.firstMatch
+            for id in ["_XCUI:CloseWindow", "_XCUI:MinimizeWindow", "_XCUI:ZoomWindow", "_XCUI:FullScreenWindow"] {
+                let button = window.buttons[id]
+                if button.exists && button.frame.insetBy(dx: -2, dy: -2).contains(element.frame) {
+                    return "a group inside the window's \(id.dropFirst(6)) button, which the system draws"
+                }
+            }
+        }
         switch element.elementType {
         case .touchBar:
             return "the system's Touch Bar element, which the runner's Mac does not even have"

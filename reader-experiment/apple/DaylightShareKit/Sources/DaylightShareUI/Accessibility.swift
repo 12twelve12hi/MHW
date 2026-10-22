@@ -25,16 +25,23 @@ public enum Comfort {
     public static let borderWidth: CGFloat = 2
     /// The text sizes Comfort allows on iPhone and iPad: never smaller than xxLarge, never larger than accessibility3.
     public static let typeSizes: ClosedRange<DynamicTypeSize> = DynamicTypeSize.xxLarge ... DynamicTypeSize.accessibility3
-    /// Every text size (no limit).
-    static let allTypeSizes: ClosedRange<DynamicTypeSize> = DynamicTypeSize.xSmall ... DynamicTypeSize.accessibility5
 
     /// The tint of buttons and links: a blue with at least 4.5:1 contrast both as text on the background and behind white
     /// text (#0058CC, 6.4:1 on white), lighter in dark mode (#4DA3FF, 8:1 on black). The system blue is 4:1 on white.
     public static let accent: Color = adaptive(light: (0x00, 0x58, 0xCC), dark: (0x4D, 0xA3, 0xFF))
 
-    /// Secondary text: the primary colour at 72% (about 9:1 on the background), where the system's secondary grey is
-    /// about 3.5:1 and fails the contrast audit. Comfort uses the primary colour itself.
+    /// Destructive buttons (Unpair): a red with at least 4.5:1 contrast (#C01010, 6.3:1 on white; #FF6B6B in dark
+    /// mode, 7.6:1 on black). The system red is 3.6:1 on white.
+    public static let destructive: Color = adaptive(light: (0xC0, 0x10, 0x10), dark: (0xFF, 0x6B, 0x6B))
+
+    /// Secondary text: on iPhone and iPad the primary colour at 72% (about 9:1 on the background), where the system's
+    /// secondary grey is about 3.5:1 and fails the contrast audit; on the Mac, whose small text sizes the audit holds to
+    /// a higher contrast, the primary colour. Comfort uses the primary colour everywhere.
+    #if os(macOS)
+    public static let secondaryText = Color.primary
+    #else
     public static let secondaryText = Color.primary.opacity(0.72)
+    #endif
 
     static func adaptive(light: (Int, Int, Int), dark: (Int, Int, Int)) -> Color {
         func rgb(_ c: (Int, Int, Int)) -> (CGFloat, CGFloat, CGFloat) {
@@ -146,7 +153,11 @@ public struct ComfortModifier: ViewModifier {
         content
             .environment(\.comfort, isOn)
             .tint(Comfort.accent)
-            .dynamicTypeSize(isOn ? Comfort.typeSizes : Comfort.allTypeSizes)
+            // Only with Comfort on is the text size held in Comfort's range; otherwise the system's size goes through
+            // untouched, so text follows a change of size at once (as the Dynamic Type audit checks).
+            .transformEnvironment(\.dynamicTypeSize) { size in
+                if isOn { size = min(max(size, Comfort.typeSizes.lowerBound), Comfort.typeSizes.upperBound) }
+            }
             .controlSize(isOn ? .large : .regular)
             #if os(macOS)
             .font(isOn ? Comfort.font(.body, comfort: true) : nil)

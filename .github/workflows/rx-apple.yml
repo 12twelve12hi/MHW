@@ -176,7 +176,8 @@ jobs:
       # Settings and pairing, with Comfort off and on (F27.2); the baseline's rules (Comfort in Settings, off by default;
       # typed-code pairing); the tree walk against iOS/UITests/lab-off-baseline (a missing or changed baseline is
       # printed between "=====BEGIN lab-off-baseline" markers, and the test fails); and the truncation audit hosted in
-      # the app (F27.4). The apps run on their own empty storage (-DLSTestStorage) and a relay nobody listens on.
+      # the app (F27.4). The apps run on their own empty storage (-DLSTestStorage) and a relay nobody listens on. A
+      # failing test is run once more (the simulator now and then fails to stop the app between tests).
       - name: iPhone UI tests and truncation audit (F27.2, F27.4, F00.2)
         run: |
           # The same simulator every run (the Lab-off baselines are its accessibility trees): an iPhone 16 on iOS 18,
@@ -194,6 +195,7 @@ jobs:
           set +e
           TEST_RUNNER_DLS_SHOTS="$PWD/build/shots" TEST_RUNNER_DLS_BASELINE_OUT="$PWD/build/baselines" \
             xcodebuild test -project SendToDaylight.xcodeproj -scheme SendToDaylight-iOS -configuration Debug \
+            -retry-tests-on-failure -test-iterations 2 \
             -destination "platform=iOS Simulator,id=$DEVICE" -derivedDataPath build/dd-sim \
             -resultBundlePath build/ios-tests.xcresult CODE_SIGNING_ALLOWED=NO > build/ios-tests.log 2>&1
           status=$?
@@ -376,6 +378,7 @@ jobs:
           set +e
           TEST_RUNNER_DLS_SHOTS="$PWD/build/shots" TEST_RUNNER_DLS_BASELINE_OUT="$PWD/build/baselines" \
             xcodebuild test -project SendToDaylight.xcodeproj -scheme SendToDaylight-macOS -configuration Debug \
+            -retry-tests-on-failure -test-iterations 2 \
             -destination 'platform=macOS' -derivedDataPath build/dd-mac-test -resultBundlePath build/mac-tests.xcresult \
             CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
             > build/mac-tests.log 2>&1

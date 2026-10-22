@@ -32,22 +32,21 @@ struct HomeView: View {
                         .labelStyle(.iconOnly)
                         .buttonBorderShape(.capsule)
                     }
+                    // Never greyed out (an empty link does nothing); the icon and words side by side, the words free to
+                    // wrap at any text size.
                     Button(action: sendLink) {
-                        Label {
-                            Text("Send the link").listRowText("Send the link")
-                        } icon: {
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
                             Image(systemName: "paperplane").accessibilityHidden(true)
+                            Text("Send the link").listRowText("Send the link")
                         }
                         .comfortTarget()
                     }
-                    .disabled(link.trimmingCharacters(in: .whitespaces).isEmpty)
                     Button {
                         model.sheet = .files
                     } label: {
-                        Label {
-                            Text("Send a file…").listRowText("Send a file…")
-                        } icon: {
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
                             Image(systemName: "doc.badge.plus").accessibilityHidden(true)
+                            Text("Send a file…").listRowText("Send a file…")
                         }
                         .comfortTarget()
                     }
@@ -83,8 +82,8 @@ struct HomeView: View {
                 }
             }
             .navigationTitle("Send to Daylight")
-            // A large title is cut short at accessibility sizes; Comfort keeps it in the bar.
-            .navigationBarTitleDisplayMode(model.comfort ? .inline : .automatic)
+            // In the bar: a large title is cut short at large text sizes.
+            .navigationBarTitleDisplayMode(.inline)
             .refreshable { await model.refresh() }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -154,7 +153,7 @@ struct SettingsView: View {
                         }
                     }
                     Button(role: .destructive) { confirmUnpair = true } label: {
-                        Text("Unpair").listRowText("Unpair").comfortTarget()
+                        Text("Unpair").foregroundColor(Comfort.destructive).listRowText("Unpair").comfortTarget()
                     }
                 } header: {
                     Text("Your Daylight").dlsSecondary().listRowText("Your Daylight")

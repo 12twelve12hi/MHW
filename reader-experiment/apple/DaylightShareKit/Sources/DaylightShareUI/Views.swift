@@ -40,7 +40,6 @@ public struct PairingForm: View {
                     Text("Pair").wrapping("Pair").comfortTarget()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .comfortBorder()
                 #if os(iOS)
                 PasteButton(payloadType: String.self) { strings in
