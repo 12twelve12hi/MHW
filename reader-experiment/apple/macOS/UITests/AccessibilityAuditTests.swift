@@ -60,11 +60,13 @@ final class AccessibilityAuditTests: XCTestCase {
                 if !inSheet.exists && sheet.frame.intersects(element.frame) {
                     return "text of the main window under the open Settings sheet"
                 }
-                // The scroll view the text is in: Settings', or that of a page its Lab section opened (the
-                // navigation stack keeps Settings in the tree underneath).
-                let scrolls = sheet.scrollViews.allElementsBoundByIndex.filter { $0.frame.intersects(element.frame) }
-                if inSheet.exists && scrolls.contains(where: { !$0.frame.insetBy(dx: -1, dy: -1).contains(element.frame) }) {
-                    return "text the Settings sheet has scrolled partly out of view"
+                // Inside no scroll view of the sheet as it shows: Settings' form, or that of a page its Lab section
+                // opened (the navigation stack keeps Settings in the tree underneath), has scrolled it partly or
+                // wholly out of view, and the audit measures it where it is laid out.
+                let scrolls = sheet.scrollViews.allElementsBoundByIndex
+                if inSheet.exists && !scrolls.isEmpty
+                    && !scrolls.contains(where: { $0.frame.insetBy(dx: -1, dy: -1).contains(element.frame) }) {
+                    return "text the Settings sheet has scrolled partly or wholly out of view"
                 }
             } else if let list = UITestSupport.historyList(), !list.visible.insetBy(dx: -1, dy: -1).contains(element.frame),
                       list.outline.staticTexts.matching(NSPredicate(format: "value == %@", value)).firstMatch.exists {
