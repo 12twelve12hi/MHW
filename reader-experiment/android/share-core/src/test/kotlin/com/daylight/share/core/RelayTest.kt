@@ -478,6 +478,58 @@ class RelayTest {
         return frames.map { c.publish(topic, it) }
     }
 
+    /**
+     * LAB-PROTOCOL 2.7.1: a poll whose ack publish the relay refuses for its limits reports 429 or 413 in
+     * [Receiver.Result.limitStatus] (the Lab Inbox gives way for an hour on it), and so does [Receiver.sendAcks] on the
+     * live path; any other failure reports 0. The ack goes out with the next poll's digest.
+     */
+    @Test
+    fun aRefusedAckPublishReportsTheRelaysLimit() {
+        MockRelay.start("--control").use { m ->
+            for (status in listOf(429, 413)) {
+                val p = pairing(m.url)
+                val inbox = Inbox(p)
+                val (prepared, frames) = ItemBuilder.buildFrames(p.keys, OutgoingItem(Kind.URL, url = "https://example.com/$status"), null)
+                publishAll(m.url, p.keys.inboxTopic, frames)
+                m.control("fail-publish?count=1&status=$status&topic=${p.keys.ackTopic}")
+                val r = inbox.receiver.pollOnce()
+                assertEquals(listOf(prepared.header.id), r.items.map { it.id })
+                assertTrue(r.ackIds.isEmpty())
+                assertNotNull(r.ackError)
+                assertEquals(status, r.limitStatus)
+                assertFalse("no download was limited", r.limited)
+                // The next poll's digest carries the ack; nothing is limited any more.
+                val next = inbox.receiver.pollOnce()
+                assertNull(next.ackError)
+                assertEquals(0, next.limitStatus)
+                assertEquals(listOf(prepared.header.id), next.digestIds)
+
+                // The live path: sendAcks says the same; publishAcks keeps its v1.1 answer (the error only).
+                m.control("fail-publish?count=1&status=$status&topic=${p.keys.ackTopic}")
+                val live = inbox.receiver.sendAcks(listOf(prepared.header.id))
+                assertEquals(status, live.limitStatus)
+                assertTrue(live.published.isEmpty())
+                assertNotNull(live.error)
+                m.control("fail-publish?count=1&status=$status&topic=${p.keys.ackTopic}")
+                assertNotNull(inbox.receiver.publishAcks(listOf(prepared.header.id)))
+                val ok = inbox.receiver.sendAcks(listOf(prepared.header.id))
+                assertEquals(listOf(prepared.header.id), ok.published)
+                assertNull(ok.error)
+                assertEquals(0, ok.limitStatus)
+            }
+            // A failure that is not the relay's limit (a 500 after the retries, a 403) reports 0.
+            for (status in listOf(500, 403)) {
+                val p = pairing(m.url)
+                val inbox = Inbox(p)
+                publishAll(m.url, p.keys.inboxTopic, ItemBuilder.buildFrames(p.keys, OutgoingItem(Kind.URL, url = "https://example.com/$status"), null).second)
+                m.control("fail-publish?count=${if (status == 500) 4 else 1}&status=$status&topic=${p.keys.ackTopic}")
+                val r = inbox.receiver.pollOnce()
+                assertNotNull(r.ackError)
+                assertEquals(0, r.limitStatus)
+            }
+        }
+    }
+
     @Test
     fun downloadFailureHoldsTheCursor() {
         MockRelay.start("--control").use { m ->
@@ -490,6 +542,7 @@ class RelayTest {
             val r1 = inbox.receiver.pollOnce()
             assertTrue(r1.items.isEmpty())
             assertFalse(r1.limited)
+            assertEquals(0, r1.limitStatus)
             assertTrue("held at the retry", inbox.receiver.since().toLong() <= pub.time!! - Limits.CURSOR_OVERLAP_S)
             assertFalse(inbox.receiver.handled(pub.id!!))
             assertEquals(listOf(prepared.header.id), inbox.receiver.pollOnce().items.map { it.id })
@@ -501,6 +554,7 @@ class RelayTest {
             val limited = inbox.receiver.pollOnce()
             assertTrue(limited.items.isEmpty())
             assertTrue(limited.limited)
+            assertEquals("a download's 429 (LAB-PROTOCOL 2.7.1)", 429, limited.limitStatus)
             assertEquals(1, m.downloadsById()[g.id])
             assertNull("no request after the 429", m.downloadsById()[h.id])
             assertTrue(inbox.receiver.since().toLong() <= g.time!! - Limits.CURSOR_OVERLAP_S)

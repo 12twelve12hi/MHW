@@ -96,8 +96,11 @@ class Receiver(
      * [items]: new items, stored; each header carries its Lab extras (`ItemHeader.extras`, LAB-PROTOCOL 2.3), as the
      * [Reassembler.Completed] handed to [accept] does. [ackIds]: this poll's ids whose ack was published. [digestIds]: older ids the digest
      * re-published. [ackError]: why an ack could not be published (null when all went out). [storeError]: why an item
-     * could not be stored ([accept] threw, or a part or its content could not be written; null when all were stored). [limited]: a download answered 429 or 413 (the relay is
-     * limiting this network; what it held back arrives later).
+     * could not be stored ([accept] threw, or a part or its content could not be written; null when all were stored).
+     * [limited]: a download answered 429 or 413 (the relay is limiting this network; what it held back arrives later).
+     * [limitStatus]: the JS `limited` of LAB-PROTOCOL 2.7.1: 429 or 413 when the relay refused this poll's ack (or
+     * digest) publish for its limits, else 429 when it answered a download with 429, else 0. A Lab Inbox passes it to
+     * `LabInbox.noteRelayLimit` (2.2.4: Lab frames give way for an hour after any of them).
      */
     class Result(
         val items: List<ItemHeader>,
@@ -106,7 +109,14 @@ class Receiver(
         val storeError: String? = null,
         val digestIds: List<String> = emptyList(),
         val limited: Boolean = false,
+        val limitStatus: Int = 0,
     )
+
+    /**
+     * What [sendAcks] did: [published] the ids whose ack frame went out; [error] why the rest did not (null when every
+     * frame went out); [limitStatus] 429 or 413 when the relay refused a frame for its limits, else 0.
+     */
+    class AckOutcome(val published: List<String>, val error: String?, val limitStatus: Int = 0)
 
     /**
      * Polls once, handles everything new, saves the state, then publishes the acks (and the digest when due). Throws
@@ -131,12 +141,16 @@ class Receiver(
                 .take(Limits.DIGEST_MAX_IDS)
                 .map { it.key }
         }
-        val (published, ackError) = publishAcksOrError(acks + digest)
+        val out = sendAcks(acks + digest)
+        val ackError = out.error
         if (ackError != null) state.lastDigest = 0
         else if (digestDue) state.lastDigest = now
         if (ackError != null || digestDue) store.save(state)
-        val sent = published.toHashSet()
-        Result(handled.items, acks.filter { it in sent }, ackError, handled.storeError, digest.filter { it in sent }, handled.limited)
+        val sent = out.published.toHashSet()
+        Result(
+            handled.items, acks.filter { it in sent }, ackError, handled.storeError, digest.filter { it in sent }, handled.limited,
+            if (out.limitStatus != 0) out.limitStatus else handled.limitStatus,
+        )
     }
 
     /** The cursor to resume a live stream from. */
@@ -150,7 +164,8 @@ class Receiver(
 
     /**
      * Handles messages from the live stream with the same rules as a poll (download outcomes, holds, cursor). Returns
-     * the ids to ack: publish them with [publishAcks] and call [ackFailed] when that fails.
+     * the ids to ack: publish them with [sendAcks] (or [publishAcks]) and call [ackFailed] when that fails. Its
+     * [Result.limitStatus] is 429 when a download answered 429; the ack publish's own goes in [AckOutcome.limitStatus].
      */
     fun handleLive(msgs: List<RelayMessage>): Result = synchronized(lock) {
         val state = store.load()
@@ -192,9 +207,11 @@ class Receiver(
             failed += item
         }
         var limited = false
+        var downloadLimit = 0
         for (m in msgs) {
             newest = maxOf(newest, m.time)
             if (m.status == 429 || m.status == 413) limited = true
+            if (m.status == 429) downloadLimit = 429
             when (m.outcome) {
                 Outcome.SKIPPED -> continue
                 Outcome.RETRY -> {
@@ -266,16 +283,21 @@ class Receiver(
         }
         for (t in state.incomplete.values) held = minOf(held ?: t, t)
         if (msgs.isNotEmpty()) state.since = RelayClient.nextCursor(state.since, newest, held)
-        return Result(items, ack.toList(), null, storeError, limited = limited)
+        return Result(items, ack.toList(), null, storeError, limited = limited, limitStatus = downloadLimit)
     }
 
     /**
      * Publishes acks for [ids] in frames of at most [Limits.MAX_ACK_IDS] (always small frames: messages), stopping at
-     * the first failure. Never throws. Returns the error, or null when every frame went out.
+     * the first failure. Never throws. Returns the error, or null when every frame went out. [sendAcks] also says
+     * which ids went out and whether the relay refused a frame for its limits (429 or 413).
      */
-    fun publishAcks(ids: Collection<String>): String? = publishAcksOrError(ids).second
+    fun publishAcks(ids: Collection<String>): String? = sendAcks(ids).error
 
-    private fun publishAcksOrError(ids: Collection<String>): Pair<List<String>, String?> {
+    /**
+     * [publishAcks] with its whole outcome: the ids that went out, the error, and the relay's 429 or 413 (the live
+     * path passes [AckOutcome.limitStatus] to `LabInbox.noteRelayLimit`, as a poll passes [Result.limitStatus]).
+     */
+    fun sendAcks(ids: Collection<String>): AckOutcome {
         val list = ids.distinct()
         val published = ArrayList<String>()
         var i = 0
@@ -284,14 +306,15 @@ class Receiver(
             try {
                 relay.publish(keys.ackTopic, AckHeader.frame(keys, slice, from, clock()))
             } catch (e: ShareException) {
-                return published to (e.message ?: e.code)
+                val limit = if (e.status == 429 || e.status == 413) e.status else 0
+                return AckOutcome(published, e.message ?: e.code, limit)
             } catch (e: RuntimeException) {
-                return published to (e.message ?: e.javaClass.simpleName)
+                return AckOutcome(published, e.message ?: e.javaClass.simpleName)
             }
             published += slice
             i += Limits.MAX_ACK_IDS
         }
-        return published to null
+        return AckOutcome(published, null)
     }
 
     private fun prune(state: ReceiverState, now: Long) {

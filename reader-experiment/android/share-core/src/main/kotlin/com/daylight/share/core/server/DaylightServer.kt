@@ -375,17 +375,21 @@ class DaylightServer(
     companion object {
         private fun longOf(v: Any?): Long? = (v as? Number)?.toLong()
 
-        /** The manual address's origin: https, or http on localhost / 127.0.0.1 (tests); null for anything else. */
+        /**
+         * The manual address's origin: https, or http on localhost / 127.0.0.1 (tests); null for anything else, and for
+         * a host the JS reference's `new URL(…).origin` would write differently.
+         */
         internal fun manualOrigin(url: String): String? {
             val m = Regex("^(https?)://([^/?#@\\s]+)(?:[/?#].*)?$", RegexOption.IGNORE_CASE).matchEntire(url.trim()) ?: return null
             val scheme = m.groupValues[1].lowercase()
-            var hostport = m.groupValues[2].lowercase()
-            val host = if (hostport.startsWith("[")) hostport.substringBefore(']') + "]" else hostport.substringBefore(':')
+            val hp = Regex("^([a-z0-9_.-]+|\\[[0-9a-f:.]+])(?::([0-9]{1,5}))?$").matchEntire(m.groupValues[2].lowercase()) ?: return null
+            val host = hp.groupValues[1]
             if (scheme == "http" && host != "localhost" && host != "127.0.0.1") return null
-            if (scheme == "https" && hostport.endsWith(":443")) hostport = hostport.removeSuffix(":443")
-            if (scheme == "http" && hostport.endsWith(":80")) hostport = hostport.removeSuffix(":80")
-            if (host.isEmpty() || !Regex("^([a-z0-9_.-]+|\\[[0-9a-f:.]+])(:[0-9]{1,5})?$").matches(hostport)) return null
-            return "$scheme://$hostport"
+            // A host a URL parser would rewrite (a numeric IPv4 form, a long IPv6 form) is refused rather than kept.
+            if (!WebHost.isCanonical(host)) return null
+            val port = hp.groupValues[2].takeIf { it.isNotEmpty() }?.toInt()
+            if (port != null && port > 65535) return null
+            return if (port == null || port == (if (scheme == "https") 443 else 80)) "$scheme://$host" else "$scheme://$host:$port"
         }
 
         /**

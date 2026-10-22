@@ -217,8 +217,9 @@ data class ServerConfig(val server: String, val api: Int, val fingerprint: Strin
          * The 4.3 rules for an opened config header (the JS `checkConfig`). -> a clean config or null. `server` must be
          * an https origin as it serialises (lowercase host, no default port, no user info, path, query or fragment; one
          * trailing '/' allowed), `sent` an ISO time no more than 5 minutes ahead of [now], `api` an integer >= 1 and
-         * `fingerprint` 8 hex digits. Hosts are read more strictly than a WHATWG parser would: letters, digits, '-',
-         * '_' and '.' only, or a bracketed IPv6 address.
+         * `fingerprint` 8 hex digits. It accepts no server the JS `checkConfig` refuses ([WebHost]): a numeric host
+         * only as a canonical dotted quad, IPv6 only in its canonical form, `xn--` labels only when they decode. It
+         * refuses a few the JS accepts (a host that starts with '.', port 0).
          */
         fun check(header: Map<String, Any?>?, now: Long): ServerConfig? {
             val h = header ?: return null
@@ -246,10 +247,118 @@ data class ServerConfig(val server: String, val api: Int, val fingerprint: Strin
             val s = server.removeSuffix("/")
             val m = HTTPS_ORIGIN.matchEntire(s) ?: return null
             val host = m.groupValues[1]
-            if (host.isEmpty() || host.startsWith(".")) return null
+            if (host.isEmpty() || host.startsWith(".") || !WebHost.isCanonical(host)) return null
             val port = m.groupValues[2]
             if (port.isNotEmpty() && (port.toInt() > 65535 || port == "443")) return null
             return s
         }
+    }
+}
+
+/**
+ * Whether a host, already lowercase and made of `[a-z0-9_.-]` or a bracketed `[0-9a-f:.]` address, is exactly how a
+ * WHATWG URL parser serialises it, so `new URL("https://" + host).host == host` (the JS references compare origins
+ * that way). Checked against node's URL in `ServerVectorsTest.hostsMatchWhatwg`.
+ *
+ * - A host whose last label (a trailing dot aside) is all digits, or `0x` and hex digits, is an IPv4 address: only the
+ *   canonical dotted quad serialises as itself (`0x7f.1`, `1.2.3`, `2130706433`, `01.2.3.4`, `1.2.3.4.` do not).
+ * - A bracketed IPv6 address must be in its canonical form: lowercase, no leading zeros, the first longest run of two
+ *   or more zero pieces as `::`, no dotted IPv4 tail.
+ * - An `xn--` label must decode as Punycode and encode back to itself.
+ */
+internal object WebHost {
+    private val DOTTED_QUAD = Regex("^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$")
+    private val HEX_NUMBER = Regex("^0x[0-9a-f]*$")
+    private val PIECE = Regex("^[0-9a-f]{1,4}$")
+
+    fun isCanonical(host: String): Boolean = when {
+        host.startsWith("[") -> host.endsWith("]") && canonicalIpv6(host.substring(1, host.length - 1))
+        endsInANumber(host) -> DOTTED_QUAD.matches(host)
+        else -> host.split('.').all(::labelDecodes)
+    }
+
+    /** WHATWG's "ends in a number" checker: such a host is parsed as IPv4. */
+    private fun endsInANumber(host: String): Boolean {
+        val parts = host.split('.').toMutableList()
+        if (parts.last().isEmpty()) {
+            if (parts.size == 1) return false
+            parts.removeAt(parts.size - 1)
+        }
+        val last = parts.last()
+        return (last.isNotEmpty() && last.all { it in '0'..'9' }) || HEX_NUMBER.matches(last)
+    }
+
+    /** An ASCII label is kept as it is; an `xn--` label must decode and encode back to itself (UTS 46 refuses it otherwise). */
+    private fun labelDecodes(label: String): Boolean {
+        if (!label.startsWith("xn--")) return true
+        val unicode = try {
+            java.net.IDN.toUnicode(label, java.net.IDN.ALLOW_UNASSIGNED)
+        } catch (e: Exception) {
+            return false
+        }
+        if (unicode.isEmpty() || unicode == label) return false // toUnicode answers its input when it cannot decode
+        val back = try {
+            java.net.IDN.toASCII(unicode, java.net.IDN.ALLOW_UNASSIGNED)
+        } catch (e: Exception) {
+            return false
+        }
+        return back == label
+    }
+
+    /** [s] (no brackets) is an IPv6 address written exactly as WHATWG serialises it. */
+    private fun canonicalIpv6(s: String): Boolean {
+        if (s.isEmpty() || '.' in s) return false
+        val halves = s.split("::")
+        if (halves.size > 2) return false
+        fun pieces(t: String): List<Int>? = if (t.isEmpty()) emptyList() else t.split(':').map { p ->
+            if (!PIECE.matches(p)) return null
+            p.toInt(16)
+        }
+        val head = pieces(halves[0]) ?: return false
+        val tail = if (halves.size == 2) pieces(halves[1]) ?: return false else emptyList()
+        val a = IntArray(8)
+        if (halves.size == 1) {
+            if (head.size != 8) return false
+            head.forEachIndexed { i, v -> a[i] = v }
+        } else {
+            if (head.size + tail.size > 7) return false
+            head.forEachIndexed { i, v -> a[i] = v }
+            tail.forEachIndexed { i, v -> a[8 - tail.size + i] = v }
+        }
+        return serializeIpv6(a) == s
+    }
+
+    /** The WHATWG IPv6 serializer: the first longest run of two or more zero pieces becomes `::`. */
+    private fun serializeIpv6(a: IntArray): String {
+        var compress = -1
+        var best = 1
+        var i = 0
+        while (i < 8) {
+            if (a[i] != 0) {
+                i++
+                continue
+            }
+            var j = i
+            while (j < 8 && a[j] == 0) j++
+            if (j - i > best) {
+                best = j - i
+                compress = i
+            }
+            i = j
+        }
+        val sb = StringBuilder()
+        var ignore0 = false
+        for (k in 0 until 8) {
+            if (ignore0 && a[k] == 0) continue
+            ignore0 = false
+            if (compress == k) {
+                sb.append(if (k == 0) "::" else ":")
+                ignore0 = true
+                continue
+            }
+            sb.append(Integer.toHexString(a[k]))
+            if (k != 7) sb.append(':')
+        }
+        return sb.toString()
     }
 }

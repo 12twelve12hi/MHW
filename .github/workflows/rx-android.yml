@@ -15,8 +15,9 @@ on:
       - 'reader-experiment/android/**'
       - 'reader-experiment/share/**'
       - '!reader-experiment/share/**/*.md'
-      # share-core's server client passes the server lane's vectors (LAB-PLAN 2.6)
+      # share-core's server client passes the server lane's vectors (LAB-PLAN 2.6) and reads addresses as its JS does
       - 'reader-experiment/server/vectors/**'
+      - 'reader-experiment/server/client/daylight-server.js'
       - '.github/workflows/rx-android.yml'
   workflow_dispatch:
 

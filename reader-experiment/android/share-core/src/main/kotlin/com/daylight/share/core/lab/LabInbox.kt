@@ -6,6 +6,7 @@ import com.daylight.share.core.RelayClient
 import com.daylight.share.core.ShareException
 import java.time.Instant
 import java.time.ZoneOffset
+import java.util.WeakHashMap
 
 /**
  * The Inbox side of the Lab frames (LAB-PROTOCOL 2.2.4; the JS `LabInbox`, its reference): it records item states and
@@ -23,8 +24,14 @@ import java.time.ZoneOffset
  * Rules: frames carry at most 24 states, oldest first, at most one every 30 s; nothing goes while the last poll's acks
  * failed or within an hour of a 429 or 413; at most 30 hellos and state frames a UTC day (digest frames and the lab: 0
  * frames are outside the cap); a batch that is not small is halved down to one entry, and an entry that still does not
- * fit is dropped; at most 500 pending entries (the oldest go first). Every method is blocking and runs under the
- * store's lock; [flush] publishes, so run it off the main thread.
+ * fit is dropped; at most 500 pending entries (the oldest go first).
+ *
+ * Threads: every method is blocking. [record], [notePolled], [noteAcksFailed], [noteRelayLimit], [clear] and
+ * [debugState] only read and write the store, under its lock, and never wait for the relay: [flush] holds that lock to
+ * choose and build its frame and again to commit what went out, but not while it publishes. [flush], and [labTurnedOn],
+ * [labTurnedOff] and [digest] (which flush), publish: with the pairing's [RelayClient] that can take about two minutes
+ * (four attempts, 30 s reads, 1 + 2 + 4 s apart), so run them off the main thread. Flushes of one store run one at a
+ * time (a second waits for the first); [clear] during a publish wins, and the publish's outcome is not written back.
  */
 class LabInbox(
     private val store: LabStore,
@@ -180,12 +187,7 @@ class LabInbox(
      * waits.
      */
     fun flush(): FlushResult {
-        var next: Long? = null
-        val r = synchronized(store.lock) {
-            val (res, wait) = flushLocked()
-            next = wait
-            res
-        }
+        val (r, next) = synchronized(flushLockOf(store.lock)) { flushOnce() }
         next?.let { schedule?.invoke(it) }
         return r
     }
@@ -203,26 +205,57 @@ class LabInbox(
         return LabInboxInfo(i.lab, i.app, i.caps, i.poll ?: st.lastPoll, i.live)
     }
 
-    private fun flushLocked(): Pair<FlushResult, Long?> {
-        while (true) {
-            val st = load()
-            val now = clock()
-            val day = utcDay(now)
-            if (st.day != day) {
-                st.day = day
-                st.dayCount = 0
+    /** A frame [plan] chose and built: [kind], the [batch] it carries, the [hello] it says, at [now]. */
+    private class Plan(val kind: String, val batch: List<LabState>, val hello: LabInboxInfo, val frame: ByteArray, val now: Long)
+
+    /**
+     * One flush, under the store's flush lock: [plan] (the store's lock), the publish (no lock but the flush lock, so
+     * [record] and the notes go on meanwhile), then [commit] (the store's lock) on the state as it is by then.
+     */
+    private fun flushOnce(): Pair<FlushResult, Long?> {
+        val (none, p) = synchronized(store.lock) { plan() }
+        if (p == null) return none!! to none.waitMs // the spacing's wait, else nothing to schedule
+        try {
+            relay.publish(keys.ackTopic, p.frame)
+        } catch (e: Exception) {
+            val status = (e as? ShareException)?.status ?: 0
+            synchronized(store.lock) {
+                val st = loadIfKept()
+                if (st != null && (status == 429 || status == 413)) {
+                    st.limitUntil = maxOf(st.limitUntil, p.now + Lab.LAB_YIELD_MS)
+                    save(st)
+                }
             }
-            st.published.removeAll { !(it.t * 1000 >= now - Lab.STATE_DIGEST_WINDOW_MS || it.at >= now - Lab.STATE_DIGEST_WINDOW_MS) }
-            fun none(reason: String, waitMs: Long? = null, error: Exception? = null) = FlushResult(0, null, 0, reason, waitMs, error)
-            val info = currentInfo(st)
+            log("lab: publish failed ${e.message ?: e.javaClass.simpleName}")
+            return FlushResult(0, null, 0, "error", error = e) to null
+        }
+        return synchronized(store.lock) { commit(p) }
+    }
+
+    /**
+     * Chooses the frame that goes next and builds it (halving a batch that is not small, dropping an entry that alone
+     * does not fit), or answers why nothing goes. Saves the state either way (the new UTC day, the pruned published list).
+     */
+    private fun plan(): Pair<FlushResult?, Plan?> {
+        val st = load()
+        val now = clock()
+        val day = utcDay(now)
+        if (st.day != day) {
+            st.day = day
+            st.dayCount = 0
+        }
+        st.published.removeAll { !(it.t * 1000 >= now - Lab.STATE_DIGEST_WINDOW_MS || it.at >= now - Lab.STATE_DIGEST_WINDOW_MS) }
+        fun none(reason: String, waitMs: Long? = null): Pair<FlushResult?, Plan?> {
+            save(st)
+            return FlushResult(0, null, 0, reason, waitMs) to null
+        }
+        val info = currentInfo(st)
+        while (true) {
             val kind: String
             var batch: List<LabState> = emptyList()
             when {
                 !st.on -> {
-                    if (!st.offPending) {
-                        save(st)
-                        return none("off") to null
-                    }
+                    if (!st.offPending) return none("off")
                     kind = "off"
                 }
                 st.digest.isNotEmpty() -> {
@@ -235,28 +268,16 @@ class LabInbox(
                 }
                 st.helloDue || st.lastInfo == null || st.lastInfo!!.app != Lab.readApp(info.app) ||
                     st.lastInfo!!.caps != Lab.readCaps(info.caps) || now - st.lastFrameAt > Lab.HELLO_EVERY_MS -> kind = "hello"
-                else -> {
-                    save(st)
-                    return none("idle") to null
-                }
+                else -> return none("idle")
             }
-            if (st.acksFailed || now < st.limitUntil) {
-                save(st)
-                return none("yield") to null
-            }
+            if (st.acksFailed || now < st.limitUntil) return none("yield")
             if (st.lastFrameAt != 0L && now - st.lastFrameAt < Lab.LAB_FRAME_GAP_MS) {
-                val waitMs = st.lastFrameAt + Lab.LAB_FRAME_GAP_MS - now
-                save(st)
-                return none("spacing", waitMs) to waitMs
+                return none("spacing", st.lastFrameAt + Lab.LAB_FRAME_GAP_MS - now)
             }
-            if ((kind == "states" || kind == "hello") && st.dayCount >= Lab.LAB_FRAMES_PER_DAY) {
-                save(st)
-                return none("cap") to null
-            }
+            if ((kind == "states" || kind == "hello") && st.dayCount >= Lab.LAB_FRAMES_PER_DAY) return none("cap")
 
             val hello = if (kind == "off") info.copy(lab = 0, caps = emptyList()) else info
             var frame: ByteArray? = null
-            var dropped = false
             while (frame == null) {
                 try {
                     frame = buildFrame(keys, hello, batch, from, Bytes.isoTime(now))
@@ -266,56 +287,68 @@ class LabInbox(
                         batch = batch.take((batch.size + 1) / 2)
                         continue
                     }
-                    val d = batch[0]
-                    log("lab: dropped state ${d.i} ${d.s}: the frame is not small")
-                    st.pending.removeAll { it.i == d.i }
-                    if (kind == "digest") {
-                        st.digest[0].removeAll { it.i == d.i }
-                        if (st.digest[0].isEmpty()) st.digest.removeAt(0)
-                    }
-                    save(st)
-                    dropped = true
                     break
                 }
             }
-            if (dropped) continue // flush again, without the entry that does not fit
-            try {
-                relay.publish(keys.ackTopic, frame!!)
-            } catch (e: Exception) {
-                val status = (e as? ShareException)?.status ?: 0
-                if (status == 429 || status == 413) st.limitUntil = maxOf(st.limitUntil, now + Lab.LAB_YIELD_MS)
-                save(st)
-                log("lab: publish failed ${e.message ?: e.javaClass.simpleName}")
-                return none("error", error = e) to null
-            }
-            st.lastFrameAt = now
-            st.lastInfo = LastInfo(Lab.readApp(hello.app), Lab.readCaps(hello.caps))
-            if (kind == "off") {
-                st.offPending = false
-            } else {
-                st.helloDue = false
+            if (frame == null) {
+                val d = batch[0]
+                log("lab: dropped state ${d.i} ${d.s}: the frame is not small")
+                st.pending.removeAll { it.i == d.i }
                 if (kind == "digest") {
-                    val ids = batch.mapTo(HashSet()) { it.i }
-                    st.digest[0].removeAll { it.i in ids }
+                    st.digest[0].removeAll { it.i == d.i }
                     if (st.digest[0].isEmpty()) st.digest.removeAt(0)
-                } else {
-                    st.dayCount += 1
                 }
-                if (kind == "states") {
-                    val ids = batch.mapTo(HashSet()) { it.i }
-                    st.pending.removeAll { it.i in ids }
-                }
-                for (e in batch) st.published.add(Published(e.i, e.s, e.t, now))
+                continue // choose again, without the entry that does not fit
             }
             save(st)
-            when (kind) {
-                "hello" -> log("lab: hello caps=${st.lastInfo!!.caps.joinToString(",")}${if (hello.lab == 0) " lab=0" else ""}")
-                "off" -> log("lab: hello lab=0")
-                else -> log("lab: states n=${batch.size} published")
-            }
-            val more = st.on && (st.digest.isNotEmpty() || (st.pending.isNotEmpty() && st.dayCount < Lab.LAB_FRAMES_PER_DAY))
-            return FlushResult(1, kind, batch.size, "sent") to (if (more) Lab.LAB_FRAME_GAP_MS else null)
+            return null to Plan(kind, batch, hello, frame, now)
         }
+    }
+
+    /**
+     * Records that [p] went out, on the state as it is now: [record] may have added entries meanwhile (kept when they
+     * beat what went out), [digest] may have queued a new digest (the entries that went out leave it), and Lab may have
+     * been turned on or off (its frame still goes next). Nothing is written when [clear] ran meanwhile.
+     */
+    private fun commit(p: Plan): Pair<FlushResult, Long?> {
+        val kind = p.kind
+        val batch = p.batch
+        val st = loadIfKept()
+        if (st == null) {
+            log("lab: cleared during a publish")
+            return FlushResult(1, kind, batch.size, "sent") to null
+        }
+        st.lastFrameAt = maxOf(st.lastFrameAt, p.now)
+        st.lastInfo = LastInfo(Lab.readApp(p.hello.app), Lab.readCaps(p.hello.caps))
+        if (kind == "off") {
+            st.offPending = false
+        } else {
+            st.helloDue = false
+            if (kind == "digest") {
+                val sent = batch.toHashSet()
+                for (d in st.digest) d.removeAll { it in sent }
+                st.digest.removeAll { it.isEmpty() }
+            } else {
+                val day = utcDay(p.now)
+                if (st.day != day) {
+                    st.day = day
+                    st.dayCount = 0
+                }
+                st.dayCount += 1
+            }
+            for (e in batch) st.published.add(Published(e.i, e.s, e.t, p.now))
+            // The pending entries this frame made old: the ones it carried, and any recorded meanwhile that do not beat it.
+            val sent = batch.associateBy { it.i }
+            st.pending.removeAll { e -> sent[e.i]?.let { !Lab.beats(e, it) } == true }
+        }
+        save(st)
+        when (kind) {
+            "hello" -> log("lab: hello caps=${st.lastInfo!!.caps.joinToString(",")}${if (p.hello.lab == 0) " lab=0" else ""}")
+            "off" -> log("lab: hello lab=0")
+            else -> log("lab: states n=${batch.size} published")
+        }
+        val more = st.on && (st.digest.isNotEmpty() || (st.pending.isNotEmpty() && st.dayCount < Lab.LAB_FRAMES_PER_DAY))
+        return FlushResult(1, kind, batch.size, "sent") to (if (more) Lab.LAB_FRAME_GAP_MS else null)
     }
 
     // ----------------------------------------------------------------------------------------------------- storage
@@ -327,6 +360,9 @@ class LabInbox(
             save(st)
         }
     }
+
+    /** The state, or null when the store is empty: [clear] ran since [plan] saved it. */
+    private fun loadIfKept(): State? = if (runCatching { store.load() }.getOrNull() == null) null else load()
 
     private fun load(): State {
         val m = runCatching { store.load() }.getOrNull() ?: emptyMap()
@@ -388,5 +424,10 @@ class LabInbox(
 
     private companion object {
         fun utcDay(ms: Long): String = Instant.ofEpochMilli(ms).atZone(ZoneOffset.UTC).toLocalDate().toString()
+
+        /** One flush lock per store (keyed by its lock, which is per file for [FileLabStore]). */
+        private val flushLocks = WeakHashMap<Any, Any>()
+
+        fun flushLockOf(storeLock: Any): Any = synchronized(flushLocks) { flushLocks.getOrPut(storeLock) { Any() } }
     }
 }

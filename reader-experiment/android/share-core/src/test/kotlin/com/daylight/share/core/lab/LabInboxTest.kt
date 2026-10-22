@@ -12,9 +12,15 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import java.io.File
 import java.time.Instant
+import java.util.concurrent.Callable
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlin.io.path.createTempDirectory
 
 /**
@@ -327,6 +333,81 @@ class LabInboxTest {
         val rest = lab.flush()
         assertEquals("states", rest.kind)
         assertTrue(frames().last().states.none { s -> all.any { it.i == s.i } })
+    }
+
+    /**
+     * A flush holds the store's lock to choose its frame and to commit it, not while it publishes: record, the notes,
+     * debugState and clear go on meanwhile (K1 calls record from the hand-off, on the main thread). A second flush of
+     * the same file, from another LabInbox too, waits for the first and then keeps the spacing.
+     */
+    @Test
+    fun recordAndTheNotesNeverWaitForAPublishInFlight() {
+        val file = File(createTempDirectory("dls-labinbox").toFile(), "lab-dls-test.json")
+        val lab = inbox(FileLabStore(file))
+        assertEquals("sent", lab.flush().reason) // the hello
+        advance(Lab.LAB_FRAME_GAP_MS)
+        val t = this.t // fixed: the clock moves on below
+        assertTrue(lab.record(id(1), "inbox", t))
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        http.failPublish = {
+            entered.countDown()
+            assertTrue("released", release.await(30, TimeUnit.SECONDS))
+            null
+        }
+        val pool = Executors.newFixedThreadPool(3)
+        try {
+            val first = pool.submit(Callable { lab.flush() })
+            assertTrue(entered.await(10, TimeUnit.SECONDS))
+            val other = inbox(FileLabStore(file)) // the same file, another object (a worker and the app)
+            val second = pool.submit(Callable { other.flush() })
+            pool.submit(Callable {
+                assertTrue(lab.record(id(1), "reader", t)) // beats the entry in flight
+                assertTrue(other.record(id(2), "inbox", t))
+                assertFalse(lab.record(id(3), "done", t))
+                lab.notePolled(clock)
+                lab.noteAcksFailed(false)
+                lab.noteRelayLimit(200)
+                lab.debugState()
+            }).get(5, TimeUnit.SECONDS) // fails with a TimeoutException if any of them waited for the relay
+            try {
+                second.get(300, TimeUnit.MILLISECONDS)
+                fail("the second flush ran while the first was publishing")
+            } catch (e: TimeoutException) {
+                // it waits for the first
+            }
+            release.countDown()
+            assertEquals(LabInbox.FlushResult(1, "states", 1, "sent"), first.get(10, TimeUnit.SECONDS))
+            assertEquals("spacing", second.get(10, TimeUnit.SECONDS).reason)
+            assertEquals(listOf(LabState(id(1), "inbox", t)), frames().last().states)
+            assertEquals(2, frames().size)
+            // What was recorded during the publish is still pending, and goes next.
+            advance(Lab.LAB_FRAME_GAP_MS)
+            assertEquals(2, lab.flush().states)
+            assertEquals(setOf(LabState(id(1), "reader", t), LabState(id(2), "inbox", t)), frames().last().states.toSet())
+
+            // clear() during a publish: it does not wait, and the publish's outcome is not written back.
+            advance(Lab.LAB_FRAME_GAP_MS)
+            assertTrue(lab.record(id(4), "reader", t))
+            val entered2 = CountDownLatch(1)
+            val release2 = CountDownLatch(1)
+            http.failPublish = {
+                entered2.countDown()
+                assertTrue("released", release2.await(30, TimeUnit.SECONDS))
+                null
+            }
+            val third = pool.submit(Callable { lab.flush() })
+            assertTrue(entered2.await(10, TimeUnit.SECONDS))
+            pool.submit(Callable { lab.clear() }).get(5, TimeUnit.SECONDS)
+            release2.countDown()
+            assertEquals("sent", third.get(10, TimeUnit.SECONDS).reason)
+            assertFalse("nothing written after clear()", file.exists())
+            assertTrue(logs.contains("lab: cleared during a publish"))
+        } finally {
+            release.countDown()
+            pool.shutdownNow()
+            http.failPublish = { null }
+        }
     }
 
     @Test

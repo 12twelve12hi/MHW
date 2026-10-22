@@ -5,6 +5,7 @@ import com.daylight.share.core.FrameCodec
 import com.daylight.share.core.Http
 import com.daylight.share.core.Json
 import com.daylight.share.core.Keys
+import com.daylight.share.core.MockRelay
 import com.daylight.share.core.Pairing
 import com.daylight.share.core.Purpose
 import com.daylight.share.core.ShareException
@@ -23,8 +24,12 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Assume
 import org.junit.Test
+import java.io.File
 import java.io.IOException
+import java.time.Instant
+import java.util.concurrent.TimeUnit
 
 /**
  * Checks the Kotlin port of the server client's W0 subset (LAB-PLAN 2.6) against ../../server/vectors/server-vectors.json:
@@ -121,6 +126,76 @@ class ServerVectorsTest {
         for (k in listOf("hello", "ack")) {
             val f = v["frames"].obj()[k].obj()
             assertEquals(k, f["header"], ServerBox.open(values, ServerBox.ACK, Bytes.fromBase64OrNull(f["frameBase64"] as String)!!).first)
+        }
+    }
+
+    /**
+     * `ServerConfig.check` and the manual address never accept a server the JS reference refuses, nor keep one it
+     * would write differently: every address here goes through `checkConfig` and `setManualUrl`'s reading under node,
+     * and what Kotlin accepts must come out the same there. The hosts include WHATWG's other IPv4 forms (`0x7f.1`,
+     * `1.2.3`, `2130706433`), long and dotted IPv6 forms and Punycode labels. Kotlin refuses a few more (a host that
+     * starts with '.', port 0, a numeric host typed as the manual address): never the other way round.
+     */
+    @Test
+    fun hostsMatchWhatwg() {
+        Assume.assumeTrue("node is needed for the JS reference", MockRelay.nodeAvailable())
+        val hosts = listOf(
+            "daylight-0123456789ab.someone.workers.dev", "daylight.example.org", "example.com.", "a_b.example", "-a-.b", "a..b", "..", ".a",
+            "a.", "1e2", "a.b-1", "a.1-b", "1.a", "a.0xg", "a1", "1.2.3.4..", "xn--mnchen-3ya.de", "localhost",
+            "1.2.3.4", "0.0.0.0", "255.255.255.255", "127.0.0.1", "0x7f.1", "1.2.3", "2130706433", "1.2.3.4.", "01.2.3.4", "1.2.3.256",
+            "0x1.2.3.4", "a.1", "a.0x1", "a.0x", "0x", "a.09", "9a.1", "1.2.3.4.5", "0", "00", "1", "4294967295", "4294967296",
+            "0x0.0x0.0x0.0x0", "1..2", "a.1.", "a.0x1.", "123a.456",
+            "xn--a.com", "xn--abc", "xn--", "xn--1.c", "a.xn--0",
+            "[::1]", "[::]", "[1::]", "[::1:0:0]", "[fe80::1]", "[1:2:3:4:5:6:7:8]", "[1:0:0:2::3]", "[1::2:0:0:3:4]", "[::ffff:102:304]",
+            "[0::1]", "[::ffff:1.2.3.4]", "[1:0:0:2:0:0:0:3]", "[1::2:0:0:0:3]", "[1:0:0:2:0:0:3:4]", "[1:0::2:0:0:3:4]",
+            "[0:0:0:0:0:0:0:0]", "[1.2.3.4]", "[::1.2.3.4]", "[1:2:3:4:5:6:7:8:9]", "[1::2::3]", "[::0]", "[1:2:3:4:5:6:7::]",
+            "[1:2:3:4:5:6::8]", "[0001::1]", "[1:2:3:4:5:6:1.2.3.4]", "[1:0::]", "[:1]", "[1:]", "[]",
+        )
+        val addresses = hosts.flatMap { h -> listOf("https://$h", "https://$h/", "https://$h:8443") } + listOf(
+            "https://daylight.example.org:0", "https://daylight.example.org:0443", "https://daylight.example.org:08443", "https://daylight.example.org:65536",
+            "https://Daylight.Example.org/v1/x?y#z", "http://localhost:8787", "http://127.0.0.1:8787/", "http://LOCALHOST", "http://2130706433",
+            "http://localhost:80", "https://daylight.example.org:443/", "http://daylight.example.org",
+        )
+        val file = File.createTempFile("dls-origins", ".json").apply { deleteOnExit() }
+        file.writeText(Json.write(addresses))
+        val lib = File(System.getProperty("dls.serverClient") ?: "../../server/client/daylight-server.js").absolutePath
+        val p = ProcessBuilder(MockRelay.node, File("src/test/js/server-origins.mjs").absolutePath, lib, file.path).redirectErrorStream(true).start()
+        val out = p.inputStream.bufferedReader().readText()
+        check(p.waitFor(60, TimeUnit.SECONDS) && p.exitValue() == 0) { "node failed: $out" }
+        val js = Json.parse(out.trim().lines().last()).objs()
+        assertEquals(addresses.size, js.size)
+
+        val sentMs = Instant.parse("2026-10-22T10:00:00Z").toEpochMilli()
+        fun config(server: String) = ServerConfig.check(
+            mapOf("v" to 1.0, "kind" to "config", "id" to "", "sent" to "2026-10-22T10:00:00.000Z", "server" to server, "api" to 1.0, "fingerprint" to "5138e08d"),
+            sentMs,
+        )?.server
+        val stricter = ArrayList<String>()
+        for ((i, a) in addresses.withIndex()) {
+            val k = config(a)
+            val j = js[i]["config"] as String?
+            if (k != null) assertEquals("config $a", j, k) else if (j != null) stricter += "config $a"
+            val km = DaylightServer.manualOrigin(a)
+            val jm = js[i]["manual"] as String?
+            if (km != null) assertEquals("manual $a", jm, km) else if (jm != null) stricter += "manual $a"
+        }
+        // The review's examples are refused; the canonical forms still pass.
+        for (a in listOf("https://0x7f.1", "https://1.2.3", "https://2130706433", "https://1.2.3.4.", "https://[0::1]", "https://[::ffff:1.2.3.4]", "https://xn--a.com")) {
+            assertNull(a, config(a))
+            assertNull(a, DaylightServer.manualOrigin(a))
+        }
+        for (a in listOf("https://1.2.3.4", "https://[::1]", "https://[1:0:0:2::3]", "https://xn--mnchen-3ya.de", "https://daylight-0123456789ab.someone.workers.dev", "https://example.com.")) {
+            assertEquals(a, a, config(a))
+            assertEquals(a, a, DaylightServer.manualOrigin(a))
+        }
+        // Where Kotlin is stricter than the JS, and only there: config hosts that start with '.' and port 0; manual
+        // addresses whose host the URL parser rewrites (the JS stores the rewritten origin; Kotlin asks again).
+        val dotted = listOf("https://..", "https://../", "https://..:8443", "https://.a", "https://.a/", "https://.a:8443", "https://daylight.example.org:0")
+        assertEquals(dotted.map { "config $it" }.toSet(), stricter.filter { it.startsWith("config ") }.toSet())
+        fun hostOf(u: String) = u.substringAfter("://").substringBefore('/').let { if (it.startsWith("[")) it.substringBefore(']') + "]" else it.substringBefore(':') }.lowercase()
+        for (x in stricter.filter { it.startsWith("manual ") }) {
+            val a = x.removePrefix("manual ")
+            assertTrue(x, hostOf(a) != hostOf(js[addresses.indexOf(a)]["manual"] as String))
         }
     }
 

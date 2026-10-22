@@ -117,7 +117,7 @@ class LabSkewTest {
                 val now = clock()
                 labInbox.notePolled(now)
                 labInbox.noteAcksFailed(res.ackError != null)
-                if (res.limited) labInbox.noteRelayLimit(429)
+                labInbox.noteRelayLimit(res.limitStatus) // the ack publish's 429 or 413, else a download's 429 (2.7.1)
                 for (h in res.items) labInbox.record(h.id, stateFor(h), now / 1000)
                 lastFlush = labInbox.flush()
             }
@@ -227,6 +227,45 @@ class LabSkewTest {
             }
         }
         assertEquals(18, outcomes.size)
+    }
+
+    /**
+     * F17.5 and 2.1 rule 8 through the mock relay: when the relay refuses the Kotlin Daylight's ack publish for its
+     * limits (429 or 413), its Lab frames give way for an hour (Receiver.Result.limitStatus, LAB-PROTOCOL 2.7.1), even
+     * after the next poll's digest carries the ack and the acks are fine again.
+     */
+    @Test
+    fun aRelayLimitOnTheAckPublishMakesLabFramesGiveWayForAnHour() {
+        MockRelay.start("--control", "--visitor-total", "1000000000").use { m ->
+            for (status in listOf(429, 413)) {
+                val p = Pairing(Bytes.random(16), m.url, "Daylight")
+                val sender = LabSender(p, fast(p), tmp("dls-skew-limit"))
+                val daylight = KotlinDaylight(p, lab = true)
+                val (row, _) = sender.send(Kind.URL)
+                m.control("fail-publish?count=1&status=$status&topic=${p.keys.ackTopic}")
+                val r = daylight.pollOnce()
+                assertEquals(listOf(row.id), r.items.map { it.id })
+                assertNotNull(r.ackError)
+                assertEquals(status, r.limitStatus)
+                assertEquals("yield", daylight.lastFlush!!.reason)
+                // Ten minutes on, the digest carries the ack and nothing fails: Lab still gives way.
+                daylight.ahead += 10 * 60_000L
+                val r2 = daylight.pollOnce()
+                assertNull(r2.ackError)
+                assertEquals(0, r2.limitStatus)
+                assertEquals(listOf(row.id), r2.digestIds)
+                assertEquals("yield", daylight.lastFlush!!.reason)
+                assertEquals(1, sender.outbox.checkAcks())
+                assertFalse("no Lab frame within the hour", sender.ledger.snapshot().inboxLab)
+                // After the hour, the state goes (with the Inbox's hello in it).
+                daylight.ahead += Lab.LAB_YIELD_MS
+                daylight.pollOnce()
+                assertEquals(LabInbox.FlushResult(1, "states", 1, "sent"), daylight.lastFlush)
+                sender.outbox.checkAcks()
+                assertTrue(sender.ledger.snapshot().inboxLab)
+                assertEquals("reader", sender.ledger.state(row.id)?.s)
+            }
+        }
     }
 
     // ------------------------------------------------------------------------------- two publishers on one ack topic
