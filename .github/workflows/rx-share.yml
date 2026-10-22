@@ -12,6 +12,8 @@ on:
       - '!reader-experiment/share/**/*.md'
       # lab.test.mjs runs labGate against the server lane's client module (F00.6), so a change there runs this too
       - 'reader-experiment/server/client/**'
+      # lab.test.mjs pins LAB_TEXT against the plan's own copy tables (2.6, 1.6 "Copy added Oct 22", 5.3.4)
+      - 'reader-experiment/LAB-PLAN.md'
       - '.github/workflows/rx-share.yml'
   workflow_dispatch:
   schedule:
