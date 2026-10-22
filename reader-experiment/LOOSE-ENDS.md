@@ -1,6 +1,6 @@
 # Loose ends
 
-Things that are built and waiting on something only the user can provide.
+Things that are built and waiting on something only the user can provide, and things to build later so they aren't forgotten.
 
 ## Sign and notarize the Mac app with your Apple Developer ID
 
@@ -32,3 +32,17 @@ domain on Cloudflare for the email-in address. See `reader-experiment/server/REA
 ## Turn on GitHub Pages for the web sender
 
 MHW › Settings › Pages › Source: GitHub Actions. The sender then lives at https://12twelve12hi.github.io/MHW/send/.
+
+## Later: import a library from the previous Reader app (low priority)
+
+Raised by the user on Oct 22. Not started, and behind everything in the Lab plan, but needed before the new Reader
+reaches customers. People moving to the new Reader should be able to bring their library from the previous Reader app,
+not start over.
+
+To settle when it's picked up:
+- which "previous" apps it covers (the earlier Daylight Reader builds only, or others too);
+- what comes across: documents, saved pages, collections, highlights and notes, ink, reading position;
+- where it runs: inside the new Reader on the tablet, or as a one-time export and import;
+- how to avoid duplicates when someone imports twice.
+
+It is Reader-side work, so it belongs to the Reader session on the Mac mini and is proved on the lab tablet first.
