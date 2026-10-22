@@ -263,8 +263,14 @@ jobs:
           if-no-files-found: error
 
   # lane: mac
+  # Hands `publish` the Mac release (the send-to-daylight-mac artifact): its own ad-hoc zip without the signing
+  # secrets, as before; with them, the Developer ID build from mac-developer-id and never the ad-hoc one (the last steps
+  # below). So it runs after mac-developer-id, whatever that job's result: a failed dry run does not hold back the
+  # ad-hoc release.
   mac:
     name: Mac (build, smoke test, UI tests, zip)
+    needs: [check-mac-signing, mac-developer-id]
+    if: ${{ !cancelled() && needs.check-mac-signing.result == 'success' }}
     runs-on: macos-15
     timeout-minutes: 90
     concurrency:
@@ -423,6 +429,51 @@ jobs:
             reader-experiment/apple/build/mac-tests.log
           if-no-files-found: ignore
 
+      # Which zip goes to the release (README.md › Signing). With the signing secrets it is the Developer ID build, or
+      # nothing: this run's ad-hoc zip would replace a signed release, and a Mac that updated to it would open unpaired
+      # with an empty history (its pairing and outbox had moved into the App Group, which an ad-hoc build never
+      # opens), with Gatekeeper's warning and "Allow unsigned extensions" back. So if mac-developer-id failed (a
+      # notary outage or refusal, its smoke test), this job fails, `publish` does not run and the release keeps its
+      # last builds.
+      - name: Mac release - ad hoc (no signing secrets)
+        if: needs.check-mac-signing.outputs.developer-id != 'true'
+        run: |
+          echo "### Mac release handed to publish: the ad-hoc build (no signing secrets yet; README.md › Signing)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Mac release - the Developer ID build, never this ad-hoc one
+        if: needs.check-mac-signing.outputs.developer-id == 'true'
+        env:
+          DEVELOPER_ID_RESULT: ${{ needs.mac-developer-id.result }}
+        run: |
+          if [ "$DEVELOPER_ID_RESULT" != success ]; then
+            echo "::error::mac-developer-id did not succeed ($DEVELOPER_ID_RESULT), so nothing is published: the release keeps its last builds, never this run's ad-hoc Mac zip"
+            exit 1
+          fi
+          rm -f Send-to-Daylight-mac.zip
+      - uses: actions/download-artifact@v4
+        if: needs.check-mac-signing.outputs.developer-id == 'true'
+        with:
+          name: rx-apple-mac-developer-id
+          path: reader-experiment/apple
+      - name: Check the Developer ID zip (the team's Developer ID, notarization ticket stapled)
+        if: needs.check-mac-signing.outputs.developer-id == 'true'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          CHECK="$RUNNER_TEMP/mac-release"
+          rm -rf "$CHECK" && mkdir -p "$CHECK"
+          ditto -x -k Send-to-Daylight-mac.zip "$CHECK"
+          SIGNED="$CHECK/Send to Daylight.app"
+          INFO=$(codesign -dv "$SIGNED" 2>&1)
+          printf '%s\n' "$INFO" | grep -E '^(Authority|TeamIdentifier|Timestamp)='
+          if ! printf '%s\n' "$INFO" | grep -q "^Authority=Developer ID Application: .*($APPLE_TEAM_ID)\$" \
+             || ! printf '%s\n' "$INFO" | grep -qx "TeamIdentifier=$APPLE_TEAM_ID"; then
+            echo "::error::the zip from mac-developer-id is not signed with the team's Developer ID"; exit 1
+          fi
+          codesign --verify --deep --strict "$SIGNED"
+          xcrun stapler validate "$SIGNED"
+          rm -rf "$CHECK"
+          echo "### Mac release handed to publish: the Developer ID build (signed, notarized and stapled by mac-developer-id)" >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-artifact@v4
         with:
           name: send-to-daylight-mac
@@ -530,16 +581,14 @@ jobs:
 
   # lane: mac
   # The Mac's Developer ID path (LAB-DECISIONS Q6, reader-experiment/apple/README.md › Signing, LOOSE-ENDS.md): on once
-  # all six signing secrets exist; only their presence is read here. Also lints the signing and smoke-test scripts.
+  # all six signing secrets exist; only their presence is read here. The `mac` job needs this one, so it does nothing
+  # that can fail on its own (the scripts are linted in mac-scripts).
   check-mac-signing:
-    name: Mac signing (secrets, scripts)
+    name: Mac signing (secrets)
     runs-on: ubuntu-latest
     outputs:
       developer-id: ${{ steps.check.outputs.developer-id }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Shellcheck the Mac signing and smoke-test scripts
-        run: shellcheck reader-experiment/apple/scripts/sign-mac.sh reader-experiment/apple/scripts/mac-smoke-test.sh
       - name: Which Mac release (Developer ID with all six secrets, else ad hoc)
         id: check
         env:
@@ -566,14 +615,24 @@ jobs:
           fi
 
   # lane: mac
+  mac-scripts:
+    name: Mac signing and smoke-test scripts (shellcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shellcheck the Mac signing and smoke-test scripts
+        run: shellcheck reader-experiment/apple/scripts/sign-mac.sh reader-experiment/apple/scripts/mac-smoke-test.sh
+
+  # lane: mac
   # The Developer ID build (scripts/sign-mac.sh). With the secrets: a Release build for APPLE_TEAM_ID (every bundle's
   # App Group <TEAMID>.com.daylight.share, Config/Base.xcconfig), signed with the Developer ID (hardened runtime, secure
   # timestamp), every bundle and its embedded entitlements checked, notarized, stapled, accepted by Gatekeeper, zipped and
-  # smoke-tested (the app must use the App Group, so the Share menu item and the Safari extension share its pairing, Lab
-  # switch and history); publish-mac-developer-id then puts it on the release in place of the ad-hoc zip. Without the
-  # secrets, a dry run of the same steps: the same build for a stand-in team (DRYRUN0000), a throwaway self-signed
-  # certificate made here, no notarization, and the smoke test, in which the app keeps its own storage (a self-signed
-  # signature carries no Team ID, so SharedStore never opens the group). Either way the ad-hoc release is unaffected.
+  # smoke-tested (the app must use the App Group, which it shares with the Share menu item: one pairing, Lab switch and
+  # history; the Safari extension reads only its pairing there, LAB-PLAN 1.1); the `mac` job then hands that zip to
+  # `publish`, in place of its ad-hoc one. Without the secrets, a dry run of the same steps: the same build for a
+  # stand-in team (DRYRUN0000), a throwaway self-signed certificate made here, no notarization, and the smoke test, in
+  # which the app keeps its own storage (a self-signed signature carries no Team ID, so SharedStore never opens the
+  # group). Its result does not hold back the ad-hoc release.
   mac-developer-id:
     name: Mac (Developer ID; a dry run until the secrets exist)
     needs: [check-mac-signing]
@@ -668,36 +727,10 @@ jobs:
             bash scripts/mac-smoke-test.sh Send-to-Daylight-mac.zip private mac-dry-run
           fi
 
-      # Not named send-to-daylight-*: the publish job merges every artifact so named into one folder.
+      # Not named send-to-daylight-*: the `mac` job checks it and hands it to `publish` under that name.
       - uses: actions/upload-artifact@v4
         if: env.RELEASE == 'true'
         with:
           name: rx-apple-mac-developer-id
           path: reader-experiment/apple/Send-to-Daylight-mac.zip
           if-no-files-found: error
-
-  # lane: mac
-  # With the signing secrets, the Developer ID zip replaces the ad-hoc Send-to-Daylight-mac.zip that `publish` has just
-  # put on the release (the same asset name). Without them it is skipped and the release keeps the ad-hoc zip.
-  publish-mac-developer-id:
-    needs: [check-mac-signing, mac-developer-id, publish]
-    if: needs.check-mac-signing.outputs.developer-id == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    concurrency:
-      group: rx-apple-publish-mac-developer-id
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: rx-apple-mac-developer-id
-          path: out
-      - name: Put the Developer ID build on the reader-experiment-latest release in place of the ad-hoc one
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          bash .github/scripts/rx-publish.sh out/Send-to-Daylight-mac.zip
-          echo "Send-to-Daylight-mac.zip on the release is the Developer ID build: signed, notarized and stapled." >> "$GITHUB_STEP_SUMMARY"

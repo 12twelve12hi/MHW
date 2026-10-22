@@ -17,7 +17,8 @@ Actions). Then it:
   timestamp and the App Group `<TEAMID>.com.daylight.share`;
 - notarizes and staples the app;
 - runs the Mac smoke test on it;
-- publishes it as `Send-to-Daylight-mac.zip` in place of the ad-hoc build.
+- publishes it as `Send-to-Daylight-mac.zip` instead of the ad-hoc build. If signing or notarizing fails, that run
+  publishes nothing, so the release never goes back to an ad-hoc Mac build.
 
 The step-by-step guide covers creating the certificate, exporting the .p12, creating the API key and what changes for
 Mac users: `reader-experiment/apple/README.md` › Signing.
@@ -27,13 +28,22 @@ Mac users: `reader-experiment/apple/README.md` › Signing.
 | `APPLE_TEAM_ID` | Your 10-character Team ID (developer.apple.com › Account › Membership details) |
 | `MAC_DEVELOPER_ID_P12` | Your "Developer ID Application" certificate and its private key, exported from Keychain Access as .p12, base64-encoded |
 | `MAC_DEVELOPER_ID_P12_PASSWORD` | The .p12 export password |
-| `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8` | An App Store Connect API key (Users and Access › Integrations): its Key ID, the Issuer ID, and the contents of its `AuthKey_<KEYID>.p8` file. Used for notarization and TestFlight. |
+| `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8` | An App Store Connect API key with Admin access (Users and Access › Integrations): its Key ID, the Issuer ID, and the contents of its `AuthKey_<KEYID>.p8` file. Used for notarization and TestFlight. |
+
+Before you add them:
+- **They also start TestFlight.** `APPLE_TEAM_ID` and the three `ASC_*` secrets also turn on the iPhone app's
+  TestFlight upload on every build. That needs the key's Admin access and the iPhone app created in App Store Connect
+  (Apps › + › New App, bundle id `com.daylight.share`). Without them the TestFlight job fails on every run.
+- **One change still has to land first.** Moving from the ad-hoc build to the signed one carries the pairing, this
+  Mac's name and the history into the App Group, but not Comfort, the Lab switch, the one-time Lab note, Lab's
+  delivery record (`lab.json`) or the Daylight server's pin and notices (`server.json`). The plan says updates keep
+  them (LAB-PLAN 1.2, 1.3). `SharedStore.migrate` in `apple/DaylightShareKit` must carry them too, and it needs a test.
+  This is the kit lane's job; remove this item once it lands.
 
 Then push any change under `reader-experiment/apple/`, or choose Re-run all jobs on the latest "Reader experiment –
-Apple apps" run. If a secret is missing, the "Mac signing" job's log names it.
-
-The same Apple account also unlocks TestFlight for the iPhone app. Its job is already written and needs
-`APPLE_TEAM_ID` and the three `ASC_*` secrets.
+Apple apps" run. If a secret is missing, the "Mac signing (secrets)" job's log names it. Keep the secrets once the
+release is signed: without them CI goes back to the ad-hoc build, which can't read the pairing and history that moved
+into the App Group.
 
 ## Deploy the Daylight server (Cloudflare)
 

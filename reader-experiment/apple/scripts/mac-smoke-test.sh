@@ -63,7 +63,7 @@ if [ "$STORAGE" = shared ]; then
     }' "$STATUS" "$DECLARED"
   [ -d "$HOME/Library/Group Containers/$DECLARED" ] \
     || { echo "::error::no ~/Library/Group Containers/$DECLARED after the app chose it"; exit 1; }
-  echo "The app, its Share menu item and its Safari extension share ~/Library/Group Containers/$DECLARED."
+  echo "The app and its Share menu item share ~/Library/Group Containers/$DECLARED; the Safari extension reads its pairing there."
 fi
 node scripts/ci-app-status.mjs main-thread "$STATUS"
 pgrep -fl "smoke/Send to Daylight" || { echo "::error::the Mac app is not running"; exit 1; }

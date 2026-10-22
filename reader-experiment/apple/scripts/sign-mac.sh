@@ -221,7 +221,7 @@ codesign --verify --deep --strict --verbose=2 "$APP"
 check "$SHARE" "$WORK/share.entitlements" ShareExtension
 check "$SAFARI" "$WORK/safari.entitlements" SafariExtension
 check "$APP" "$WORK/app.entitlements" App
-note "the app, its Share menu item and its Safari extension share the App Group $GROUP"
+note "the app and its Share menu item share the App Group $GROUP; the Safari extension reads its pairing there"
 
 # ---- 5. Notarize, staple, Gatekeeper ---------------------------------------------------------------------------------
 SUBMISSION=""
@@ -282,8 +282,8 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
       echo "### Mac release: Developer ID"
       echo "Signed with \"$IDENTITY_NAME\" (hardened runtime, secure timestamp), notarized (submission \`$SUBMISSION\`),"
-      echo "stapled and accepted by Gatekeeper. The app, its Share menu item and its Safari extension share the App Group"
-      echo "\`$GROUP\`. Zipped as \`$(basename "$OUT")\`."
+      echo "stapled and accepted by Gatekeeper. The app and its Share menu item share the App Group \`$GROUP\` (the Safari"
+      echo "extension reads its pairing there). Zipped as \`$(basename "$OUT")\`; the \`mac\` job hands it to \`publish\`."
     } >> "$GITHUB_STEP_SUMMARY"
   fi
 fi
