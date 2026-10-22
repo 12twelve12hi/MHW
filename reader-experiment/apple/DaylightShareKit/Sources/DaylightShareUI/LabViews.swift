@@ -227,10 +227,11 @@ public struct LabNote: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label {
-                Text(message).dlsFont(.callout).wrapping(message)
-            } icon: {
+            // The icon beside the sentence, not a Label: the iPhone's audit measured a Label's text against the Label's
+            // wider frame and reported it clipped. The note sits in a list row, which sizes the text (`listRowText`).
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: "info.circle").accessibilityHidden(true)
+                Text(message).dlsFont(.callout).listRowText(message)
             }
             if button != nil || onOK != nil {
                 ViewThatFits(in: .horizontal) {
@@ -241,7 +242,10 @@ public struct LabNote: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
+        // An outline, not a grey fill: the buttons' tinted words on that fill only "nearly passed" the contrast audit.
+        .overlay {
+            RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.5), lineWidth: 1)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(LabIDs.note)
         .onAppear { Announcer.announce(message) }
@@ -251,14 +255,14 @@ public struct LabNote: View {
     @ViewBuilder private var buttons: some View {
         if let button, let onButton {
             Button(action: onButton) {
-                Text(button).wrapping(button).comfortTarget()
+                Text(button).listRowText(button).comfortTarget()
             }
             .buttonStyle(.bordered)
             .comfortBorder()
         }
         if let onOK {
             Button(action: onOK) {
-                Text(LabText.noteButton).wrapping(LabText.noteButton).comfortTarget()
+                Text(LabText.noteButton).listRowText(LabText.noteButton).comfortTarget()
             }
             .buttonStyle(.bordered)
             .comfortBorder()
@@ -470,25 +474,42 @@ public struct WhatsInLabView: View {
         }
     }
 
+    /// A feature's name, sentence and short state.
+    private func featureWords(_ row: LabCenter.Row) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(row.name).dlsFont(.body, weight: .semibold).listRowText(row.name)
+            Text(row.sentence).dlsFont(.footnote).dlsSecondary().listRowText(row.sentence)
+            if let short = row.short {
+                Text(short).dlsFont(.footnote, weight: .medium).listRowText(short)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
     @ViewBuilder private func featureRow(_ row: LabCenter.Row) -> some View {
         VStack(alignment: .leading, spacing: 6) {
+            #if os(iOS)
+            // On iPhone and iPad the row's words are one element that acts as a button, as a history row's are: in a
+            // Button's label the iPhone's audit reported the words as clipped text it could not point at.
+            featureWords(row)
+                .onTapGesture { Task { await tap(row.id) } }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel([row.name, row.sentence, row.short].compactMap { $0 }.joined(separator: ", "))
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { Task { await tap(row.id) } }
+                .accessibilityIdentifier(LabIDs.feature(row.id))
+            #else
             Button {
                 Task { await tap(row.id) }
             } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(row.name).dlsFont(.body, weight: .semibold).listRowText(row.name)
-                    Text(row.sentence).dlsFont(.footnote).dlsSecondary().listRowText(row.sentence)
-                    if let short = row.short {
-                        Text(short).dlsFont(.footnote, weight: .medium).listRowText(short)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+                featureWords(row)
             }
             .buttonStyle(.plain)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
             .accessibilityIdentifier(LabIDs.feature(row.id))
+            #endif
             if let use = useSwitch?(row.id) {
                 Toggle(isOn: use) {
                     Text(LabText.useLabel).listRowText(LabText.useLabel)
@@ -571,10 +592,10 @@ public struct ServerSettingsView: View {
 
     @ViewBuilder private func content(_ v: LabCenter.ServerView) -> some View {
         Section {
-            Label {
-                Text(v.message).listRowText(v.message)
-            } icon: {
+            // The icon beside the text, not a Label (whose wider frame the iPhone's audit measured the text against).
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: v.state == "ready" ? "checkmark.circle.fill" : "info.circle").accessibilityHidden(true)
+                Text(v.message).listRowText(v.message)
             }
         }
         if !v.paired {
