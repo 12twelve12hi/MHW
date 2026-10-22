@@ -65,6 +65,8 @@ test('pairs from a link, sends Send To files and a clipboard link; the Daylight 
   app.onChange((k) => changes.push(k));
 
   assert.deepEqual(await app.state(), { paired: false, name: '', relay: '', defaultRelay: true, codeStart: '' });
+  // v1.1's words, which the app keeps with Lab off (Lab's toasts, F08 and F33: lab.test.mjs).
+  await app.lab.setLab(false);
   const r = await app.pair(d.link);
   assert.deepEqual(r, { name: 'Desk Daylight', relay: relay.url });
   assert.ok(changes.includes('pairing'));

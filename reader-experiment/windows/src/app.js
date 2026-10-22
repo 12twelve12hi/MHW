@@ -1,15 +1,20 @@
 // The window: pairing, the drop zone, "Send the link on the clipboard", the history and the settings, with Lab's
-// switch and screens (LAB-PLAN 1, 2.6). Sending and the outbox live in core.js (with daylight-share.js), Lab's logic in
-// lab.js and its screens' parts in lab-ui.js; bridge.js talks to the Rust side. The window can be hidden (closed to the
-// tray) for days: this page keeps running, handles Send To and the hotkey, and keeps the outbox moving.
+// switch and screens (LAB-PLAN 1, 2.6) and, with Lab on, Wave 1 (card WIN1): the delivery timeline and its toast
+// (F01), F02's entry point, the offline queue (F07), "Sent to {name}" (F08), send links (F09), smart intake (F16),
+// Setup check (F26), the copied link's question (F33) and the Use switches (6.5 Q5). Sending and the outbox live in
+// core.js (with daylight-share.js), Lab's logic in lab.js and its screens' parts in lab-ui.js; bridge.js talks to the
+// Rust side. The window can be hidden (closed to the tray) for days: this page keeps running, handles Send To and the
+// hotkey, and keeps the outbox moving. With Lab off, every view is v1.1's (the Lab-off baselines).
 
 import { bridge, appStorage } from './bridge.js';
 import { createApp, serial, MAX_FILE, tooBig } from './core.js';
 import { ShareError } from './daylight-share.js';
-import { LAB_TEXT } from './daylight-lab.js';
+import { LAB_TEXT, fillText } from './daylight-lab.js';
+import { LAB_NOTE_ENABLED, USE_SWITCHES, isQueued, labRowText, setupChecks } from './lab.js';
 import {
   labNote, noteFollowUp, clearNote, noteBox, dismissNotesOnOtherControls, renderWhatsInLab, updateWhatsInLab,
-  renderServerSection, renderRepaired,
+  renderServerSection, renderRepaired, renderLabNote, renderLabRow, renderQuestion, renderBigFiles, renderSetupCheck,
+  updateSetupCheck, useSwitch, featureSwitch,
 } from './lab-ui.js';
 import {
   rowView, kindLabel, displayTitle, relativeTime, sendSummary, linkFromDrop, accelFromEvent, describeAccel,
@@ -17,7 +22,10 @@ import {
 } from './logic.js';
 
 const $ = (id) => document.getElementById(id);
-const VIEWS = ['view-pair', 'view-confirm', 'view-send', 'view-settings', 'view-whats', 'view-server'];
+const VIEWS = ['view-pair', 'view-confirm', 'view-send', 'view-settings', 'view-whats', 'view-server', 'view-setup'];
+/** The v1.1 words of the window's clipboard button and the tray's entry (Lab F33 reads "Send copied link"). */
+const CLIP_BUTTON = 'Send the link on the clipboard';
+const CLIP_TRAY = 'Send clipboard link';
 const HISTORY_SHOWN = 50;
 
 let app = null;
@@ -33,6 +41,11 @@ let dataProblem = ''; // saved data that couldn't be read and was set aside, sai
 let ready = false; // the first view is drawn: actions from Rust can be handled
 let comfort = false; // F27 Comfort (settings.comfort), not Lab
 let labIsOn = true; // the Lab switch as last read (LAB-PLAN 1.2: a missing key means on)
+let labSettings = {}; // the settings as last read: the Use switches (labUse), quick sends, the note (Lab, WIN1)
+let labTl = null; // the timeline's ledger read (lab.timeline()), for the rows and the check-in header (F01)
+let pendingSend = null; // a send link's question (F09): prepareSendLink's {link, title, lines}
+let testId = ''; // Setup check's test article (F26): the row it follows
+let testError = '';
 let settingsFrom = 'view-send'; // the view Settings' Back returns to
 const lastLabel = new Map(); // row id -> the label last drawn, to announce a row's new state (F27)
 const log = []; // recent events, for the end-to-end test's status file
@@ -53,7 +66,15 @@ function setStatus(text, bad = false) {
   const s = $('status');
   s.textContent = text || '';
   s.classList.toggle('bad', !!bad);
+  hideBox('lab-after'); // F02's entry point belongs to the sentence it was under
   writeStatusSoon();
+}
+
+/** Empties and hides one of Lab's boxes in the send view. */
+function hideBox(id) {
+  const b = $(id);
+  b.hidden = true;
+  b.textContent = '';
 }
 
 function show(v) {
@@ -61,6 +82,7 @@ function show(v) {
   for (const id of VIEWS) $(id).hidden = id !== v;
   // Settings (Comfort among them) is one click away before pairing too.
   $('open-settings').hidden = v !== 'view-send' && v !== 'view-pair';
+  renderNote();
   writeStatusSoon();
 }
 
@@ -216,6 +238,8 @@ async function onConfirm(yes) {
 async function onTestHook(hook) {
   if (!info?.e2e?.status) return;
   note(`test hook ${hook}`);
+  // The pairing question first; else a send link's question (Lab, F09).
+  if (view !== 'view-confirm' && pendingSend) { await answerSend(hook === 'confirm'); return; }
   if (hook === 'confirm') await onConfirm(true);
   else if (hook === 'cancel') await onConfirm(false);
 }
@@ -228,13 +252,30 @@ function setBusy(busy) {
   $('app').setAttribute('aria-busy', busy ? 'true' : 'false');
 }
 
-/** After a share (CHANGES-v1.1 2.5): the row's label, then its sentence; for several, what each one did. */
-function showResults(results) {
+/**
+ * After a share (CHANGES-v1.1 2.5): the row's label, then its sentence; for several, what each one did. With Lab on in
+ * the timeline's words (Waiting for connection while offline, F07), and under a file refused as too big, F02's entry
+ * point (3.1).
+ */
+async function showResults(results) {
   if (!results?.length) return;
   for (const r of results) note(r.row ? `sent ${r.row.kind} ${r.row.id} (${r.row.status}${r.row.errorCode ? '/' + r.row.errorCode : ''}${r.row.error ? ': ' + r.row.error : ''})` : `not sent ${r.name}: ${r.error}`);
   if (results.length === 1 && results[0].code === 'no-link') { setStatus(`No link on the clipboard. ${results[0].error}`, true); return; }
-  const s = sendSummary(results);
+  let s;
+  try { s = await app.summary(results); } catch { s = sendSummary(results); }
   setStatus(results.length === 1 && results[0].row ? s.body : `${s.title}: ${s.body.replace(/\n/g, ' ')}`, s.bad);
+  if (labIsOn && results.some((r) => r.code === 'too-large')) {
+    renderBigFiles($('lab-after'), {
+      gate: () => app.lab.gate('F02').catch((e) => ({ ready: false, state: 'error', message: e?.message ?? String(e) })),
+      fix: async (r, shown, b) => {
+        if (r.state === 'needs-server') {
+          const done = await copyText(r.serverCode ?? '');
+          noteFollowUp(shown, done === true ? LAB_TEXT.setup.copied : done);
+        }
+        b?.focus();
+      },
+    });
+  }
 }
 
 async function sendFiles(files) {
@@ -253,7 +294,7 @@ async function sendFiles(files) {
   } finally {
     setBusy(false);
   }
-  showResults(results);
+  await showResults(results);
 }
 
 /** The text of the dropped link (browsers put an <a> in text/html), or ''. */
@@ -268,11 +309,12 @@ function titleFromHtml(html, link) {
   } catch { return ''; }
 }
 
-async function sendLinkFromWindow(link, title) {
+async function sendLinkFromWindow(link, title, text = '') {
   setBusy(true);
   setStatus('Sending the link…');
   try {
-    showResults([await app.settle(hostOf(link) || link, () => app.sendLink(link, title))]);
+    // With Lab on, the dropped text goes along, so smart intake (F16) reads a headline with its link.
+    await showResults([await app.settle(hostOf(link) || link, () => app.sendLink(link, title, labIsOn ? { text } : {}))]);
   } finally {
     setBusy(false);
   }
@@ -308,14 +350,95 @@ function onDrop(e) {
   if (files.length) { sendFiles(files); return; }
   const link = linkFromDrop({ uriList, text });
   if (!link) { setStatus('Only files and web links (http and https) can be sent.', true); return; }
-  sendLinkFromWindow(link, titleFromHtml(html, link));
+  sendLinkFromWindow(link, titleFromHtml(html, link), uriList ? '' : text);
+}
+
+/** F33 with Lab on: the clipboard command shows the host and Send first (its Use switch on). */
+const clipAsks = () => labIsOn && labSettings.labUse?.F33 !== false;
+
+/** The clipboard button's words: v1.1's, or "Send copied link" (F33); the tray's entry follows (Rust). */
+function renderClipLabel() {
+  $('send-clip').textContent = clipAsks() ? LAB_TEXT.copiedLink.chip : CLIP_BUTTON;
+  if (!clipAsks()) hideBox('lab-clip');
+  bridge.setClipboardLabel?.(clipAsks() ? LAB_TEXT.copiedLink.chip : CLIP_TRAY).catch(() => {});
 }
 
 async function onSendClipboard() {
   let clip;
   try { clip = { text: await bridge.readClipboard(), error: '' }; } catch (e) { clip = { text: '', error: String(e?.message ?? e) }; }
-  setBusy(true);
-  try { showResults(await app.sendClipboard(clip)); } finally { setBusy(false); }
+  if (!clipAsks()) {
+    setBusy(true);
+    try { await showResults(await app.sendClipboard(clip)); } finally { setBusy(false); }
+    return;
+  }
+  // F33: read on the click, then "Send {host} to {name}?" with Send and Cancel; nothing is sent unseen.
+  hideBox('lab-clip');
+  const p = await app.prepareClipboard(clip);
+  if (p.error) { setStatus(`No link on the clipboard. ${p.error}`, true); return; }
+  setStatus('');
+  const title = fillText(LAB_TEXT.copiedLink.confirm, { host: p.host, name: await app.daylightName() });
+  note(`clipboard asks: ${p.host}`);
+  renderQuestion($('lab-clip'), { title }, {
+    send: async () => {
+      hideBox('lab-clip');
+      setBusy(true);
+      try { await showResults(await app.sendPrepared(p.link)); } finally { setBusy(false); }
+      $('send-clip').focus();
+    },
+    cancel: () => { hideBox('lab-clip'); $('send-clip').focus(); },
+  });
+  writeStatusSoon();
+}
+
+// --- F09: daylightshare://send links (Lab) --------------------------------------------------------------------------
+
+/** A send link from outside (a browser, Shortcuts, a script): its question, a quick send, or why it can't. */
+async function onSendLink(link) {
+  let r;
+  try { r = await app.prepareSendLink(link); } catch (e) { r = { error: e?.message ?? String(e), state: 'error' }; }
+  note(`send link: ${r.error ? r.state : r.ask ? 'asks' : 'quick'}`);
+  if (r.error) {
+    bridge.showWindow().catch(() => {});
+    if (view === 'view-confirm') return;
+    if (st.paired) { renderSend(); setStatus(r.error, true); } else renderPair(r.error);
+    return;
+  }
+  if (!r.ask) {
+    // A quick send (allowed in What's in Lab): it goes, and the notification says so (F08), as the hotkey's does.
+    const results = await app.sendPrepared(r.link);
+    await app.notifyResults(results);
+    await showResults(results);
+    return;
+  }
+  pendingSend = r;
+  bridge.showWindow().catch(() => {});
+  if (view !== 'view-confirm') renderSend();
+  renderSendQuestion();
+}
+
+/** The send link's question in the send view (F09): "Send to {name}?", the title and host, Send and Cancel. */
+function renderSendQuestion() {
+  const box = $('lab-sendlink');
+  if (!pendingSend || !labIsOn) { hideBox('lab-sendlink'); return; }
+  renderQuestion(box, { title: pendingSend.title, lines: pendingSend.lines }, {
+    send: () => answerSend(true),
+    cancel: () => answerSend(false),
+  });
+  writeStatusSoon();
+}
+
+async function answerSend(yes) {
+  const r = pendingSend;
+  pendingSend = null;
+  hideBox('lab-sendlink');
+  if (!r) return;
+  note(`send link ${yes ? 'sent' : 'cancelled'}`);
+  if (yes) {
+    setBusy(true);
+    try { await showResults(await app.sendPrepared(r.link)); } finally { setBusy(false); }
+  }
+  if (view === 'view-send') $('send-clip').focus();
+  writeStatusSoon();
 }
 
 async function retry(id, button) {
@@ -323,7 +446,7 @@ async function retry(id, button) {
   button.textContent = 'Sending…';
   try {
     const row = await app.retry(id);
-    if (row) showResults([{ row }]); // null: the row was removed meanwhile
+    if (row) await showResults([{ row }]); // null: the row was removed meanwhile
   } catch (e) { setStatus(e.message, true); }
 }
 
@@ -344,8 +467,9 @@ function drain() {
       note(`action ${a.type}${a.paths ? ` (${a.paths.length} files)` : ''}`);
       try {
         if (a.type === 'pair') await onPairLink(a.link);
+        else if (a.type === 'send') await onSendLink(a.link);
         else if (a.type === 'test') await onTestHook(a.hook);
-        else showResults(await app.handleAction(a));
+        else await showResults(await app.handleAction(a));
       } catch (e) {
         note(`action ${a.type} failed: ${e?.message ?? e}`);
       }
@@ -360,10 +484,10 @@ function drain() {
  * The rows whose label changed since they were last drawn to a state worth saying (F27: Delivered ✓, and Waiting to
  * send or Not delivered), as "label: title"; a share's own outcome is said in #status. Remembers every row's label.
  */
-function changedStates(all) {
+function changedStates(all, labelOf = (row) => rowView(row).label) {
   const said = [];
   for (const row of all) {
-    const label = rowView(row).label;
+    const label = labelOf(row);
     const was = lastLabel.get(row.id);
     if (was !== undefined && was !== label && ['delivered', 'failed', 'expired'].includes(row.status)) said.push(`${label}: ${displayTitle(row)}`);
     lastLabel.set(row.id, label);
@@ -372,6 +496,10 @@ function changedStates(all) {
 }
 
 function renderHistory() {
+  if (labIsOn) { renderLabHistory(); return; }
+  $('lab-queue-list').textContent = '';
+  $('lab-queue').hidden = true;
+  $('lab-checkin').hidden = true;
   const list = $('history');
   list.textContent = '';
   const shown = rows.slice(0, HISTORY_SHOWN);
@@ -410,8 +538,54 @@ function renderHistory() {
   }
 }
 
+/**
+ * The history with Lab on (2.5, F07): the check-in header, "Waiting to send ({n})" with Cancel on each row, then
+ * Recent, in the timeline's words; a row whose label changes to Delivered, In your Reader, Waiting or Not delivered is
+ * said, as v1.1's are.
+ */
+function renderLabHistory() {
+  const tl = labTl ?? { lab: true, inboxLab: false, caps: [], states: {}, checkedInText: null };
+  const now = Date.now();
+  const online = navigator.onLine !== false;
+  const text = (row) => labRowText(row, tl, { online, now });
+  const said = changedStates(rows, (row) => text(row).label);
+  if (said.length) { announce(said.join('. ')); note(`announced ${said.join('. ')}`); }
+  const checkin = $('lab-checkin');
+  checkin.textContent = st.paired ? (tl.checkedInText ?? '') : '';
+  checkin.hidden = !checkin.textContent;
+  const newest = rows[0]?.id;
+  const on = { retry, remove };
+  const draw = (row, cancel) => {
+    const v = rowView(row);
+    return renderLabRow(row, text(row), {
+      v11: v, title: displayTitle(row), kind: kindLabel(row), when: `· ${relativeTime(row.created)}`, newest: row.id === newest,
+      on, cancel, tone: v.tone,
+    });
+  };
+  const queue = rows.filter(isQueued);
+  const qList = $('lab-queue-list');
+  qList.textContent = '';
+  $('lab-queue').hidden = queue.length === 0;
+  $('lab-queue-h').textContent = fillText(LAB_TEXT.queue.heading, { n: queue.length });
+  for (const row of queue.slice(0, HISTORY_SHOWN)) qList.append(draw(row, true));
+  const list = $('history');
+  list.textContent = '';
+  const shown = rows.filter((r) => !isQueued(r)).slice(0, HISTORY_SHOWN);
+  $('recent-h').hidden = shown.length === 0;
+  for (const row of shown) list.append(draw(row, false));
+}
+
+/** What the ledger knows, for the timeline (F01): read again when it learns something, then the rows follow. */
+async function refreshTimeline() {
+  try { labTl = await app.lab.timeline(); } catch { /* the last read stays */ }
+}
+
 let refreshTimer = null;
 function onStorageChange(key) {
+  if (key === 'lab/activity') {
+    if (view === 'view-setup') updateSetup();
+    return;
+  }
   if (key.startsWith('lab/')) {
     // The ledger learnt something (LAB-PLAN 2.2.6): What's in Lab's header line follows.
     // Once the server's live answer is on screen, the rows keep it (the cached states can be older than an answer that
@@ -422,16 +596,25 @@ function onStorageChange(key) {
         if (m.lab && view === 'view-whats') updateWhats(box, box.dataset.fresh === '1' ? { ...m, fresh: false } : m);
       }, () => {});
     }
+    // ...and the timeline's rows, the check-in header and Setup check's test (F01, F26).
+    refreshTimeline().then(() => {
+      if (view === 'view-send' && labIsOn) renderHistory();
+      if (view === 'view-setup') updateSetup();
+      writeStatusSoon();
+    });
     writeStatusSoon();
     return;
   }
+  if (key === 'settings') readLabSettings();
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(async () => {
     try {
       rows = await app.rows();
       if (key === 'pairing') st = await app.state();
     } catch (e) { note(`couldn’t read the history: ${e?.message ?? e}`); }
+    if (key === 'outbox' || key === 'pairing') await refreshTimeline();
     if (view === 'view-send') { $('daylight-name').textContent = st.name || 'your Daylight'; renderHistory(); }
+    if (view === 'view-setup') updateSetup();
   }, 50);
   writeStatusSoon();
 }
@@ -584,8 +767,37 @@ let labBlockSeq = 0;
 let setupSaid = null; // the setup's done line, said once the server section is drawn again
 
 /** Lab's Copy: Rust writes the clipboard. -> true, or why it couldn't (the system's words). */
-async function copyText(text) {
-  try { await bridge.writeClipboard(text); note('copied the Server code'); return true; } catch (e) { return String(e?.message ?? e); }
+async function copyText(text, what = 'the Server code') {
+  try { await bridge.writeClipboard(text); note(`copied ${what}`); return true; } catch (e) { return String(e?.message ?? e); }
+}
+
+/** The settings Lab's Wave 1 reads in the window: the switch, the Use switches, the note (1.2, 6.5 Q5). */
+async function readLabSettings() {
+  try { labSettings = (await app.getSettings()) ?? {}; } catch { return; }
+  const was = labIsOn;
+  labIsOn = labSettings.lab !== false;
+  renderClipLabel();
+  renderNote();
+  if (was !== labIsOn) {
+    await refreshTimeline();
+    if (view === 'view-send') renderSend();
+  }
+}
+
+/** The one-time note (1.2): above the pairing screen or the send view, while Lab is on, until OK. */
+function renderNote() {
+  const box = $('lab-note');
+  const due = LAB_NOTE_ENABLED && labIsOn && !labSettings.labNoteShown && (view === 'view-pair' || view === 'view-send');
+  if (!due) { hideBox('lab-note'); return; }
+  if (box.firstChild) { box.hidden = false; return; }
+  renderLabNote(box, {
+    onOk: async () => {
+      hideBox('lab-note');
+      labSettings = { ...labSettings, labNoteShown: true };
+      try { await app.lab.noteSeen(); } catch (e) { note(`note not kept: ${e?.message ?? e}`); }
+      (view === 'view-send' ? $('send-clip') : $('code')).focus();
+    },
+  });
 }
 
 /**
@@ -621,6 +833,8 @@ async function onLab() {
     $('lab-msg').textContent = `Couldn’t change that: ${e?.message ?? e}`;
   }
   renderLabBlock();
+  await readLabSettings();
+  await refreshTimeline();
   writeStatusSoon();
 }
 
@@ -636,7 +850,13 @@ async function onFeature(f, box) {
     clearTimeout(timer);
   }
   note(`lab gate ${f.id}: ${r.state}`);
-  if (r.ready) { clearNote(box); return; } // W0 runs no Lab feature here: a ready server feature is `later`
+  if (r.ready) {
+    // Ready: the feature opens (Setup check), or its switch takes the focus; the others live in the send view.
+    clearNote(box);
+    if (f.id === 'F26') { openSetup(); return; }
+    box.closest('li.lab-feature')?.querySelector('input.switch')?.focus();
+    return;
+  }
   const shown = labNote(box, r.message, {
     state: r.state, button: r.button,
     onButton: async (b) => {
@@ -655,8 +875,34 @@ async function onFeature(f, box) {
  * open. data-fresh="1" once the server's live answer is on screen (not the cached states).
  */
 function updateWhats(box, model) {
-  if (!updateWhatsInLab(box, model) && !box.querySelector('.lab-note > *')) renderWhatsInLab(box, model, { onTap: onFeature });
+  if (!updateWhatsInLab(box, model) && !box.querySelector('.lab-note > *')) renderWhatsInLab(box, model, { onTap: onFeature, use: useControls(model) });
   if (model.fresh && !model.cached) box.dataset.fresh = '1';
+}
+
+/**
+ * The switches on What's in Lab's rows: a Use switch (6.5 Q5) on Clean links and Send copied link, and "Allow quick
+ * sends from other apps" with its footer on Shortcuts and automation (F09). model.settings: lab.overview()'s.
+ */
+function useControls(model) {
+  const set = model.settings ?? { use: {}, quickSends: false };
+  return (f) => {
+    if (USE_SWITCHES.includes(f.id)) {
+      return useSwitch(f, set.use?.[f.id] !== false, async (want) => {
+        const now = await app.lab.setUse(f.id, want);
+        note(`use ${f.id} ${now ? 'on' : 'off'}`);
+        await readLabSettings();
+        return now;
+      });
+    }
+    if (f.id === 'F09') {
+      const A = LAB_TEXT.automation;
+      return featureSwitch({
+        label: A.quickSends, footer: A.quickSendsFooter, checked: set.quickSends,
+        onChange: async (want) => { const now = await app.lab.setQuickSends(want); note(`quick sends ${now ? 'on' : 'off'}`); return now; },
+      });
+    }
+    return null;
+  };
 }
 
 /**
@@ -674,7 +920,7 @@ async function openWhats() {
   try { model = await app.lab.overview({ refresh: false }); } catch (e) { box.textContent = e?.message ?? String(e); return; }
   if (seq !== labSeq || view !== 'view-whats') return;
   if (!model.lab) { renderSettings(); return; }
-  renderWhatsInLab(box, model, { onTap: onFeature, checking: !model.fresh });
+  renderWhatsInLab(box, model, { onTap: onFeature, checking: !model.fresh, use: useControls(model) });
   try { model = await app.lab.overview({ refresh: true }); } catch { return; }
   if (seq !== labSeq || view !== 'view-whats' || !model.lab) return;
   updateWhats(box, model);
@@ -751,9 +997,90 @@ async function renderRepairedBlock() {
   });
 }
 
-/** Back from a Lab view: Settings, with the focus on the row that opened it. */
+/** Back from a Lab view: Settings, with the focus on the row that opened it (Setup check: What's in Lab). */
 function backToSettings() {
+  if (view === 'view-setup') { openWhats(); return; }
   renderSettings({ focus: view === 'view-server' ? 'open-server' : 'open-whats' });
+}
+
+// --- Setup check (F26) ----------------------------------------------------------------------------------------------
+
+/** Setup check's test article, as far as it got: its title, the timeline's label and the two ticks (F26.1). */
+function testModel() {
+  const row = rows.find((r) => r.id === testId);
+  if (testError) return { title: '', label: testError, delivered: false, reader: false };
+  if (!row) return null;
+  const tl = labTl ?? { lab: true, states: {} };
+  const s = tl.states?.[row.id]?.s;
+  return {
+    title: displayTitle(row), label: labRowText(row, tl, { online: navigator.onLine !== false }).label,
+    delivered: row.status === 'delivered', reader: row.status === 'delivered' && (s === 'reader' || s === 'queued'),
+  };
+}
+
+/** Setup check's lines, from what this PC says (F26): pairing, Send to, start at login, the hotkey, notifications. */
+async function setupModel() {
+  let notifications = 'unknown';
+  try { notifications = await bridge.notificationsState(); } catch { /* not said */ }
+  return {
+    checks: setupChecks({
+      paired: st.paired, sendTo: !!info?.sendTo?.exists, autostart: !!info?.autostart, hotkey: !!hotkey.accel && !hotkey.error,
+      notifications,
+    }),
+    test: testModel(),
+    activity: await app.lab.activity().catch(() => []),
+  };
+}
+
+async function openSetup() {
+  const seq = ++labSeq;
+  show('view-setup');
+  $('setup').textContent = '';
+  $('setup-back').focus();
+  const model = await setupModel();
+  if (seq !== labSeq || view !== 'view-setup') return;
+  renderSetupCheck($('setup'), model, { fix: onCheckFix, test: onTestSend, copy: copyDiagnostics });
+  writeStatusSoon();
+}
+
+/** The test's progress and the activity log change in place (the focus stays). */
+async function updateSetup() {
+  if (view !== 'view-setup' || !$('setup').firstChild) return;
+  updateSetupCheck($('setup'), { test: testModel(), activity: await app.lab.activity().catch(() => []) });
+  writeStatusSoon();
+}
+
+/** An unmet check's button opens where it is set (F26.3): this app's Settings, the pairing screen, or Windows'. */
+async function onCheckFix(c) {
+  note(`setup fix ${c.id}`);
+  if (c.fix === 'notifications') { bridge.openNotificationSettings().catch((e) => note(`open settings: ${e?.message ?? e}`)); return; }
+  if (c.fix === 'pairing') { $('code').value = ''; $('relay').value = ''; renderPair(); return; }
+  const focus = c.fix === 'sendTo' ? (info?.sendTo?.path ? 'sendto-add' : 'sendto-text') : c.fix === 'autostart' ? 'autostart' : 'hotkey-change';
+  renderSettings({ focus: focus === 'sendto-text' ? 'close-settings' : focus });
+}
+
+/** "Send a test article" (F26): the checklist then follows it along the timeline. */
+async function onTestSend(button) {
+  button.disabled = true;
+  testError = '';
+  try {
+    const row = await app.sendTestArticle();
+    testId = row.id;
+    note(`test article ${row.id} (${row.status})`);
+  } catch (e) {
+    testError = e?.message ?? String(e);
+  } finally {
+    button.disabled = false;
+  }
+  await refreshTimeline();
+  await updateSetup();
+}
+
+/** "Copy diagnostics" (F26): redacted, onto the clipboard. -> true or why not */
+async function copyDiagnostics() {
+  let text;
+  try { text = await app.lab.diagnostics({ version: info?.version ?? '', rows }); } catch (e) { return String(e?.message ?? e); }
+  return copyText(text, 'the diagnostics');
 }
 
 // --- start ----------------------------------------------------------------------------------------------------------
@@ -762,8 +1089,10 @@ function renderSend() {
   show('view-send');
   $('daylight-name').textContent = st.name || 'your Daylight';
   renderHotkey();
+  renderClipLabel();
   renderHistory();
   renderRepairedBlock();
+  renderSendQuestion();
 }
 
 /** The end-to-end test reads the outbox from a file (only with --e2e-status; Rust ignores this otherwise). */
@@ -779,6 +1108,11 @@ function writeStatusSoon() {
         version: info.version, hotkey, autostart: !!info.autostart, sendTo: info.sendTo, view, comfort,
         confirm: c ? { title: c.title, lines: c.lines, button: c.button } : null,
         statusText: $('status').textContent, pairError: $('pair-error').textContent, log: log.slice(-50),
+        // Lab, Wave 1: the send link's question (F09), the clipboard button's words (F33), the one-time note (1.2),
+        // the check-in header (F01) and whether the window was hidden (F01's toast shows only then).
+        sendQuestion: pendingSend && labIsOn ? { title: pendingSend.title, lines: pendingSend.lines } : null,
+        clipButton: $('send-clip').textContent, noteShown: !$('lab-note').hidden, checkInShown: $('lab-checkin').hidden ? '' : $('lab-checkin').textContent,
+        hidden: document.hidden,
       });
       await bridge.e2eStatus(JSON.stringify(snap, null, 2));
     } catch (e) { console.warn('Send to Daylight: status file', e); }
@@ -813,9 +1147,29 @@ function onBadData(key, e) {
 }
 
 function onShown() {
-  if (!app || document.hidden) return;
+  if (!app) return;
+  app.setVisible(!document.hidden);
+  if (document.hidden) return;
   app.tickIfStale();
   if (view === 'view-send') renderHistory();
+}
+
+/**
+ * F01's toast (2.5): a row the ledger says is in the Reader now, while the window is hidden: "In your Reader: {title}".
+ * With the window showing, its row says so.
+ */
+function onReader(row) {
+  if (!labIsOn) return;
+  if (!document.hidden) { note(`in the Reader ${row.id.slice(0, 8)} (window shown: no toast)`); return; }
+  const title = fillText(LAB_TEXT.readerToast, { title: displayTitle(row) });
+  note(`toast: ${title}`);
+  notifyNow(title, LAB_TEXT.rows.reader.sentence).catch(() => {});
+}
+
+/** A notification through Rust; in test mode the status file's log says what it said (F08's "Sent to {name}", F01). */
+function notifyNow(title, body) {
+  if (info?.e2e?.status) note(`notified: ${title} — ${body}`);
+  return bridge.notify(title, body);
 }
 
 async function init() {
@@ -847,6 +1201,7 @@ async function init() {
   $('open-server').addEventListener('click', openServer);
   $('whats-back').addEventListener('click', backToSettings);
   $('server-back').addEventListener('click', backToSettings);
+  $('setup-back').addEventListener('click', backToSettings);
   dismissNotesOnOtherControls($('app'));
   $('repair').addEventListener('click', () => { $('code').value = ''; $('relay').value = ''; renderPair(); });
   $('pair-back').addEventListener('click', () => { renderSend(); $('open-settings').focus(); });
@@ -862,6 +1217,9 @@ async function init() {
   document.addEventListener('drop', onDrop);
   document.addEventListener('visibilitychange', onShown);
   window.addEventListener('focus', onShown);
+  // F07: back online, the items that waited for a connection go (Lab on); the rows say Waiting for connection meanwhile.
+  window.addEventListener('online', () => { note('online'); app?.onOnline(); if (view === 'view-send') renderHistory(); writeStatusSoon(); });
+  window.addEventListener('offline', () => { note('offline'); if (view === 'view-send') renderHistory(); writeStatusSoon(); });
 
   try {
     info = await bridge.info();
@@ -871,7 +1229,10 @@ async function init() {
     $('app').setAttribute('aria-busy', 'false');
     return;
   }
-  app = createApp({ bridge, storage: appStorage(console, onBadData), version: info.version });
+  app = createApp({
+    bridge: { ...bridge, notify: notifyNow }, storage: appStorage(console, onBadData), version: info.version,
+    online: () => navigator.onLine !== false, onReader,
+  });
   app.onChange(onStorageChange);
   note(`started ${info.version}${info.e2e?.status ? ' (test mode)' : ''}`);
 
@@ -895,6 +1256,9 @@ async function init() {
   try { settings = await app.getSettings(); } catch (e) { onBadData('settings', e); }
   applyComfort(settings.comfort);
   labIsOn = settings.lab !== false;
+  labSettings = settings ?? {};
+  await refreshTimeline();
+  renderClipLabel(); // the tray's clipboard entry too (F33)
   await applyHotkey(settings.hotkey ?? DEFAULT_HOTKEY, { save: false });
 
   if (info.e2e?.pair) {
@@ -918,6 +1282,7 @@ async function init() {
   }
 
   ready = true;
+  app.setVisible(!document.hidden);
   drain();
   app.start();
   setInterval(() => { if (!document.hidden && view === 'view-send') renderHistory(); }, 60 * 1000);

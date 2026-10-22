@@ -19,6 +19,10 @@
       </button>
     </header>
 
+    <!-- Lab: the one-time note (LAB-PLAN 1.2; from the first build with F01), above the pairing screen or the send view
+         until OK. Hidden otherwise, and always with Lab off. -->
+    <div id="lab-note" class="lab-banner" hidden></div>
+
     <!-- Not paired yet, or Settings › Change pairing… (a typed code is always one step away, F27) -->
     <section id="view-pair" hidden aria-labelledby="pair-h">
       <button id="pair-back" class="back" type="button" hidden>‹ Back</button>
@@ -56,6 +60,9 @@
     <!-- Paired -->
     <section id="view-send" hidden aria-labelledby="target">
       <p class="target" id="target">Sending to <strong id="daylight-name">your Daylight</strong></p>
+      <!-- Lab F09: a daylightshare://send link's question ("Send to {name}?", the title and host, Send and Cancel).
+           Hidden otherwise, and always with Lab off. -->
+      <div id="lab-sendlink" class="lab-question" hidden></div>
       <!-- Lab: after a re-pairing while a Daylight server was known (LAB-PLAN 2.6, DESIGN 12.7), until OK; lab-ui.js
            fills it. Hidden otherwise, and always with Lab off. -->
       <div id="lab-repaired" class="lab-repaired" role="region" hidden></div>
@@ -67,9 +74,20 @@
         <input id="file" type="file" multiple hidden>
       </div>
       <button id="send-clip" class="btn primary" type="button">Send the link on the clipboard</button>
+      <!-- Lab F33: with Lab on the button reads "Send copied link" and shows the host with Send first, here. -->
+      <div id="lab-clip" class="lab-question" hidden></div>
       <p class="hint small center" id="hotkey-hint"></p>
       <p id="status" class="status" role="status" aria-live="polite"></p>
+      <!-- Lab F02: under a too-big sentence, "Send files over 9 MB ›" and its note. -->
+      <div id="lab-after" class="lab-after" hidden></div>
 
+      <!-- Lab F01: "Your Daylight checked in {rel}." above the history (LAB-PLAN 2.5). -->
+      <p id="lab-checkin" class="lab-checkin" hidden></p>
+      <!-- Lab F07: what waits to send, with Cancel, above the rest of the history. -->
+      <section id="lab-queue" class="lab-queue" aria-labelledby="lab-queue-h" hidden>
+        <h2 class="recent-h" id="lab-queue-h"></h2>
+        <ol id="lab-queue-list" class="history" aria-labelledby="lab-queue-h"></ol>
+      </section>
       <h2 class="recent-h" id="recent-h" hidden>Recent</h2>
       <ol id="history" class="history" aria-labelledby="recent-h"></ol>
       <!-- F27: a history row's new state (Delivered ✓, Waiting to send, Not delivered), said to screen readers. -->
@@ -143,6 +161,14 @@
       <button id="whats-back" class="back" type="button">‹ Back</button>
       <h2 id="whats-h">What’s in Lab</h2>
       <div id="whats"></div>
+    </section>
+
+    <!-- Lab › What's in Lab › Setup check (LAB-PLAN F26): the checks, the test article, the activity log and Copy
+         diagnostics. lab-ui.js fills it. -->
+    <section id="view-setup" hidden aria-labelledby="setup-h">
+      <button id="setup-back" class="back" type="button">‹ Back</button>
+      <h2 id="setup-h" tabindex="-1">Setup check</h2>
+      <div id="setup"></div>
     </section>
 
     <!-- Lab › Daylight server (LAB-PLAN 2.6): where setup happens, so it carries the long texts. -->

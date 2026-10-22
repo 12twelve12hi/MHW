@@ -76,7 +76,9 @@ export function hostOf(url) {
 }
 
 const TONES = { sending: 'busy', failed: 'busy', sent: 'sent', delivered: 'ok', expired: 'bad' };
-const BUTTONS = { 'retry-now': 'Retry now', 'try-again': 'Try again' };
+/** The words of a row's one button (CHANGES-v1.1 2.5), by describeRow's action. */
+export const ACTION_LABELS = { 'retry-now': 'Retry now', 'try-again': 'Try again' };
+const BUTTONS = ACTION_LABELS;
 
 /**
  * How a history row reads, in the words every Send to Daylight app uses (CHANGES-v1.1 2.5, from the protocol library's
@@ -91,9 +93,12 @@ export function rowView(row, now = Date.now()) {
   };
 }
 
-/** What to say after a share (CHANGES-v1.1 2.5): the row's label, then its sentence when it has one. */
-export function rowMessage(row, now = Date.now()) {
-  const d = describeRow(row, now);
+/**
+ * What to say after a share (CHANGES-v1.1 2.5): the row's label, then its sentence when it has one. describe(row, now)
+ * -> {label, sentence}: the words to use (Lab's timeline, LAB-PLAN 2.5); describeRow by default.
+ */
+export function rowMessage(row, now = Date.now(), describe = null) {
+  const d = (describe ?? describeRow)(row, now);
   if (!d.label) return '';
   const label = /[.…✓]$/.test(d.label) ? d.label : `${d.label}.`;
   return d.sentence ? `${label} ${d.sentence}` : label;
@@ -149,11 +154,12 @@ export const wantsAcks = (rows, now = Date.now()) =>
 /**
  * The outbox's acks and re-sends (PROTOCOL 3.3; CHANGES-v1.1 2.4 tick). The library's resendDue always runs: it makes
  * no request unless something is due, and it ends week-old rows and drops expired rows' content after 14 days
- * (CONTENT_KEEP). The ack topic is read only while wantsAcks(), so an idle outbox stays off the relay.
+ * (CONTENT_KEEP). The ack topic is read only while wantsAcks(), so an idle outbox stays off the relay, or when
+ * readAcks says so: Lab's timeline (LAB-PLAN 2.5) also reads it while a delivered row waits for its state.
  * sender: a daylight-share Sender; call it under the app's own outbox lock. -> {delivered, resent}
  */
-export async function maintain(sender, now = Date.now()) {
-  if (wantsAcks(await sender.list(), now)) return sender.tick();
+export async function maintain(sender, now = Date.now(), { readAcks = false } = {}) {
+  if (readAcks || wantsAcks(await sender.list(), now)) return sender.tick();
   return { delivered: 0, resent: (await sender.resendDue()).length };
 }
 
@@ -162,11 +168,20 @@ export async function maintain(sender, now = Date.now()) {
  * them isn't sent and won't be by itself (an error, or Not delivered).
  * One item: its name, then the row's label and sentence (CHANGES-v1.1 2.5), or "Couldn’t send <name>" and why. Several:
  * a count, then one line when they all ended alike, else what each one did.
+ * Lab passes: describe (rowMessage's words: the timeline's, LAB-PLAN 2.5), name(result) (a result's name: the host
+ * for the clipboard's link, F33), and sentTo ("Sent to {name}", F08): when every item went out, that is the title and
+ * each item gets its line, "{name}: {label and sentence}".
  */
-export function sendSummary(results) {
-  const say = (r) => (r.row ? rowMessage(r.row) : r.error || 'Something went wrong.');
-  const nameOf = (r) => (r.row ? shortName(r.row) : r.name || 'it');
+export function sendSummary(results, { describe = null, sentTo = null, name = null } = {}) {
+  const say = (r) => (r.row ? rowMessage(r.row, Date.now(), describe) : r.error || 'Something went wrong.');
+  const nameOf = (r) => (r.row ? (name?.(r) || shortName(r.row)) : r.name || 'it');
   const bad = results.some((r) => !r.row || r.row.status === 'expired');
+  // Lab (F08): a notification for items that went out names the Daylight: "Sent to {name}", then what each one did.
+  if (sentTo && results.length && results.every((r) => r.row && (r.row.status === 'sent' || r.row.status === 'delivered'))) {
+    const lines = results.slice(0, 4).map((r) => `${nameOf(r)}: ${say(r)}`);
+    if (results.length > 4) lines.push(`and ${results.length - 4} more`);
+    return { title: sentTo, body: lines.join('\n'), bad };
+  }
   if (results.length === 1) {
     const r = results[0];
     return r.row ? { title: nameOf(r), body: say(r), bad } : { title: `Couldn’t send ${nameOf(r)}`, body: say(r), bad };

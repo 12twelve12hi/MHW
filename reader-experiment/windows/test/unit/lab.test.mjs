@@ -98,10 +98,17 @@ test('Lab is on by default: the first start writes settings.lab = true, a stored
     assert.deepEqual(await s.settings(), { lab: false, comfort: true, hotkey: 'Ctrl+Alt+D' });
     await s.lab.setLab(true);
     assert.deepEqual(await s.settings(), { lab: true, comfort: true, hotkey: 'Ctrl+Alt+D' }, 'Comfort stays when Lab changes');
-    // W0 shows no one-time note (1.2: only from a build with F01 or F04).
-    assert.equal(labMod.LAB_NOTE_ENABLED, false);
+    // The one-time note (1.2) comes with the first build that has F01 or F04: Wave 1 (WIN1) has F01.
+    assert.equal(labMod.LAB_NOTE_ENABLED, true);
     const st = await s.lab.state();
-    assert.deepEqual([st.lab, st.noteEnabled], [true, false]);
+    assert.deepEqual([st.lab, st.noteEnabled, st.labNoteShown], [true, true, false]);
+    assert.equal(await s.lab.noteDue(), true);
+    await s.lab.noteSeen();
+    assert.equal(await s.lab.noteDue(), false, 'once dismissed, never again');
+    assert.equal((await s.settings()).labNoteShown, true);
+    await s.lab.setLab(false);
+    await s.app.setSettings({ labNoteShown: false });
+    assert.equal(await s.lab.noteDue(), false, 'never with Lab off');
   } finally { await s.close(); }
 });
 
@@ -132,14 +139,19 @@ test('Lab off: no discovery and no server call; the gate says how to turn it on;
 
 // --- What's in Lab (1.4) and the gate (1.5, 2.6) -------------------------------------------------------------------------
 
-test('What’s in Lab on Windows: Files over 9 MB under the server heading (1.4’s Apps column), with the server’s short state', async () => {
-  assert.deepEqual(labMod.LAB_FEATURES, [], 'W0: no Lab feature of its own yet');
+test('What’s in Lab on Windows: its Wave 1 features (1.4’s Apps column), then Files over 9 MB under the server heading, with the server’s short state', async () => {
+  // 1.4's Apps column: F01, F07, F09, F16, F26 and F33 list Windows; F08 is Android's share-sheet row (on Windows only
+  // the toast's words). Files over 9 MB is the one server feature that lists Windows; it comes in Wave S (`later`).
+  assert.deepEqual(labMod.LAB_FEATURES, ['F01', 'F07', 'F09', 'F16', 'F26', 'F33']);
+  assert.deepEqual(labMod.LAB_FEATURES, L.LAB_TEXT.featureOrder.filter((f) => labMod.LAB_FEATURES.includes(f)), 'in 1.4’s order');
   assert.deepEqual(labMod.LAB_SERVER_FEATURES, ['F02']);
-  assert.deepEqual(labMod.BUILT_FEATURES, []);
+  assert.deepEqual(labMod.BUILT_FEATURES, labMod.LAB_FEATURES);
+  assert.deepEqual(labMod.USE_SWITCHES, ['F16', 'F33'], 'the Use switches of the features here that change how sending behaves (6.5 Q5)');
   const s = await setup({ paired: false });
   try {
     let o = await s.lab.overview();
-    assert.deepEqual(o.features, []);
+    assert.deepEqual(o.features.map((f) => [f.id, f.name, f.sentence, f.short]), labMod.LAB_FEATURES.map((id) => [id, L.LAB_TEXT.features[id].name, L.LAB_TEXT.features[id].sentence, 'Pair first']));
+    assert.deepEqual(o.settings, { use: { F16: true, F33: true }, quickSends: false }, 'Use switches on by default; quick sends off');
     assert.deepEqual(o.server.features.map((f) => [f.id, f.name, f.sentence]), [['F02', 'Files over 9 MB', 'Big PDFs and books go through your Daylight server.']]);
     assert.equal(o.header, 'Needs Lab on your Daylight', 'never heard from the Daylight (F17.2)');
     assert.deepEqual([o.server.state, o.server.short], ['needs-pairing', 'Pair first']);
@@ -148,13 +160,15 @@ test('What’s in Lab on Windows: Files over 9 MB under the server heading (1.4�
     await s.app.pair(s.link);
     o = await s.lab.overview();
     assert.deepEqual([o.fresh, o.server.state, o.server.short, o.server.features[0].short], [true, 'needs-server', 'Not set up', null]);
+    // Paired, no Lab heard from the Daylight: the timeline needs Lab on it (F01's capability, `st`); the rest is Ready.
+    assert.deepEqual(o.features.map((f) => [f.id, f.short]), [['F01', 'Needs Lab on your Daylight'], ['F07', 'Ready'], ['F09', 'Ready'], ['F16', 'Ready'], ['F26', 'Ready'], ['F33', 'Ready']]);
     assert.equal(o.cached, false, 'asked now');
     // Opened again: the last answer at once, from storage (1.5), and nothing on the network.
     const asked = s.log.length;
     let cached = await s.lab.overview({ refresh: false });
     assert.deepEqual([cached.fresh, cached.cached, cached.server.state, cached.server.short, cached.server.features[0].short], [true, true, 'needs-server', 'Not set up', null]);
     assert.equal(s.log.length, asked, 'nothing went on the network');
-    assert.deepEqual(await s.lab.state(), { lab: true, noteEnabled: false, labNoteShown: false, serverState: 'needs-server', serverSubtitle: 'Optional · Not set up' });
+    assert.deepEqual(await s.lab.state(), { lab: true, noteEnabled: true, labNoteShown: false, serverState: 'needs-server', serverSubtitle: 'Optional · Not set up' });
     // An answer older than 10 minutes isn't used: no short states until the server answers.
     await s.storage.set('lab/server', { state: 'needs-server', at: Date.now() - 11 * MIN });
     cached = await s.lab.overview({ refresh: false });
@@ -523,8 +537,9 @@ test('F17: every ack-topic frame feeds the ledger, Lab on or off; What’s in La
     snap = await s.app.snapshot();
     assert.deepEqual([snap.inboxLab, snap.caps], [true, ['reader-link', 'st', 'tap']]);
     assert.equal(snap.labStates[two.id].s, 'reader');
-    // W0 has no timeline (F01 is W1): the row reads as v1.1's.
+    // The status file keeps v1.1's words in `label`; the timeline's (F01, Wave 1) are labRow's.
     assert.equal(snap.rows.find((r) => r.id === two.id).label, 'Delivered ✓');
+    assert.equal(snap.rows.find((r) => r.id === two.id).labRow.label, 'In your Reader ✓');
 
     // Lab off: the ledger keeps learning (1.3), so turning Lab on shows the right state at once.
     await s.lab.setLab(false);
@@ -833,8 +848,15 @@ test('the window’s Lab words are LAB_TEXT’s, the switch comes first in Setti
   assert.match(ui, /\bhostLineText\(model\.host, model\.fingerprint\)/, 'the host line is hostLineText’s');
 });
 
-test('the window’s Lab code is Wave 0: none of daylight-lab.js’s W1 exports, F01’s rows or F07’s sends (the release gate)', async () => {
+test('the window’s Lab code is Wave 1, and the release gate reads it so (LAB-PLAN 6.2)', async () => {
   const { codeWave, readTree, w1Names } = await import('../../scripts/lab-wave.mjs');
   const { wave, why } = codeWave(readTree(root), { w1: w1Names(fs.readFileSync(LAB_LIB, 'utf8')) });
-  assert.equal(wave, 'w0', why.join('; '));
+  assert.equal(wave, 'w1', why.join('; '));
+  // Each of WIN1's pieces alone is enough to hold the build for W1: the timeline, the offline queue, smart intake,
+  // Setup check, the Use switches, the note, the features it lists.
+  for (const reason of ['uses describeLabRow', 'sends with defer (F07)', 'uses normaliseShare', 'uses testArticle', 'uses labUseOn', 'sets LAB_NOTE_ENABLED = true', 'builds F01']) {
+    assert.ok(why.some((w) => w.includes(reason)), `${reason}: ${why.join('; ')}`);
+  }
+  const gate = JSON.parse(fs.readFileSync(path.join(root, '..', 'lab-release-gate.json'), 'utf8'));
+  assert.equal(typeof gate.w1, 'boolean', 'the gate knows W1');
 });

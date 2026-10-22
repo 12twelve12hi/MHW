@@ -1,11 +1,14 @@
-// The Lab screens' building blocks for the Windows window (LAB-PLAN 1.4, 1.5 and 2.6): the needs-setup note, What's in
-// Lab, the Daylight server section and the re-pairing follow-up. DOM only: no Tauri, storage or network. app.js passes
-// the data (lab.js's answers) and what a button does. Every word comes from LAB_TEXT, the server module or the data.
+// The Lab screens' building blocks for the Windows window (LAB-PLAN 1.4, 1.5, 2.5 and 2.6): the needs-setup note, What's
+// in Lab with its switches, the Daylight server section, the re-pairing follow-up, and Wave 1's: the timeline's rows
+// (F01), the one-time note (1.2), the questions before a send link or the copied link goes (F09, F33), F02's entry
+// point and Setup check (F26). DOM only: no Tauri, storage or network. app.js passes the data (lab.js's answers) and
+// what a button does. Every word comes from LAB_TEXT, the server module, the protocol module or the data.
 //
 // Text fields are one-line textareas that wrap (as the relay field is), so a pasted link or address is shown whole,
 // also at 225% text with Comfort (F27.4); Enter submits, and a pasted line break goes.
 
-import { LAB_TEXT, hostLineText } from './daylight-lab.js';
+import { LAB_TEXT, hostLineText, labRowA11yLabel, fillText, activityLine } from './daylight-lab.js';
+import { ACTION_LABELS } from './logic.js';
 
 let uid = 0;
 const nextId = (p) => `${p}-${++uid}`;
@@ -424,4 +427,270 @@ export function renderServerSection(box, model, on = {}) {
   box.append(form);
   if (setup && !model.setupFirst) box.append(setup);
   box.append(el('p', 'hint small lab-server-rerun', model.rerun ?? ''));
+}
+
+// --- Wave 1 --------------------------------------------------------------------------------------------------------
+
+/**
+ * A switch on a feature's row in What's in Lab: its Use switch (6.5 Q5: label "Use", named "Use {feature}") or F09's
+ * "Allow quick sends from other apps", with its footer as its description. onChange(want) -> Promise<the value now>;
+ * a value that can't be saved is put back and says why.
+ */
+export function featureSwitch({ label, name = null, footer, checked = false, onChange }) {
+  const wrap = el('div', 'lab-switch');
+  const row = el('div', 'switch-row');
+  const id = nextId('lab-switch');
+  const lab = el('label', 'switch-label', label);
+  lab.htmlFor = id;
+  const input = el('input', 'switch');
+  Object.assign(input, { type: 'checkbox', id, checked: !!checked });
+  input.setAttribute('role', 'switch');
+  if (name) input.setAttribute('aria-label', name);
+  const foot = el('p', 'hint small switch-footer', footer);
+  foot.id = nextId('lab-switch-footer');
+  input.setAttribute('aria-describedby', foot.id);
+  const said = el('p', 'hint small lab-switch-msg');
+  said.setAttribute('role', 'status');
+  input.addEventListener('change', async () => {
+    said.textContent = '';
+    const want = input.checked;
+    try { input.checked = !!(await onChange?.(want)); } catch (e) {
+      input.checked = !want;
+      said.textContent = `Couldn’t change that: ${e?.message ?? e}`;
+    }
+  });
+  row.append(lab, input);
+  wrap.append(row, foot, said);
+  return wrap;
+}
+
+/** A Use switch (6.5 Q5) for feature f: {id, name}; on: true while it is on. */
+export function useSwitch(f, on, onChange) {
+  const U = LAB_TEXT.use;
+  return featureSwitch({ label: U.label, name: fillText(U.a11y, { feature: f.name }), footer: U.footers[f.id] ?? '', checked: on, onChange });
+}
+
+/** The one-time note (1.2): LAB_TEXT.note with OK, which calls onOk (the caller marks it seen). */
+export function renderLabNote(box, { onOk } = {}) {
+  box.textContent = '';
+  const body = el('div', 'lab-note-body');
+  const text = el('p', 'lab-note-text', LAB_TEXT.note);
+  text.id = nextId('lab-note');
+  body.setAttribute('role', 'note');
+  body.setAttribute('aria-labelledby', text.id);
+  const acts = el('div', 'lab-note-acts');
+  const ok = button(LAB_TEXT.noteButton);
+  ok.classList.add('lab-note-ok');
+  ok.addEventListener('click', () => onOk?.());
+  acts.append(ok);
+  body.append(text, acts);
+  box.append(body);
+  box.hidden = false;
+}
+
+/**
+ * One history row with Lab on (2.5, "What a row shows"). d: the timeline's {label, sentence, action, stepLine, final}
+ * for it. A row from describeLabRow's rules 1 and 4 (stepLine null: Lab off on the Daylight, or v1.1's own words) keeps
+ * v1.1's layout exactly (v11: rowView's {label, tone, sentence, retry, retryLabel}). Otherwise every row shows its
+ * title and label, and the sentence and step line show on the newest row and on every row that is not final;
+ * elsewhere the title opens them (its details). The row's accessible text is "{label}. {sentence}" (labRowA11yLabel);
+ * the label, sentence and step line on screen are hidden from screen readers, which read that instead.
+ * row: {id, status, kind}; title, kind, when: the texts; on: {retry(id, button), remove(id, button)}; cancel: the
+ * queue's Cancel instead of Remove (F07); tone: the label's style ('ok', 'sent', 'busy', 'bad').
+ */
+export function renderLabRow(row, d, { v11, title, kind, when, newest = false, on = {}, cancel = false, tone = 'sent' } = {}) {
+  const li = el('li');
+  li.dataset.id = row.id;
+  li.dataset.status = row.status;
+  const lab = d.stepLine !== null && d.stepLine !== undefined;
+  const showAll = !lab || newest || !d.final;
+  const line = el('div', 'item-line');
+  let titleEl;
+  if (showAll) titleEl = el('span', 'item-title', title);
+  else {
+    titleEl = button(title, 'item-title item-open');
+    titleEl.setAttribute('aria-expanded', 'false');
+  }
+  line.append(el('span', 'kind', kind), titleEl);
+  const meta = el('div', 'item-meta');
+  if (lab) {
+    const label = el('span', `st ${tone}`, d.label);
+    label.setAttribute('aria-hidden', 'true');
+    meta.append(label, el('span', 'sr-only lab-row-a11y', labRowA11yLabel(d)));
+  } else {
+    meta.append(el('span', `st ${v11.tone}`, v11.label));
+  }
+  meta.append(el('span', 'when', when));
+  const acts = el('span', 'acts');
+  const retryLabel = lab ? (ACTION_LABELS[d.action] ?? '') : v11.retryLabel;
+  if (retryLabel) {
+    const b = el('button', 'retry', retryLabel);
+    b.type = 'button';
+    b.setAttribute('aria-label', `${retryLabel}: ${title}`);
+    b.addEventListener('click', () => on.retry?.(row.id, b));
+    acts.append(b);
+  }
+  const rmText = cancel ? LAB_TEXT.queue.cancel : 'Remove';
+  const rm = el('button', 'remove', rmText);
+  rm.type = 'button';
+  rm.setAttribute('aria-label', `${rmText}: ${title}`);
+  rm.addEventListener('click', () => on.remove?.(row.id, rm));
+  acts.append(rm);
+  meta.append(acts);
+  li.append(line, meta);
+  if (!lab) {
+    if (v11.sentence) li.append(el('p', `note sentence${v11.tone === 'bad' ? ' bad' : ''}`, v11.sentence));
+    return li;
+  }
+  const details = [];
+  if (d.sentence) {
+    const p = el('p', `note sentence${tone === 'bad' ? ' bad' : ''}`, d.sentence);
+    p.setAttribute('aria-hidden', 'true');
+    details.push(p);
+  }
+  if (d.stepLine) {
+    const p = el('p', 'note lab-steps', d.stepLine);
+    p.setAttribute('aria-hidden', 'true');
+    details.push(p);
+  }
+  for (const p of details) { p.hidden = !showAll; li.append(p); }
+  if (!showAll) {
+    titleEl.addEventListener('click', () => {
+      const open = titleEl.getAttribute('aria-expanded') !== 'true';
+      titleEl.setAttribute('aria-expanded', String(open));
+      for (const p of details) p.hidden = !open;
+    });
+  }
+  return li;
+}
+
+/**
+ * A question before something is sent (F09's send link, F33's copied link) in `box`: a title, lines, and Send and
+ * Cancel. on: {send(), cancel()}. -> the group (role group, named by its title); Send has the focus.
+ */
+export function renderQuestion(box, { title, lines = [] } = {}, on = {}) {
+  box.textContent = '';
+  const ask = el('div', 'lab-note-body lab-question-body');
+  const h = el('p', 'lab-question-title', title);
+  h.id = nextId('lab-question');
+  ask.setAttribute('role', 'group');
+  ask.setAttribute('aria-labelledby', h.id);
+  ask.append(h);
+  for (const t of lines) ask.append(el('p', 'lab-note-text lab-question-line', t));
+  const yes = button(LAB_TEXT.automation.send, 'btn primary lab-question-send');
+  const no = button(LAB_TEXT.automation.cancel, 'btn secondary lab-question-cancel');
+  yes.addEventListener('click', () => on.send?.(yes));
+  no.addEventListener('click', () => on.cancel?.());
+  const acts = el('div', 'row');
+  acts.append(yes, no);
+  ask.append(acts);
+  box.append(ask);
+  box.hidden = false;
+  yes.focus();
+  return ask;
+}
+
+/**
+ * The F02 entry point (3.1) in `box`, under the too-big sentence: "Send files over 9 MB ›", which runs the gate and
+ * shows its note (needs-server with Copy Server code, later, OFFLINE…) under it. gate() -> the gate's answer;
+ * fix(r, note, button) for the note's one button.
+ */
+export function renderBigFiles(box, { gate, fix } = {}) {
+  box.textContent = '';
+  const li = el('div', 'lab-feature lab-big-files');
+  const b = button(null, 'nav-row lab-big-files-row');
+  const text = el('span', 'nav-text');
+  text.append(el('span', 'nav-label', LAB_TEXT.bigFiles));
+  b.append(text);
+  const notes = noteBox();
+  b.addEventListener('click', async () => {
+    const r = await gate?.();
+    if (!r || r.ready) { clearNote(notes); return; }
+    const note = labNote(notes, r.message, { state: r.state, button: r.button, onButton: (btn) => fix?.(r, note, btn) });
+  });
+  li.append(b, notes);
+  box.append(li);
+  box.hidden = false;
+}
+
+/**
+ * Setup check (F26) into `box`. model: {checks: lab.js setupChecks()'s lines, test: null | {title, label, delivered,
+ * reader}, activity: [events, oldest first]}. on: {fix(check, button), test(button), copy() -> Promise<true | why>}.
+ */
+export function renderSetupCheck(box, model, on = {}) {
+  const S = LAB_TEXT.setup;
+  box.textContent = '';
+  const list = el('ul', 'lab-checks');
+  for (const c of model.checks ?? []) {
+    const li = el('li', `lab-check${c.ok ? ' ok' : ' unmet'}`);
+    li.dataset.check = c.id;
+    li.append(el('span', 'lab-check-text', c.text));
+    if (c.button) {
+      const b = button(c.button, 'btn secondary small-btn lab-check-fix');
+      b.setAttribute('aria-label', `${c.button}: ${c.text.replace(/^[!✓] /, '')}`);
+      b.addEventListener('click', () => on.fix?.(c, b));
+      li.append(b);
+    }
+    list.append(li);
+  }
+  box.append(list);
+
+  const test = el('div', 'lab-test');
+  const go = button(S.testSend, 'btn secondary lab-test-send');
+  const foot = el('p', 'hint small lab-test-footer', S.testFooter);
+  foot.id = nextId('lab-test-footer');
+  go.setAttribute('aria-describedby', foot.id);
+  go.addEventListener('click', () => on.test?.(go));
+  const progress = el('div', 'lab-test-progress');
+  progress.setAttribute('aria-live', 'polite');
+  test.append(go, foot, progress);
+  box.append(test);
+
+  const log = el('details', 'lab-activity');
+  const sum = el('summary', null, S.activity);
+  const ol = el('ol', 'lab-activity-list');
+  log.append(sum, ol);
+  box.append(log);
+  updateSetupCheck(box, model);
+
+  const copy = button(S.copyDiagnostics, 'btn secondary lab-diagnostics');
+  const said = el('p', 'hint small lab-diagnostics-said');
+  said.setAttribute('role', 'status');
+  copy.addEventListener('click', async () => {
+    said.textContent = '';
+    const r = await on.copy?.();
+    if (r === true) said.textContent = S.copied;
+    else if (typeof r === 'string') said.textContent = r;
+  });
+  box.append(copy, said);
+}
+
+/**
+ * Setup check's parts that change while it shows, in place (the focus stays): the test article's progress, as far as
+ * it got ("✓ Delivered", "✓ In your Reader"; the row's label meanwhile, Waiting for a tap among them, F26.1), and the
+ * activity log, newest first. model: {test, activity}.
+ */
+export function updateSetupCheck(box, model) {
+  const S = LAB_TEXT.setup;
+  const progress = box.querySelector('.lab-test-progress');
+  if (progress) {
+    const lines = [];
+    const t = model.test;
+    if (t) {
+      if (t.title) lines.push(['lab-test-title', t.title]);
+      lines.push(['lab-test-label', t.label]);
+      if (t.delivered) lines.push(['lab-test-tick', fillText(S.ok, { check: S.delivered })]);
+      if (t.reader) lines.push(['lab-test-tick', fillText(S.ok, { check: S.inReader })]);
+    }
+    const now = [...progress.children].map((p) => `${p.className}\n${p.textContent}`).join('\n\n');
+    if (now !== lines.map(([c, x]) => `${c}\n${x}`).join('\n\n')) {
+      progress.textContent = '';
+      for (const [c, x] of lines) progress.append(el('p', c, x));
+    }
+  }
+  const ol = box.querySelector('.lab-activity-list');
+  if (ol) {
+    ol.textContent = '';
+    for (const e of [...(model.activity ?? [])].reverse()) ol.append(el('li', null, activityLine(e)));
+  }
 }

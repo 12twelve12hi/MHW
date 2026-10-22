@@ -1,4 +1,4 @@
 {
-  "about": "LAB-PLAN 6.2: the Lab wave of the code in this folder, which the release gate (../lab-release-gate.json) checks before rx-windows.yml publishes this build. null: no Lab code yet, so the build is published as before. WIN0 set \"w0\" (the Lab switch, What's in Lab, the Daylight server section, the ledger); WIN1 sets \"w1\".",
-  "wave": "w0"
+  "about": "LAB-PLAN 6.2: the Lab wave of the code in this folder, which the release gate (../lab-release-gate.json) checks before rx-windows.yml publishes this build. null: no Lab code yet, so the build is published as before. WIN0 set \"w0\" (the Lab switch, What's in Lab, the Daylight server section, the ledger); WIN1 set \"w1\" (the timeline, F02's entry point, the offline queue, send links, smart intake, Setup check, the copied link, the Use switches).",
+  "wave": "w1"
 }

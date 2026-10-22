@@ -11,7 +11,9 @@
 //   UPDATE_LAB_OFF_BASELINE=1 PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node --test test/ui/lab-off-parity.test.mjs
 //
 // With Lab off, only the Lab switch row in Settings and its footer, which 1.3 keeps, may be left out of the comparison
-// (LAB_SWITCH, through expectBaseline's omit); every other line must match. Lab off is reached three ways: stored
+// (LAB_SWITCH, through expectBaseline's omit); every other line must match. Wave 1's Lab parts of the main window (the
+// one-time note, the timeline, the queue, "Send copied link", the send link's question, F02's entry point) are all gone
+// with Lab off, so the baselines hold unchanged. Lab off is reached three ways: stored
 // (seeded), the switch clicked off in Settings, and --e2e-lab 0 in test mode (1.7). axe-core checks each Lab-off screen
 // too, light and dark, Comfort off and on (F27.1 with Lab off; Lab on is a11y.test.mjs and lab.test.mjs).
 
@@ -133,12 +135,17 @@ test('--e2e-lab 0 in test mode turns Lab off before the window draws: the baseli
   await plain.context().close();
 });
 
-test('Lab on, Wave 0: the pairing screen and the main window are unchanged (W0’s Lab lives in Settings)', { timeout: 60000 }, async () => {
+test('Lab on, Wave 1: the pairing screen is the baseline’s but for the one-time note, and once that is dismissed, exactly the baseline', { timeout: 60000 }, async () => {
+  // The note (LAB-PLAN 1.2) is the only Lab part of the pairing screen; the send view's Lab parts (the timeline, the
+  // queue, the copied link) are checked in lab-w1.test.mjs.
+  const NOTE = [`- note "${LAB_TEXT.note}":`, `- paragraph: ${LAB_TEXT.note}`, `- button "${LAB_TEXT.noteButton}"`];
   const page = await open(kvOf({ settings: { lab: true } }));
-  await expectBaseline(page, 'main-pair');
+  const snap = await snapshot(page);
+  for (const line of NOTE) assert.ok(snap.split('\n').some((l) => l.trim() === line), `the note: ${line}\n${snap}`);
+  await expectBaseline(page, 'main-pair', { omit: NOTE });
   await page.context().close();
-  const sending = await open(await paired({ lab: true }));
-  await expectBaseline(sending, 'main-send');
-  assert.deepEqual(sending.errors, []);
-  await sending.context().close();
+  const seen = await open(kvOf({ settings: { lab: true, labNoteShown: true } }));
+  await expectBaseline(seen, 'main-pair');
+  assert.deepEqual(seen.errors, []);
+  await seen.context().close();
 });

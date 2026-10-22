@@ -77,7 +77,11 @@ function fakeTauri(seed) {
     },
     kv_remove: ({ key }) => { kv.delete(key); return null; },
     kv_set_aside: ({ key }) => { kv.delete(key); return null; },
-    read_file: () => { throw 'Couldn’t open it (not found).'; },
+    // seed.bigFiles: {path: size}, files Rust refuses unread as over the protocol's 9 MB (F02's entry point).
+    read_file: ({ path }) => {
+      if (seed.bigFiles?.[path]) throw `too-large:${seed.bigFiles[path]}`;
+      throw 'Couldn’t open it (not found).';
+    },
     read_clipboard: () => seed.clipboard ?? '',
     write_clipboard: ({ text }) => {
       if (seed.failClipboard) throw 'The clipboard is in use by another app.';
@@ -85,6 +89,10 @@ function fakeTauri(seed) {
       return null;
     },
     notify: ({ title, body }) => { fake.notes.push({ title, body }); return null; },
+    // Lab, Wave 1: the tray's clipboard entry (F33), Setup check's notifications line and its Open Settings (F26).
+    set_clipboard_label: ({ text }) => { fake.trayLabel = text; return null; },
+    notifications_state: () => seed.notifications ?? 'on',
+    open_notification_settings: () => { fake.openedSettings = (fake.openedSettings ?? 0) + 1; return null; },
     show_window: () => null,
     hide_window: () => null,
     set_hotkey: ({ accel }) => accel,
@@ -142,7 +150,8 @@ export async function startUi() {
   const browser = await chromium.launch({ channel: process.env.DLS_UI_CHANNEL || undefined, headless: !process.env.HEADED });
 
   /**
-   * A window on the page. seed: {kv: {key: JSON text}, info, clipboard, failWrites: [keys], failClipboard}; width (default the
+   * A window on the page. seed: {kv: {key: JSON text}, info, clipboard, failWrites: [keys], failClipboard, notifications
+   * ('on' | 'off' | 'unknown', Setup check), bigFiles ({path: size})}; width (default the
    * narrowest), height, colorScheme, now (a fixed Date.now(), for times that read the same every run).
    * -> the page, once the app has drawn its first view (body[data-ready="1"]); page.errors collects page errors.
    */
@@ -333,7 +342,8 @@ export async function snapshot(page) {
 /**
  * Compares the page's tree with lab-off-baseline/<name>.yml (or records it with UPDATE_LAB_OFF_BASELINE=1).
  * omit: lines (strings, whole and trimmed, or regexes) dropped from the page's tree first. Only for what LAB-PLAN 1.3
- * keeps with Lab off, which is the Lab switch row in Settings and its footer: WIN0 passes those lines, nothing else.
+ * keeps with Lab off, which is the Lab switch row in Settings and its footer (WIN0 passes those lines), and, with Lab
+ * on, the one-time note above the pairing screen (1.2, WIN1): nothing else.
  */
 export async function expectBaseline(page, name, { omit = [] } = {}) {
   const drop = (line) => omit.some((o) => (o instanceof RegExp ? o.test(line) : line.trim() === o));

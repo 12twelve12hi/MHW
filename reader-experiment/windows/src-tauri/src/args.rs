@@ -1,6 +1,7 @@
 //! What a launch asks for: the app's own command line, or a second launch's, which the single-instance plugin
 //! forwards to the running app. File Explorer's "Send to > Daylight" starts `send-to-daylight.exe <file>...`; a
-//! clicked `daylightshare://pair?...` link starts `send-to-daylight.exe "daylightshare://pair?..."`.
+//! clicked `daylightshare://pair?...` link starts `send-to-daylight.exe "daylightshare://pair?..."`, and a
+//! `daylightshare://send?url=...` link (Lab, LAB-PLAN F09) `send-to-daylight.exe "daylightshare://send?..."`.
 //!
 //! Plain std, so the tests run anywhere: `rustc --edition 2021 --test src/args.rs -o args-test && ./args-test`
 
@@ -15,6 +16,9 @@ pub struct Launch {
     pub paths: Vec<PathBuf>,
     /// `daylightshare:` pairing links.
     pub links: Vec<String>,
+    /// `daylightshare://send?url=...&title=...[&text=...][&quick=1]` links (Lab, LAB-PLAN F09): the page reads them,
+    /// asks before sending (unless the user allowed quick sends) and answers with Lab off. Never a file path.
+    pub sends: Vec<String>,
     /// Started at sign-in by the autostart entry: stay in the notification area.
     pub autostart: bool,
     /// Test mode: pair with this link without showing anything.
@@ -38,6 +42,7 @@ impl Launch {
     pub fn is_plain(&self) -> bool {
         self.paths.is_empty()
             && self.links.is_empty()
+            && self.sends.is_empty()
             && !self.e2e_hotkey
             && !self.e2e_autostart
             && !self.e2e_confirm
@@ -53,6 +58,18 @@ impl Launch {
 /// True for `daylightshare:...` in any letter case.
 pub fn is_pairing_link(s: &str) -> bool {
     s.len() > SCHEME.len() && s.is_char_boundary(SCHEME.len() + 1) && s[..SCHEME.len() + 1].eq_ignore_ascii_case("daylightshare:")
+}
+
+/// True for a `daylightshare://send` link (F09), in any letter case: `send` is the link's host, followed by nothing, a
+/// `/`, a `?` or a `#`. Every other `daylightshare:` link stays a pairing link, as it always was.
+pub fn is_send_link(s: &str) -> bool {
+    if !is_pairing_link(s) {
+        return false;
+    }
+    let rest = &s[SCHEME.len() + 1..];
+    let Some(rest) = rest.strip_prefix("//") else { return false };
+    let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    rest[..host_end].eq_ignore_ascii_case("send")
 }
 
 /// Parses arguments (without the program name). Unknown `--options` are ignored.
@@ -98,6 +115,10 @@ pub fn parse<S: AsRef<str>>(args: &[S], cwd: &Path) -> Launch {
                 }
                 _ => {}
             }
+            continue;
+        }
+        if is_send_link(a) {
+            out.sends.push(a.to_string());
             continue;
         }
         if is_pairing_link(a) {
@@ -193,6 +214,39 @@ mod tests {
         let l = parse(&["--e2e-lab", "0", "notes.txt"], &cwd());
         assert_eq!(l.e2e_lab, Some(false));
         assert_eq!(l.paths, vec![cwd().join("notes.txt")]);
+    }
+
+    /// LAB-PLAN F09: `daylightshare://send?...` (any case) is a send link, never a pairing link or a file; the page
+    /// decides what it does (it asks first, or answers with Lab off). A file path in it is just text for the page.
+    #[test]
+    fn send_links() {
+        let link = "daylightshare://send?url=https%3A%2F%2Fexample.com%2Fstory&title=A%20story";
+        let l = parse(&[link], &cwd());
+        assert_eq!(l.sends, vec![link.to_string()]);
+        assert!(l.links.is_empty() && l.paths.is_empty());
+        assert!(!l.is_plain() && !l.is_e2e());
+        for s in [
+            "DaylightShare://SEND?url=x",
+            "daylightshare://send",
+            "daylightshare://send/?url=x&quick=1",
+            "daylightshare://send#frag",
+            "\"daylightshare://send?text=Hi%20https%3A%2F%2Fexample.com\"",
+        ] {
+            let l = parse(&[s], &cwd());
+            assert_eq!(l.sends.len(), 1, "{s}");
+            assert!(l.links.is_empty() && l.paths.is_empty(), "{s}");
+        }
+        // Pairing links, and anything else on the scheme, stay pairing links (v1.1).
+        for s in ["daylightshare://pair?c=ABC", "daylightshare://sender?url=x", "daylightshare://sendx", "daylightshare:send?url=x"] {
+            let l = parse(&[s], &cwd());
+            assert!(l.sends.is_empty(), "{s}");
+            assert_eq!(l.links.len(), 1, "{s}");
+        }
+        assert!(!is_send_link("https://example.com/send"));
+        assert!(!is_send_link("send"));
+        // With files and a pairing link, each goes its own way.
+        let l = parse(&["a.pdf", "daylightshare://send?url=https%3A%2F%2Fexample.com", "daylightshare://pair?c=Q"], &cwd());
+        assert_eq!((l.paths.len(), l.sends.len(), l.links.len()), (1, 1, 1));
     }
 
     #[test]

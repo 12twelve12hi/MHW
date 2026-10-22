@@ -55,7 +55,8 @@ Settings › Change pairing…**: the same Daylight's code applies at once, anot
 - **The clipboard's link:** copy a web address anywhere and press **Ctrl + Alt + D**. A notification names the site
   and says how it went, or that there was no link to send. The tray menu's **Send clipboard link** and the button in the
   window do the same. Change or turn off the hotkey in **⋯ › Settings** (click **Change…**, then press the new
-  combination; it needs Ctrl, Alt or Win).
+  combination; it needs Ctrl, Alt or Win). With Lab on (below) the command is called **Send copied link**, and the
+  window's button shows the site first, with **Send**.
 
 **Sizes:** files can be up to 9 MB. The free relay (ntfy.sh) takes attachments of up to 2 MB, so larger files travel in
 pieces that fit, and it holds about 20 MB per sender at a time, so after a burst of big files the rest waits a few
@@ -125,17 +126,25 @@ leave it as it is.
 
 While Lab is on, two rows under the switch open Lab's screens (**Back** or Esc returns to Settings):
 
-- **What’s in Lab ›**: the features this build has, each with a short state ("Ready", "Pair first", "Not set up", "In a
-  later update", …). The header line says whether your Daylight has confirmed Lab ("Your Daylight: Lab on · checked in 4
-  min ago", or "Needs Lab on your Daylight · checked in …"), from what Daylight Share on it says on its confirmation
-  channel. The screen shows the server's last states at once when they are 10 minutes old or less (else *Checking your
-  Daylight server…*), then reads that channel and asks the server, both at once, and updates the lines in place. In
-  this first Lab build (Wave 0) the list holds the one feature
-  of your own **Daylight server** that comes to Windows, **Files over 9 MB** (the other server features, Summaries
-  with Claude, Email-in and Feeds, are for the phone and browser apps). It is always shown and never greyed out:
-  clicking it when something is missing shows one sentence under it, saying what (with **Copy Server code** when there
-  is no server yet) and **OK**; screen readers say it. A ready server answers "comes to this app in a later Lab update"
-  until the feature is built here.
+- **What’s in Lab ›**: the features this build has, each with a short state ("Ready", "Pair first", "Needs Lab on your
+  Daylight", "Not set up", "In a later update", …): **Delivery timeline**, **Works offline**, **Shortcuts and
+  automation**, **Clean links**, **Setup check** and **Send copied link** (Wave 1, below), then, under *With your
+  Daylight server (optional)*, the one feature of your own **Daylight server** that comes to Windows, **Files over 9
+  MB** (the other server features, Summaries with Claude, Email-in and Feeds, are for the phone and browser apps). The
+  header line says whether your Daylight has confirmed Lab ("Your Daylight: Lab on · checked in 4 min ago", or "Needs
+  Lab on your Daylight · checked in …"), from what Daylight Share on it says on its confirmation channel. The screen
+  shows the server's last states at once when they are 10 minutes old or less (else *Checking your Daylight server…*),
+  then reads that channel and asks the server, both at once, and updates the lines in place. Every feature is always
+  shown and never greyed out: clicking one when something is missing shows one sentence under it, saying what (with
+  **Copy Server code** when there is no server yet) and **OK**; screen readers say it. A ready feature opens (Setup
+  check) or moves the focus to its switch. A ready server answers "comes to this app in a later Lab update" for Files
+  over 9 MB until it is built here (Wave S).
+  - **Use** switches (LAB-PLAN 6.5 Q5), on by default, on the two features that change how sending behaves: **Clean
+    links** (*When it’s off, links go exactly as they were shared, tracking and all.*) and **Send copied link** (*When
+    it’s off, the app doesn’t offer to send a link you copied.*: the clipboard command is the plain app's again). The
+    one Lab switch still turns all of Lab off.
+  - **Allow quick sends from other apps** (under Shortcuts and automation; off by default): *Lets Shortcuts, scripts
+    and other apps send without asking. Any app or web page could then send to your Daylight.*
 - **Daylight server ›** (*Optional · Not set up*): where setup happens. It shows the server's state in full (with the
   exact GitHub secret names); while the server isn't set up, **Turn it on** with the five steps, numbered, and where
   every step is explained; **Your server** (its address and fingerprint, *daylight-….workers.dev · 3f9a-1c2e*);
@@ -170,15 +179,55 @@ on, the send view shows the locked text with the new **Server code**, **Copy** a
 
 Whether Lab is on or off, the app keeps what Daylight Share says about Lab on the confirmation channel (whether it has
 Lab, what it can report, and each item's state in the Reader) each time it reads that channel, so turning Lab on shows
-what it has heard. In this build the app reads the channel while an item waits for its confirmation, after a send and
-when What's in Lab opens; a state the Daylight reports after confirming an item (the Reader took it later, say) is
-heard the next time one of these happens. The history still reads as before in this build: the Reader's states come
-with the delivery timeline, in the next Lab build (Wave 1), which also reads the channel after delivery. The one-time
-"Lab is on" note waits for that build too.
+what it has heard. It reads the channel while an item waits for its confirmation, after a send, when What's in Lab
+opens and, with Lab on and a Daylight that speaks Lab, after delivery too, while a delivered item of the last 48 hours
+waits for its state (every 15 minutes, and every 30 s while the window shows and the item was delivered in the last 10
+minutes).
+
+### Lab, Wave 1 (card WIN1)
+
+The first start of this build shows, once, above the pairing screen or the send view: *Lab is on. New features to try
+are in Settings › Lab, where you can turn it off.* with **OK** (LAB-PLAN 1.2). With Lab off none of what follows is
+there: the window is the plain app's.
+
+- **Delivery timeline** (F01). The history speaks in the timeline's words: *Sent · waiting for your Daylight*, *On your
+  Daylight ✓*, *Waiting for a tap on your Daylight*, *Kept for later on your Daylight*, *Handed to the Reader*, *In your
+  Reader’s queue*, *In your Reader ✓*… (LAB-PLAN 2.5), with a step line (*Sent ✓ · On your Daylight ✓ · In the Reader
+  …*). Every row shows its title and label; the sentence and the step line show on the newest row and on every row
+  that isn't settled yet, and elsewhere clicking the title shows them. Screen readers hear "{label}. {sentence}", never
+  the step line. Above the history: *Your Daylight checked in 4 min ago.* With a Daylight without Lab the rows read
+  exactly as the plain app's (*Delivered ✓*). While the window is closed to the tray, an item that reaches the Reader
+  shows a notification: *In your Reader: {title}*.
+- **Files over 9 MB** (F02's entry point). Under the too-big sentence of a refused file: **Send files over 9 MB ›**,
+  which says what is missing: your Daylight server (with **Copy Server code**) until one exists, then *comes to this app
+  in a later Lab update*.
+- **Works offline** (F07). Shared while Windows says the PC is offline, an item isn't tried: it waits as *Waiting for
+  connection* (*It will send when this device is back online.*) and goes as soon as Windows says the PC is back online,
+  oldest first, at most 30 messages and 18 MB of attachments at a time, passes at least 3 minutes apart. What waits to
+  send is listed first, under *Waiting to send ({n})*, each with **Cancel**.
+- **Sent to {name}** (F08). The notifications after Send To, the hotkey and a quick send name your Daylight: *Sent to
+  Desk Daylight* / *Paper: Sent · waiting for your Daylight.*
+- **Send links** (F09). `daylightshare://send?url=<address>&title=<title>[&text=<text>][&quick=1]` (from Shortcuts, a
+  script, a web page) opens the window and asks *Send to {name}?* with the title and the site, **Send** and **Cancel**.
+  `quick=1` sends without asking only when **Allow quick sends from other apps** is on, at most 10 a minute. `text=` goes
+  through Clean links; a send link never takes a file. With Lab off: *Turn on Lab in Send to Daylight to use this.*
+- **Clean links** (F16). Every link (dropped, copied, a `.url` file, a send link) loses its tracking (`utm_…`, `fbclid`,
+  …), Google AMP and redirect wrappers come off, and a shared "headline + link" keeps the headline as its title. The link
+  as shared goes along for your Daylight (`x-orig`, *Cleaned from …*).
+- **Setup check** (F26), from What's in Lab: *✓ Pairing*, *Send to shortcut*, *Open at login*, *Hotkey* and
+  *Notifications* (as Windows reports them), each one not met with **Open setting** (this app's Settings) or **Open
+  Settings** (Windows' notification settings); **Send a test article** (*It’s added to your Reader library; delete it
+  there when you’re done.*), followed along the timeline to *✓ Delivered* and *✓ In your Reader*; the **Activity log**
+  (the last 200 sends, acks and states, without titles or addresses); **Copy diagnostics** (no address, title, code,
+  topic or Server code in it).
+- **Send copied link** (F33). The clipboard command reads *Send copied link* in the window and the tray menu. The
+  window's button shows *Send {site} to {name}?* with **Send** and **Cancel** first; the tray entry and the hotkey send
+  at once, and their notification names the site, as before.
 
 Every word on Lab's screens is `LAB_TEXT`'s (`daylight-lab.js`) or the server module's: the server section's setup
 steps, host and fingerprint line, delivery mode and Server address field (its `https://` placeholder, **Save** and
-footer), which Wave 0 had to word itself, now come from `LAB_TEXT.serverSection` too. Nothing is missing from it.
+footer), which Wave 0 had to word itself, now come from `LAB_TEXT.serverSection` too. The one gap: Setup check's
+start-at-login line reads *Open at login* (see *Still to check on a device*).
 
 ## Uninstall
 
@@ -205,18 +254,19 @@ side (`src-tauri/src/`) is kept to what a web page can't do.
 |---|---|
 | `src/core.js` | Pairing (the module's `pairingConfirmation` and `applyPairingChange`), sending, the outbox and its timers, with `daylight-share.js` (no DOM, no Tauri; unit-tested in node) |
 | `src/app.js`, `index.html`, `styles.css` | The window: pairing and its confirmation, drop zone, history, settings (Comfort and Lab among them), Lab's screens, the hotkey recorder, the screen-reader announcements. The code and relay fields size to their text (CSS `field-sizing`, which WebView2 has had since Edge 123) |
-| `src/lab.js` | Lab (no DOM, no Tauri; unit-tested in node): the switch (`settings.lab`, a missing key means on), the sender ledger fed by every ack-topic frame (`LabLedger` through the Sender's `onAckHeader`), the gates (`labGate`), the Daylight server (`DaylightServer`: discovery, status, Set up with a link, the Server address, the lock before a re-pairing) and the status file's Lab fields |
-| `src/lab-ui.js` | Lab's screens' parts (DOM only): the needs-setup note (a polite live region under the clicked control), What's in Lab (with room for Wave 1's per-feature **Use** switches), the Daylight server section, the re-pairing follow-up |
+| `src/lab.js` | Lab (no DOM, no Tauri; unit-tested in node): the switch (`settings.lab`, a missing key means on), the sender ledger fed by every ack-topic frame (`LabLedger` through the Sender's `onAckHeader`), the gates (`labGate`), the Daylight server (`DaylightServer`: discovery, status, Set up with a link, the Server address, the lock before a re-pairing), the status file's Lab fields; Wave 1: the timeline's words (`describeLabRow`), the Use switches and quick sends, send links (`parseSendLink`), Setup check's lines, activity log and diagnostics |
+| `src/lab-ui.js` | Lab's screens' parts (DOM only): the needs-setup note (a polite live region under the clicked control), What's in Lab with its switches, the Daylight server section, the re-pairing follow-up; Wave 1: the timeline's rows, the one-time note, the questions before a send link or the copied link goes, F02's entry point, Setup check |
+| `src/core.js` (Lab, Wave 1) | Smart intake at every entry point (`normaliseShare`), sending while offline (`send(…, {defer})`) and the flush back online (`flushNetwork`), reading the ack topic after delivery, the faster checks, "Sent to {name}", send links |
 | `src/logic.js` | Small pure helpers (status labels, MIME types, the hotkey's key names, notification texts) |
 | `src/bridge.js` | Calls into Rust; the storage adapter (one JSON file per key in the app's data folder) |
 | `build.mjs` | Copies `src/`, `../share/js/daylight-share.js`, `../share/js/daylight-lab.js` (unchanged) and `../server/client/daylight-server.js` (with its one import pointed at the copy next to it) into `dist/`, which Tauri embeds |
 | `lab-wave.json`, `scripts/lab-wave.mjs` | The Lab wave of this code, as declared and as read from the code, for the release gate (below) |
-| `src-tauri/src/main.rs` | Tray icon and menu, the window (closing hides it), single instance (a second launch hands over its arguments: Send To files, pairing links), the clipboard hotkey, notifications, start at login, commands for the page |
-| `src-tauri/src/args.rs` | The command line: files, `daylightshare:` links, `--autostart`, test-mode options and hooks |
+| `src-tauri/src/main.rs` | Tray icon and menu, the window (closing hides it), single instance (a second launch hands over its arguments: Send To files, pairing and send links), the clipboard hotkey, notifications, start at login, commands for the page (Lab's: the tray entry's words, whether Windows lets the app notify, Windows' notification settings) |
+| `src-tauri/src/args.rs` | The command line: files, `daylightshare:` pairing links and `daylightshare://send` links (Lab, F09), `--autostart`, test-mode options and hooks |
 | `src-tauri/src/sendto.rs` | The **Send to › Daylight** shortcut (created on the first run if the installer didn't) |
 | `src-tauri/src/store.rs`, `atomic.rs` | The page's key-value storage: each write flushed to disk, then renamed into place; a damaged file is set aside |
 | `src-tauri/windows/installer-hooks.nsh` | Installer extras: adds and removes the Send to shortcut; puts start at login back after an update |
-| `test/unit/` | Unit tests (node): `core.js` against the mock relay with a Receiver playing the Daylight, helpers, configuration; `lab.test.mjs`: Lab against the mock relay, a Lab Daylight (`LabInbox`) and a stand-in Daylight server (`test/helpers/fake-worker.mjs`) |
+| `test/unit/` | Unit tests (node): `core.js` against the mock relay with a Receiver playing the Daylight, helpers, configuration; `lab.test.mjs`: Lab against the mock relay, a Lab Daylight (`LabInbox`) and a stand-in Daylight server (`test/helpers/fake-worker.mjs`); `lab-w1.test.mjs`: Wave 1 |
 | `test/ui/` | The window's page (`dist/index.html`) in Chromium with a fake bridge in place of Rust (`test/helpers/ui.mjs`): the accessibility checks, the Lab-off parity baselines and Lab's screens (below) |
 | `test/e2e/windows.e2e.mjs` | The end-to-end test on Windows (below) |
 
@@ -264,8 +314,10 @@ jobs:
 The end-to-end test runs against the mock relay (`../share/js/mock-relay.mjs`), with `Receiver`s from
 `daylight-share.js` acting as the Daylight. Test mode is `--e2e-status <file>`: the app writes its state (pairing,
 outbox, view, the pairing question, the status line, and Lab's: `lab`, `inboxLab`, `caps`, `checkedIn`, `labHeader`,
-`labStates`, LAB-PLAN 1.7) to the file as it changes. The test hooks `--e2e-confirm`, `--e2e-cancel` (answer the
-pairing question), `--e2e-hotkey` (the hotkey's code path; pressing a global hotkey on a CI machine isn't practical),
+`labStates`, LAB-PLAN 1.7; Wave 1's: each row's timeline words as `labRow`, `checkedInText`, `online`, the send link's
+`sendQuestion`, `clipButton`, `noteShown` and whether the window is `hidden`; the log says what each notification said)
+to the file as it changes. The test hooks `--e2e-confirm`, `--e2e-cancel` (answer the pairing question, else a send
+link's), `--e2e-hotkey` (the hotkey's code path; pressing a global hotkey on a CI machine isn't practical),
 `--e2e-autostart` (the tray switch) and `--e2e-lab 0|1` (sets the Lab switch at start, as a click in Settings would,
 and keeps it) work only in an app started in test mode; otherwise none of these options does anything. The test:
 
@@ -277,7 +329,9 @@ and keeps it) work only in an app started in test mode; otherwise none of these 
 4. starts the app again with files as arguments, as Send to does: a PDF, a text file and a 5 MB file arrive intact (the
    last in three pieces, each under the relay's 2 MB limit), and a file over 9 MB is refused with the library's
    sentence;
-5. puts a link on the clipboard and starts the app with `--e2e-hotkey`;
+5. puts a headline and a link with tracking on the clipboard and starts the app with `--e2e-hotkey`: the Daylight gets
+   the link without its tracking, the headline as its title and the link as shared in `x-orig` (F16), and the
+   notification says *Sent to Test Daylight* and names the site (F08, F33);
 6. waits until the status file shows all four **Delivered**, in the library's words; this Daylight is a plain v1.1
    one, so the app has heard no Lab from it and What's in Lab's header says *Needs Lab on your Daylight* (F17.2);
 7. opens another Daylight's link with the same name: the question shows the other code and **Switch**; Cancel keeps
@@ -286,11 +340,17 @@ and keeps it) work only in an app started in test mode; otherwise none of these 
    the next file goes through the new relay and is acked there; the Daylight there is a Lab one (`daylight-lab.js`'s
    `LabInbox` and `LabInboxSim`), in the real order: it acks first, and reports the file's state (`handed`) only after
    the app has read the ack. Sending one more file reads the channel again, and the hello and that state reach the
-   app's ledger (F17), while the rows keep their v1.1 words (the timeline is Wave 1);
+   app's ledger (F17); the status file keeps the rows' v1.1 words in `label`, and the timeline's in `labRow`: a v1.1
+   Daylight's rows read *Delivered ✓* there too (F01.5), the Lab Daylight's file *Handed to the Reader* (F01.2);
 9. turns on start at login with `--e2e-autostart` and checks this user's Run entry;
-10. restarts the app: pairing, history, start at login and what the ledger learnt come back; then restarts it with
-    `--e2e-lab 0`: Lab is off and saved, the ledger is kept, and the status file equals the Lab-on one but for Lab's
-    own fields (a Lab-off status snapshot);
+10. restarts the app: pairing, history, start at login and what the ledger learnt come back. With the window in the
+    notification area, the hotkey sends a link the Lab Daylight then puts in the Reader: at the next ack read the
+    status file shows *In your Reader ✓* (F01.1) and the log the toast *In your Reader: {title}* (or, if the page
+    reports the window as shown, no toast). A `daylightshare://send` link asks *Send to Desk Daylight?* with the title
+    and site (`sendQuestion`), nothing goes before `--e2e-confirm`, which sends it cleaned with `x-orig`; with
+    `quick=1` it asks too (quick sends are off) and `--e2e-cancel` sends nothing (F09.3). Then it restarts with
+    `--e2e-lab 0`: Lab is off and saved, the ledger is kept, the rows have no timeline words, and the status file
+    equals the Lab-on one but for Lab's own fields (a Lab-off status snapshot);
 11. zero-fills `outbox.json` and deletes the Run entry, restarts (with `--e2e-lab 1`, which turns Lab back on): the
     app sets the file aside and says so, puts the Run entry back, and Send To still works;
 12. updates the default way (the old uninstaller, then the installer), from settings as a build without Lab left them:
@@ -328,7 +388,7 @@ links' real path.
 
 Screenshots of every view go to `test-results/a11y/` (a CI artifact, for review; not compared).
 
-### Lab checks (LAB-PLAN F00 and F17)
+### Lab checks (LAB-PLAN F00, F17 and Wave 1)
 
 `test/unit/lab.test.mjs` runs `src/lab.js` and `core.js` in node against the mock relay, a Lab Daylight (`LabInbox`)
 and a stand-in Daylight server (`test/helpers/fake-worker.mjs`): Lab on by default and kept across pairing changes;
@@ -343,10 +403,22 @@ status, so another Daylight's pairing says `pairing-mismatch`, finds its own ser
 never answer from the old server's status; F17 (every ack-topic frame reaches the ledger, Lab
 on or off; a later Lab level, junk and a `lab: 0` frame are read safely; no Lab frame delays an ack); an item queued
 offline goes once back online with Lab off (F00.4); the lock before a re-pairing and its follow-up; the build's copies,
-the CSP, that the window's words are `LAB_TEXT`'s, and that the code is Wave 0 (the release gate).
+the CSP, that the window's words are `LAB_TEXT`'s (the server section's included), and that the code is Wave 1 (the
+release gate).
+
+`test/unit/lab-w1.test.mjs` runs Wave 1 the same way: smart intake at each entry point (the clipboard, a dropped text,
+an AMP link, a `.url` file), `x-orig` on the wire, F16's Use switch and v1.1 exactly with Lab off (F16); an item shared
+offline is deferred (nothing published, *Waiting for connection* in the window and the notification), goes back online,
+passes 3 minutes apart, and 70 links go out in passes of 30 with no 429 (F07, F07.3); a Lab Daylight's states as the
+rows' words (*In your Reader ✓*, *Handed to the Reader*, *Waiting for a tap…*), v1.1's words for a v1.1 Daylight, the
+ack topic read after delivery only while a row waits for its state, the faster checks only while the window shows, the
+toast's hook once (F01); "Sent to {name}" and the host (F08, F33); the copied link prepared without sending (F33);
+send links: what they read, Lab off, unpaired, not a web address (a file path among them), the question, quick sends
+and their limit (F09); F02's gate; the test article to the Reader, the activity log and redacted diagnostics, Setup
+check's lines (F26).
 
 `test/ui/lab.test.mjs` opens the window's page as the accessibility checks do: Lab first in Settings and on by default,
-with no one-time note in this build (F00.1); a switch that can't be saved is put back; What's in Lab with short states
+with the one-time note once (F00.1, 1.2); a switch that can't be saved is put back; What's in Lab with short states
 only, and a click that shows exactly the feature's sentence under it, in a polite live region, with **Copy Server
 code** (F00.3); *Checking your Daylight server…*, then `OFFLINE` at 5 s (F00.6), and the cached states at once instead
 when the last answer is recent; the server section and **Copy**
@@ -358,6 +430,16 @@ sentence on any screen reached without clicking a Lab feature or opening the ser
 follow-up. axe-core finds nothing on each of them, light and dark, and with Comfort at 100%, 200% and 225% text
 nothing is clipped at the narrowest window. `test/ui/lab-off-parity.test.mjs` (above) runs axe-core with Lab off.
 
+`test/ui/lab-w1.test.mjs` does the same for Wave 1: the timeline's rows (labels everywhere, the sentence and step line
+on the newest row and the rows not settled, the details behind the title, "{label}. {sentence}" for screen readers and
+no step line, the check-in header, the queue with Cancel; F01.6), a Lab Daylight's *In your Reader ✓* after a tick, said
+politely (F01.1); a send link's question, Send and Cancel, Lab off and unpaired (F09.3); *Send copied link*'s question
+and its Use switch, with the tray's words following (F33.3); F02's entry point with its note, and none with Lab off
+(F02e.1); offline, *Waiting for connection* in *Waiting to send (1)*, sent once back online (F07.1, F07.2); What's in
+Lab's Use switches and quick sends with their footers; Setup check's lines and buttons, the test article to *✓ In your
+Reader*, the activity log and Copy diagnostics (F26.1-3); F01's *Needs Lab on your Daylight*. axe-core on each, light and
+dark, and with Comfort at 100%, 200% and 225% text nothing clipped in any of Wave 1's views.
+
 ### Lab-off parity baselines (LAB-PLAN 1.7)
 
 `test/lab-off-baseline/*.yml` hold what the window says, as Playwright's `locator('body').ariaSnapshot()` (roles,
@@ -368,7 +450,8 @@ fixed pairing and rows at fixed ages under a fixed clock, and compares; Comfort 
 switch reads checked). With Lab off, every Lab build must still match them: only the Lab switch row in Settings and its
 footer, which stay with Lab off, may be left out (`expectBaseline(page, name, {omit})`). Lab off is reached three ways
 (stored, the switch clicked off, `--e2e-lab 0`), and axe-core checks each Lab-off screen, light and dark, Comfort off
-and on. With Lab on, the pairing screen and the main window still equal the baselines: Wave 0's Lab lives in Settings.
+and on. With Lab on, the pairing screen still equals its baseline but for the one-time note above it (and exactly once
+the note is dismissed); the send view's Lab parts (Wave 1) are checked in `lab-w1.test.mjs`.
 Re-record them only together with a matching non-Lab change:
 
 ```sh
@@ -379,8 +462,8 @@ The workflow then uploads the installer to the `reader-experiment-latest` releas
 and the test output (status file, screenshot) are kept as workflow artifacts.
 
 **Lab release gate** (LAB-PLAN 6.2): a Windows Lab build reaches the release only after the iPhone and Mac builds of
-the same wave. [`lab-wave.json`](lab-wave.json) names the Lab wave of the code in this folder (`null` until WIN0 sets
-`"w0"`; WIN1 sets `"w1"`). While [`../lab-release-gate.json`](../lab-release-gate.json) has that wave `false`, the
+the same wave. [`lab-wave.json`](lab-wave.json) names the Lab wave of the code in this folder: `"w1"` since WIN1 (WIN0
+set `"w0"`). While [`../lab-release-gate.json`](../lab-release-gate.json) has that wave `false`, the
 publish job skips the upload and says so in the log (a "Lab release gate" notice); the tests run all the same. Flipping
 the gate starts the workflow again, which then publishes the held build.
 
@@ -393,6 +476,46 @@ calls (`flushNetwork`, `send(…, {defer})`), `LAB_NOTE_ENABLED = true`, a quote
 When the script can't tell (the module or its heading missing, or a quoted feature id of a wave it doesn't know), it
 fails and nothing is uploaded. Unit tests check the script on made-up trees (WIN0 forgetting `"w0"`, WIN1 leaving it),
 that `lab-wave.json` is not behind the code here and names a wave the gate knows, and that every job carries its lane.
+
+## Still to check on a device
+
+For the W1 device round on the lab tablet **Rooted 2** (JP4R01422; LAB-PLAN 6.4), with the real ntfy.sh relay and a real
+Windows 10 or 11 PC. CI covers everything else above with the mock relay, Chromium and Daylights simulated in node, and
+on the `windows-latest` runner with the installed app; these need a real DC-1, a real desktop or a person. Nothing here
+is ever installed on JP4R03005. The Windows W1 build reaches the release only once the gate opens W1 (until then, take
+the `Send-to-Daylight-windows-setup` artifact of the green rx-windows run).
+
+- [ ] **F01.1** A link sent from Windows (Send To, the hotkey, a drop) shows *In your Reader ✓* within 45 s of *On your
+  Daylight ✓* with the window open: Daylight Share in front; in the background with the Reader in front and "Display
+  over other apps" on; the same with it off (*Waiting for a tap on your Daylight* until the notice is tapped, then *In
+  your Reader ✓*); the screen off with Instant delivery on. Note the times in DEVICE-CHECKS.md.
+- [ ] **F01.2** With Documents = Ask, a PDF reads *Waiting for a tap on your Daylight*, then, after the tap, *Handed to
+  the Reader* and *The Reader doesn’t confirm documents yet.* at the next check.
+- [ ] **F01.3** The header reads *Your Daylight checked in N min ago*; with the Daylight off, sends still go out.
+- [ ] **F01 (toast)** With the window closed to the notification area, a link that reaches the Reader shows the Windows
+  notification *In your Reader: {title}*; with the window open, none (its row says so). CI checks the code path; whether
+  WebView2 reports a hidden window as hidden to the page is what this confirms.
+- [ ] **F01.6** Narrator (and NVDA) read each row as "{label}. {sentence}", with no step count, and say *In your Reader ✓:
+  {title}* when a row gets there.
+- [ ] **F02e** Dropping a 14 MB PDF on the window shows the too-big sentence and **Send files over 9 MB ›**, whose note
+  says the Daylight server is needed (with Copy Server code).
+- [ ] **F07.1** With Wi-Fi off (or flight mode), a link sent from the window, Send To and the hotkey reads *Waiting for
+  connection* under *Waiting to send (n)*; with the network back it goes within a minute.
+- [ ] **F08** The notifications read *Sent to {your Daylight’s name}* with the item's name (and the site for the
+  hotkey).
+- [ ] **F09** A `daylightshare://send?url=…` link clicked in Edge and in Chrome opens the window with *Send to {name}?*;
+  **Send** sends it. A test page that opens `…&quick=1` by itself shows the question too (quick sends off); with **Allow
+  quick sends from other apps** on, it sends without asking, and the 11th in a minute asks again.
+- [ ] **F26.1** Setup check's test article reaches the Reader and ticks *✓ Delivered* and *✓ In your Reader*, in each
+  condition of F01.1 (*Waiting for a tap on your Daylight* meanwhile where the Inbox asks).
+- [ ] **F26.3** Turning the app's notifications off in *Settings › System › Notifications* makes Setup check say *!
+  Notifications*, and **Open Settings** opens that page; **Open setting** on *Open at login*, *Hotkey* and *Send to
+  shortcut* opens this app's Settings at that setting.
+- [ ] **F33.3** The tray menu's entry reads *Send copied link* with Lab on and *Send clipboard link* with Lab off (or
+  F33's Use switch off); Ctrl + Alt + D sends at once and its notification names the site.
+
+**Copy, reported to the share lane:** Setup check's start-at-login line uses `LAB_TEXT.setup.checks.loginItem`, *Open at
+login* (the Mac's words): LAB_TEXT has no Windows wording for it, and this app calls the setting *Start at login*.
 
 ## Not yet
 

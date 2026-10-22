@@ -51,7 +51,10 @@ export function appStorage(log = console, onBad = () => {}) {
 export const bridge = {
   /** -> {version, e2e: {pair, status, lab: true | false | null (--e2e-lab, test mode only)}, sendTo: {path, exists}, autostart} */
   info: () => invoke('app_info'),
-  /** Things to do that arrived from outside: files (Send To), pairing links, the clipboard (hotkey or tray), test hooks. */
+  /**
+   * Things to do that arrived from outside: files (Send To), pairing links, send links (Lab, F09), the clipboard (hotkey
+   * or tray), test hooks.
+   */
   takeActions: () => invoke('take_actions'),
   /** A file offered on the command line (Send To): Rust answers with raw bytes (an ArrayBuffer). */
   readFile: async (path, max) => new Uint8Array(await invoke('read_file', { path, max })),
@@ -61,8 +64,14 @@ export const bridge = {
   /** -> the accelerator now registered ('' = off). Throws when Windows won't give us that combination. */
   setHotkey: (accel) => invoke('set_hotkey', { accel }),
   readClipboard: () => invoke('read_clipboard'),
-  /** Lab's Copy (the Server code): Rust writes the clipboard, which needs no focus or permission. */
+  /** Lab's Copy (the Server code, diagnostics): Rust writes the clipboard, which needs no focus or permission. */
   writeClipboard: (text) => invoke('write_clipboard', { text }),
+  /** The tray's clipboard entry in the window's words (Lab, F33: "Send copied link"; v1.1's otherwise). */
+  setClipboardLabel: (text) => invoke('set_clipboard_label', { text }),
+  /** Setup check (Lab, F26): -> 'on' | 'off' | 'unknown', whether Windows lets the app show notifications. */
+  notificationsState: () => invoke('notifications_state'),
+  /** Setup check's Open Settings: Windows' Settings › System › Notifications. */
+  openNotificationSettings: () => invoke('open_notification_settings'),
   setAutostart: (enabled) => invoke('set_autostart', { enabled }),
   addSendTo: () => invoke('add_send_to'),
   e2eStatus: (json) => invoke('e2e_status', { json }),

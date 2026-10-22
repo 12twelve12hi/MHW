@@ -41,6 +41,17 @@
 //     snapshot), and the ledger is kept (1.3); --e2e-lab 1 turns it back on;
 //   - the update starts from a non-Lab build's settings (no lab key): Lab is on after it, with the pairing and history.
 //
+// Lab, Wave 1 (LAB-PLAN 3.3, Windows parts; card WIN1; the status file's rows carry the timeline's words as labRow):
+//   - F16 and F33: the hotkey sends a copied "headline + link" with tracking: the Daylight gets the cleaned link, the
+//     headline as its title and the link as shared in x-orig; the notification says "Sent to {name}" and names the host
+//     (F08);
+//   - F01: a v1.1 Daylight's rows keep v1.1's words (rule 4); the Lab Daylight's file reads "Handed to the Reader"; after a
+//     restart (the window hidden), a link it puts in the Reader reads "In your Reader ✓" at the next ack read, and the
+//     toast "In your Reader: {title}" goes out while the window is hidden;
+//   - F09: a daylightshare://send link asks first (the status file's sendQuestion: "Send to {name}?", the title and host);
+//     --e2e-confirm sends it, cleaned, with x-orig; quick=1 asks too while quick sends are off, and Cancel sends
+//     nothing.
+//
 //   node test/e2e/windows.e2e.mjs --installer out/Send-to-Daylight-windows-setup.exe
 //   node test/e2e/windows.e2e.mjs --exe src-tauri/target/release/send-to-daylight.exe     (no install, update, uninstall)
 
@@ -72,6 +83,10 @@ const SCHEME_KEY = 'HKCU\\Software\\Classes\\daylightshare\\shell\\open\\command
 const RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 const MACHINE_RUN_KEY = 'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
 const CLIP_URL = 'https://example.com/e2e/clipboard?from=windows&n=1';
+/** F16, F33: a copied "headline + link" with tracking; the Daylight must get CLIP_URL, with the headline as its title. */
+const CLIP_HEADLINE = 'Quiet reading on Windows';
+const CLIP_TEXT = `${CLIP_HEADLINE} ${CLIP_URL}&utm_source=e2e&fbclid=x1`;
+const READER_URL = 'https://example.com/e2e/for-the-reader';
 
 if (process.platform !== 'win32') { console.error('This test runs on Windows.'); process.exit(2); }
 if (!installer && !arg('exe')) { console.error('Pass --installer <setup.exe> or --exe <app.exe>.'); process.exit(2); }
@@ -126,6 +141,18 @@ function waitStatus(what, pred, opts = {}) {
     if (s?.bootError) throw Object.assign(new Error(`the window's page failed to start: ${s.bootError}`), { fatal: true });
     return s && pred(s) && s;
   }, { timeout: 60000, ...opts });
+}
+
+/**
+ * waitStatus for an ack the app reads by itself (right after a send and about 30 s later). If it hasn't come after
+ * nudgeAfter, the window is opened once (a plain second launch, as a user would: opening it checks for acks), and the
+ * wait goes on. The log says so; a run that needed it passes, but shows where the app's own check was late.
+ */
+async function waitStatusNudged(what, pred, { timeout = 150000, nudgeAfter = 60000 } = {}) {
+  try { return await waitStatus(what, pred, { timeout: nudgeAfter, every: 1000 }); } catch { /* nudge below */ }
+  console.log(`(${what}: not yet after ${nudgeAfter / 1000} s; opening the window, which checks for acks)`);
+  launchAgain([], 'plain launch (opening the window checks for acks)');
+  return waitStatus(what, pred, { timeout: timeout - nudgeAfter, every: 1000 });
 }
 
 /** Starts the app (not running yet) with these arguments, detached, as Windows would. */
@@ -355,13 +382,19 @@ async function main() {
   check(refused.endsWith(tooBigText), 'a file over the protocol’s limit is refused, saying why', refused.replace(/^\S+ /, ''));
 
   // --- 5. the clipboard hotkey's path ------------------------------------------------------------------------------
-  step('Clipboard hotkey: a link on the clipboard, then the hotkey path (test hook --e2e-hotkey)');
-  ps(`Set-Clipboard -Value '${CLIP_URL}'`);
+  step('Clipboard hotkey: a headline and a link with tracking on the clipboard, then the hotkey path (test hook --e2e-hotkey)');
+  ps(`Set-Clipboard -Value '${CLIP_TEXT}'`);
   const clip = ps('Get-Clipboard');
-  check(clip === CLIP_URL, 'the clipboard holds the link', clip);
+  check(clip === CLIP_TEXT, 'the clipboard holds the headline and the link', clip);
   launchAgain(['--e2e-hotkey'], 'hotkey hook');
   const url = await waitFor('the Daylight to receive the link', () => received.find((i) => i.header.kind === 'url'), { timeout: 90000 });
-  check(url.header.url === CLIP_URL, 'the clipboard link arrives', url.header.url);
+  // F16 (Lab on): the link without its tracking, the headline as its title, the link as shared in x-orig (2.3).
+  check(url.header.url === CLIP_URL, 'the clipboard link arrives, cleaned of its tracking (F16)', url.header.url);
+  check(url.header.title === CLIP_HEADLINE, 'with the headline as its title (a headline + link stays a link)', url.header.title);
+  check(url.extras?.['x-orig'] === `${CLIP_URL}&utm_source=e2e&fbclid=x1`, 'and the link as shared in x-orig', JSON.stringify(url.extras));
+  // F08 and F33: the notification names the Daylight, and the host as the hotkey's always has.
+  const toast = await waitFor('the hotkey’s notification', () => (readStatus()?.log ?? []).find((l) => l.includes('notified: Sent to Test Daylight')), { timeout: 20000 }).catch(() => '');
+  check(toast.endsWith('notified: Sent to Test Daylight — example.com: Sent · waiting for your Daylight.'), 'the notification says “Sent to Test Daylight” and names the host (F08, F33)', toast.replace(/^\S+ /, ''));
 
   // --- 6. acks: Delivered ✓ ------------------------------------------------------------------------------------------
   step('Acks: the status file shows all four Delivered');
@@ -371,6 +404,9 @@ async function main() {
   const words = ds.describeRow({ status: 'delivered', created: Date.now() });
   check(done.rows.every((r) => r.label === words.label && r.sentence === words.sentence && r.action === null),
     'the history says so in the protocol library’s words', `${done.rows[0]?.label} / ${done.rows[0]?.sentence}`);
+  // F01 with a v1.1 Daylight (rule 4): the timeline's words are v1.1's too, with no step line.
+  check(done.rows.every((r) => r.labRow?.label === words.label && r.labRow?.sentence === words.sentence && r.labRow?.stepLine === null),
+    'the timeline keeps v1.1’s words for a v1.1 Daylight (F01.5)', JSON.stringify(done.rows[0]?.labRow));
   check(done.rows.length === 4, 'exactly four items in the history (the refused one isn’t)', String(done.rows.length));
   check(received.length === 4, 'the Daylight got each item once', String(received.length));
   const ids = done.rows.map((r) => r.id);
@@ -412,7 +448,7 @@ async function main() {
   launchAgain([afterPath], 'Send To after the move');
   const after = await waitFor('the Daylight to receive it', () => received.find((i) => i.header.name === 'After the move.txt'), { timeout: 90000 });
   check(after.via === 2 && Buffer.from(after.content).equals(afterBytes), 'a file sent next goes through the new relay, intact', `via relay ${after.via}`);
-  const five = await waitStatus('Delivered through the new relay', (s) => allDelivered(s, 5), { timeout: 120000, every: 1000 }).catch(() => readStatus());
+  const five = await waitStatusNudged('Delivered through the new relay', (s) => allDelivered(s, 5)).catch(() => readStatus());
   check(allDelivered(five, 5), 'and is acked there: five Delivered', JSON.stringify(five?.rows?.map((r) => r.status)));
   // F17, in the real order: the ack came first; the file's state follows once its hand-off is done, after the app has
   // read the ack. With nothing left waiting for an ack, the app doesn't read the ack topic by itself (PROTOCOL 3.3);
@@ -429,9 +465,13 @@ async function main() {
   check(learnt.inboxLab === true && isDeepStrictEqual(learnt.caps, LAB_CAPS), 'the Lab Daylight’s hello is in the ledger, with its caps (F17)', `${learnt.inboxLab} ${JSON.stringify(learnt.caps)}`);
   check(/^Your Daylight: Lab on · checked in /.test(learnt.labHeader ?? ''), 'What’s in Lab’s header says Lab is on the Daylight', learnt.labHeader);
   check(learnt.labStates?.[afterRow?.id]?.s === 'handed', 'the file’s state from the Daylight is in the ledger: handed', JSON.stringify(learnt.labStates));
-  const six = await waitStatus('the next file Delivered', (s) => allDelivered(s, 6), { timeout: 120000, every: 1000 }).catch(() => readStatus());
+  const six = await waitStatusNudged('the next file Delivered', (s) => allDelivered(s, 6)).catch(() => readStatus());
   check(allDelivered(six, 6), 'and the next file is Delivered: six', JSON.stringify(six?.rows?.map((r) => r.status)));
-  check((six?.rows ?? []).every((r) => r.label === words.label), 'Wave 0 keeps the rows’ v1.1 words (the timeline is Wave 1)', JSON.stringify(six?.rows?.map((r) => r.label)));
+  check((six?.rows ?? []).every((r) => r.label === words.label), 'the status file keeps the rows’ v1.1 words in label', JSON.stringify(six?.rows?.map((r) => r.label)));
+  // F01: the timeline (labRow) says what the Lab Daylight said: the file was handed to the Reader.
+  const handedRow = (six?.rows ?? []).find((r) => r.id === afterRow?.id);
+  check(handedRow?.labRow?.label === L.LAB_TEXT.rows.handedFile.label && handedRow?.labRow?.sentence === L.LAB_TEXT.rows.handedFile.sentence,
+    'the timeline says “Handed to the Reader” for it (F01.2)', JSON.stringify(handedRow?.labRow));
 
   // --- 9. start at login ------------------------------------------------------------------------------------------
   step('Start at login: the tray menu’s switch (test hook --e2e-autostart)');
@@ -455,13 +495,63 @@ async function main() {
   check(back.lab === true && back.inboxLab === true && back.labStates?.[afterRow?.id]?.s === 'handed', 'Lab is on and the ledger is kept across the restart',
     `${back.lab} ${back.inboxLab}`);
 
+  // --- 10a. Lab, Wave 1: In your Reader with the window hidden, and a send link ---------------------------------------------
+  step('F01: the Lab Daylight puts a link in the Reader; the next ack read shows “In your Reader ✓”, and the toast goes out while the window is hidden');
+  console.log(`the window is ${back.hidden ? 'hidden' : 'not hidden'} for the page (document.hidden ${back.hidden})`);
+  ps(`Set-Clipboard -Value '${READER_URL}'`);
+  launchAgain(['--e2e-hotkey'], 'hotkey hook (a link for the Reader)');
+  const forReader = await waitFor('the Daylight to receive the link', () => received.find((i) => i.header.url === READER_URL), { timeout: 90000 }).catch(() => null);
+  check(!!forReader, 'the Lab Daylight receives it');
+  const inReaderState = await labState(forReader?.header.id, 'reader');
+  check(inReaderState.kind === 'states', 'and reports it in the Reader, after its ack', JSON.stringify(inReaderState));
+  const oneMorePath = path.join(work, 'One more.txt');
+  fs.writeFileSync(oneMorePath, Buffer.from('One more ✓\n', 'utf8'));
+  launchAgain([oneMorePath], 'Send To (which reads the ack topic)');
+  const inReader = await waitStatusNudged('the link In your Reader', (s) => s.rows?.find((r) => r.id === forReader?.header.id)?.labRow?.label === L.LAB_TEXT.rows.reader.label)
+    .catch(() => readStatus() ?? {});
+  const readerRow = (inReader.rows ?? []).find((r) => r.id === forReader?.header.id);
+  check(readerRow?.labRow?.label === 'In your Reader ✓' && readerRow?.labRow?.stepLine === 'Sent ✓ · On your Daylight ✓ · In the Reader ✓',
+    'the status file shows “In your Reader ✓” (F01.1)', JSON.stringify(readerRow?.labRow));
+  check(readerRow?.label === words.label, 'and keeps v1.1’s words in label');
+  const toastLine = await waitFor('the toast', () => (readStatus()?.log ?? []).find((l) => /toast: In your Reader: |in the Reader [0-9a-f]{8} \(window shown/.test(l)), { timeout: 15000 }).catch(() => '');
+  if (readStatus()?.hidden === false) check(/window shown: no toast/.test(toastLine), 'the window shows, so its row says it (no toast)', toastLine);
+  else check(toastLine.includes(`toast: In your Reader: ${readerRow?.title || 'example.com/e2e/for-the-reader'}`), 'the toast “In your Reader: {title}” goes out while the window is hidden (F01)', toastLine.replace(/^\S+ /, ''));
+  check((readStatus()?.log ?? []).some((l) => l.includes(`notified: ${L.fillText(L.LAB_TEXT.readerToast, { title: readerRow?.title || 'example.com/e2e/for-the-reader' })} — ${L.LAB_TEXT.rows.reader.sentence}`)) || readStatus()?.hidden === false,
+    'through Windows’ notifications');
+
+  step('F09: a daylightshare://send link asks first; --e2e-confirm sends it, cleaned; quick=1 asks too while quick sends are off, and Cancel sends nothing');
+  const SEND_URL = 'https://example.com/e2e/send-link';
+  const sendLink = `daylightshare://send?url=${encodeURIComponent(`${SEND_URL}?utm_campaign=e2e`)}&title=${encodeURIComponent('A send link')}`;
+  launchAgain([sendLink], 'a send link');
+  const asking = await waitStatus('the send link’s question', (s) => !!s.sendQuestion, { timeout: 30000 }).catch(() => readStatus() ?? {});
+  check(isDeepStrictEqual(asking.sendQuestion, { title: 'Send to Desk Daylight?', lines: ['A send link', 'example.com'] }), 'it asks “Send to Desk Daylight?” with the title and host (F09.3)', JSON.stringify(asking.sendQuestion));
+  check(asking.view === 'view-send', 'in the send view');
+  await sleep(1500);
+  check(!received.some((i) => i.header.url === SEND_URL), 'nothing is sent before the answer');
+  launchAgain(['--e2e-confirm'], 'Send (test hook)');
+  const viaLink = await waitFor('the Daylight to receive the send link’s page', () => received.find((i) => i.header.url === SEND_URL), { timeout: 90000 }).catch(() => null);
+  check(viaLink?.header.title === 'A send link' && viaLink?.extras?.['x-orig'] === `${SEND_URL}?utm_campaign=e2e`, 'Send sends it, cleaned, with x-orig', JSON.stringify(viaLink?.header));
+  launchAgain([`${sendLink}&quick=1`], 'a quick send link (quick sends off)');
+  const asking2 = await waitStatus('the question again', (s) => !!s.sendQuestion, { timeout: 30000 }).catch(() => readStatus() ?? {});
+  check(!!asking2.sendQuestion, 'quick=1 asks too: quick sends are off by default');
+  const before = received.length;
+  launchAgain(['--e2e-cancel'], 'Cancel (test hook)');
+  await waitStatus('the question to close', (s) => !s.sendQuestion, { timeout: 20000 }).catch(() => {});
+  await sleep(2000);
+  check(received.length === before, 'Cancel sends nothing', `${received.length - before} more`);
+  const settledLab = await waitStatusNudged('everything Delivered', (s) => (s.rows ?? []).length > 0 && s.rows.every((r) => r.status === 'delivered'))
+    .catch(() => readStatus() ?? {});
+  check((settledLab.rows ?? []).every((r) => r.status === 'delivered'), 'and everything sent is Delivered', JSON.stringify(settledLab.rows?.map((r) => r.status)));
+
   // --- 10b. Lab off ----------------------------------------------------------------------------------------------------
   step('Lab off (--e2e-lab 0): the status is the Lab-on one but for Lab’s own fields; the ledger is kept');
+  const labOnStatus = readStatus() ?? back;
   const off = await restartApp('the app to start with Lab off', ['--e2e-lab', '0']);
   check(off.lab === false, 'the status file says Lab is off', String(off.lab));
   check(readSettings()?.lab === false, 'and the switch is saved off, as a click would', JSON.stringify(readSettings()));
-  check(isDeepStrictEqual(plainStatus(off), plainStatus(back)), 'everything else equals the Lab-on status (a Lab-off status snapshot)',
+  check(isDeepStrictEqual(plainStatus(off), plainStatus(labOnStatus)), 'everything else equals the Lab-on status (a Lab-off status snapshot)',
     JSON.stringify(plainStatus(off)));
+  check((off.rows ?? []).every((r) => r.labRow === null), 'with Lab off the rows have no timeline words', JSON.stringify(off.rows?.map((r) => r.labRow)));
   check(fs.existsSync(path.join(STORE, 'lab~inbox.json')) && off.inboxLab === true, 'Lab off deletes nothing: the ledger is kept (LAB-PLAN 1.3)');
 
   // --- 11. a damaged outbox and a missing Run entry ----------------------------------------------------------------------

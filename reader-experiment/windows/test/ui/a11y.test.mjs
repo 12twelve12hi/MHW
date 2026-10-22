@@ -112,7 +112,9 @@ test('paired, every history state: no axe violations, light and dark, Comfort of
   const other = await ds.formatCode(OTHER_SECRET);
   for (const comfort of [false, true]) {
     const tag = comfort ? ', Comfort' : '';
-    const page = await ui.open({ kv: await paired({ outbox: historyRows(), settings: { comfort } }) });
+    // The v1.1 history (Lab off): every row in one list, in the library's words. With Lab on (the timeline, the queue)
+    // the same checks run in lab.test.mjs.
+    const page = await ui.open({ kv: await paired({ outbox: historyRows(), settings: { comfort, lab: false } }) });
     assert.equal(await comfortOn(page), comfort);
     assert.equal(await page.locator('#history li').count(), 6);
     // States are words (the library's labels), never colour alone.
@@ -167,6 +169,7 @@ test('paired, every history state: no axe violations, light and dark, Comfort of
     await page.waitForSelector('#view-send:not([hidden])');
     assert.equal((await stored(page, 'pairing')).code, await ds.formatCode(FIXED_SECRET), 'Cancel keeps the pairing');
     assert.equal((await stored(page, 'settings'))?.comfort ?? false, comfort, 'and Comfort as it was');
+    assert.equal((await stored(page, 'settings'))?.lab, false, 'and Lab as it was');
     assert.deepEqual(page.errors, []);
     await page.context().close();
   }

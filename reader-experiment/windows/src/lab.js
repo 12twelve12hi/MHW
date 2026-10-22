@@ -1,12 +1,18 @@
-// Lab for Windows (LAB-PLAN 1, 2.2.6 and 2.6; card WIN0, Wave 0), with no DOM and no Tauri: the Lab switch, the sender
-// ledger, the gates and the Daylight server. core.js makes one with createLab() and wires the ledger into its Sender;
-// app.js and lab-ui.js draw what it answers. Every word comes from daylight-lab.js (LAB_TEXT and its helpers) or the
-// server module (daylight-server.js); both are copied in by build.mjs.
+// Lab for Windows (LAB-PLAN 1, 2.2.6, 2.5 and 2.6; cards WIN0 and WIN1, Waves 0 and 1), with no DOM and no Tauri: the
+// Lab switch, the sender ledger, the gates, the Daylight server, and Wave 1's pieces: the delivery timeline's words
+// (F01), the per-feature Use switches (6.5 Q5), smart intake's setting (F16), the URL scheme's send links and quick
+// sends (F09), Setup check with its activity log and diagnostics (F26). core.js makes one with createLab() and wires
+// the ledger into its Sender; app.js and lab-ui.js draw what it answers. Every word comes from daylight-lab.js
+// (LAB_TEXT and its helpers) or the server module (daylight-server.js); both are copied in by build.mjs.
 //
 // Storage (the app's JSON store, bridge.js; the same adapter as the outbox):
 //   settings.lab           the Lab switch: missing means on, and the first start writes true (1.2); never synced and
 //                          never in a pairing link, so pairing, unpairing and re-pairing leave it as it is
 //   settings.labNoteShown  the one-time note (1.2), shown only from a build with F01 or F04: LAB_NOTE_ENABLED
+//   settings.labUse        {F16, F33}: the Use switches (6.5 Q5) of the features here that change how sending behaves;
+//                          a missing key means on (labUseOn)
+//   settings.labQuickSends "Allow quick sends from other apps" (F09): off unless true
+//   lab/activity           Setup check's activity log (F26): the last 200 events, written only while Lab is on
 //   lab/inbox, lab/heard, lab/states   the ledger (LabLedger), fed by every ack-topic frame that decrypts, Lab on or
 //                          off, through the Sender's onAckHeader (2.2.6)
 //   lab/server             the last server answer {state, at}, for the "Daylight server ›" row's subtitle and What's
@@ -26,7 +32,10 @@ import * as ds from './daylight-share.js';
 import {
   LAB_TEXT, LabLedger, labHook, labGate, needsMessage, inboxLabText, featureName, serverHeadingShort,
   serverRowSubtitle, serverFeatureShort, labInboxSeenText, aiTodayText, setupConfirmText, serverMovedText,
-  GATE_DEADLINE_MS, LEDGER_STATES_MAX,
+  GATE_DEADLINE_MS, LEDGER_STATES_MAX, describeLabRow, checkedInText, wantsFastChecks, SETTLED_STATES,
+  STATE_DIGEST_WINDOW_MS,
+  // Wave 1 (L1)
+  USE_FEATURES, labUseOn, fillText, testArticle, appendActivity, diagnosticsReport,
 } from './daylight-lab.js';
 import {
   DaylightServer, localMessage, stateFromStatus, showFingerprint, noticeText, parseSetupLink, RERUN_HELP,
@@ -37,21 +46,30 @@ import {
 export const PLATFORM = 'windows';
 export const APP_NAME = LAB_TEXT.appName[PLATFORM];
 
-/** The one-time note (1.2) needs F01 or F04 in this build: from WIN1 (W1) on. W0 shows none. */
-export const LAB_NOTE_ENABLED = false;
+/** The one-time note (1.2) needs F01 or F04 in this build: from WIN1 (W1) on, which has F01. */
+export const LAB_NOTE_ENABLED = true;
 
 /**
- * What's in Lab (1.4) on Windows: the Lab features this build has (W0: none yet; WIN1 adds F01, F07, F08, F09, F16, F26
- * and F33), then the server features Windows has. Of the four (1.4's "Apps" column), only Files over 9 MB lists
- * Windows: Summaries with Claude, Email-in and Feeds don't.
+ * What's in Lab (1.4) on Windows: the Lab features this build has, in 1.4's order, then the server features Windows
+ * has. 1.4's "Apps" column lists Windows for F01, F07, F09, F16, F26 and F33 (the existing clipboard command). F08 is
+ * the Android share sheet's row there; on Windows it is only the toast's words ("Sent to {name}", core.js), so it has no
+ * row. Of the four server features only Files over 9 MB lists Windows: Summaries with Claude, Email-in and Feeds don't.
  */
-export const LAB_FEATURES = [];
+export const LAB_FEATURES = ['F01', 'F07', 'F09', 'F16', 'F26', 'F33'];
 export const LAB_SERVER_FEATURES = ['F02'];
-/** The Lab features this build runs (labGate's `built`). A server feature that is ready but not built is `later`. */
-export const BUILT_FEATURES = [];
+/**
+ * The Lab features this build runs (labGate's `built`). A server feature that is ready but not built is `later`: F02's
+ * entry point (3.1, "Send files over 9 MB ›") runs its gate, and the feature itself comes in Wave S.
+ */
+export const BUILT_FEATURES = ['F01', 'F07', 'F09', 'F16', 'F26', 'F33'];
+/** The features here whose row has a Use switch (6.5 Q5): those of USE_FEATURES this app has (Clean links, F33). */
+export const USE_SWITCHES = USE_FEATURES.filter((f) => LAB_FEATURES.includes(f));
+/** F09: quick sends from other apps, at most this many a minute; past that, the question shows. */
+export const QUICK_SENDS_PER_MINUTE = 10;
 
 export const SERVER_KEY = 'lab/server';
 export const REPAIRED_KEY = 'lab/repaired';
+export const ACTIVITY_KEY = 'lab/activity';
 /** The keys of this file that a pairing change with another secret removes (the ledger's go with applyPairingChange). */
 export const LAB_APP_KEYS = [SERVER_KEY, REPAIRED_KEY];
 
@@ -63,6 +81,70 @@ const SERVER_WIDE = ['needs-pairing', 'needs-server', 'pairing-mismatch', 'serve
 
 /** The Lab switch as one value (1.2): a missing key means on. */
 export const isLabOn = (settings) => settings?.lab !== false;
+
+/** The device in the test article's title (F26): "Test article from Windows PC". */
+export const DEVICE = 'Windows PC';
+
+/** A row that waits to send (F07's queue, History's "Waiting to send ({n})"): failed, whatever the cause. */
+export const isQueued = (row) => row?.status === 'failed';
+
+/**
+ * Whether the ack topic is worth reading for the timeline's states (F01, 2.5): the Daylight speaks Lab and a row
+ * delivered within the state digest's 48 hours (2.2.4) has no settled state yet. tl: timeline()'s answer.
+ */
+export function wantsStates(rows, tl, now = Date.now()) {
+  if (!tl?.lab || !tl.inboxLab) return false;
+  return (rows ?? []).some((r) => r?.status === 'delivered' && now - (r.delivered ?? 0) <= STATE_DIGEST_WINDOW_MS
+    && !SETTLED_STATES.includes(tl.states?.[r.id]?.s));
+}
+
+/** Faster checks (2.5): while the window shows, every 30 s, as long as a delivered row of the last 10 minutes waits. */
+export function wantsFaster(rows, tl, now = Date.now()) {
+  return !!tl?.lab && !!tl.inboxLab && wantsFastChecks(rows, now, tl.states ?? {});
+}
+
+/**
+ * A row as the timeline shows it (2.5): describeLabRow with what the ledger knows. tl: timeline()'s answer (Lab off:
+ * the v1.1 row, rule 1); online: false while Windows says this PC is offline (F07's Waiting for connection).
+ * -> {label, sentence, action, stepLine, final}
+ */
+export function labRowText(row, tl, { online = true, now = Date.now() } = {}) {
+  return describeLabRow(row, now, {
+    lab: !!tl?.lab, inboxLab: !!tl?.inboxLab, hasCap: tl?.caps ?? [], state: tl?.states?.[row?.id] ?? null, online,
+  });
+}
+
+/**
+ * F09: a daylightshare://send?url=…&title=…[&text=…][&quick=1] link -> {url, title, text, quick}, or null for anything
+ * else (a pairing link among them). The scheme never takes a file path: other parameters are ignored.
+ */
+export function parseSendLink(link) {
+  const m = /^daylightshare:\/\/send\/?(?:\?([^#]*))?(?:#.*)?$/i.exec(String(link ?? '').trim());
+  if (!m) return null;
+  const q = new URLSearchParams(m[1] ?? '');
+  return { url: q.get('url') ?? '', title: q.get('title') ?? '', text: q.get('text') ?? '', quick: q.get('quick') === '1' };
+}
+
+/**
+ * Setup check's lines on Windows (F26): the pairing, the Send to shortcut, start at login, the hotkey and
+ * notifications. -> [{id, ok, text: "✓ {check}" | "! {check}", fix: 'pairing' | 'sendTo' | 'autostart' | 'hotkey' |
+ * 'notifications' | null, button}]: an unmet check's one button, Open setting (this app's) or Open Settings (Windows').
+ * notifications: 'on' | 'off' | 'unknown' (Windows didn't say: not reported as unmet).
+ */
+export function setupChecks({ paired = false, sendTo = false, autostart = false, hotkey = false, notifications = 'unknown' } = {}) {
+  const S = LAB_TEXT.setup;
+  const line = (id, check, ok, fix, os = false) => ({
+    id, ok, text: fillText(ok ? S.ok : S.notOk, { check }), fix: ok ? null : fix,
+    button: ok ? null : LAB_TEXT.buttons[os ? 'needs-notifications' : 'needs-quick-sends'],
+  });
+  return [
+    line('paired', S.checks.paired, !!paired, 'pairing'),
+    line('sendTo', S.checks.sendTo, !!sendTo, 'sendTo'),
+    line('loginItem', S.checks.loginItem, !!autostart, 'autostart'),
+    line('hotkey', S.checks.hotkey, !!hotkey, 'hotkey'),
+    line('notifications', S.checks.notifications, notifications !== 'off', 'notifications', true),
+  ];
+}
 
 /** The one accessor of 1.2 for JS: the Lab switch from a storage adapter. */
 export async function labOn(storage) {
@@ -255,7 +337,8 @@ export function createLab({
    * refresh: it opened, so read the ack topic (the header is then current) and ask the server now, both at once and
    * each within the gate's 5 s. Without refresh nothing goes on the network: the cached states (cachedProbe; `cached`
    * true), or, with nothing recent, no short states yet (null; fresh false).
-   * -> {lab, header, fresh, cached, features: [{id, name, sentence, short}], server: {state, short, features: [...]}}
+   * -> {lab, header, fresh, cached, settings: rowSettings(), features: [{id, name, sentence, short}],
+ *     server: {state, short, features: [...]}}
    */
   async function overview({ refresh = true } = {}) {
     if (!isLabOn(await settings())) return { lab: false };
@@ -271,7 +354,7 @@ export function createLab({
     else p = await cachedProbe();
     if (!p) {
       return {
-        lab: true, header, fresh: false, cached: false,
+        lab: true, header, fresh: false, cached: false, settings: await rowSettings(),
         features: LAB_FEATURES.map((id) => row(id, null)),
         server: { state: null, short: null, features: LAB_SERVER_FEATURES.map((id) => row(id, null)) },
       };
@@ -282,9 +365,15 @@ export function createLab({
     const serverRows = [];
     for (const id of LAB_SERVER_FEATURES) serverRows.push(row(id, serverFeatureShort((await gate(id, { probeResult: p })).state, heading)));
     return {
-      lab: true, header, fresh: true, cached: !!pairing && !asking, features,
+      lab: true, header, fresh: true, cached: !!pairing && !asking, features, settings: await rowSettings(),
       server: { state: heading, short: serverHeadingShort(heading), features: serverRows },
     };
+  }
+
+  /** The switches What's in Lab draws on its rows (6.5 Q5, F09): {use: {F16, F33}, quickSends}. */
+  async function rowSettings() {
+    const s = await settings();
+    return { use: Object.fromEntries(USE_SWITCHES.map((f) => [f, labUseOn(s, f)])), quickSends: s.labQuickSends === true };
   }
 
   /**
@@ -505,19 +594,95 @@ export function createLab({
     } catch (e) { log.warn?.('Send to Daylight: Lab ledger prune failed', e); }
   }
 
+  // --- Wave 1 ----------------------------------------------------------------------------------------------------
+
+  /**
+   * What the timeline needs (F01, 2.5), in one read: {lab, inboxLab, caps, states, checkedIn, checkedInText}.
+   * checkedInText: the header above the history, "Your Daylight checked in {rel}." (null with Lab off).
+   */
+  async function timeline() {
+    const lab = isLabOn(await settings());
+    const snap = await ledger.snapshot();
+    return {
+      lab, inboxLab: snap.inboxLab, caps: snap.caps, states: snap.states, checkedIn: snap.checkedIn,
+      checkedInText: lab ? checkedInText(snap.checkedIn, now()) : null,
+    };
+  }
+
+  /** Whether a feature is in use (6.5 Q5): Lab on and, for F16 and F33, its Use switch on. */
+  async function useOn(feature) { return labUseOn(await settings(), feature); }
+
+  /** A Use switch (6.5 Q5). -> whether the feature is in use now. Throws when it can't be saved. */
+  async function setUse(feature, on) {
+    if (!USE_SWITCHES.includes(feature)) throw new Error(`no Use switch for ${feature}`);
+    const s = await updateSettings((cur) => ({ ...cur, labUse: { ...(cur.labUse ?? {}), [feature]: !!on } }));
+    return labUseOn(s, feature);
+  }
+
+  /** "Allow quick sends from other apps" (F09; off by default). -> the setting now. Throws when it can't be saved. */
+  async function setQuickSends(on) {
+    return (await updateSettings((cur) => ({ ...cur, labQuickSends: !!on }))).labQuickSends === true;
+  }
+
+  /** The one-time note (1.2): -> true while it should show (Lab on, this build has F01, not dismissed yet). */
+  async function noteDue() {
+    const s = await settings();
+    return LAB_NOTE_ENABLED && isLabOn(s) && !s.labNoteShown;
+  }
+
+  /** OK on the one-time note: it never shows again on this PC (1.2). */
+  async function noteSeen() { await updateSettings((cur) => (cur.labNoteShown ? cur : { ...cur, labNoteShown: true })); }
+
+  let activityRun = Promise.resolve();
+  /**
+   * Adds an event to Setup check's activity log (F26), only while Lab is on: {type, id, kind, status, http}. Titles,
+   * names, addresses and `from` never go in (activityEvent keeps 8 characters of the id). Never throws.
+   */
+  function logEvent(e) {
+    activityRun = activityRun.then(async () => {
+      try {
+        if (!isLabOn(await settings())) return;
+        await storage.set(ACTIVITY_KEY, appendActivity(await get(ACTIVITY_KEY), { time: now(), ...e }));
+      } catch (err) { log.warn?.('Send to Daylight: activity log not kept', err); }
+    });
+    return activityRun;
+  }
+
+  /** The activity log, oldest first (F26). */
+  async function activity() { const a = await get(ACTIVITY_KEY); return Array.isArray(a) ? a : []; }
+
+  /**
+   * "Copy diagnostics" (F26): diagnosticsReport over the app, Lab, what the Daylight said, the outbox's counts, the
+   * relay and the last 50 events, redacted (no URL, title, code, topic or Server code). -> the text
+   */
+  async function diagnostics({ version = '', rows = [] } = {}) {
+    const snap = await ledger.snapshot();
+    const pairing = await getPairing();
+    return diagnosticsReport({
+      app: APP_NAME, version, platform: PLATFORM, lab: isLabOn(await settings()), caps: snap.caps,
+      checkedIn: snap.checkedIn, rows, relay: pairing?.relay ?? '', log: await activity(), now: now(),
+    });
+  }
+
+  /** The test article (F26), as Sender.send takes it: a page of about 400 words, x-cap "test". */
+  const testItem = () => testArticle({ device: DEVICE });
+
   /** What the end-to-end test's status file says about Lab (1.7): the switch and what the ledger knows. */
   async function status() {
     const snap = await ledger.snapshot();
+    const lab = isLabOn(await settings());
     return {
-      lab: isLabOn(await settings()), inboxLab: snap.inboxLab, caps: snap.caps, checkedIn: snap.checkedIn,
+      lab, inboxLab: snap.inboxLab, caps: snap.caps, checkedIn: snap.checkedIn,
       labHeader: inboxLabText({ inboxLab: snap.inboxLab, checkedIn: snap.checkedIn }, now()), labStates: snap.states,
+      checkedInText: lab ? checkedInText(snap.checkedIn, now()) : null,
     };
   }
 
   return {
     ledger, hook, ensureDefault, setLab, labOn: () => labOn(storage), state, overview, gate, serverView, serverCode,
     confirmMove, checkSetupLink, setupServer, setServerAddress, beforeRepair, beforeUnpair, afterPairingChange, repaired,
-    repairSeen, prune, probe, status,
+    repairSeen, prune, probe, status, timeline, useOn, setUse, setQuickSends, rowSettings, noteDue, noteSeen, logEvent,
+    activity, diagnostics, testItem,
   };
 }
 

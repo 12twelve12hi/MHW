@@ -2,8 +2,9 @@ name: Reader experiment - Windows app
 
 # Builds Send to Daylight for Windows (Tauri), tests it end to end on the runner against the mock relay (installer,
 # pairing links with their confirmation, Send to, the clipboard hotkey's path, acks, restarts, an update, uninstall;
-# and Lab, LAB-PLAN F00 and F17: the Lab switch with --e2e-lab, a Lab Daylight's hello and states), checks the window's
-# page for accessibility, Lab's screens and Lab-off parity in Chromium, then publishes
+# and Lab, LAB-PLAN F00 and F17: the Lab switch with --e2e-lab, a Lab Daylight's hello and states; Wave 1, card WIN1:
+# the timeline's words and toast, smart intake, "Sent to {name}", send links), checks the window's page for
+# accessibility, Lab's screens (Wave 1's among them) and Lab-off parity in Chromium, then publishes
 # Send-to-Daylight-windows-setup.exe to the "reader-experiment-latest" release. Unsigned for now: SmartScreen warns on
 # first run.
 #

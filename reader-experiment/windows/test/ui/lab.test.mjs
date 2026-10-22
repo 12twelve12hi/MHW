@@ -79,10 +79,28 @@ function assertNoSetupText(text, what) {
   for (const t of NEEDS_SENTENCES) assert.ok(!text.includes(t), `${what}: no needs-setup sentence before anything is clicked: “${t}”`);
 }
 
-test('F00.1: Lab is on by default, first in Settings with What’s in Lab › and Daylight server ›; a W0 build shows no note', { timeout: 120000 }, async () => {
+test('F00.1: Lab is on by default, first in Settings with What’s in Lab › and Daylight server ›; the one-time note shows once (W1)', { timeout: 120000 }, async () => {
   const page = await ui.open();
   assert.deepEqual(await stored(page, 'settings'), { lab: true }, 'the first start writes it');
-  assert.ok(!(await screenText(page)).includes(LAB_TEXT.note), 'no one-time note in W0');
+  // From the first build with F01 (WIN1), the one-time note (1.2): above the pairing screen, until OK.
+  const lead = page.getByRole('note', { name: LAB_TEXT.note, exact: true });
+  await lead.waitFor();
+  assert.equal(await lead.locator('.lab-note-text').textContent(), LAB_TEXT.note);
+  await axeBoth(page, 'the pairing screen with the one-time note');
+  await shot(page, 'lab-note');
+  await lead.getByRole('button', { name: LAB_TEXT.noteButton, exact: true }).click();
+  assert.equal(await lead.count(), 0);
+  await page.waitForFunction(() => window.__fake.json('settings')?.labNoteShown === true);
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'code', 'the focus goes on to the code');
+  const kv = await page.evaluate(() => Object.fromEntries(window.__fake.kv));
+  const again = await ui.open({ kv });
+  await again.waitForTimeout(200);
+  assert.ok(!(await screenText(again)).includes(LAB_TEXT.note), 'never again once dismissed');
+  await again.context().close();
+  const off = await ui.open({ kv: kvOf({ settings: { lab: false } }) });
+  await off.waitForTimeout(200);
+  assert.ok(!(await screenText(off)).includes(LAB_TEXT.note), 'never with Lab off');
+  await off.context().close();
   await openSettings(page);
   const lab = page.getByRole('switch', { name: LAB_TEXT.lab, exact: true });
   assert.equal(await lab.isChecked(), true);
@@ -127,7 +145,8 @@ test('F00.3: What’s in Lab, paired, no server: short states only; a click show
   await page.waitForFunction(() => document.querySelector('#server-sub').textContent === 'Optional · Not set up');
   assert.equal(await page.textContent('.lab-group-h'), LAB_TEXT.serverHeading);
   assert.equal(await page.textContent('.lab-group-state'), 'Not set up');
-  assert.deepEqual(await page.locator('li.lab-feature').evaluateAll((lis) => lis.map((li) => li.dataset.feature)), ['F02']);
+  // Windows' Wave 1 features (1.4's Apps column), then Files over 9 MB under the server heading.
+  assert.deepEqual(await page.locator('li.lab-feature').evaluateAll((lis) => lis.map((li) => li.dataset.feature)), ['F01', 'F07', 'F09', 'F16', 'F26', 'F33', 'F02']);
   const row = feature(page, 'F02').locator('.lab-row');
   assert.equal(await row.textContent(), `${LAB_TEXT.features.F02.name}${LAB_TEXT.features.F02.sentence}`, 'no short state repeats the heading’s');
   // Never greyed out (1.5): an enabled control like any other.

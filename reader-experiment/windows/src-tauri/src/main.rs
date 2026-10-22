@@ -57,6 +57,8 @@ enum Action {
     Files { paths: Vec<String> },
     /// A daylightshare: pairing link.
     Pair { link: String },
+    /// A daylightshare://send link (Lab, LAB-PLAN F09): the page asks before sending, unless quick sends are allowed.
+    Send { link: String },
     /// The clipboard's text, for "Send the link on the clipboard" (the hotkey or the tray menu).
     Clipboard { text: String, error: String },
     /// Test mode only: "confirm" or "cancel" answers the pairing question, as its buttons do.
@@ -78,6 +80,8 @@ struct AppState {
     readable: Mutex<HashSet<PathBuf>>,
     hotkey: Mutex<String>,
     autostart_item: Mutex<Option<CheckMenuItem<Wry>>>,
+    /// The tray's clipboard entry, which the page renames with Lab (F33: "Send copied link").
+    send_item: Mutex<Option<MenuItem<Wry>>>,
     send_to: Mutex<sendto::SendTo>,
     e2e: E2e,
 }
@@ -133,6 +137,10 @@ fn handle_launch(app: &AppHandle, launch: args::Launch, forwarded: bool) {
     }
     for link in launch.links {
         actions.push(Action::Pair { link });
+    }
+    // The page shows the window when it asks (or says why it can't send); a quick send stays in the notification area.
+    for link in launch.sends {
+        actions.push(Action::Send { link });
     }
     // The test hooks work only in an app started in test mode.
     if launch.e2e_hotkey && st.e2e.status.is_some() {
@@ -238,6 +246,67 @@ fn write_clipboard(app: AppHandle, text: String) -> Result<(), String> {
 #[tauri::command]
 fn notify(app: AppHandle, title: String, body: String) -> Result<(), String> {
     app.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
+}
+
+/// The tray's clipboard entry in the page's words: v1.1's "Send clipboard link", or with Lab on "Send copied link"
+/// (LAB-PLAN F33). Without a tray (no notification area) there is nothing to rename.
+#[tauri::command]
+fn set_clipboard_label(app: AppHandle, text: String) -> Result<(), String> {
+    let text: String = text.trim().chars().take(60).collect();
+    if text.is_empty() {
+        return Err("No label.".into());
+    }
+    match state(&app).send_item.lock().unwrap().as_ref() {
+        Some(item) => item.set_text(text).map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
+}
+
+/// Whether Windows lets this app show notifications (Setup check, LAB-PLAN F26): "on", "off" (turned off in Settings
+/// › System › Notifications, for this app or all, or by policy) or "unknown" (Windows didn't say). It asks about the
+/// same app id the notification plugin shows them under: the app's identifier once installed, PowerShell's when it runs
+/// from a build folder.
+#[tauri::command]
+fn notifications_state(app: AppHandle) -> String {
+    notification_setting(&app.config().identifier).unwrap_or_else(|e| {
+        diag(&app, format!("notifications: {e}"));
+        "unknown".into()
+    })
+}
+
+#[cfg(windows)]
+fn notification_setting(identifier: &str) -> Result<String, String> {
+    use windows::{
+        core::HSTRING,
+        UI::Notifications::{NotificationSetting, ToastNotificationManager},
+    };
+    const POWERSHELL_APP_ID: &str = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe";
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = exe.parent().map(|d| d.display().to_string()).unwrap_or_default();
+    let from_build = dir.ends_with("\\target\\debug") || dir.ends_with("\\target\\release");
+    let id = if from_build { POWERSHELL_APP_ID } else { identifier };
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(id)).map_err(|e| e.to_string())?;
+    let setting = notifier.Setting().map_err(|e| e.to_string())?;
+    Ok(if setting == NotificationSetting::Enabled { "on" } else { "off" }.into())
+}
+
+#[cfg(not(windows))]
+fn notification_setting(_identifier: &str) -> Result<String, String> {
+    Err("not Windows".into())
+}
+
+/// Setup check's Open Settings for notifications (F26): Windows' Settings › System › Notifications. A fixed address:
+/// the page can't open anything else with it.
+#[tauri::command]
+fn open_notification_settings() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer.exe").arg("ms-settings:notifications").spawn().map(|_| ()).map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Only on Windows.".into())
+    }
 }
 
 #[tauri::command]
@@ -398,6 +467,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         &[&send, &open, &PredefinedMenuItem::separator(app)?, &autostart, &PredefinedMenuItem::separator(app)?, &quit],
     )?;
     *state(app).autostart_item.lock().unwrap() = Some(autostart.clone());
+    *state(app).send_item.lock().unwrap() = Some(send.clone());
 
     let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
     TrayIconBuilder::with_id("main")
@@ -465,6 +535,9 @@ fn main() {
             read_clipboard,
             write_clipboard,
             notify,
+            set_clipboard_label,
+            notifications_state,
+            open_notification_settings,
             show_window,
             hide_window,
             set_hotkey,

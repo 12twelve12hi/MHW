@@ -31,6 +31,7 @@
 }
 @media (forced-colors: active) {
   .drop, .btn, input, textarea, .nav-row, .lab-note-body, .lab-repaired { border-color: CanvasText; }
+  .lab-check.unmet .lab-check-text { color: CanvasText; }
 }
 
 * { box-sizing: border-box; }
@@ -280,6 +281,50 @@ input.switch:checked::before { left: calc(100% - 1.23em); background: var(--btn-
 .lab-repaired-text { margin: 0; overflow-wrap: anywhere; }
 .lab-repaired .lab-server-rerun { margin: 10px 0 0; }
 
+/* Lab, Wave 1 (card WIN1): the one-time note, the questions before a send link or the copied link goes (F09, F33),
+   F02's entry point, the check-in header and the queue (F01, F07), a row's step line and its details, the switches on
+   What's in Lab's rows (6.5 Q5, F09) and Setup check (F26). */
+.lab-banner { margin: 0 0 12px; }
+.lab-banner .lab-note-body { margin: 0; }
+.lab-question { margin: 10px 0 0; }
+.lab-question .lab-note-body { margin: 0; }
+.lab-question-title { margin: 0 0 4px; font-weight: 600; overflow-wrap: anywhere; }
+.lab-question-line { margin-top: 2px; }
+.lab-question .row > .btn { margin-top: 10px; }
+.lab-after { margin: 8px 0 0; }
+.lab-after .nav-row { margin-top: 0; }
+.lab-checkin { margin: 16px 0 0; font-size: .8667em; color: var(--muted); overflow-wrap: anywhere; }
+.lab-queue .recent-h { margin-top: 14px; }
+.lab-steps { color: var(--muted); }
+.item-open {
+  font: inherit; font-weight: 500; color: inherit; background: none; border: 0; padding: 0; margin: 0; text-align: left;
+  cursor: pointer; border-radius: 4px;
+}
+.item-open:hover { text-decoration: underline; text-underline-offset: 2px; }
+.lab-switch { padding: 0 2px 6px; }
+.lab-switch .switch-row { margin: 2px 0; min-height: 36px; }
+.lab-switch .switch-label { font-size: .9333em; }
+.lab-switch .switch-footer { margin: 0; overflow-wrap: anywhere; }
+.lab-switch-msg { margin: 2px 0 0; overflow-wrap: anywhere; }
+.lab-switch-msg:empty { display: none; }
+.lab-checks { list-style: none; margin: 4px 0 0; padding: 0; }
+.lab-check { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 10px; padding: 7px 0; border-top: 1px solid var(--rule); }
+.lab-check:last-child { border-bottom: 1px solid var(--rule); }
+.lab-check-text { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.lab-check.unmet .lab-check-text { color: var(--bad); }
+.lab-test { margin-top: 14px; }
+.lab-test .btn { margin-top: 0; }
+.lab-test-footer { margin: 4px 0 0; overflow-wrap: anywhere; }
+.lab-test-progress p { margin: 6px 0 0; overflow-wrap: anywhere; }
+.lab-test-title { font-weight: 600; }
+.lab-test-tick { font-weight: 600; }
+.lab-activity { margin-top: 14px; }
+.lab-activity-list { margin: 4px 0 0; padding-left: 1.4em; font-family: "Cascadia Mono", Consolas, ui-monospace, monospace; font-size: .8em; color: var(--muted); }
+.lab-activity-list li { overflow-wrap: anywhere; }
+.lab-diagnostics { margin-top: 14px; }
+.lab-diagnostics-said { margin: 6px 0 0; }
+.lab-diagnostics-said:empty { display: none; }
+
 /* Comfort (F27, not Lab): larger text and buttons, more contrast, no motion. Off by default; Settings › Comfort. */
 body.comfort { font-size: 1.171875rem; --muted: var(--ink); --rule: var(--rule-strong); }
 body.comfort *, body.comfort *::before, body.comfort *::after { transition: none !important; animation: none !important; }
@@ -292,6 +337,8 @@ body.comfort .retry { padding: 2px 14px; }
 body.comfort .icon-btn { min-width: 48px; display: inline-flex; align-items: center; justify-content: center; border: 2px solid var(--rule-strong); }
 body.comfort :is(.btn, .retry, input, textarea, .kind, kbd) { border-width: 2px; }
 body.comfort :is(.nav-row, .lab-note-body, .lab-repaired) { border-width: 2px; }
+body.comfort .lab-check { border-top-width: 2px; }
+body.comfort .lab-check:last-child { border-bottom-width: 2px; }
 body.comfort .lab-feature { border-top-width: 2px; }
 body.comfort .lab-feature:last-child { border-bottom-width: 2px; }
 body.comfort input.switch { border-width: 2px; }
