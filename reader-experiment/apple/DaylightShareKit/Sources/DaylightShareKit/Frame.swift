@@ -1,10 +1,26 @@
 import Foundation
 
-/// Which topic a frame belongs to; selects the AES-GCM additional data.
-public enum FramePurpose: String {
+/// Which topic a frame belongs to; selects the AES-GCM additional data. An explicit map (LAB-PROTOCOL 2.4): every
+/// purpose has its own AAD, and a purpose this enum does not name has none (`FramePurpose(rawValue:)` is nil, the JS
+/// `aadFor` throws "purpose"), never a default. The four Lab lanes (return and control, with their acks) are derived
+/// now and used from W2 and W3 (`LabTopics`).
+public enum FramePurpose: String, CaseIterable {
     case inbox, ack
+    case labReturn = "lab-return"
+    case labReturnAck = "lab-return-ack"
+    case labControl = "lab-control"
+    case labControlAck = "lab-control-ack"
 
-    var aad: Data { Data((self == .ack ? DLS.labelAck : DLS.labelInbox).utf8) }
+    /// The AAD's text: "dlshare/v1/inbox", "dlshare/v1/ack", "dlshare/v1/lab-return", …
+    public var aadLabel: String {
+        switch self {
+        case .inbox: return DLS.labelInbox
+        case .ack: return DLS.labelAck
+        case .labReturn, .labReturnAck, .labControl, .labControlAck: return "dlshare/v1/" + rawValue
+        }
+    }
+
+    var aad: Data { Data(aadLabel.utf8) }
 }
 
 /// A decrypted frame: the header as parsed JSON (untrusted), its exact bytes, and the body.
@@ -226,6 +242,9 @@ public final class Reassembler {
     public struct Item {
         public let header: ItemHeader
         public let content: Data
+
+        /// The Lab fields of part 0 (`x-cap`, `x-orig`; LAB-PROTOCOL 2.3), as the JS `Reassembler.add` returns them.
+        public var extras: [String: String] { header.extras }
     }
 
     private var pending: [String: Pending] = [:]

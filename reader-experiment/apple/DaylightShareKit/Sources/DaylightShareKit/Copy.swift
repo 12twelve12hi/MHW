@@ -4,7 +4,7 @@ import Foundation
 /// JavaScript `describeRow` and Kotlin `RowText.of`. `sentence` is nil or one sentence to show under the label;
 /// `action` is the one button the row offers, if any. Every row can also be removed.
 public struct RowText: Equatable {
-    public enum Action: String {
+    public enum Action: String, Sendable {
         /// "Retry now": a network failure, which also retries by itself.
         case retryNow = "retry-now"
         /// "Try again": an expired row; starts its 7 days over.

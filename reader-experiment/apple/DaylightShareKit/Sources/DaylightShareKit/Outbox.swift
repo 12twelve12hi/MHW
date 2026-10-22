@@ -225,7 +225,8 @@ public final class OutboxStore {
         await whileLocked { clearFinishedUnlocked() }
     }
 
-    /// Every row, every stored body and the ack cursor (unpairing, or pairing with another secret).
+    /// Every row, every stored body, the ack cursor and the Lab ledger (unpairing, or pairing with another secret:
+    /// LAB-PROTOCOL 2.2.6, the JS `applyPairingChange` removing every `lab/*` key).
     public func removeAll() async {
         await whileLocked { removeAllUnlocked() }
     }
@@ -254,6 +255,7 @@ public final class OutboxStore {
         update { state in state = State() }
         try? FileManager.default.removeItem(at: bodiesURL)
         try? FileManager.default.createDirectory(at: bodiesURL, withIntermediateDirectories: true)
+        LabLedger(outbox: self).clear()
     }
 
     /// Runs `body` under the lock every `ShareSender` on this outbox directory holds while it works (in this process):

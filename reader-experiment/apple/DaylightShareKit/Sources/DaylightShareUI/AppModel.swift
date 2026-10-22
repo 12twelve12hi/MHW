@@ -86,6 +86,9 @@ public final class AppModel: ObservableObject {
     }
 
     public let store: SharedStore
+    /// The Lab switch, the ledger, What's in Lab and the Daylight server section (LAB-PLAN 1, 2.6). Its own observable
+    /// object: the Lab views observe it. `-DLSLab 0|1` (1.7) applies before the first render.
+    public let lab: LabModel
     private var timer: Timer?
     private var observer: NSObjectProtocol?
     private var bannerTask: Task<Void, Never>?
@@ -95,6 +98,7 @@ public final class AppModel: ObservableObject {
 
     public init(store: SharedStore = .shared, arguments: [String] = ProcessInfo.processInfo.arguments) {
         self.store = store
+        lab = LabModel(store: store, arguments: arguments)
         storage = store.state // in memory: no storage access
         // The test hook `-DLSComfort 0|1` (LAB-PLAN 1.7) applies before the first render, and is saved off the main thread.
         if let on = Comfort.launchValue(arguments) { setComfort(on) }
@@ -490,7 +494,14 @@ public final class AppModel: ObservableObject {
         // `holdsSampleHistory` is set.
         guard let sender = await sender(), !holdsSampleHistory else { return }
         _ = await sender.tick()
+        // The ledger keeps the states of the items still in the outbox only (LAB-PROTOCOL 2.2.6).
+        let store = self.store
+        await Self.onStorage {
+            let outbox = OutboxStore(store: store)
+            LabLedger(outbox: outbox).prune(keeping: Set(outbox.rows.map(\.id)))
+        }
         await reloadNow()
+        await lab.reloadNow()
     }
 
     /// Checks for the Daylight's ack again ~30 s after a send, while the app runs.
@@ -565,6 +576,10 @@ public final class AppModel: ObservableObject {
             "daylight": pairing.map { $0.displayName as Any } ?? NSNull(),
             "pendingPairing": pendingPairing?.confirmation.title.map { $0 as Any } ?? NSNull(),
             "comfort": comfort,
+            // LAB-PLAN 1.7: the Lab switch, the Inbox's capabilities and each item's state from the ledger.
+            "lab": lab.isOn,
+            "caps": lab.ledger.caps,
+            "labStates": lab.ledger.states.mapValues { ["s": $0.s, "t": $0.t] as [String: Any] },
             "mainThreadStorage": StorageAudit.mainThreadAccesses,
             "rows": rows.map { row -> [String: Any] in
                 let text = RowText(row: row, now: now)

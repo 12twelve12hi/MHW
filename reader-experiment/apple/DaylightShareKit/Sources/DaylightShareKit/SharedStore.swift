@@ -18,7 +18,7 @@ import Security
 /// answer. So resolution never runs on the caller's thread. A new store answers at once from this process's own
 /// storage, resolves the group on a background queue, and switches to it only if it proves usable within
 /// `resolutionTimeout`. Code that writes (pairing, sending) waits for `ready()` first.
-public final class SharedStore {
+public final class SharedStore: @unchecked Sendable {
     public static let defaultAppGroup = "group.com.daylight.share"
     /// How long resolution may take before the process settles on its own storage for this launch.
     public static let resolutionTimeout: TimeInterval = 2
@@ -232,6 +232,10 @@ public final class SharedStore {
         static let deviceName = "dls.deviceName"
         /// The accessibility baseline's Comfort switch (LAB-PLAN F27, 1.2): not a Lab key, and Lab never reads it.
         static let comfort = "dls.comfort"
+        /// The Lab switch (LAB-PLAN 1.2): a missing key means on.
+        static let lab = "dls.lab"
+        /// Whether the one-time Lab note was dismissed (LAB-PLAN 1.2, 1.6; shown only in builds with F01 or F04).
+        static let labNoteShown = "dls.labNoteShown"
     }
 
     /// The stored pairing. Reads and writes UserDefaults: off the main thread (see `StorageAudit`).
@@ -275,6 +279,40 @@ public final class SharedStore {
         set {
             StorageAudit.note("comfort write")
             defaults.set(newValue, forKey: Key.comfort)
+            SharedStore.postChange()
+        }
+    }
+
+    /// The Lab switch (LAB-PLAN 1.2): on when never set, so a fresh install and an upgrade both start with Lab on. It
+    /// belongs to this device: never synced, never in a pairing link, and kept by pairing, unpairing and updates. Read
+    /// it through `LabSettings.isOn(store:)`, which also answers while storage is still resolving.
+    public var lab: Bool {
+        get {
+            StorageAudit.note("lab read")
+            return defaults.object(forKey: Key.lab) as? Bool ?? true
+        }
+        set {
+            StorageAudit.note("lab write")
+            defaults.set(newValue, forKey: Key.lab)
+            SharedStore.postChange()
+        }
+    }
+
+    /// Whether the Lab switch was ever stored (the first start of a build with Lab writes it: `LabSettings.ensureDefault`).
+    public var labIsStored: Bool {
+        StorageAudit.note("lab read")
+        return defaults.object(forKey: Key.lab) != nil
+    }
+
+    /// Whether the one-time Lab note was dismissed (LAB-PLAN 1.2).
+    public var labNoteShown: Bool {
+        get {
+            StorageAudit.note("lab note read")
+            return defaults.bool(forKey: Key.labNoteShown)
+        }
+        set {
+            StorageAudit.note("lab note write")
+            defaults.set(newValue, forKey: Key.labNoteShown)
             SharedStore.postChange()
         }
     }

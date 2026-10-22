@@ -5,7 +5,8 @@ public enum ItemKind: String, Codable, CaseIterable {
 }
 
 /// An item header (PROTOCOL 2.1). Serialised with the JS reference's key order:
-/// v, id, kind, url, title, name, mime, size, sha256, enc, sent, from, app, part, parts.
+/// v, id, kind, url, title, name, mime, size, sha256, enc, sent, from, app, part, parts, then the Lab extras (on part 0
+/// only).
 public struct ItemHeader: Codable, Equatable {
     public var id: String
     public var kind: ItemKind
@@ -21,10 +22,20 @@ public struct ItemHeader: Codable, Equatable {
     public var app: String?
     public var part: Int?
     public var parts: Int?
+    /// The Lab header fields (LAB-PROTOCOL 2.3): `x-cap` ("seen", "clean", "excerpt" or "test") and `x-orig` (a web
+    /// URL), or neither. A receiver reads them from part 0 only (`validated`); a sender writes them on part 0 only, and
+    /// only with Lab on (`json`). Empty for every v1.1 item.
+    public var extras: [String: String]
+
+    /// The values `x-cap` may take (LAB-PROTOCOL 2.3).
+    public static let xCapValues = ["seen", "clean", "excerpt", "test"]
+    /// A sender leaves `x-orig` out when it is longer than this (2.3); receivers do not apply it.
+    public static let xOrigMax = 1024
 
     public init(id: String, kind: ItemKind, url: String? = nil, title: String? = nil, name: String? = nil,
                 mime: String? = nil, size: Int? = nil, sha256: String? = nil, enc: String? = nil, sent: String,
-                from: String? = nil, app: String? = nil, part: Int? = nil, parts: Int? = nil) {
+                from: String? = nil, app: String? = nil, part: Int? = nil, parts: Int? = nil,
+                extras: [String: String] = [:]) {
         self.id = id
         self.kind = kind
         self.url = url
@@ -39,6 +50,52 @@ public struct ItemHeader: Codable, Equatable {
         self.app = app
         self.part = part
         self.parts = parts
+        self.extras = extras
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, url, title, name, mime, size, sha256, enc, sent, from, app, part, parts, extras
+    }
+
+    /// Headers saved before Lab have no `extras`: they read as none.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        kind = try c.decode(ItemKind.self, forKey: .kind)
+        url = try c.decodeIfPresent(String.self, forKey: .url)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        mime = try c.decodeIfPresent(String.self, forKey: .mime)
+        size = try c.decodeIfPresent(Int.self, forKey: .size)
+        sha256 = try c.decodeIfPresent(String.self, forKey: .sha256)
+        enc = try c.decodeIfPresent(String.self, forKey: .enc)
+        sent = try c.decode(String.self, forKey: .sent)
+        from = try c.decodeIfPresent(String.self, forKey: .from)
+        app = try c.decodeIfPresent(String.self, forKey: .app)
+        part = try c.decodeIfPresent(Int.self, forKey: .part)
+        parts = try c.decodeIfPresent(Int.self, forKey: .parts)
+        extras = try c.decodeIfPresent([String: String].self, forKey: .extras) ?? [:]
+    }
+
+    /// The Lab extras of an untrusted item header (LAB-PROTOCOL 2.3; vectors > labHeaderExtras; the JS
+    /// `itemHeaderExtras`): `x-cap` when it is one of `xCapValues` and `x-orig` when it passes the web URL rule (the
+    /// trimmed value), read from part 0 only. Every other `x-` field is dropped.
+    public static func labExtras(of h: [String: Any]) -> [String: String] {
+        var out: [String: String] = [:]
+        if !JSONRead.isNull(h["part"]) && JSONRead.integer(h["part"]) != 0 { return out }
+        if let cap = h["x-cap"] as? String, xCapValues.contains(cap) { out["x-cap"] = cap }
+        if let orig = h["x-orig"] as? String, let u = ShareText.webURL(orig) { out["x-orig"] = u }
+        return out
+    }
+
+    /// The Lab header fields a sender may write (the JS `labHeaderFields`): `x-cap` when it is one of `xCapValues`,
+    /// `x-orig` when it passes the web URL rule (the trimmed value) and is at most 1,024 characters. Anything else is
+    /// left out.
+    public static func labHeaderFields(cap: String?, orig: String?) -> [String: String] {
+        var out: [String: String] = [:]
+        if let cap, xCapValues.contains(cap) { out["x-cap"] = cap }
+        if let orig, let u = ShareText.webURL(orig), u.utf16.count <= xOrigMax { out["x-orig"] = u }
+        return out
     }
 
     public var isDeflated: Bool { enc == "deflate-raw" }
@@ -57,6 +114,10 @@ public struct ItemHeader: Codable, Equatable {
         if let app { o.append(("app", .string(app))) }
         if let part { o.append(("part", .int(part))) }
         if let parts { o.append(("parts", .int(parts))) }
+        if (part ?? 0) == 0 {
+            if let cap = extras["x-cap"] { o.append(("x-cap", .string(cap))) }
+            if let orig = extras["x-orig"] { o.append(("x-orig", .string(orig))) }
+        }
         return .object(o)
     }
 
@@ -71,8 +132,9 @@ public struct ItemHeader: Codable, Equatable {
         return h
     }
 
-    /// Validates an incoming (untrusted) item header and returns a cleaned copy with `enc`, `part` and `parts` set,
-    /// or throws ShareError("header"). The same rules as `checkItemHeader` in the JS reference.
+    /// Validates an incoming (untrusted) item header and returns a cleaned copy with `enc`, `part` and `parts` set, and
+    /// `extras` (the Lab fields of part 0; none on later parts), or throws ShareError("header"). The same rules as
+    /// `checkItemHeader` in the JS reference.
     public static func validated(_ h: [String: Any]) throws -> ItemHeader {
         func bad(_ why: String) -> ShareError { ShareError("header", why) }
         guard let id = h["id"] as? String, Hex.isLowerHex(id, count: 32) else { throw bad("id") }
@@ -112,6 +174,7 @@ public struct ItemHeader: Codable, Equatable {
         let from = ShareText.cleanName(JSONRead.isNull(h["from"]) ? "" : JSONRead.coerceString(h["from"]))
         if !from.isEmpty { out.from = from }
         if let app = h["app"] as? String { out.app = ShareText.utf16Prefix(app, 60) }
+        out.extras = part == 0 ? labExtras(of: h) : [:]
         return out
     }
 }

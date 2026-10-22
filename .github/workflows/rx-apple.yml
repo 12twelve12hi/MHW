@@ -20,6 +20,8 @@ on:
       - 'reader-experiment/apple/**'
       - 'reader-experiment/share/**'
       - '!reader-experiment/share/**/*.md'
+      - 'reader-experiment/server/client/**'
+      - 'reader-experiment/server/vectors/**'
       - 'reader-experiment/extension/**'
       - '.github/workflows/rx-apple.yml'
   workflow_dispatch:
@@ -52,7 +54,12 @@ jobs:
 
       - name: Select the newest Xcode that has its iOS platform installed
         run: bash scripts/select-xcode.sh
-      - name: Swift package tests (vectors, relay, outbox, end-to-end with the JS reference, accessibility baseline)
+      # LabStrings.swift is generated from LAB_TEXT (share/js/daylight-lab.js), the one source of every Lab string
+      # (LAB-PLAN 6.3); LabVectorTests also pins it to share/vectors/lab-vectors.json.
+      - name: Lab strings are LAB_TEXT's
+        working-directory: reader-experiment/apple/DaylightShareKit
+        run: node scripts/lab-strings.mjs --check
+      - name: Swift package tests (vectors, relay, outbox, end-to-end with the JS reference, accessibility baseline, Lab)
         working-directory: reader-experiment/apple/DaylightShareKit
         run: |
           set -o pipefail
@@ -60,16 +67,19 @@ jobs:
           for i in 1 2 3 4 5 6 7 8 9 10; do curl -fsS "http://127.0.0.1:$RELAY_PORT/v1/health" && break; sleep 1; done
           DLS_E2E_RELAY="http://127.0.0.1:$RELAY_PORT" swift test 2>&1 | tee "$RUNNER_TEMP/swift-test.log"
           grep -E "Executed [0-9]+ tests" "$RUNNER_TEMP/swift-test.log" | tail -1
-          if grep -qE "(EndToEndTests|testTheShareSheetSaysWhatTheRowSays|testABigPageGoesAsItsLink).*skipped" "$RUNNER_TEMP/swift-test.log"; then
+          if grep -qE "(EndToEndTests|LabSkewTests|testTheShareSheetSaysWhatTheRowSays|testABigPageGoesAsItsLink).*skipped" "$RUNNER_TEMP/swift-test.log"; then
             echo "::error::a test that needs the mock relay was skipped"; exit 1
           fi
           # The 1.1 review's rules, each pinned by a test that must have run: the outbox lock and removal guard, the
           # download rule and caps, the sending takeover, the single sheet presentation point, the share sheet's words
           # (a big page goes as its link and says so). And the accessibility baseline (F27): Comfort, announcements,
           # the truncation audit's recorder, the UI tests' own storage.
+          # Lab W0 (A0): every section of the Lab vectors and the server vectors' W0 subset, the ledger, the server
+          # client's flows, and the F17 skew suite against the JS reference as the Daylight.
           for t in OutboxLockTests DownloadRuleTests AppModelTests testTheShareSheetSaysWhatTheRowSays \
                    testAFileThatCannotBeCopiedIsReported testAnUnreadableFileURLFallsBackToTheItemsData \
-                   testABigPageGoesAsItsLinkAndTheShareSheetSaysSo AccessibilityBaselineTests; do
+                   testABigPageGoesAsItsLinkAndTheShareSheetSaysSo AccessibilityBaselineTests \
+                   LabVectorTests ServerVectorTests LabLedgerTests DaylightServerTests LabSkewTests; do
             grep -qE "Test (Case|case) .*$t.* passed" "$RUNNER_TEMP/swift-test.log" || { echo "::error::$t did not run and pass"; exit 1; }
           done
 

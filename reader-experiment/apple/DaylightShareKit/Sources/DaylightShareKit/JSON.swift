@@ -4,6 +4,8 @@ import Foundation
 public indirect enum JSONOut: Equatable {
     case string(String)
     case int(Int)
+    /// `true` or `false` (Lab frames' `live`).
+    case bool(Bool)
     case array([JSONOut])
     case object([(String, JSONOut)])
 
@@ -11,6 +13,7 @@ public indirect enum JSONOut: Equatable {
         switch (a, b) {
         case let (.string(x), .string(y)): return x == y
         case let (.int(x), .int(y)): return x == y
+        case let (.bool(x), .bool(y)): return x == y
         case let (.array(x), .array(y)): return x == y
         case let (.object(x), .object(y)): return x.count == y.count && zip(x, y).allSatisfy { $0.0 == $1.0 && $0.1 == $1.1 }
         default: return false
@@ -29,6 +32,7 @@ public indirect enum JSONOut: Equatable {
         switch self {
         case let .string(s): JSONOut.writeString(s, into: &out)
         case let .int(n): out += String(n)
+        case let .bool(b): out += b ? "true" : "false"
         case let .array(items):
             out += "["
             for (i, v) in items.enumerated() {

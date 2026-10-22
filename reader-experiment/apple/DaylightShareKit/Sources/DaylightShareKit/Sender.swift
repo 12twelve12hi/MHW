@@ -12,6 +12,26 @@ import FoundationNetworking
 /// `sending` row is only taken over once it is stale, and an attempt only updates rows the outbox still holds, so a
 /// row removed meanwhile never comes back (only `send` adds rows).
 public final class ShareSender {
+    /// What `onAckHeader` gets with each header: the message's relay time (Unix seconds), its ntfy id, and the header's
+    /// exact JSON bytes (the Lab ledger parses those itself, as JavaScript would: LAB-PROTOCOL 2.2.5).
+    public struct AckMeta {
+        public let time: Int
+        public let msgId: String
+        public let headerJSON: Data
+
+        public init(time: Int, msgId: String, headerJSON: Data) {
+            self.time = time
+            self.msgId = msgId
+            self.headerJSON = headerJSON
+        }
+    }
+
+    /// Called for every ack-topic frame that decrypts and whose `kind` is "ack" (acks and Lab frames alike), in the
+    /// order the poll returns them, before rows are updated (LAB-PROTOCOL 2.7.1, the JS `onAckHeader`). The Lab ledger
+    /// listens here (`LabLedger.hook`), whether Lab is on or off. It must not throw; it runs under the outbox lock, so it
+    /// must not call this sender.
+    public typealias AckHeaderHook = (_ header: [String: Any], _ meta: AckMeta) -> Void
+
     public let pairing: Pairing
     public let keys: ShareKeys
     public let outbox: OutboxStore
@@ -21,13 +41,17 @@ public final class ShareSender {
     public var chunkSize = DLS.chunk
     /// The clock (tests move it).
     public var now: () -> Date = Date.init
+    /// See `AckHeaderHook`; nil for a sender without Lab (v1.1).
+    public var onAckHeader: AckHeaderHook?
 
-    public init(pairing: Pairing, outbox: OutboxStore, from: String = "", app: String = "", session: URLSession? = nil) throws {
+    public init(pairing: Pairing, outbox: OutboxStore, from: String = "", app: String = "", session: URLSession? = nil,
+                onAckHeader: AckHeaderHook? = nil) throws {
         self.pairing = pairing
         keys = pairing.keys
         self.outbox = outbox
         self.from = from
         self.app = app
+        self.onAckHeader = onAckHeader
         relay = try RelayClient(relay: pairing.relay, session: session)
     }
 
@@ -190,8 +214,9 @@ public final class ShareSender {
             newest = max(newest, m.time)
             if m.outcome == .retry { held = min(held, m.time) }
             guard m.outcome == .frame, let frame = m.frame, let opened = try? Frame.open(keys: keys, purpose: .ack, frame: frame),
-                  let ids = AckHeader.ids(in: opened.header) else { continue }
-            acked.formUnion(ids)
+                  opened.header["kind"] as? String == "ack" else { continue }
+            onAckHeader?(opened.header, AckMeta(time: m.time, msgId: m.id, headerJSON: opened.headerJSON))
+            if let ids = AckHeader.ids(in: opened.header) { acked.formUnion(ids) }
         }
         let when = now()
         let delivered: [String] = outbox.update { state in
