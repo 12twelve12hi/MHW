@@ -158,6 +158,28 @@ test('workers.dev subdomain: kept when it exists, created only on "none", never 
   assert.ok(!calls.includes('PUT'));
 });
 
+test('a Worker is new only when Cloudflare says it does not exist (404, code 10007); anything else is not (12.3)', async () => {
+  const { workerMissing } = await import('../scripts/setup.mjs');
+  const urls = [];
+  const answer = (status, body) => async (url, init) => {
+    urls.push(`${init?.method ?? 'GET'} ${url} ${init?.headers?.Authorization}`);
+    if (status === 'network') throw new TypeError('fetch failed');
+    return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  };
+  const base = { account: 'a'.repeat(32), token: 'tk', name: 'daylight-0123456789ab', api: 'https://cf.test/client/v4' };
+  const gone = { success: false, errors: [{ code: 10007, message: 'This Worker does not exist on your account.' }] };
+  assert.equal(await workerMissing({ ...base, fetchFn: answer(404, gone) }), true);
+  assert.deepEqual(urls, [`GET https://cf.test/client/v4/accounts/${'a'.repeat(32)}/workers/services/daylight-0123456789ab Bearer tk`]);
+  for (const [status, body, why] of [
+    [200, { success: true, result: { id: 'daylight-0123456789ab' } }, 'it exists'],
+    [404, { success: false, errors: [{ code: 7003, message: 'Could not route to /accounts/…' }] }, 'a routing error'],
+    [404, '<html>Not Found</html>', 'not Cloudflare’s JSON'],
+    [403, { success: false, errors: [{ code: 10000 }] }, 'no permission'],
+    [500, gone, 'a 5xx'],
+    ['network', null, 'no network'],
+  ]) assert.equal(await workerMissing({ ...base, fetchFn: answer(status, body) }), false, why);
+});
+
 test('the deploy workflow reads the subdomain through setup.mjs and cf-check (no swallowed errors before a PUT)', () => {
   const wf = fs.readFileSync(path.join(root, '..', '..', '.github', 'workflows', 'rx-server.yml'), 'utf8');
   const step = wf.slice(wf.indexOf('- name: Server code or setup link'), wf.indexOf('- name: R2 bucket'));
@@ -434,15 +456,29 @@ test('secrets.mjs remove: a failed listing fails the job only when the Worker ma
   };
   const lab = ['ANTHROPIC_API_KEY', 'DAYLIGHT_PAIRING', 'DAYLIGHT_SETUP_TOKEN'];   // a Lab deploy never uploads DAYLIGHT_PAIRING
 
-  // A Worker this run created holds only what this deploy uploaded: nothing is listed or removed, and nothing is wrong
-  // even while the listing would fail. D1 then shows it without DAYLIGHT_PAIRING.
+  // A Worker this run created holds only what this deploy uploaded: a listing that keeps failing is nothing to report.
+  // D1 then shows it without DAYLIGHT_PAIRING.
   const down = worker(() => ({ status: 1, stdout: '' }));
   const fresh = d1(null);
   const r1 = await run(lab, down, { newWorker: true, record: fresh.record() });
   assert.deepEqual([r1.ok, r1.removed, r1.failed], [true, [], []]);
-  assert.deepEqual(down.calls, []);
+  assert.equal(down.calls.length, 3, 'still listed (three tries)');
   assert.doesNotMatch(r1.said, /::(error|warning)/);
+  assert.match(r1.said, /^Nothing to remove: this run created the Worker/m);
   assert.deepEqual(fresh.row, { worker: W, pairing: 0, at: 7 });
+  down.calls.length = 0;
+  // A Worker taken for new that does hold DAYLIGHT_PAIRING (setup.mjs asked Cloudflare, which could be wrong): the
+  // listing shows it, so it is removed all the same.
+  const notNew = d1(null);
+  const held = worker((a) => (a[1] === 'list' ? listed('DAYLIGHT_PAIRING', 'NTFY_TOKEN') : { status: 0, stdout: '' }));
+  const r0 = await run(lab, held, { newWorker: true, record: notNew.record() });
+  assert.deepEqual([r0.ok, r0.removed], [true, ['DAYLIGHT_PAIRING']]);
+  assert.deepEqual(held.calls, ['secret list --format json', 'secret delete DAYLIGHT_PAIRING']);
+  assert.deepEqual(notNew.row, { worker: W, pairing: 0, at: 7 });
+  const stuckNew = d1(null);
+  const r00 = await run(lab, worker((a) => (a[1] === 'list' ? listed('DAYLIGHT_PAIRING') : { status: 1, stdout: '' })), { newWorker: true, record: stuckNew.record() });
+  assert.equal(r00.ok, false, 'a delete that keeps failing still fails the job');
+  assert.equal(stuckNew.row.pairing, 1);
 
   // Its next deploy can't list the secrets: D1 shows it without DAYLIGHT_PAIRING, so only the others warn.
   const r2 = await run(lab, down, { record: fresh.record() });

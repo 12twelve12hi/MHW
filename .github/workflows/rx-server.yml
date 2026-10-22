@@ -254,7 +254,7 @@ jobs:
           NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
           AI_MAX_USD: ${{ vars.DAYLIGHT_AI_MAX_USD_DAY || '10' }}
           AI_MAX_REQ: ${{ vars.DAYLIGHT_AI_MAX_REQ_DAY || '100' }}
-          NEW_WORKER: ${{ steps.setup.outputs.new_worker }}         # this run's deploy creates the Worker (a new name)
+          NEW_WORKER: ${{ steps.setup.outputs.new_worker }}         # this run's deploy creates the Worker (Cloudflare has none of that name)
           CI: 'true'
         # secrets.mjs keeps the D1 deploy row (migration 0005): whether the Worker may hold DAYLIGHT_PAIRING. A v1 deploy
         # marks it before the upload (and stops if it can't); a Lab deploy whose secret listing keeps failing fails only

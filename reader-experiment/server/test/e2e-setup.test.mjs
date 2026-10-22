@@ -261,9 +261,13 @@ function run(args, env) {
   });
 }
 
-/** A stand-in for Cloudflare's API: the workers.dev subdomain and D1 queries, run on the Worker's own D1. */
-async function fakeCloudflare(t, { account, token }) {
+/**
+ * A stand-in for Cloudflare's API: the workers.dev subdomain, D1 queries (run on the Worker's own D1) and whether a
+ * Worker exists (`workers`, the names deployed; `workersDown` answers 500).
+ */
+async function fakeCloudflare(t, { account, token, workers = [] }) {
   const calls = [];
+  const cf = { workers: new Set(workers), workersDown: false };
   const server = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const c of req) chunks.push(c);
@@ -272,6 +276,13 @@ async function fakeCloudflare(t, { account, token }) {
     const send = (status, json) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(json)); };
     if (req.headers.authorization !== `Bearer ${token}`) return send(403, { success: false, errors: [{ code: 10000 }] });
     if (req.method === 'GET' && req.url === `/client/v4/accounts/${account}/workers/subdomain`) return send(200, { success: true, result: { subdomain: 'anjan' } });
+    const service = new RegExp(`^/client/v4/accounts/${account}/workers/services/([^/?]+)$`).exec(req.url ?? '');
+    if (req.method === 'GET' && service) {
+      if (cf.workersDown) return send(500, { success: false, errors: [{ code: 10013, message: 'An unknown error has occurred.' }] });
+      const name = decodeURIComponent(service[1]);
+      return cf.workers.has(name) ? send(200, { success: true, result: { id: name, default_environment: { environment: 'production' } } })
+        : send(404, { success: false, errors: [{ code: 10007, message: 'This Worker does not exist on your account.' }] });
+    }
     if (req.method === 'POST' && req.url === `/client/v4/accounts/${account}/d1/database/test-d1/query`) {
       const { sql, params } = JSON.parse(body);
       try {
@@ -282,7 +293,7 @@ async function fakeCloudflare(t, { account, token }) {
     return send(404, { success: false });
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  return { api: `http://127.0.0.1:${server.address().port}/client/v4`, calls, close: () => new Promise((r) => server.close(r)) };
+  return Object.assign(cf, { api: `http://127.0.0.1:${server.address().port}/client/v4`, calls, close: () => new Promise((r) => server.close(r)) });
 }
 
 const readKv = (file) => Object.fromEntries(fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
@@ -326,6 +337,7 @@ test('the deploy steps as the workflow runs them: setup.mjs, secrets.mjs and der
     assert.deepEqual(Object.keys(put), ['DAYLIGHT_SETUP_TOKEN']);
     assert.match(fs.readFileSync(path.join(j1.dir, 'delete.txt'), 'utf8'), /^ANTHROPIC_API_KEY$/m);
     await t.restart({ ...put, SERVER_URL: env1.SERVER_URL, ANTHROPIC_API_KEY: undefined });
+    cf.workers.add(env1.WORKER_NAME);
     const local = String(await t.mf.ready).replace(/\/$/, '');
 
     // The deploy row (migration 0005) on the Worker's own D1: this run created the Worker, which D1 then shows without
@@ -387,7 +399,8 @@ test('the deploy steps as the workflow runs them: setup.mjs, secrets.mjs and der
     assert.match(sum2, /AI: needs ANTHROPIC_API_KEY/);
     assert.match(sum2, /Next: open Daylight Share on the Daylight with Lab on/);
     assert.ok(!sum2.includes(t.serverCode) && !sum2.includes(t.values.authToken) && !sum2.includes('::add-mask::'));
-    assert.ok(cf.calls.every((c) => /\/workers\/subdomain$|\/d1\/database\/test-d1\/query$/.test(c)), cf.calls.join('\n'));
+    assert.ok(cf.calls.every((c) => /\/workers\/subdomain$|\/d1\/database\/test-d1\/query$|^GET \/client\/v4\/accounts\/a{32}\/workers\/services\/daylight-[0-9a-f]{12}$/.test(c)), cf.calls.join('\n'));
+    assert.ok(cf.calls.includes(`GET /client/v4/accounts/${account}/workers/services/${env1.WORKER_NAME}`), 'the second run asked whether the Worker exists');
 
     // No Worker answering /v1/hello at the address (a new workers.dev name not resolving yet): a warning and a summary
     // that says to re-run, not a failure.
@@ -402,7 +415,7 @@ test('the deploy steps as the workflow runs them: setup.mjs, secrets.mjs and der
 test('Re-run all jobs of a manual “New setup link” run keeps the server and its Server code: only attempt 1 rotates (3.5)', async () => {
   const t = await setup({ serverUrl: ORIGIN, vars: { DAYLIGHT_SERVER_CODE: undefined } });
   const account = 'a'.repeat(32), token = 'cf-test-token';
-  const cf = await fakeCloudflare(t, { account, token });
+  const cf = await fakeCloudflare(t, { account, token, workers: [WORKER] });
   try {
     const query = d1Query(t);
     await writeSetup({ query, plan: { worker: WORKER, secret: SECRET, rotate: true }, origin: ORIGIN, now: 1 });
@@ -427,5 +440,136 @@ test('Re-run all jobs of a manual “New setup link” run keeps the server and 
     const first = await step(1);
     assert.deepEqual(first.out, { new_worker: 'true', mode: 'setup', setup: 'pending', reason: 'requested' });
     assert.notEqual(first.env.WORKER_NAME, WORKER);
+  } finally { await cf.close(); await t.close(); }
+});
+
+/**
+ * A stand-in for `npx` on the deploy runner's PATH, for `secrets.mjs remove`: `npx wrangler secret list` prints
+ * $STUB_SECRETS (a JSON list) or, when it is "fail", fails; `npx wrangler secret delete` works. Every call is logged
+ * to $STUB_LOG.
+ */
+function stubNpx() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dls-npx-'));
+  fs.writeFileSync(path.join(dir, 'npx'), [
+    '#!/bin/sh',
+    'echo "$*" >> "$STUB_LOG"',
+    '[ "$1 $2" = "wrangler secret" ] || exit 1',
+    'case "$3" in',
+    '  list) [ "$STUB_SECRETS" = fail ] && { echo "A request to the Cloudflare API failed. [code: 10013]" >&2; exit 1; }',
+    '        printf "%s\\n" "$STUB_SECRETS"; exit 0 ;;',
+    '  delete) exit 0 ;;',
+    'esac',
+    'exit 1',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  return dir;
+}
+
+test('the deploy step’s secrets.mjs as the workflow runs it: a Worker a new Server code names, the D1 row before a v1 upload (12.3)', async () => {
+  const t = await setup({ serverUrl: ORIGIN });
+  const account = 'a'.repeat(32), token = 'cf-test-token';
+  const cf = await fakeCloudflare(t, { account, token, workers: [WORKER] });
+  const npx = stubNpx();
+  try {
+    const query = d1Query(t);
+    const row = async () => (await query('SELECT worker, pairing FROM deploy'))[0] ?? null;
+    const cfEnv = { CLOUDFLARE_API_TOKEN: token, CLOUDFLARE_ACCOUNT_ID: account, D1_ID: 'test-d1', DLS_TEST_CF_API: cf.api, DLS_TEST_NO_RETRY_WAIT: 'true' };
+    const job = () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dls-job-'));
+      const f = { GITHUB_ENV: path.join(dir, 'env'), GITHUB_OUTPUT: path.join(dir, 'out'), GITHUB_STEP_SUMMARY: path.join(dir, 'summary') };
+      for (const p of Object.values(f)) fs.writeFileSync(p, '');
+      return { dir, ...f, base: { RUNNER_TEMP: dir, ...f }, put: path.join(dir, 'put.json'), del: path.join(dir, 'delete.txt'), log: path.join(dir, 'npx.log') };
+    };
+    /** The deploy step's two secrets.mjs calls; `secrets` is what `wrangler secret list` shows (or 'fail'). */
+    const deployStep = async (j, env, secrets) => {
+      const split = await run(['scripts/secrets.mjs', j.put, j.del], { ...j.base, ...cfEnv, ...env });
+      if (split.status !== 0) return { split };
+      const remove = await run(['scripts/secrets.mjs', 'remove', j.del, 'wrangler.deploy.toml'], {
+        ...j.base, ...cfEnv, ...env, PATH: `${npx}:${process.env.PATH}`, STUB_LOG: j.log,
+        STUB_SECRETS: secrets === 'fail' ? 'fail' : JSON.stringify(secrets.map((name) => ({ name, type: 'secret_text' }))),
+      });
+      const calls = fs.existsSync(j.log) ? fs.readFileSync(j.log, 'utf8').trim().split('\n') : [];
+      return { split, remove, calls };
+    };
+    const listFails = Array(3).fill('wrangler secret list --format json -c wrangler.deploy.toml');
+
+    // The setup-link Worker has run Lab for a while (D1 shows it without DAYLIGHT_PAIRING). The user re-pairs and, as the
+    // README says, pastes the new Server code into DAYLIGHT_SERVER_CODE: the gate names a new Worker after the code.
+    await query('INSERT INTO deploy (id, worker, pairing, at) VALUES (1, ?1, 0, 1)', [WORKER]);
+    const j1 = job();
+    const g = await run(['scripts/derive.mjs', 'gate'], { ...j1.base, DAYLIGHT_SERVER_CODE: t.serverCode, HAS_TOKEN: 'true', HAS_ACCOUNT: 'true' });
+    assert.equal(g.status, 0, g.stdout);
+    const codeWorker = readKv(j1.GITHUB_ENV).WORKER_NAME;
+    assert.equal(codeWorker, t.values.workerName);
+    const code = { WORKER_NAME: codeWorker, DAYLIGHT_SERVER_CODE: t.serverCode };   // the deploy step's environment
+    fs.writeFileSync(j1.GITHUB_ENV, '');
+    fs.writeFileSync(j1.GITHUB_OUTPUT, '');
+    const s1 = await run(['scripts/setup.mjs'], { ...j1.base, ...cfEnv, WORKER_NAME: codeWorker });
+    assert.equal(s1.status, 0, s1.stdout);
+    assert.deepEqual(readKv(j1.GITHUB_OUTPUT), { new_worker: 'true', mode: 'code', setup: 'none' }, 'Cloudflare has no Worker of that name: this deploy creates it');
+    assert.ok(cf.calls.includes(`GET /client/v4/accounts/${account}/workers/services/${codeWorker}`));
+    assert.ok(!s1.stdout.split('\n').filter((l) => !l.startsWith('::add-mask::')).join('\n').includes(codeWorker), 'the name is never printed');
+
+    // Without new_worker that deploy's failed listing would fail the job: D1's row names the setup-link Worker.
+    const before = await deployStep(job(), { ...code, NEW_WORKER: 'false' }, 'fail');
+    assert.equal(before.remove.status, 1);
+    assert.match(before.remove.stdout, /^::error title=Worker secrets::Couldn’t list the Worker’s secrets to remove DAYLIGHT_PAIRING/m);
+    assert.deepEqual(await row(), { worker: WORKER, pairing: 0 }, 'left as it was');
+    // With it (as the workflow passes it): listed all the same, and a listing that keeps failing is nothing to report.
+    const fresh = await deployStep(job(), { ...code, NEW_WORKER: readKv(j1.GITHUB_OUTPUT).new_worker }, 'fail');
+    assert.equal(fresh.split.status, 0, fresh.split.stdout);
+    assert.equal(fresh.remove.status, 0, fresh.remove.stdout);
+    assert.doesNotMatch(fresh.remove.stdout, /::(error|warning)/);
+    assert.match(fresh.remove.stdout, /^Nothing to remove: this run created the Worker/m);
+    assert.deepEqual(fresh.calls, listFails, 'listed three times, nothing deleted');
+    assert.deepEqual(await row(), { worker: codeWorker, pairing: 0 }, 'D1 now shows the new Worker without DAYLIGHT_PAIRING');
+    cf.workers.add(codeWorker);
+
+    // The next deploy: the Worker exists, so it is not new, and D1 vouches for it when the listing fails.
+    const j2 = job();
+    const s2 = await run(['scripts/setup.mjs'], { ...j2.base, ...cfEnv, WORKER_NAME: codeWorker });
+    assert.equal(s2.status, 0, s2.stdout);
+    assert.equal(readKv(j2.GITHUB_OUTPUT).new_worker, 'false');
+    const next = await deployStep(j2, { ...code, NEW_WORKER: 'false' }, 'fail');
+    assert.equal(next.remove.status, 0, next.remove.stdout);
+    assert.match(next.remove.stdout, /^DAYLIGHT_PAIRING: not on the Worker\./m);
+    // Cloudflare's answer unknown (a 5xx): not new, which is safe.
+    cf.workersDown = true;
+    const j3 = job();
+    assert.equal((await run(['scripts/setup.mjs'], { ...j3.base, ...cfEnv, WORKER_NAME: 'daylight-ffffffffffff' })).status, 0);
+    assert.equal(readKv(j3.GITHUB_OUTPUT).new_worker, 'false');
+    cf.workersDown = false;
+
+    // v1 delivery: the row says "may hold" before the pairing code is uploaded.
+    const PAIRING = 'E4AY-56TM-ADQP-5QSN-MY7B-CGPZ-UFRA';
+    const v1 = { ...code, NEW_WORKER: 'false', DELIVERY: 'v1', DAYLIGHT_PAIRING: PAIRING };
+    const j4 = job();
+    const up = await deployStep(j4, v1, ['DAYLIGHT_PAIRING']);
+    assert.equal(up.split.status, 0, up.split.stdout);
+    assert.ok(!up.split.stdout.includes(PAIRING), 'never printed');
+    assert.equal(JSON.parse(fs.readFileSync(j4.put, 'utf8')).DAYLIGHT_PAIRING, PAIRING);
+    assert.doesNotMatch(fs.readFileSync(j4.del, 'utf8'), /DAYLIGHT_PAIRING/);
+    assert.deepEqual(await row(), { worker: codeWorker, pairing: 1 });
+    assert.equal(up.remove.status, 0, up.remove.stdout);
+    assert.deepEqual(await row(), { worker: codeWorker, pairing: 1 }, 'a listing that works keeps it: uploaded');
+    // Without D1 to mark (no D1_ID, or D1 failing three times), nothing goes up.
+    for (const [env, why] of [[{ D1_ID: '' }, 'no D1_ID'], [{ D1_ID: 'gone' }, 'D1 failing']]) {
+      const j = job();
+      const r = await run(['scripts/secrets.mjs', j.put, j.del], { ...j.base, ...cfEnv, ...v1, ...env });
+      assert.equal(r.status, 1, why);
+      assert.match(r.stdout, /^::error title=Worker secrets::Couldn’t record in D1 that the Worker gets DAYLIGHT_PAIRING/m, why);
+      assert.ok(!fs.existsSync(j.put) && !fs.existsSync(j.del), `${why}: no put.json for wrangler deploy`);
+    }
+    assert.equal(cf.calls.filter((c) => c.includes('/d1/database/gone/')).length, 3, 'tried three times');
+
+    // Back to Lab: a listing that keeps failing now fails the job (the Worker may hold the pairing code), and one that
+    // works removes it and clears the row.
+    const stuck = await deployStep(job(), { ...code, NEW_WORKER: 'false' }, 'fail');
+    assert.equal(stuck.remove.status, 1);
+    assert.match(stuck.remove.stdout, /^::error title=Worker secrets::[^\n]*may still hold your pairing code/m);
+    const lab = await deployStep(job(), { ...code, NEW_WORKER: 'false' }, ['DAYLIGHT_PAIRING', 'NTFY_TOKEN']);
+    assert.equal(lab.remove.status, 0, lab.remove.stdout);
+    assert.deepEqual(lab.calls, ['list --format json', 'delete NTFY_TOKEN', 'delete DAYLIGHT_PAIRING'].map((c) => `wrangler secret ${c} -c wrangler.deploy.toml`), 'NTFY_TOKEN: not a GitHub secret either');
+    assert.deepEqual(await row(), { worker: codeWorker, pairing: 0 });
   } finally { await cf.close(); await t.close(); }
 });

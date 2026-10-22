@@ -1676,11 +1676,15 @@ Worker may really hold it: every Lab deploy lists `DAYLIGHT_PAIRING` to remove, 
 otherwise fail the job for a Worker that never had it. The D1 row `deploy` (11.1, written only by CI) says whether the
 Worker may hold it: a v1 deploy sets it before uploading the pairing code (and does not deploy when it can't), and a
 listing that shows the Worker without it, or a delete that worked, clears it. When the listing fails, the job fails
-only if that row does not name this Worker as holding none, or D1 can't be read. A Worker this run created (a new
-setup-link name, `setup.mjs`'s `new_worker`) holds only what was just uploaded, so nothing is listed or removed. (A
-`DAYLIGHT_PAIRING` added by hand in the dashboard is outside what the deploy can know.) Test-only behaviour hangs
-on the build-time constant `__TESTING__`, which is `false` in every deploy bundle. CI checks that the bundle does not
-contain the test variable's name.
+only if that row does not name this Worker as holding none, or D1 can't be read. A Worker this run created holds
+only what was just uploaded, so a listing that keeps failing is nothing to report and the row then names it without
+the pairing code. `setup.mjs`'s `new_worker` says so for a new setup-link name, and for any other name (a new
+`DAYLIGHT_SERVER_CODE`'s, as after re-pairing; a setup row whose deploy failed) when Cloudflare answers "This Worker
+does not exist on your account" (`GET …/workers/services/<name>`: 404, code 10007, as wrangler reads it); any other
+answer is "not new", which fails safe. Such a Worker is still listed, so one wrongly taken for new loses what it
+holds. (A `DAYLIGHT_PAIRING` added by hand in the dashboard is outside what the deploy can know.) Test-only
+behaviour hangs on the build-time constant `__TESTING__`, which is `false` in every deploy bundle. CI checks that the
+bundle does not contain the test variable's name.
 
 ### 12.4 `.github/workflows/rx-server.yml`
 
@@ -1714,7 +1718,7 @@ that failed or was cancelled leaves what is live unknown, so the push deploys. C
 | Check the secrets (`derive.mjs gate`) | Masks every form of any code first. A pairing code in `DAYLIGHT_SERVER_CODE` fails here. With a Server code (or v1 delivery): `mode=code` and the seed-derived Worker name; without: `mode=setup`. |
 | Token, permissions, R2 (`cf-check.mjs`) | Verifies the token and reads Workers, D1 and (with a domain) zones, naming a missing permission in plain words; `r2=on` when the account has R2 and the token can use it. |
 | D1 and migrations | Finds the database `daylight-server` or creates it, writes `wrangler.deploy.toml` with its id, and applies every migration (`wrangler d1 migrations apply --remote`; applied ones are skipped). |
-| Server code or setup link (`setup.mjs`) | The workers.dev subdomain (created only when the API says there is none). In setup mode, the D1 `setup` row (3.5): a new Worker name and link the first time, after a lock or on request; else the waiting link, or the Server code an app sent. Writes `WORKER_NAME` and `SERVER_URL`; hands the token or the code to later steps in `$RUNNER_TEMP` files (0600). |
+| Server code or setup link (`setup.mjs`) | The workers.dev subdomain (created only when the API says there is none). In setup mode, the D1 `setup` row (3.5): a new Worker name and link the first time, after a lock or on request; else the waiting link, or the Server code an app sent. Writes `WORKER_NAME` and `SERVER_URL`, and `new_worker` when this deploy creates the Worker (12.3); hands the token or the code to later steps in `$RUNNER_TEMP` files (0600). |
 | R2 bucket | With R2: finds or creates the bucket and its lifecycle rules (14 days `f/`, 8 days `m/`, 1 day `a/`). A token that can't create it leaves R2 off with a warning instead of failing. |
 | Deploy config | The Worker name, the R2 binding when on, `cpu_ms = 60000` on Workers Paid. |
 | Deploy | `secrets.mjs` splits the Worker's secrets (GitHub's, plus `DAYLIGHT_SETUP_TOKEN` while a link waits) into the ones to upload and the ones to delete; `wrangler deploy --secrets-file` with `--var` for `SERVER_URL`, `GIT_SHA`, the plan, the delivery mode and the AI ceilings; without the rate-limit binding if the account refuses it; then `secrets.mjs remove` deletes the secrets that are gone and keeps the D1 `deploy` row (12.3). |
@@ -2165,7 +2169,10 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
     Worker, a wrong token (a 5 MB body is not read), a pairing code, a locked pairing, another pairing after use,
     and the per-IP limit. The scripts run as the workflow runs them (`setup.mjs`, `secrets.mjs`, `derive.mjs
     announce` in their own processes, against a stand-in for Cloudflare's API): outputs, 0600 files, masks, no
-    workflow command or secret in the summary, and a Worker that is not reachable yet.
+    workflow command or secret in the summary, and a Worker that is not reachable yet. Both `secrets.mjs` calls of the
+    deploy step (with a stand-in `npx` for `wrangler secret`): a Worker named after a new Server code is new, so its
+    failed listing passes; the D1 `deploy` row marked before a v1 upload, and nothing uploaded without it; a failed
+    listing that fails the job only while the Worker may hold `DAYLIGHT_PAIRING` (12.3).
 - **v1 safety**: hosted frames and server item frames through share/js's v1 `Receiver`. Hosted frames are received.
   Server items under Lab delivery are ignored: no item, no ack, no exception.
 - **Bundle**: under 3 MB gzipped, with no test variable names.

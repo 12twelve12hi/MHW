@@ -17,9 +17,10 @@
 // Environment: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, D1_ID, WORKER_NAME (optional), NEW_SETUP_LINK,
 // GITHUB_RUN_ATTEMPT (set by GitHub), RUNNER_TEMP.
 // Writes WORKER_NAME and SERVER_URL to $GITHUB_ENV; mode (code | setup), setup (none | pending | claimed), reason
-// (first | locked | requested | invalid), fingerprint and new_worker (true when the name is new, so this run's deploy
-// creates the Worker: secrets.mjs remove then knows it holds only what was uploaded) to $GITHUB_OUTPUT;
-// $RUNNER_TEMP/dls-setup-token while a link waits, $RUNNER_TEMP/dls-server-code once an app used it.
+// (first | locked | requested | invalid), fingerprint and new_worker (true when this run's deploy creates the Worker: a
+// new setup-link name, or a name Cloudflare says it has no Worker for, as for a new DAYLIGHT_SERVER_CODE; secrets.mjs
+// remove then knows it holds only what was uploaded) to $GITHUB_OUTPUT; $RUNNER_TEMP/dls-setup-token while a link
+// waits, $RUNNER_TEMP/dls-server-code once an app used it.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -46,6 +47,22 @@ export function cfD1({ account, database, token, fetchFn = fetch }) {
     if (res.status !== 200 || json?.success === false) throw new Error(`D1 query failed (HTTP ${res.status})`);
     return json?.result?.[0]?.results ?? [];
   };
+}
+
+/**
+ * Whether the account has no Worker called `name`, so this run's deploy creates it. Only Cloudflare's "This Worker does
+ * not exist on your account" (HTTP 404 with code 10007, how wrangler tells) says so. Anything else (the Worker, another
+ * error, no network) is false, which is safe: secrets.mjs remove then treats it as a Worker that may hold what an
+ * earlier deploy gave it.
+ */
+export async function workerMissing({ account, token, name, fetchFn = fetch, api = API }) {
+  try {
+    const res = await fetchFn(`${api}/accounts/${account}/workers/services/${encodeURIComponent(name)}`, {
+      headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000),
+    });
+    const json = await res.json().catch(() => ({}));
+    return res.status === 404 && json?.success === false && Array.isArray(json.errors) && json.errors.some((e) => e?.code === 10007);
+  } catch { return false; }
 }
 
 const randomBytes = (n) => crypto.getRandomValues(new Uint8Array(n));
@@ -132,7 +149,9 @@ async function main() {
   setEnv('WORKER_NAME', worker);
   setEnv('SERVER_URL', `https://${host}`);
   say(created ? 'Created a workers.dev subdomain for this account.' : 'workers.dev subdomain: ok.');
-  out('new_worker', String(!!plan?.rotate));
+  // A new setup-link name is new; any other name (a Server code's, or a setup row's whose deploy may have failed) is
+  // new only when Cloudflare says it has no such Worker.
+  out('new_worker', String(!!plan?.rotate || await workerMissing({ account, token, name: worker, api: API })));
   if (!plan) {
     out('mode', 'code'); out('setup', 'none');
     return;

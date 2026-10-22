@@ -7,12 +7,13 @@
 // The D1 `deploy` row (migration 0005) says whether the deployed Worker may hold DAYLIGHT_PAIRING: set before a v1
 // deploy uploads it (that deploy stops when it can't be set), cleared once a listing shows the Worker without it. So a
 // Lab deploy whose listing keeps failing fails only when the Worker may really still hold the pairing code: not for a
-// Worker this run created (NEW_WORKER=true), nor for one whose row says it holds none.
+// Worker this run created (NEW_WORKER=true, setup.mjs's new_worker), nor for one whose row says it holds none.
 //
 //   node scripts/secrets.mjs <put.json> <delete.txt>
 //   node scripts/secrets.mjs remove <delete.txt> <wrangler config>    (after the deploy: --secrets-file only adds)
 //
 // Environment for the D1 row: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, D1_ID, WORKER_NAME; NEW_WORKER (remove).
+// The tests set DLS_TEST_NO_RETRY_WAIT=true to retry without waiting.
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -47,6 +48,7 @@ export function split(env) {
 
 const PAIRING = 'DAYLIGHT_PAIRING';
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+const retryWait = (env) => (env.DLS_TEST_NO_RETRY_WAIT === 'true' ? async () => {} : pause);
 
 /** fn() up to `tries` times, 2 s then 4 s apart: its first result other than null; null when every try failed or threw. */
 async function retry(fn, { tries, sleep }) {
@@ -104,8 +106,9 @@ export async function beforeUpload(put, { record, say = console.log, sleep = pau
  * them). A secret that could not be removed, or checked, is a ::warning; for DAYLIGHT_PAIRING it is an ::error and
  * ok=false, because the job summary and the apps would then say the server does not hold the pairing code (3.1) while
  * it does. Not when the Worker can't hold it: `newWorker` (this run's deploy created it, with put.json alone, so it
- * holds none of `names`) or a `record` that says so (Lab deploys never upload it). The record is updated from what
- * the listing shows. Prints names only, never wrangler's output. -> {ok, removed, failed}
+ * holds none of `names`) or a `record` that says so (Lab deploys never upload it). A new Worker is still listed, so a
+ * Worker wrongly taken for new loses what it holds; only a listing that fails is then nothing to report. The record is
+ * updated from what the listing shows. Prints names only, never wrangler's output. -> {ok, removed, failed}
  */
 export async function removeSecrets(names, { wrangler, say = console.log, sleep = pause, tries = 3, newWorker = false, record = null }) {
   const attempt = (args) => retry(async () => { const r = await wrangler(args); return r.status === 0 ? r : null; }, { tries, sleep });
@@ -129,11 +132,6 @@ export async function removeSecrets(names, { wrangler, say = console.log, sleep 
     }
     return { ok: !failed.includes(PAIRING), removed, failed };
   };
-  if (newWorker) {
-    if (want.length) say('Nothing to remove: this run created the Worker, with only the secrets it uploaded.');
-    if (checksPairing) holds = false;
-    return finish();
-  }
   if (!want.length) return finish();
   const listing = await attempt(['secret', 'list', '--format', 'json']);
   let existing = null;
@@ -141,6 +139,11 @@ export async function removeSecrets(names, { wrangler, say = console.log, sleep 
     const text = String(listing?.stdout ?? '');
     existing = new Set(JSON.parse(text.slice(text.indexOf('['))).map((x) => x?.name));
   } catch { existing = null; }
+  if (!existing && newWorker) {
+    say('Nothing to remove: this run created the Worker, with only the secrets it uploaded (its secrets couldn’t be listed to check).');
+    if (checksPairing) holds = false;
+    return finish();
+  }
   if (!existing) {
     const mayHold = checksPairing && (!record || await record.mayHold());
     for (const name of want) {
@@ -167,13 +170,13 @@ if (import.meta.url === `file://${process.argv[1]}` && process.argv[2] === 'remo
     const r = spawnSync('npx', ['wrangler', ...args, '-c', config], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, CI: 'true' } });
     return { status: r.status ?? 1, stdout: r.stdout ?? '' };
   };
-  const { ok } = await removeSecrets(names, { wrangler, newWorker: process.env.NEW_WORKER === 'true', record: recordFromEnv(process.env) });
+  const { ok } = await removeSecrets(names, { wrangler, sleep: retryWait(process.env), newWorker: process.env.NEW_WORKER === 'true', record: recordFromEnv(process.env) });
   process.exit(ok ? 0 : 1);
 } else if (import.meta.url === `file://${process.argv[1]}`) {
   const [putPath, deletePath] = process.argv.slice(2);
   if (!putPath || !deletePath) { console.log('::error::usage: secrets.mjs <put.json> <delete.txt>'); process.exit(1); }
   const { put, remove } = split(withSetupToken(process.env));
-  if (!(await beforeUpload(put, { record: recordFromEnv(process.env) })).ok) process.exit(1);
+  if (!(await beforeUpload(put, { record: recordFromEnv(process.env), sleep: retryWait(process.env) })).ok) process.exit(1);
   fs.writeFileSync(putPath, JSON.stringify(put), { mode: 0o600 });
   fs.writeFileSync(deletePath, remove.join('\n') + (remove.length ? '\n' : ''), { mode: 0o600 });
   console.log(`Secrets to upload: ${Object.keys(put).join(', ') || 'none'}. Optional secrets not set: ${remove.join(', ') || 'none'}.`);
