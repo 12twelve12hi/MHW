@@ -138,7 +138,9 @@ final class DaylightServerTests: XCTestCase {
         XCTAssertTrue(v.showSteps)
         XCTAssertTrue(v.setupFirst)
         XCTAssertNil(v.delivery)
-        XCTAssertEqual(v.serverCode, try ServerCode.format(seed: ServerCode.deriveSeed(secret: pairing.secret)))
+        // A pairing on another relay than the default: the Server code is its link form (formatServerCode).
+        XCTAssertEqual(v.serverCode, try ServerCode.format(seed: ServerCode.deriveSeed(secret: pairing.secret), relay: pairing.relay))
+        XCTAssertTrue(v.serverCode.hasPrefix("daylightserver://setup?c="))
         XCTAssertEqual(v.hostLine, ServerCode.showFingerprint(try values(pairing).fingerprint))
         let rowState = await c.serverRowState()
         XCTAssertEqual(LabText.serverRowSubtitle(rowState ?? ""), "Optional · Not set up")
@@ -236,7 +238,8 @@ final class DaylightServerTests: XCTestCase {
         let link = "https://daylight-0123456789ab.example.workers.dev/setup#SETUP-JRTK-XSYV-FBNR-BSJP-AGJI-ZIDS-SD2A"
         let token = try ServerCode.deriveSetupToken(secret: ServerCode.parseSetupLink(link).secret)
         let fp = try values(pairing).fingerprint
-        let code = try ServerCode.format(seed: ServerCode.deriveSeed(secret: pairing.secret))
+        // What the server is sent: this pairing's Server code (here with its relay, which is not the default one).
+        let code = try ServerCode.format(seed: ServerCode.deriveSeed(secret: pairing.secret), relay: pairing.relay)
         net.route("POST", "\(origin)/v1/setup") { req in
             guard req.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)",
                   let body = req.httpBody, let j = try? JSONSerialization.jsonObject(with: body) as? [String: Any],

@@ -77,11 +77,20 @@ public enum Frame {
         let hlen = Int(plain[0]) << 24 | Int(plain[1]) << 16 | Int(plain[2]) << 8 | Int(plain[3])
         guard hlen <= plain.count - 4, hlen <= DLS.maxHeaderBytes else { throw ShareError("frame", "bad header length") }
         let headerJSON = plain.subdata(in: 4..<(4 + hlen))
-        guard String(data: headerJSON, encoding: .utf8) != nil, let header = JSONRead.object(headerJSON) else {
+        guard String(data: headerJSON, encoding: .utf8) != nil, let header = Self.headerObject(headerJSON) else {
             throw ShareError("frame", "bad header")
         }
         guard JSONRead.integer(header["v"]) == DLS.protocolVersion else { throw ShareError("frame", "unsupported header") }
         return OpenedFrame(header: header, headerJSON: headerJSON, body: plain.subdata(in: (4 + hlen)..<plain.count))
+    }
+
+    /// The header's JSON object. `JSONSerialization` refuses an escaped lone surrogate (`"\ud800"`), which `JSON.parse`
+    /// takes: the Lab frames' worst case has 60 of them in `from` (LAB-PROTOCOL 2.2.1). Such a header is read as the
+    /// reference reads it, with `JSONValue`'s strict parser (each lone surrogate becomes U+FFFD), so the ack is heard.
+    static func headerObject(_ json: Data) -> [String: Any]? {
+        if let header = JSONRead.object(json) { return header }
+        guard case let .object(o)? = JSONValue.parse(json) else { return nil }
+        return o.mapValues(\.foundation)
     }
 
     /// Whether the frame goes as a message (base64 text, at most 3800 characters) rather than an attachment.
