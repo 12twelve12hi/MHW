@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Step 2 of the end-to-end test, on the emulator where reader-smoke.sh has installed the Reader. A "phone" (sender.mjs,
-# the protocol 1.1 JS reference) sends through the mock relay, which runs with ntfy.sh's limits (2,097,152-byte
+# the JS reference: protocol 1.1 with Lab Wave 0) sends through the mock relay, which runs with ntfy.sh's limits (2,097,152-byte
 # attachments, 20 MB per uploader at a time); the Daylight Share Inbox receives each item, acks it and hands it to the
 # Reader, and the Reader's library grows:
 #  0.  a PDF over 9 MB is refused by the phone before anything is queued or sent;
@@ -14,6 +14,17 @@
 #  8.  another one: the card's "Later", then a tap on its notification in the shade hands it over;
 #  9.  Documents = Add to the library as a batch (docs=quiet, to= Automatic): a PDF goes as SEND_MULTIPLE;
 #  and the phone sees every item delivered.
+# Lab (LAB-PLAN F17, task E0): the phone is a Lab sender. Its ledger reads the Inbox's Lab frames on the ack topic
+# (sender.mjs lab-states / wait-lab), and a second phone on the same pairing is a v1.1 sender (E2E_PLAIN=1):
+#  1b. the v1.1 phone sends a page: delivered, and its row keeps v1.1's words (a Lab Inbox changes nothing for it);
+#  L1. after 1-3, the phone has the Inbox's hello (lab 1, caps st, tap, reader-link) and the states of the page
+#      (reader), the link (reader, or queued without internet) and the PDF (handed);
+#  10. Documents = Ask: the phone sees a PDF `waiting`; a root tap through HandoffActivity hands it over: `handed`;
+#  11. no "Display over other apps" and the Reader in front: a link waits too (`waiting`, a notification alone); a
+#      root tap hands it over: `reader`;
+#  12. Lab off on the Inbox (setup link lab=0): its one lab: 0 frame reaches the phone, a page gets no state; Lab on
+#      again: a hello;
+#  and at the end every item's last state is on the phone, and the Inbox's Lab frames were at least 30 s apart.
 # Usage: inbox-e2e.sh <daylight-share debug apk> <out dir>
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -24,10 +35,15 @@ SHARE_PKG=com.daylight.share
 RELAY_LOCAL=http://127.0.0.1:8787
 NTFY_ATTACHMENT_MAX=2097152
 SENDER="$here/sender.mjs"
+PLAIN_STATE="$OUT/plain-state.json"
 
 fails=()
 failed() { echo "FAIL: $*"; fails+=("$*"); }
 sent=()
+plain_sent=()
+# The Lab state the phone must end with, per item: reader (pages; links, or queued without internet), handed (PDFs),
+# none (sent while the Inbox's Lab was off).
+declare -A expect=()
 
 node "$here/../share/js/mock-relay.mjs" --host 0.0.0.0 --port 8787 --attachment-max "$NTFY_ATTACHMENT_MAX" \
   --visitor-total 20000000 --control > "$OUT/relay.log" 2>&1 &
@@ -85,6 +101,8 @@ setup_inbox() {
 }
 
 send() { node "$SENDER" "$@"; }
+# The second phone: a v1.1 sender on the same pairing (no Lab ledger), with its own outbox.
+plain() { E2E_STATE="$PLAIN_STATE" E2E_PLAIN=1 node "$SENDER" "$@"; }
 
 # Prints "x y" of the first node of package $2 whose text or content-desc matches $1 (a JS regex): from a uiautomator
 # dump of every window (--windows: the card over the Reader takes no focus), else of the active window.
@@ -118,12 +136,31 @@ tap_card_add() {
   adb shell input tap $xy
 }
 
+# Restarts adbd as root ($1 = root) or as the shell user ($1 = unroot), and waits until a shell answers again.
+adbd_as() {
+  adb "$1" >/dev/null 2>&1 || true
+  sleep 3
+  local i
+  for i in 1 2 3 4 5 6; do
+    adb wait-for-device
+    if adb shell true >/dev/null 2>&1; then break; fi
+    sleep 2
+  done
+  echo "adbd: $1 (uid $(adb shell id -u 2>/dev/null | tr -d '\r'))"
+}
+
 # The README's debug hook for a notification's tap: on an emulator after adb root, start the (unexported) hand-off.
+# adbd goes back to the shell user afterwards, so every later step runs as before (the Reader's adb hook included).
 root_tap() {
   echo "tap through the debug hook (adb root; am start HandoffActivity --es mode one --es item $1)"
-  adb root >/dev/null 2>&1 || true
-  sleep 3; adb wait-for-device
-  adb shell am start -n "$SHARE_PKG/.inbox.HandoffActivity" --es mode one --es item "$1" || echo "the debug hook did not start"
+  adbd_as root
+  local i ok=0
+  for i in 1 2 3; do
+    if adb shell am start -n "$SHARE_PKG/.inbox.HandoffActivity" --es mode one --es item "$1"; then ok=1; break; fi
+    sleep 2
+  done
+  [ "$ok" = 1 ] || echo "the debug hook did not start"
+  adbd_as unroot
 }
 
 # Seconds of the day of a threadtime log line ("10-20 18:06:40.177 ...").
@@ -134,6 +171,7 @@ before="$(count)"
 echo "library before: $(reader_count_line)"
 
 code="$(send pair "$RELAY_LOCAL")"
+cp "$E2E_STATE" "$PLAIN_STATE" # the pairing only, so far: the v1.1 phone starts with the same secret and no rows
 echo "pairing code: $code"
 adb shell "am start -n $SHARE_PKG/.ui.MainActivity -a android.intent.action.VIEW -d 'daylightshare://setup?role=inbox&c=$code&r=http%3A%2F%2F10.0.2.2%3A8787&n=CI%20Daylight&instant=1&auto=1'"
 sleep 6
@@ -145,15 +183,22 @@ send check-too-large 9500000 || failed "a PDF over 9 MB was not refused as too-l
 
 # 1. An article page (the HTML travels with it): one more document.
 echo "== 1. page, Inbox in front"
-page1="$(send send-page one)"; sent+=("$page1"); echo "sent page $page1"
+page1="$(send send-page one)"; sent+=("$page1"); expect[$page1]=reader; echo "sent page $page1"
 wait_handoff "$page1" 120 || failed "no hand-off for the page $page1"
 wait_library_at_least $((before + 1)) 90 || failed "the page $page1 did not reach the library"
 sleep 3; shot "$OUT/11-after-page.png"
 
+# 1b. A v1.1 phone on the same pairing (no Lab ledger): its page goes as before (F17.1).
+echo "== 1b. page from a v1.1 phone on the same pairing, Inbox in front"
+n="$(count)"
+pageV11="$(plain send-page v11)"; plain_sent+=("$pageV11"); expect[$pageV11]=reader; echo "sent page $pageV11 (v1.1 phone)"
+wait_handoff "$pageV11" 120 || failed "no hand-off for the v1.1 phone's page $pageV11"
+wait_library_at_least $((n + 1)) 90 || failed "the v1.1 phone's page $pageV11 did not reach the library"
+
 # 2. A plain link: the Reader fetches it itself (needs the emulator's internet; reported, not required).
 echo "== 2. link, Inbox in front"
 n="$(count)"
-url1="$(send send-url https://example.org/)"; sent+=("$url1"); echo "sent link $url1"
+url1="$(send send-url https://example.org/)"; sent+=("$url1"); expect[$url1]='reader|queued'; echo "sent link $url1"
 wait_handoff "$url1" 120 || failed "no hand-off for the link $url1"
 if wait_library_at_least $((n + 1)) 60; then echo "link saved"; else echo "link handed over but not saved (no internet on the emulator?)"; fi
 
@@ -161,16 +206,23 @@ if wait_library_at_least $((n + 1)) 60; then echo "link saved"; else echo "link 
 echo "== 3. PDF, Inbox in front"
 adb shell "am start -n $SHARE_PKG/.ui.MainActivity" >/dev/null; sleep 2
 n="$(count)"
-pdf1="$(send send-pdf one)"; sent+=("$pdf1"); echo "sent pdf $pdf1"
+pdf1="$(send send-pdf one)"; sent+=("$pdf1"); expect[$pdf1]=handed; echo "sent pdf $pdf1"
 wait_handoff "$pdf1" 120 || failed "no hand-off for the PDF $pdf1"
 wait_library_at_least $((n + 1)) 120 || failed "the PDF $pdf1 did not reach the library"
 sleep 5; shot "$OUT/12-after-pdf.png"
 echo "in front: $(front)"
 
+# L1. Lab (F17): the Inbox's hello and the states of the page, the link and the PDF reach the phone's ledger. Lab
+# frames go at most one every 30 s, so this can take a minute.
+echo "== L1. Lab: the Inbox's hello, and the states of the page, the link and the PDF on the phone"
+send wait-lab 150 lab=1 caps=st,tap,reader-link "$page1=reader" "$url1=reader|queued" "$pdf1=handed" \
+  || failed "the phone did not get the Inbox's Lab hello (lab 1, caps st,tap,reader-link) and the states reader (page $page1), reader or queued (link $url1) and handed (PDF $pdf1)"
+inbox_log | grep -E 'lab: (hello|states|state )' || true
+
 # 4. The Inbox is behind the Reader now: a second page must still arrive and be handed over without a tap.
 echo "== 4. page, Reader in front"
 n="$(count)"
-page2="$(send send-page two)"; sent+=("$page2"); echo "sent page $page2 (Inbox in the background)"
+page2="$(send send-page two)"; sent+=("$page2"); expect[$page2]=reader; echo "sent page $page2 (Inbox in the background)"
 wait_handoff "$page2" 150 || failed "no background hand-off for the page $page2"
 wait_library_at_least $((n + 1)) 120 || failed "the background page $page2 did not reach the library"
 sleep 4; shot "$OUT/13-after-background-page.png"
@@ -180,7 +232,7 @@ echo "== 5. a 5 MB PDF in parts, Inbox in front"
 adb shell "am start -n $SHARE_PKG/.ui.MainActivity" >/dev/null; sleep 2
 n="$(count)"
 big="$(send send-pdf big 5000000 2> "$OUT/big-publishes.txt")" || { cat "$OUT/big-publishes.txt"; exit 1; }
-sent+=("$big")
+sent+=("$big"); expect[$big]=handed
 cat "$OUT/big-publishes.txt"
 big_size="$(sed -n 's/^pdf .*: \([0-9]*\) bytes$/\1/p' "$OUT/big-publishes.txt")"
 parts="$(grep -c '^publish PUT ' "$OUT/big-publishes.txt" || true)"
@@ -200,11 +252,11 @@ n="$(count)"
 ( for i in $(seq -w 1 18); do shot "$OUT/20-race-$i.png"; sleep 4; done ) &
 shots=$!
 t0=$(date +%s)
-pdfA="$(send send-pdf race-a)"; sent+=("$pdfA"); echo "sent pdf $pdfA (Reader in front)"
+pdfA="$(send send-pdf race-a)"; sent+=("$pdfA"); expect[$pdfA]=handed; echo "sent pdf $pdfA (Reader in front)"
 lineA="$(wait_handoff "$pdfA" 120)" || { lineA=""; failed "race: no hand-off for the first PDF $pdfA"; }
 echo "$lineA"
 wait_s=$((20 - ($(date +%s) - t0))); [ "$wait_s" -gt 0 ] && sleep "$wait_s"
-pdfB="$(send send-pdf race-b)"; sent+=("$pdfB"); echo "sent pdf $pdfB $(($(date +%s) - t0)) s after the first"
+pdfB="$(send send-pdf race-b)"; sent+=("$pdfB"); expect[$pdfB]=handed; echo "sent pdf $pdfB $(($(date +%s) - t0)) s after the first"
 lineB="$(wait_handoff "$pdfB" 150)" || { lineB=""; failed "race: no hand-off for the second PDF $pdfB"; }
 echo "$lineB"
 if wait_library_at_least $((n + 2)) 120; then
@@ -233,7 +285,7 @@ echo "== 7. Documents = Ask: the card's Add to Reader"
 setup_inbox "&docs=ask&to=$READER_PKG"
 reader_front
 n="$(count)"
-pdfC="$(send send-pdf ask-card)"; sent+=("$pdfC"); echo "sent pdf $pdfC (Reader in front, Documents = Ask)"
+pdfC="$(send send-pdf ask-card)"; sent+=("$pdfC"); expect[$pdfC]=handed; echo "sent pdf $pdfC (Reader in front, Documents = Ask)"
 if lineC="$(wait_log "received $pdfC kind=file -> waiting for a tap" 90)"; then
   echo "$lineC"
   echo "$lineC" | grep -q 'waiting for a tap (card + notification) docs=ask' || failed "$pdfC was not announced by both the card and a notification"
@@ -260,7 +312,7 @@ sleep 4; shot "$OUT/31-after-card-tap.png"
 echo "== 8. Documents = Ask: Later, then the notification"
 reader_front
 n="$(count)"
-pdfD="$(send send-pdf ask-notification)"; sent+=("$pdfD"); echo "sent pdf $pdfD (Reader in front, Documents = Ask)"
+pdfD="$(send send-pdf ask-notification)"; sent+=("$pdfD"); expect[$pdfD]=handed; echo "sent pdf $pdfD (Reader in front, Documents = Ask)"
 if lineD="$(wait_log "received $pdfD kind=file -> waiting for a tap" 90)"; then
   echo "$lineD"
   echo "$lineD" | grep -q 'waiting for a tap (card + notification) docs=ask' || failed "$pdfD was not announced by both the card and a notification"
@@ -296,7 +348,7 @@ echo "== 9. Documents = Add to the library as a batch"
 setup_inbox "&docs=quiet&to="
 reader_front
 n="$(count)"
-pdfE="$(send send-pdf quiet)"; sent+=("$pdfE"); echo "sent pdf $pdfE (Reader in front, Documents = batch)"
+pdfE="$(send send-pdf quiet)"; sent+=("$pdfE"); expect[$pdfE]=handed; echo "sent pdf $pdfE (Reader in front, Documents = batch)"
 if lineE="$(wait_handoff "$pdfE" 120)"; then
   echo "$lineE"
   echo "$lineE" | grep -q 'via send_multiple status=sent docs=quiet by=auto' || failed "$pdfE was not handed over as a batch without a tap"
@@ -306,16 +358,116 @@ fi
 wait_library_at_least $((n + 1)) 120 || failed "$pdfE did not reach the library"
 sleep 4; shot "$OUT/35-after-batch.png"
 
+# 10. Lab, Documents = Ask: the phone sees the PDF waiting for a tap, then a root tap through HandoffActivity (the
+#     README's debug hook for a notification's tap) hands it over, and the phone sees it handed.
+echo "== 10. Lab, Documents = Ask: waiting on the phone, a root tap, then handed"
+setup_inbox "&docs=ask&to=$READER_PKG"
+reader_front
+n="$(count)"
+pdfF="$(send send-pdf ask-root)"; sent+=("$pdfF"); expect[$pdfF]=handed; echo "sent pdf $pdfF (Reader in front, Documents = Ask)"
+if lineF="$(wait_log "received $pdfF kind=file -> waiting for a tap" 90)"; then echo "$lineF"; else failed "$pdfF was not announced as waiting for a tap"; fi
+send wait-lab 120 "$pdfF=waiting" || failed "the phone did not see $pdfF waiting for a tap"
+if inbox_log | grep "received $pdfF .*handed to" >/dev/null; then failed "$pdfF was handed over without a tap (Documents = Ask)"; fi
+shot "$OUT/36-ask-waiting.png"
+root_tap "$pdfF"
+if lineF="$(wait_handoff "$pdfF" 120)"; then
+  echo "$lineF"
+  echo "$lineF" | grep -q 'docs=ask by=tap' || failed "$pdfF was handed over, but not by the tap"
+else
+  failed "no hand-off for $pdfF after the root tap"
+fi
+wait_library_at_least $((n + 1)) 120 || failed "$pdfF did not reach the library after the tap"
+send wait-lab 120 "$pdfF=handed" || failed "the phone did not see $pdfF handed to the Reader"
+sleep 4; shot "$OUT/37-after-root-tap.png"
+
+# 11. Lab, no "Display over other apps", the Reader in front: the Inbox cannot start the Reader from the background,
+#     so a link waits for a tap too (a notification alone, no card). The phone sees it waiting; a root tap hands it
+#     over (SAVE_PAGE), and the phone sees it in the Reader.
+echo "== 11. Lab, overlay permission off, Reader in front: a link waits, a root tap, then reader"
+adb shell appops set "$SHARE_PKG" SYSTEM_ALERT_WINDOW deny
+reader_front
+url2="$(send send-url https://example.net/)"; sent+=("$url2"); expect[$url2]='reader|queued'; echo "sent link $url2 (Reader in front, no overlay permission)"
+if lineL="$(wait_log "received $url2 kind=url -> waiting for a tap" 90)"; then
+  echo "$lineL"
+  echo "$lineL" | grep -q 'waiting for a tap (notification)$' || failed "$url2 was not announced by a notification alone"
+else
+  failed "the link $url2 was not announced as waiting for a tap"
+fi
+send wait-lab 120 "$url2=waiting" || failed "the phone did not see the link $url2 waiting for a tap"
+if inbox_log | grep "received $url2 .*handed to" >/dev/null; then failed "$url2 was handed over without a tap or the overlay permission"; fi
+shot "$OUT/38-link-waiting.png"
+root_tap "$url2"
+if lineL="$(wait_handoff "$url2" 120)"; then
+  echo "$lineL"
+  echo "$lineL" | grep -q 'via save_page .* by=tap' || failed "$url2 was handed over, but not through SAVE_PAGE by the tap"
+else
+  failed "no hand-off for the link $url2 after the root tap"
+fi
+send wait-lab 120 "$url2=reader|queued" || failed "the phone did not see the link $url2 in the Reader"
+adb shell appops set "$SHARE_PKG" SYSTEM_ALERT_WINDOW allow
+sleep 3; shot "$OUT/39-after-link-tap.png"
+
+# 12. Lab off on the Inbox: one lab: 0 frame, which the phone reads as "Lab off"; an item then gets no state (its row
+#     on the phone is v1.1's). Lab on again: a hello, and still no state for that item.
+echo "== 12. Lab off on the Inbox, then on again"
+setup_inbox "&docs=quiet&to=&lab=0"
+wait_log "lab: hello lab=0" 90 || failed "the Inbox did not send its lab: 0 frame when Lab was turned off"
+send wait-lab 120 lab=0 || failed "the phone did not see the Inbox's Lab turned off"
+n="$(count)"
+pageOff="$(send send-page lab-off)"; sent+=("$pageOff"); expect[$pageOff]=none; echo "sent page $pageOff (the Inbox's Lab off)"
+wait_handoff "$pageOff" 120 || failed "no hand-off for the page $pageOff with the Inbox's Lab off"
+wait_library_at_least $((n + 1)) 90 || failed "the page $pageOff did not reach the library with the Inbox's Lab off"
+if inbox_log | grep "lab: state $pageOff" >/dev/null; then failed "the Inbox recorded a Lab state for $pageOff with Lab off"; fi
+# Delivered, with the Inbox's Lab off: the phone shows v1.1's row (LAB-PLAN 2.5 rule 4).
+if send wait-acks "${#sent[@]}" 120 >/dev/null; then
+  offRow="$(send lab-states "$pageOff" || true)"; echo "$offRow"
+  echo "$offRow" | grep -q "^$pageOff page none: Delivered ✓. Saved on your Daylight.$" \
+    || failed "with the Inbox's Lab off, the phone's row for $pageOff is not v1.1's \"Delivered ✓. Saved on your Daylight.\""
+else
+  failed "the page $pageOff was not acknowledged with the Inbox's Lab off"
+fi
+setup_inbox "&lab=1"
+send wait-lab 120 lab=1 caps=st,tap,reader-link "$pageOff=none" || failed "the phone did not get the Inbox's hello after Lab was turned on again"
+
 # ------------------------------------------------------------------------------------------------------------ results
 echo "== the phone's view"
 send wait-acks "${#sent[@]}" 150 || failed "the phone did not see all ${#sent[@]} items delivered"
 send status || true
 
+# Lab (F17): every item's last state is on the phone; the item sent while the Inbox's Lab was off has none.
+echo "== Lab: every item's last state on the phone"
+wants=()
+for id in "${!expect[@]}"; do wants+=("$id=${expect[$id]}"); done
+send wait-lab 180 lab=1 "${wants[@]}" || failed "the phone did not end with every item's Lab state"
+
+echo "== the v1.1 phone's view"
+plain wait-acks "${#plain_sent[@]}" 120 || failed "the v1.1 phone did not see its ${#plain_sent[@]} item(s) delivered"
+v11="$(plain status || true)"; echo "$v11"
+for id in "${plain_sent[@]}"; do
+  echo "$v11" | grep -q "^$id .* delivered: Delivered ✓. Saved on your Daylight.$" || failed "the v1.1 phone's row for $id is not v1.1's \"Delivered ✓. Saved on your Daylight.\""
+done
+
 inbox_log > "$OUT/inbox-log.txt" || true
 echo "--- hand-offs ---"; grep -E "handed to|kept in inbox|waiting for a tap|card: later" "$OUT/inbox-log.txt" || true
-for id in "${sent[@]}"; do
+for id in "${sent[@]}" "${plain_sent[@]}"; do
   if grep -q "received $id .*handed to $READER_PKG" "$OUT/inbox-log.txt"; then echo "ok   $id"; else failed "no hand-off to the Reader for $id"; fi
 done
+
+# The Inbox's Lab frames (2.2.4): what went, and at least 30 s apart. Each line is logged after its publish, which
+# may take longer than the one before (a relay retry waits 1-4 s), so this fails below 25 s; a frame that skipped
+# the spacing would follow the one before within a few seconds.
+echo "--- the Inbox's Lab frames ---"
+grep -E 'lab: (hello|states n=)' "$OUT/inbox-log.txt" || true
+echo "Lab frames: $(grep -c 'lab: hello caps=' "$OUT/inbox-log.txt" || true) hellos, $(grep -c 'lab: states n=' "$OUT/inbox-log.txt" || true) state frames, $(grep -c 'lab: hello lab=0' "$OUT/inbox-log.txt" || true) lab: 0"
+prev=""
+while IFS= read -r line; do
+  t="$(logtime "$line")"
+  if [ -n "$prev" ]; then
+    gap="$(awk -v a="$prev" -v b="$t" 'BEGIN { d = b - a; if (d < 0) d += 86400; printf "%.1f", d }')"
+    if awk -v g="$gap" 'BEGIN { exit !(g < 25) }'; then failed "two Lab frames only $gap s apart (at least 30 s): $line"; fi
+  fi
+  prev="$t"
+done < <(grep -E 'lab: (hello|states n=)' "$OUT/inbox-log.txt" || true)
 grep -q "handed to com.daylightcomputer.readerexperiment" "$OUT/inbox-log.txt" && failed "something went to the side-by-side copy"
 echo "relay: $(curl -s "$RELAY_LOCAL/__mock/state" || true)"
 
@@ -344,4 +496,4 @@ if [ "${#fails[@]}" -gt 0 ]; then
   echo "FAILED (${#fails[@]}):"; printf '  - %s\n' "${fails[@]}"
   exit 1
 fi
-echo "OK: page, link, PDF, background page, a 5 MB PDF in 3 parts, two PDFs 20 s apart, Ask (card and notification) and batch reached the Reader and were acknowledged"
+echo "OK: page, link, PDF, background page, a 5 MB PDF in 3 parts, two PDFs 20 s apart, Ask (card and notification) and batch reached the Reader and were acknowledged; Lab: the hello, every item's state on the phone (waiting, then handed or reader after a tap; none with the Inbox's Lab off) and a v1.1 phone unchanged"

@@ -4,7 +4,11 @@ name: Reader experiment - end to end on an emulator
 # emulator) and checks, on an Android 14 emulator, that what the Daylight Inbox hands over lands in the Reader's library:
 # a phone (e2e/sender.mjs, protocol 1.1) sends through the mock relay with ntfy.sh's limits; pages, links, PDFs, a 5 MB
 # PDF in parts, two PDFs 20 s apart while the Reader is in front, and Documents = Ask (card and notification taps) and
-# batch. Screenshots and logs: the e2e-screens artifact.
+# batch. Lab (LAB-PLAN F17, E0): the phone reads the Inbox's Lab frames (sender.mjs wait-lab): the hello and the states
+# of a page, a link and a PDF; waiting then handed with Documents = Ask and a root tap; a link waiting without the
+# overlay permission; the Inbox's Lab off and on; and a v1.1 phone on the same pairing, unchanged. The sender job checks
+# the phone's Lab commands against the JS reference Daylight first. Screenshots and logs: the e2e-screens artifact.
+# This workflow publishes nothing, so the Lab release gate (lab-release-gate.json) does not apply.
 on:
   push:
     branches: [claude/sweet-goldberg-ej1nb0]
@@ -26,6 +30,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # lane: e2e
+  sender:
+    name: The e2e phone's Lab commands (no emulator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: sender.mjs lab-states, wait-lab and status against the JS reference Daylight (LabInbox) on the mock relay
+        run: node --test reader-experiment/e2e/sender-lab.test.mjs
+
+  # lane: e2e
   reader:
     name: Build the Reader snapshot
     runs-on: ubuntu-latest
@@ -74,6 +92,7 @@ jobs:
           name: reader-snapshot-debug
           path: reader-apk/
 
+  # lane: e2e
   share:
     name: Build Daylight Share (debug)
     runs-on: ubuntu-latest
@@ -96,6 +115,7 @@ jobs:
           name: daylight-share-debug-for-e2e
           path: share-apk/
 
+  # lane: e2e
   emulator:
     name: Reader and Inbox on an emulator
     needs: [reader, share]
