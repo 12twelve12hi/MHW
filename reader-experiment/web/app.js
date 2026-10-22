@@ -204,8 +204,7 @@ async function onPair(ev) {
     if (c.ask && !(await askPairing(c))) { if (!pendingAsk) renderPair(); return; } // Cancel: back to the form as it was
     await applyPairing(next, { from: $('from').value, expect });
     $('code').value = '';
-    await renderSend({ sayRepaired: true });
-    setStatus(c.notice || `Paired with ${pairing.name || 'your Daylight'}.`, 'ok');
+    await renderSend({ sayRepaired: true, status: [c.notice || `Paired with ${pairing.name || 'your Daylight'}.`, 'ok'] });
     if (pendingShare) { const s = pendingShare; pendingShare = null; await sendShare(s); }
   } catch (e) {
     err.textContent = e.message;
@@ -226,18 +225,16 @@ async function pairFromParam(value) {
   const c = ds.pairingConfirmation(pairing, next, { source: 'link' });
   if (c.ask && !(await askPairing(c))) {
     if (pendingAsk) return false; // another question took its place
-    if (pairing) { await renderSend(); setStatus(`Still sending to ${pairing.name || 'your Daylight'}.`); } else renderPair();
+    if (pairing) await renderSend({ status: [`Still sending to ${pairing.name || 'your Daylight'}.`] }); else renderPair();
     return false;
   }
   try {
     await applyPairing(next, { expect });
   } catch (e) {
-    if (pairing) await renderSend(); else renderPair();
-    setStatus(e.message, 'bad');
+    if (pairing) await renderSend({ status: [e.message, 'bad'] }); else { renderPair(); setStatus(e.message, 'bad'); }
     return false;
   }
-  await renderSend({ sayRepaired: true });
-  setStatus(c.notice || `Paired with ${pairing.name || 'your Daylight'}.`, 'ok');
+  await renderSend({ sayRepaired: true, status: [c.notice || `Paired with ${pairing.name || 'your Daylight'}.`, 'ok'] });
   return true;
 }
 
@@ -414,9 +411,14 @@ function renderHistory() {
   }
 }
 
-async function renderSend({ sayRepaired = false } = {}) {
+/**
+ * The send view. status: [text, tone] for its status line ("Paired with …"), set with the view and its name, before the
+ * history and the Lab follow-up load: the line never trails the view it belongs to.
+ */
+async function renderSend({ sayRepaired = false, status = null } = {}) {
   show('view-send');
   $('daylight-name').textContent = pairing.name || 'your Daylight';
+  if (status) setStatus(...status);
   await loadRows();
   await labPage?.loadRepaired({ say: sayRepaired });
 }

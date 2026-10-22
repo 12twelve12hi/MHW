@@ -101,8 +101,10 @@ address too (it locks nothing: the same Daylight may come back). Afterwards, whi
 *Daylight server*, until **OK** (or until the new server answers).
 
 **Not there yet** (strings the shared copy, `LAB_TEXT`, doesn't have; reported to the share lane, as for the
-extension): the setup steps in brief; labels for the delivery mode and for the host and fingerprint line; and keys for
-the Server address field's **Save** button and `https://` placeholder, which use the page's own words until then. The
+extension and Windows): the setup steps in brief (the server README's steps 1–5 and 10, with step 5's **Copy**); the
+delivery mode line (`serverView` has the mode, but only the v1 notice is drawn until there are words for the line); a
+label for the host and fingerprint line; and keys for the Server address field's **Save** button and `https://`
+placeholder, which use the page's own words until then. The
 server-moved question uses the setup confirmation's **Use it** and **Cancel**, which answer it word for word.
 
 **Test hook** (LAB-PLAN 1.7): `?lab=0` or `?lab=1` in the address sets the switch, only when the page is served from
@@ -124,7 +126,7 @@ frame on the Daylight's confirmation topic through the Sender's `onAckHeader`, L
 after each check), the gates (`labGate` with its 5 s deadline), the Daylight server (`DaylightServer`; discovery only
 with Lab on; forced when Lab settings open, and once more when a server found from the cached config fails; the move
 question from `server/pendingMove`, `confirmMove` on Use it), What's in Lab's cached states (`lab/server` and the
-module's `server/status`, 10 minutes), the lock before re-pairing (then `lab/repaired` until OK or a ready server) and
+module's `server/status`, 10 minutes; an answer that comes after the pairing or the server changed is not kept), the lock before re-pairing (then `lab/repaired` until OK or a ready server) and
 Unpair's `beforeUnpair` (a typed Server address goes with the pairing). `web-lab-page.js` draws
 Settings' Lab rows, What's in Lab, the server section and the follow-up with `lab-ui.js`, the same parts as the
 extension's `lab.html`. Every word is `LAB_TEXT`'s or the server module's. `LAB_FEATURES`, `LAB_SERVER_FEATURES` and

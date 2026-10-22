@@ -29,15 +29,18 @@ const MIN = 60000;
 /**
  * fetch as the page sees it: the relay and the Daylight server (it answers any origin, DESIGN 10.2); ntfy.sh is out of
  * reach here. Every URL is logged. flags.route = {origin: the stand-in's URL} sends a workers.dev server to the stand-in.
+ * flags.holdAnswer(url): a promise to wait for before an answer that has arrived reaches the page (a slow network), or
+ * null.
  */
 function pageFetch(relayUrl, log, flags) {
+  const held = async (url, res) => { await flags.holdAnswer?.(url); return res; };
   return async (url, init) => {
     log.push(`${init?.method ?? 'GET'} ${url}`);
     const u = new URL(url);
     if (flags.relayDown && url.startsWith(relayUrl)) throw new TypeError('Failed to fetch');
     if (u.hostname === 'ntfy.sh') throw new TypeError('Failed to fetch');
-    for (const [from, to] of Object.entries(flags.route ?? {})) if (url.startsWith(from)) return fetch(to + url.slice(from.length), init);
-    return fetch(url, init);
+    for (const [from, to] of Object.entries(flags.route ?? {})) if (url.startsWith(from)) return held(url, await fetch(to + url.slice(from.length), init));
+    return held(url, await fetch(url, init));
   };
 }
 
@@ -613,6 +616,65 @@ test('the follow-up shows when the lock didn’t reach the server too, and goes 
     assert.deepEqual(await s.lab.setServerAddress(s.worker.url), { manualUrl: s.worker.url });
     assert.equal((await s.lab.serverView()).state, 'ready');
     assert.deepEqual(await s.lab.repaired(), { lab: true, repaired: null });
+    assert.equal(await s.storage.get(WL.REPAIRED_KEY), undefined);
+  } finally { await s.close(); }
+});
+
+/**
+ * Holds the worker's next GET /v1/status answer once it has arrived: -> {reached (the check is waiting on it),
+ * release()}.
+ */
+function holdStatus(s) {
+  let release, asked;
+  const answer = new Promise((r) => { release = r; });
+  const reached = new Promise((r) => { asked = r; });
+  s.flags.holdAnswer = (url) => {
+    if (!url.startsWith(s.worker.url) || new URL(url).pathname !== '/v1/status') return null;
+    s.flags.holdAnswer = null;
+    asked();
+    return answer;
+  };
+  return { reached, release };
+}
+
+test('a server check that outlives a pairing change keeps nothing: the follow-up and the row stay the new pairing’s (2.6)', async () => {
+  const s = await setup();
+  try {
+    // Settings opened (a check starts), the old pairing's server answers ready, but slowly: meanwhile the user pairs
+    // with another Daylight here, which locks that server and shows the follow-up.
+    await s.useWorker();
+    let hold = holdStatus(s);
+    let check = s.lab.probe({ force: true });
+    await hold.reached;
+    const next = ds.generateSecret();
+    assert.deepEqual(await s.pair(await ds.pairingLink({ secret: next, relay: s.relay.url })), { known: true, locked: true });
+    hold.release();
+    assert.equal((await check).state, 'ready', 'the old server did answer ready');
+    assert.equal(await s.storage.get(WL.SERVER_KEY), undefined, 'not kept as the new pairing’s answer');
+    assert.equal((await s.lab.repaired()).repaired?.message, S.STATE_MESSAGES.locked, 'the follow-up stays');
+    assert.equal((await s.lab.state({ refresh: false })).serverSubtitle, null, 'the row doesn’t say Optional · Ready');
+
+    // Another tab re-pairs while this tab's check runs: this tab's Lab hears of it only through the stored pairing.
+    s.worker.state.token = (await S.deriveServerValues(await S.deriveServerSeed(next))).authToken;
+    assert.deepEqual(await s.lab.setServerAddress(s.worker.url), { manualUrl: s.worker.url });
+    hold = holdStatus(s);
+    check = s.lab.probe({ force: true });
+    await hold.reached;
+    const current = await ds.loadPairing(s.storage);
+    const third = await ds.parsePairing(await ds.pairingLink({ secret: ds.generateSecret(), relay: s.relay.url }));
+    await ds.applyPairingChange(s.storage, current, third);
+    await ds.savePairing(s.storage, third);
+    await s.storage.set(WL.REPAIRED_KEY, { at: Date.now() });
+    hold.release();
+    assert.equal((await check).state, 'ready');
+    assert.equal(await s.storage.get(WL.SERVER_KEY), undefined);
+    assert.ok(await s.storage.get(WL.REPAIRED_KEY), 'the other tab’s follow-up stays');
+
+    // A check of the pairing in use is kept as before, and its ready answer ends the follow-up.
+    s.worker.state.token = (await S.deriveServerValues(await S.deriveServerSeed(third.secret))).authToken;
+    await s.lab.setServerAddress(s.worker.url);
+    assert.equal((await s.lab.probe({ force: true })).state, 'ready');
+    assert.equal((await s.storage.get(WL.SERVER_KEY))?.state, 'ready');
     assert.equal(await s.storage.get(WL.REPAIRED_KEY), undefined);
   } finally { await s.close(); }
 });

@@ -102,7 +102,13 @@ export function createWebLab({
   const ledger = new LabLedger({ storage, now });
   const hook = labHook(ledger);
   let serverCache = null; // {key, server}
-  let probing = null; // {key, force, promise}: one discovery at a time
+  let probing = null; // {key, force, era, promise}: one discovery at a time
+  // Bumped by every change of the pairing or the server (re-pairing, Unpair, Use it, setup, a typed address): a server
+  // answer asked before it is the old one's, so it is not kept (lab/server, the re-pairing follow-up).
+  let era = 0;
+  /** A new pairing or server from now on: the check in flight is no longer this one's, and none is shared. */
+  const forget = () => { era++; probing = null; };
+  const keyOf = (pairing) => (pairing ? `${pairing.code}|${pairing.relay}` : null);
 
   const settings = async () => { try { return (await getSettings()) ?? {}; } catch { return {}; } };
   const pairingNow = async () => { try { return await getPairing(); } catch { return null; } };
@@ -126,7 +132,7 @@ export function createWebLab({
   // --- the Daylight server ------------------------------------------------------------------------------------------
 
   async function serverFor(pairing) {
-    const key = `${pairing.code}|${pairing.relay}`;
+    const key = keyOf(pairing);
     if (serverCache?.key !== key) {
       serverCache = { key, server: new DaylightServer({ pairing, storage, fetch: fetchFn, now, from: await deviceName(), app: appId }) };
     }
@@ -172,17 +178,30 @@ export function createWebLab({
     }
   }
 
+  /**
+   * The answer of a check is kept (lab/server; a ready server ends the re-pairing follow-up) only while the pairing and
+   * the server it asked about are still the ones in use: a pairing change (forget(), or another tab's, which only the
+   * stored pairing shows) or a server change while it ran makes it the old one's. A check can outlive both: discovery's
+   * relay poll has no deadline of its own, only the callers' 5 s.
+   */
+  async function stillCurrent(p) {
+    if (p.era !== era) return false;
+    const key = keyOf(await pairingNow());
+    return p.era === era && key === p.key; // the era again: a change may have begun while the pairing was read
+  }
+
   async function probe({ force = false } = {}) {
     const pairing = await pairingNow();
     if (!pairing) return { state: 'needs-pairing', message: needsMessage('needs-pairing', { platform: PLATFORM }) };
-    const key = `${pairing.code}|${pairing.relay}`;
+    const key = keyOf(pairing);
     if (!probing || probing.key !== key || (force && !probing.force)) {
-      const p = { key, force, promise: null };
+      const p = { key, force, era, promise: null };
       p.promise = probeNow(pairing, force).catch((e) => ({ state: 'error', message: e?.message ?? null })).then(async (r) => {
         try {
+          if (!(await stillCurrent(p))) return r;
           await storage.set(SERVER_KEY, { state: r.state, at: now() });
           // The new pairing's server answers: the re-pairing follow-up has done its job.
-          if (r.state === 'ready') await storage.remove(REPAIRED_KEY);
+          if (r.state === 'ready' && p.era === era) await storage.remove(REPAIRED_KEY);
         } catch { /* shown anyway */ }
         return r;
       }).finally(() => { if (probing === p) probing = null; });
@@ -367,8 +386,8 @@ export function createWebLab({
     const pairing = await pairingNow();
     if (!pairing || !isLabOn(await settings())) return { moved: false };
     const server = await serverFor(pairing);
-    probing = null;
-    try { return { moved: await server.confirmMove() }; } catch { return { moved: false }; } finally { probing = null; }
+    forget();
+    try { return { moved: await server.confirmMove() }; } catch { return { moved: false }; } finally { forget(); }
   }
 
   /**
@@ -394,14 +413,14 @@ export function createWebLab({
     const checked = await checkSetupLink(link);
     if (checked.error) return checked;
     const server = await serverFor(await pairingNow());
-    probing = null;
+    forget();
     try {
       await server.setup(link);
       return { done: LAB_TEXT.serverSection.setupDone };
     } catch (e) {
       return { error: e?.message || String(e) };
     } finally {
-      probing = null;
+      forget();
     }
   }
 
@@ -414,12 +433,14 @@ export function createWebLab({
     if (!pairing) return { error: needsMessage('needs-pairing', { platform: PLATFORM }) };
     if (!isLabOn(await settings())) return { error: labOffText() };
     const server = await serverFor(pairing);
-    probing = null;
+    forget();
     try {
       if (!String(url ?? '').trim()) { await server.clearManualUrl(); return { manualUrl: '' }; }
       return { manualUrl: await server.setManualUrl(url) };
     } catch (e) {
       return { error: e?.message || String(e) };
+    } finally {
+      forget();
     }
   }
 
@@ -432,6 +453,7 @@ export function createWebLab({
    * Never throws; gives up on the lock after `ms`. -> {known: a server was known, locked: the lock request succeeded}
    */
   async function beforeRepair(current, next, ms = 10000) {
+    forget(); // a pairing change is on its way: a check still running asked about this pairing's server (stillCurrent)
     if (!current || !next || ds.samePairingSecret(current, next)) return { known: false, locked: false };
     let pin = null, manual = null;
     try { pin = await storage.get('server/pin'); manual = await storage.get('server/manualUrl'); } catch { /* none */ }
@@ -441,7 +463,7 @@ export function createWebLab({
       server = new DaylightServer({ pairing: current, storage, fetch: fetchFn, now, from: await deviceName(), app: appId });
     } catch { return { known: true, locked: false }; }
     serverCache = null;
-    probing = null;
+    forget();
     const locked = await withDeadline(server.lockBeforeRepair().catch(() => false), ms, () => false);
     if (manual) { try { await server.clearManualUrl(); } catch { /* kept: the section can clear it */ } }
     return { known: true, locked };
@@ -455,10 +477,10 @@ export function createWebLab({
    */
   async function beforeUnpair(current) {
     if (!current?.secret) return;
+    forget(); // a check still running asked about this pairing's server (stillCurrent)
     let manual = null;
     try { manual = await storage.get('server/manualUrl'); } catch { /* none */ }
     serverCache = null;
-    probing = null;
     if (!manual) return;
     try {
       await new DaylightServer({ pairing: current, storage, fetch: fetchFn, now, from: '', app: appId }).clearManualUrl();

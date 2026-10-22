@@ -88,6 +88,9 @@ test('pair in one tap from a #pair= link, then send a typed link and a PDF', { t
   await page.screenshot({ path: path.join(OUT, 'web-pair-question.png') });
   await page.click('#confirm-yes');
   await page.waitForFunction(() => document.querySelector('#daylight-name')?.textContent === 'Web Daylight');
+  // The status line is set with the view (app.js renderSend), but wait for it all the same: under load the history and
+  // the Lab follow-up still load after it, and nothing here should depend on how long they take.
+  await statusStarts(page, 'Paired with Web Daylight.');
   assert.equal(await page.textContent('#status'), 'Paired with Web Daylight.');
   assert.equal(new URL(page.url()).hash, '', 'the pairing secret is removed from the address');
 
@@ -254,6 +257,7 @@ test('offline: the page still opens, a send waits with Retry now, and Retry now 
   await page.click('#send-url');
   const failed = '#history li[data-status="failed"]';
   await page.waitForSelector(`${failed} .retry`, { timeout: 30000 });
+  await statusStarts(page, 'Waiting to send.'); // the history row can show before the send's status line is set
   assert.equal(await page.textContent('#status'), 'Waiting to send. Couldn’t send right now. It will try again by itself.');
   assert.equal(await page.textContent(`${failed} .st`), 'Waiting to send');
   assert.equal(await page.textContent(`${failed} .retry`), 'Retry now');
@@ -298,6 +302,7 @@ test('Change pairing…: the relay in use is filled in, so the same code keeps i
   await page.fill('#from', 'Renamed browser');
   await page.click('#pair-btn');
   await page.waitForSelector('#view-send:not([hidden])');
+  await statusStarts(page, 'Pairing updated.');
   assert.equal(await page.textContent('#status'), 'Pairing updated.');
   await page.click('#open-settings');
   assert.equal(await page.textContent('#set-relay-2'), relay.url.replace(/^https?:\/\//, ''));
