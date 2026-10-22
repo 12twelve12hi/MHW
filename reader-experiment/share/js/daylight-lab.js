@@ -598,6 +598,8 @@ export const LAB_TEXT = {
     channelQuiet: 'Arrivals',
     channelAlert: 'Arrivals (alert)',
     quietHours: 'Quiet hours',
+    // Oct 22 (LAB-PLAN 1.6, "Copy added Oct 22"): the Quiet hours switch's footer
+    quietHoursFooter: 'From 22:00 to 07:00, arrivals don’t make a sound.',
     addToReader: 'Add to Reader',
     keepForLater: 'Keep for later',
     keptForLater: 'Kept for later',
@@ -607,6 +609,8 @@ export const LAB_TEXT = {
     savedGroup: '{n} saved from {from}',
     yourDevices: 'your devices',
     excerptsGroup: '{n} excerpts from {from}',
+    // Oct 22: the notice for one waiting excerpt (several use excerptsGroup)
+    excerptOne: 'New excerpt from {from}',
     healthOn: 'Last checked {rel} · Instant delivery on',
     healthOff: 'Last checked {rel} · Instant delivery off',
     stopped: 'Instant delivery stopped. Turn it back on to get items within seconds.',
@@ -656,6 +660,10 @@ export const LAB_TEXT = {
       shareItem: 'In the share sheet, scroll the row of apps to More, tap Edit, and add Daylight.',
       safariExtension: 'Open Settings › Apps › Safari › Extensions and turn on Send to Daylight.',
       shareMenu: 'Open System Settings › General › Login Items & Extensions › Sharing and turn on Daylight.',
+      // Oct 22 (LAB-PLAN 1.6, "Copy added Oct 22"): Chrome's unpinned toolbar button, and the DC-1 Inbox's Reader that
+      // turned pages down (its button is setup.readerTest)
+      toolbarButton: 'Click the puzzle piece in Chrome’s toolbar, then the pin next to Send to Daylight.',
+      readerReadLater: 'The Reader turned down the last pages it was handed. Open the Reader’s settings, allow pages from other apps, then tap Test the Reader hand-off.',
     },
   },
   testArticle: {
@@ -703,6 +711,15 @@ export const LAB_TEXT = {
     image: 'Send this image’s page to Daylight',
     pdf: 'Send PDF link to Daylight',
     showInMenu: 'Show in the right-click menu',
+  },
+  // K6, the DC-1 Inbox's handover to the Lab Reader (LAB-PLAN 5.3.4, word for word; added Oct 22). A handover outlives
+  // Lab off (1.3), so the Inbox shows receivingElsewhere, unreachable and receiveHereAgain with Lab on or off.
+  handover: {
+    letReceive: 'Let Daylight Reader (lab) receive', // the Settings › Lab row that arms the 2-minute grant (step 1)
+    armed: 'Open Daylight Reader (lab) › Settings › Labs › Send to Daylight and choose Take over.', // while armed (step 1)
+    receivingElsewhere: 'Daylight Reader (lab) receives for this Daylight now.', // the handover line (step 3)
+    receiveHereAgain: 'Receive here again', // its button, offered only when the Reader says it stopped (steps 3, 4)
+    unreachable: 'Can’t reach Daylight Reader (lab) right now.', // the Reader's provider can't be reached (step 4)
   },
 };
 

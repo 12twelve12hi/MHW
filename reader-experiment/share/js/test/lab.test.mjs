@@ -547,6 +547,58 @@ test('the rest of the server section’s copy (LAB-PLAN 2.6, Oct 22): every id a
   assert.equal(S.hostLine, '{host} · {fingerprint}');
 });
 
+test('the copy added Oct 22 (LAB-PLAN 1.6): every id and text of the plan’s table, and handover.* is 5.3.4 word for word', () => {
+  const plan = readFileSync(new URL('../../../LAB-PLAN.md', import.meta.url), 'utf8');
+  const ascii = (t) => t.replace(/[’‘]/g, '\'').replace(/[“”]/g, '"');
+  const at = (path) => path.split('.').reduce((o, k) => (o && Object.hasOwn(o, k) ? o[k] : undefined), lab.LAB_TEXT);
+  // the table: | `id` | text | used by |, ASCII apostrophes and quotes there (§0.1)
+  const from = plan.indexOf('**Copy added Oct 22');
+  assert.ok(from >= 0, 'the plan has the table');
+  const rows = [];
+  for (const line of plan.slice(from).split('\n').slice(1)) {
+    if (rows.length && !line.startsWith('|')) break;
+    const m = /^\| `([\w.*]+)` \| (.*?) \| (.*?) \|$/.exec(line);
+    if (m) rows.push([m[1], m[2]]);
+  }
+  assert.deepEqual(rows.map(([id]) => id),
+    ['setup.steps.toolbarButton', 'setup.steps.readerReadLater', 'arrivals.quietHoursFooter', 'arrivals.excerptOne', 'handover.*'],
+    'the plan table’s ids, in order');
+  for (const [id, text] of rows.filter(([id]) => id !== 'handover.*')) {
+    assert.equal(typeof at(id), 'string', id);
+    assert.equal(ascii(at(id)), text, id);
+  }
+  assert.equal(rows.find(([id]) => id === 'handover.*')[1], 'The five sentences of 5.3.4, word for word');
+
+  // handover.*: the five things 5.3.4 puts on screen, in the order it names them: its quoted lines and its bold
+  // controls (code spans left out, line breaks as spaces; "**not**" and the heading are not controls)
+  const s = plan.indexOf('**5.3.4 Handover'), e = plan.indexOf('**5.3.5', s);
+  assert.ok(s >= 0 && e > s, 'the plan has 5.3.4');
+  const section = plan.slice(s, e).replace(/`[^`\n]*`/g, '').replace(/\s+/g, ' ');
+  const shown = [...section.matchAll(/"([^"]+)"|\*\*([^*]+)\*\*/g)]
+    .map((m) => m[1] ?? m[2]).filter((t) => !/^\d/.test(t) && t.includes(' '));
+  const sentences = [...new Set(shown)];
+  assert.equal(sentences.length, 5, sentences.join(' | '));
+  const H = lab.LAB_TEXT.handover;
+  assert.deepEqual(Object.keys(H), ['letReceive', 'armed', 'receivingElsewhere', 'receiveHereAgain', 'unreachable']);
+  assert.deepEqual(Object.values(H).map(ascii), sentences.map(ascii), 'word for word, in 5.3.4’s order');
+  assert.deepEqual(Object.values(H), sentences, 'and with 5.3.4’s own ’ and ›');
+  assert.equal(H.unreachable, 'Can’t reach Daylight Reader (lab) right now.');
+
+  // the shipped strings carry ’ “ ” (§0.1), never their ASCII stand-ins
+  const added = [...rows.filter(([id]) => id !== 'handover.*').map(([id]) => at(id)), ...Object.values(H)];
+  for (const t of added) assert.ok(!/['"]/.test(t), t);
+  // the read-later step names the button it sits beside, and the single excerpt notice fills {from} as the group does
+  assert.ok(lab.LAB_TEXT.setup.steps.readerReadLater.endsWith(`tap ${lab.LAB_TEXT.setup.readerTest}.`));
+  assert.equal(lab.fillText(lab.LAB_TEXT.arrivals.excerptOne, { from: 'Mike’s iPhone' }), 'New excerpt from Mike’s iPhone');
+  assert.equal(lab.fillText(lab.LAB_TEXT.arrivals.excerptsGroup, { n: 2, from: 'Mike’s iPhone' }), '2 excerpts from Mike’s iPhone');
+  // a Setup check step for every check the plan's Oct 22 table gives one
+  for (const check of ['toolbarButton', 'readerReadLater']) assert.ok(Object.hasOwn(lab.LAB_TEXT.setup.checks, check), check);
+
+  // the vectors carry them under the same dotted ids
+  for (const [id] of rows.filter(([id]) => id !== 'handover.*')) assert.equal(V.labText.strings[id], at(id), id);
+  for (const [k, v] of Object.entries(H)) assert.equal(V.labText.strings[`handover.${k}`], v, k);
+});
+
 test('labGate with the server lane’s DaylightServer: needs-server before a deploy, OFFLINE at 5 s from a relay that never answers (F00.6)', async () => {
   const srv = await import('../../../server/client/daylight-server.js'); // read only: the server lane owns it
   const relay = await startMockRelay();
