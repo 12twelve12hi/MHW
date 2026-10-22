@@ -297,6 +297,8 @@ final class AccessibilityBaselineTests: XCTestCase {
         let link = try Pairing.generate(relay: "http://127.0.0.1:9", name: "Test Daylight").link
         await model.handleLaunchArguments(["app", "-DLSTestStorage", "-DLSPairLink", link], sampleHistory: true)
         XCTAssertTrue(model.holdsSampleHistory)
+        // The write's own read can give way to a newer one (the outbox's change notice), which publishes a moment later.
+        try await waitFor("the sample history") { model.rows.count == 6 }
         XCTAssertTrue(model.isPaired)
         XCTAssertEqual(model.rows.map(\.id), HistorySample.rows().map(\.id))
         XCTAssertEqual(model.rows.map(\.status), [.sending, .failed, .expired, .delivered, .sent, .expired])
@@ -312,6 +314,7 @@ final class AccessibilityBaselineTests: XCTestCase {
         try await waitFor("the first read") { partial.isLoaded }
         await partial.handleLaunchArguments(["app", "-DLSTestStorage", "-DLSPairLink", link, "-DLSSampleHistory", "3,4"],
                                             sampleHistory: true)
+        try await waitFor("rows 3 and 4") { partial.rows.count == 2 }
         XCTAssertEqual(partial.rows.map(\.status), [.expired, .delivered])
 
         // Without it, nothing is written and nothing is held (a store of its own: makeStore() shares one directory).
@@ -321,6 +324,7 @@ final class AccessibilityBaselineTests: XCTestCase {
         let plain = AppModel(store: other, arguments: [])
         try await waitFor("the first read") { plain.isLoaded }
         await plain.handleLaunchArguments(["app", "-DLSPairLink", link])
+        try await waitFor("the pairing") { plain.isPaired }
         XCTAssertFalse(plain.holdsSampleHistory)
         XCTAssertEqual(plain.rows, [])
     }
