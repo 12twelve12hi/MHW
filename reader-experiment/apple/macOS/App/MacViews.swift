@@ -7,6 +7,10 @@ import UniformTypeIdentifiers
 struct MacRootView: View {
     @EnvironmentObject var model: AppModel
 
+    /// The window's narrowest width, and the Settings sheet's width (the truncation audit measures at these, F27.4).
+    static let minWidth: CGFloat = 440
+    static let settingsWidth: CGFloat = 460
+
     var body: some View {
         ZStack(alignment: .bottom) {
             if model.isPaired {
@@ -23,8 +27,10 @@ struct MacRootView: View {
                 BannerView(banner: banner).onTapGesture { model.banner = nil }
             }
         }
-        .frame(minWidth: 440, minHeight: 480)
-        .animation(.default, value: model.banner)
+        .frame(minWidth: MacRootView.minWidth, minHeight: 480)
+        // No motion in Comfort (F27); `comfort(_:)` also stops animations when Reduce Motion is on.
+        .animation(model.comfort ? nil : .default, value: model.banner)
+        .comfort(model.comfort)
         // Every sheet of the window comes from here: Settings, and the pairing question, which replaces Settings when
         // a daylightshare:// link arrives while it is open.
         .appSheets(model) { sheet in
@@ -33,11 +39,15 @@ struct MacRootView: View {
                     MacSettingsView()
                     HStack {
                         Spacer()
-                        Button("Done") { model.sheet = nil }.keyboardShortcut(.defaultAction)
+                        Button { model.sheet = nil } label: {
+                            Text("Done").wrapping("Done").comfortTarget()
+                        }
+                        .keyboardShortcut(.defaultAction)
+                        .comfortBorder()
                     }
                     .padding()
                 }
-                .frame(width: 460)
+                .frame(width: MacRootView.settingsWidth)
                 .environmentObject(model)
             }
         }
@@ -48,22 +58,30 @@ struct MacRootView: View {
 struct MacPairView: View {
     @EnvironmentObject var model: AppModel
 
+    static let intro = "Send articles, web pages and PDFs from this Mac to your Daylight: drop them on this window or the Dock icon, use the Share menu in Safari, Finder or Preview, or the Safari extension."
+    static let typeTheCode = "Type or paste the code (or a daylightshare:// link):"
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(spacing: 12) {
                     Image(systemName: "paperplane.circle.fill").font(.system(size: 44)).foregroundColor(.accentColor)
-                    Text("Pair with your Daylight").font(.title2.weight(.semibold))
+                        .accessibilityHidden(true)
+                    Text("Pair with your Daylight").dlsFont(.title2, weight: .semibold).wrapping("Pair with your Daylight")
+                        .accessibilityAddTraits(.isHeader)
                 }
-                Text("Send articles, web pages and PDFs from this Mac to your Daylight: drop them on this window or the Dock icon, use the Share menu in Safari, Finder or Preview, or the Safari extension.")
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(Self.intro).wrapping(Self.intro)
                 PairingHelp()
-                Text("Type or paste the code (or a daylightshare:// link):").font(.headline)
+                // Typing or pasting the code is how the Mac pairs (F27: typed-code pairing is always available).
+                Text(Self.typeTheCode).dlsFont(.headline).wrapping(Self.typeTheCode)
                 PairingForm { model.pair($0) }
-                Button("Paste from the clipboard and pair") {
+                Button {
                     let s = NSPasteboard.general.string(forType: .string) ?? ""
                     if let error = model.pair(s) { model.show(error, error: true) }
+                } label: {
+                    Text("Paste from the clipboard and pair").wrapping("Paste from the clipboard and pair").comfortTarget()
                 }
+                .comfortBorder()
             }
             .padding(24)
         }
@@ -75,15 +93,29 @@ struct MacHomeView: View {
     @State private var link = ""
     @State private var targeted = false
 
+    /// The history's "something is on its way" (the shared copy's `sending` label).
+    static let sending = RowText(status: .sending, errorCode: "", size: 0, created: Date()).label
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("Sending to \(model.daylightName)").font(.headline)
+                Text("Sending to \(model.daylightName)").dlsFont(.headline).wrapping("Sending to \(model.daylightName)")
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
-                if model.sendingCount > 0 { ProgressView().controlSize(.small) }
-                Button { model.sheet = .settings } label: { Image(systemName: "gearshape") }
-                    .buttonStyle(.borderless)
-                    .help("Settings")
+                if model.sendingCount > 0 {
+                    // In Comfort, words instead of a spinner (no motion).
+                    if model.comfort {
+                        Text(Self.sending).wrapping(Self.sending)
+                    } else {
+                        ProgressView().controlSize(.small).accessibilityLabel(Self.sending)
+                    }
+                }
+                Button { model.sheet = .settings } label: {
+                    Image(systemName: "gearshape").comfortTarget()
+                }
+                .buttonStyle(.borderless)
+                .help("Settings")
+                .accessibilityLabel("Settings")
             }
 
             dropZone
@@ -92,19 +124,28 @@ struct MacHomeView: View {
                 TextField("Paste or type a link", text: $link)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(sendLink)
-                Button("Send", action: sendLink)
-                    .disabled(link.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .keyboardShortcut(.defaultAction)
+                    .accessibilityLabel("Paste or type a link")
+                    .comfortBorder(radius: 6)
+                Button(action: sendLink) {
+                    Text("Send").wrapping("Send").comfortTarget()
+                }
+                .disabled(link.trimmingCharacters(in: .whitespaces).isEmpty)
+                .keyboardShortcut(.defaultAction)
+                .comfortBorder()
             }
 
             HStack {
-                Text("History").font(.headline)
+                Text("History").dlsFont(.headline).wrapping("History")
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
-                Button("Check now") { Task { await model.refresh() } }.buttonStyle(.borderless)
+                Button { Task { await model.refresh() } } label: {
+                    Text("Check now").wrapping("Check now").comfortTarget()
+                }
+                .buttonStyle(.borderless)
             }
             List {
                 if model.rows.isEmpty {
-                    Text("Nothing sent yet.").foregroundColor(.secondary)
+                    Text("Nothing sent yet.").dlsSecondary().wrapping("Nothing sent yet.")
                 }
                 ForEach(model.rows) { row in
                     HistoryRowView(row: row) { Task { await model.retry(row) } }
@@ -128,12 +169,15 @@ struct MacHomeView: View {
     private var dropZone: some View {
         VStack(spacing: 10) {
             Image(systemName: "tray.and.arrow.down").font(.system(size: 30)).foregroundColor(.secondary)
-            Text("Drop a PDF, document or link here").font(.title3)
-            HStack {
-                Button("Choose File…") { MacFilePicker.pickAndSend(model) }
-                Button("Send Clipboard Link") { Task { await model.sendClipboardLink() } }
+                .accessibilityHidden(true)
+            Text("Drop a PDF, document or link here").dlsFont(.title3).multilineTextAlignment(.center)
+                .wrapping("Drop a PDF, document or link here")
+            ViewThatFits(in: .horizontal) {
+                HStack { dropZoneButtons }
+                VStack { dropZoneButtons }
             }
         }
+        .padding(.vertical, 8)
         .frame(maxWidth: .infinity, minHeight: 150)
         .background(
             RoundedRectangle(cornerRadius: 14)
@@ -145,6 +189,17 @@ struct MacHomeView: View {
             Task { await DropHandler.handle(providers, model: model) }
             return true
         }
+    }
+
+    @ViewBuilder private var dropZoneButtons: some View {
+        Button { MacFilePicker.pickAndSend(model) } label: {
+            Text("Choose File…").wrapping("Choose File…").comfortTarget()
+        }
+        .comfortBorder()
+        Button { Task { await model.sendClipboardLink() } } label: {
+            Text("Send Clipboard Link").wrapping("Send Clipboard Link").comfortTarget()
+        }
+        .comfortBorder()
     }
 
     private func sendLink() {
@@ -209,6 +264,9 @@ enum DropHandler {
 }
 
 struct MacSettingsView: View {
+    static let nameFooter = "Shown on the Daylight as who sent each item."
+    static let noAppGroup = "This build isn’t signed with a developer team, so it has no App Group: the Share menu asks for the pairing code once, and the Safari extension pairs in its own popup."
+
     @EnvironmentObject var model: AppModel
     @State private var deviceName = ""
     @State private var relay = ""
@@ -218,36 +276,53 @@ struct MacSettingsView: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent("Daylight", value: model.isPaired ? model.daylightName : "Not paired")
+                InfoRow("Daylight", value: model.isPaired ? model.daylightName : "Not paired")
                 TextField("Relay", text: $relay)
                     .onSubmit { relayError = saveRelay() }
-                if let relayError { Text(relayError).font(.footnote).foregroundColor(.red) }
+                    .accessibilityLabel("Relay")
+                if let relayError {
+                    Label {
+                        Text(relayError).dlsFont(.footnote).wrapping(relayError)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange).accessibilityHidden(true)
+                    }
+                }
                 if model.isPaired {
-                    Button("Unpair…", role: .destructive) { confirmUnpair = true }
+                    Button(role: .destructive) { confirmUnpair = true } label: {
+                        Text("Unpair…").wrapping("Unpair…").comfortTarget()
+                    }
                 }
             } header: {
-                Text("Your Daylight")
+                Text("Your Daylight").wrapping("Your Daylight")
+            }
+            // The accessibility baseline (F27), not Lab: on or off, with Lab on or off.
+            Section {
+                Toggle(isOn: Binding(get: { model.comfort }, set: { model.setComfort($0) })) {
+                    Text(Comfort.title).wrapping(Comfort.title)
+                }
+                .accessibilityIdentifier("comfort")
+                Text(Comfort.footer).dlsFont(.footnote).dlsSecondary().wrapping(Comfort.footer)
             }
             Section {
                 TextField("This Mac’s name", text: $deviceName, prompt: Text(model.defaultDeviceName))
                     .onSubmit { model.setDeviceName(deviceName) }
-                Text("Shown on the Daylight as who sent each item.").font(.footnote).foregroundColor(.secondary)
+                    .accessibilityLabel("This Mac’s name")
+                Text(Self.nameFooter).dlsFont(.footnote).dlsSecondary().wrapping(Self.nameFooter)
             } header: {
-                Text("This Mac")
+                Text("This Mac").wrapping("This Mac")
             }
             ExtensionsSection()
             Section {
-                Button("Clear Delivered and Expired") { model.clearFinished() }
-                LabeledContent("Shared with the extensions", value: model.storageSummary)
-                if case .appPrivate = model.storage {
-                    Text("This build isn’t signed with a developer team, so it has no App Group: the Share menu asks for the pairing code once, and the Safari extension pairs in its own popup.")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                Button { model.clearFinished() } label: {
+                    Text("Clear Delivered and Expired").wrapping("Clear Delivered and Expired").comfortTarget()
                 }
-                LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?")
+                InfoRow("Shared with the extensions", value: model.storageSummary)
+                if case .appPrivate = model.storage {
+                    Text(Self.noAppGroup).dlsFont(.footnote).dlsSecondary().wrapping(Self.noAppGroup)
+                }
+                InfoRow("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?")
             } header: {
-                Text("History and app")
+                Text("History and app").wrapping("History and app")
             }
         }
         .formStyle(.grouped)

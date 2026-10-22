@@ -72,8 +72,10 @@ struct RootView: View {
                 BannerView(banner: banner).onTapGesture { model.banner = nil }
             }
         }
-        .animation(.default, value: model.banner)
-        .animation(.default, value: model.isPaired)
+        // No motion in Comfort (F27); `comfort(_:)` also stops animations when Reduce Motion is on.
+        .animation(model.comfort ? nil : .default, value: model.banner)
+        .animation(model.comfort ? nil : .default, value: model.isPaired)
+        .comfort(model.comfort)
         // Every sheet comes from here (Settings, the file picker, the scanner, and the pairing question, which
         // replaces whichever is open when a daylightshare:// link arrives).
         .appSheets(model) { sheet in

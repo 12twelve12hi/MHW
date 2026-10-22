@@ -54,6 +54,37 @@ targets:
       - target: ShareExtension-iOS
       - target: SafariExtension-iOS
 
+  # The truncation audit (LAB-PLAN F27.4), hosted in the app: iOS/Tests with iOS/App/AuditScreens.swift (Debug only).
+  SendToDaylightTests-iOS:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: iOS/Tests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(DAYLIGHT_BUNDLE_ID).tests"
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - target: SendToDaylight-iOS
+
+  # The accessibility audits (F27.2), the baseline's rules and the Lab-off parity test (F00.2, 1.7), with the tree walk
+  # shared with the Mac (Shared/UITests). Baselines: iOS/UITests/lab-off-baseline (read from the source tree).
+  SendToDaylightUITests-iOS:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: iOS/UITests
+        excludes: ["lab-off-baseline/**"]
+      - path: Shared/UITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(DAYLIGHT_BUNDLE_ID).uitests"
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - target: SendToDaylight-iOS
+
   ShareExtension-iOS:
     productName: ShareExtension
     type: app-extension
@@ -117,6 +148,11 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: YES
         COMBINE_HIDPI_IMAGES: YES
+      configs:
+        # Debug builds host the unit tests; the hardened runtime's library validation would refuse an ad-hoc signed
+        # test bundle. Release (what ships) keeps it.
+        Debug:
+          ENABLE_HARDENED_RUNTIME: NO
     dependencies:
       - package: DaylightShareKit
         product: DaylightShareKit
@@ -124,6 +160,35 @@ targets:
         product: DaylightShareUI
       - target: ShareExtension-macOS
       - target: SafariExtension-macOS
+
+  # The truncation audit (LAB-PLAN F27.4), hosted in the app: macOS/Tests with macOS/App/AuditScreens.swift (Debug only).
+  SendToDaylightTests-macOS:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: macOS/Tests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(DAYLIGHT_BUNDLE_ID).mac.tests"
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: SendToDaylight-macOS
+
+  # The accessibility audits (F27.2), the baseline's rules and the Lab-off parity test (F00.2, 1.7), with the tree walk
+  # shared with the iPhone (Shared/UITests). Baselines: macOS/UITests/lab-off-baseline (read from the source tree).
+  SendToDaylightUITests-macOS:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: macOS/UITests
+        excludes: ["lab-off-baseline/**"]
+      - path: Shared/UITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(DAYLIGHT_BUNDLE_ID).mac.uitests"
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: SendToDaylight-macOS
 
   ShareExtension-macOS:
     productName: ShareExtension
@@ -175,15 +240,29 @@ schemes:
     build:
       targets:
         SendToDaylight-iOS: all
+        SendToDaylightTests-iOS: [test]
+        SendToDaylightUITests-iOS: [test]
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - SendToDaylightTests-iOS
+        - SendToDaylightUITests-iOS
     archive:
       config: Release
   SendToDaylight-macOS:
     build:
       targets:
         SendToDaylight-macOS: all
+        SendToDaylightTests-macOS: [test]
+        SendToDaylightUITests-macOS: [test]
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - SendToDaylightTests-macOS
+        - SendToDaylightUITests-macOS
     archive:
       config: Release

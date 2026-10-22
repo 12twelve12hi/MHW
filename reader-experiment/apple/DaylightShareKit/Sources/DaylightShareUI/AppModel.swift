@@ -21,6 +21,9 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var sendingCount = 0
     /// Whether the first read of storage has come back (until then `pairing` and `rows` are not known yet).
     @Published public private(set) var isLoaded = false
+    /// Comfort (LAB-PLAN F27): larger text and buttons, more contrast, no motion. Off by default; not a Lab setting.
+    /// The windows apply it with `.comfort(model.comfort)`; Settings changes it with `setComfort(_:)`.
+    @Published public private(set) var comfort = false
     /// A short status line ("Sent · waiting for your Daylight", an error, …), cleared after a few seconds.
     @Published public var banner: Banner?
     /// A pairing that waits for the user's confirmation (PROTOCOL 1.3): a link from outside the app, or a code that
@@ -84,10 +87,14 @@ public final class AppModel: ObservableObject {
     private var observer: NSObjectProtocol?
     private var bannerTask: Task<Void, Never>?
     private var reloadSeq = 0
+    /// Comfort writes on their way to storage: until they land, a read does not put the old value back.
+    private var comfortWrites = 0
 
-    public init(store: SharedStore = .shared) {
+    public init(store: SharedStore = .shared, arguments: [String] = ProcessInfo.processInfo.arguments) {
         self.store = store
         storage = store.state // in memory: no storage access
+        // The test hook `-DLSComfort 0|1` (LAB-PLAN 1.7) applies before the first render, and is saved off the main thread.
+        if let on = Comfort.launchValue(arguments) { setComfort(on) }
         reload()
         observer = NotificationCenter.default.addObserver(forName: .daylightShareChanged, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.reload() }
@@ -120,10 +127,12 @@ public final class AppModel: ObservableObject {
         var pairing: Pairing?
         var rows: [OutboxRow]
         var deviceName: String
+        var comfort: Bool
     }
 
     nonisolated static func readSnapshot(_ store: SharedStore) -> Snapshot {
-        Snapshot(state: store.state, pairing: store.pairing, rows: OutboxStore(store: store).rows, deviceName: store.deviceName)
+        Snapshot(state: store.state, pairing: store.pairing, rows: OutboxStore(store: store).rows, deviceName: store.deviceName,
+                 comfort: store.comfort)
     }
 
     // MARK: State
@@ -157,8 +166,16 @@ public final class AppModel: ObservableObject {
         guard seq == reloadSeq else { return } // a newer read is on its way
         if snapshot.state != storage { storage = snapshot.state }
         if snapshot.pairing != pairing { pairing = snapshot.pairing }
-        if snapshot.rows != rows { rows = snapshot.rows }
+        if snapshot.rows != rows {
+            // F27: "Delivered ✓, <title>" (or "Not delivered, …") is said out loud when a row gets there.
+            if isLoaded {
+                let changes = Announcer.changes(from: rows, to: snapshot.rows)
+                if !changes.isEmpty { Announcer.announce(changes.joined(separator: ". ")) }
+            }
+            rows = snapshot.rows
+        }
         if snapshot.deviceName != deviceName { deviceName = snapshot.deviceName }
+        if comfortWrites == 0 && snapshot.comfort != comfort { comfort = snapshot.comfort }
         if !isLoaded { isLoaded = true }
         writeStatus()
     }
@@ -185,8 +202,10 @@ public final class AppModel: ObservableObject {
         await Task.detached(priority: .userInitiated) { await body() }.value
     }
 
+    /// Shows a banner (and says it to VoiceOver, F27).
     public func show(_ text: String, error: Bool = false) {
         banner = Banner(text: text, isError: error)
+        Announcer.announce(text)
         bannerTask?.cancel()
         bannerTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 5_000_000_000)
@@ -252,6 +271,16 @@ public final class AppModel: ObservableObject {
 
     public func setDeviceName(_ name: String) {
         Task { await write { $0.deviceName = name } }
+    }
+
+    /// Turns Comfort on or off: the windows follow at once; it is saved off the main thread.
+    public func setComfort(_ on: Bool) {
+        comfort = on
+        comfortWrites += 1
+        Task {
+            await write { $0.comfort = on }
+            comfortWrites -= 1
+        }
     }
 
     /// Changes the relay of the current pairing (it must match the Daylight's). The outbox is kept (same secret), so
@@ -414,7 +443,8 @@ public final class AppModel: ObservableObject {
 
     /// Hooks for the CI smoke tests (and handy for debugging): `-DLSPairLink <daylightshare://…>` pairs without asking
     /// (only someone who starts the app can pass it) and `-DLSSendLink <url>` sends a link, once per launch.
-    /// (`-DLSStatusDump` is read by `noteRendered()`.)
+    /// (`-DLSStatusDump` is read by `noteRendered()`, `-DLSComfort 0|1` by `init`, `-DLSTestStorage` by
+    /// `SharedStore.shared`.)
     public func handleLaunchArguments(_ args: [String] = ProcessInfo.processInfo.arguments) async {
         guard !launchArgumentsHandled else { return }
         launchArgumentsHandled = true
@@ -514,6 +544,7 @@ public final class AppModel: ObservableObject {
             "paired": isPaired,
             "daylight": pairing.map { $0.displayName as Any } ?? NSNull(),
             "pendingPairing": pendingPairing?.confirmation.title.map { $0 as Any } ?? NSNull(),
+            "comfort": comfort,
             "mainThreadStorage": StorageAudit.mainThreadAccesses,
             "rows": rows.map { row -> [String: Any] in
                 let text = RowText(row: row, now: now)

@@ -22,7 +22,9 @@ public final class SharedStore {
     public static let defaultAppGroup = "group.com.daylight.share"
     /// How long resolution may take before the process settles on its own storage for this launch.
     public static let resolutionTimeout: TimeInterval = 2
-    public static let shared = SharedStore(resolver: .system)
+    /// The store the apps and extensions use. A process started with `-DLSTestStorage` (UI tests) gets a fresh,
+    /// empty store of its own instead (`testStore`), so tests never see or touch anyone's pairing or history.
+    public static let shared: SharedStore = testStore() ?? SharedStore(resolver: .system)
 
     public enum State: Equatable, CustomStringConvertible {
         /// Looking for the App Group in the background; reads come from this process's own storage meanwhile.
@@ -94,6 +96,19 @@ public final class SharedStore {
         current = storage
         currentState = appGroup.map { .shared(group: $0) } ?? .appPrivate(reason: "set up by the caller")
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    /// The UI tests' store (`-DLSTestStorage` among the launch arguments, which only whoever starts the app can pass):
+    /// its own defaults suite and directory, emptied at launch, no App Group. nil without the argument.
+    static func testStore(arguments: [String] = ProcessInfo.processInfo.arguments) -> SharedStore? {
+        guard arguments.contains("-DLSTestStorage") else { return nil }
+        let suite = "com.daylight.share.uitest"
+        let directory = privateDirectory().deletingLastPathComponent()
+            .appendingPathComponent("DaylightShare-UITest", isDirectory: true)
+        try? FileManager.default.removeItem(at: directory)
+        guard let defaults = UserDefaults(suiteName: suite) else { return nil }
+        defaults.removePersistentDomain(forName: suite)
+        return SharedStore(defaults: defaults, directory: directory)
     }
 
     /// This process's own storage directory: Application Support/DaylightShare (inside the sandbox container). Only
@@ -215,6 +230,8 @@ public final class SharedStore {
     enum Key {
         static let pairing = "dls.pairing"
         static let deviceName = "dls.deviceName"
+        /// The accessibility baseline's Comfort switch (LAB-PLAN F27, 1.2): not a Lab key, and Lab never reads it.
+        static let comfort = "dls.comfort"
     }
 
     /// The stored pairing. Reads and writes UserDefaults: off the main thread (see `StorageAudit`).
@@ -244,6 +261,20 @@ public final class SharedStore {
         set {
             StorageAudit.note("device name write")
             defaults.set(ShareText.cleanName(newValue), forKey: Key.deviceName)
+            SharedStore.postChange()
+        }
+    }
+
+    /// Comfort (LAB-PLAN F27): larger text and buttons, more contrast, no motion. Off when never set. The app and its
+    /// extensions share it when they share storage.
+    public var comfort: Bool {
+        get {
+            StorageAudit.note("comfort read")
+            return defaults.bool(forKey: Key.comfort)
+        }
+        set {
+            StorageAudit.note("comfort write")
+            defaults.set(newValue, forKey: Key.comfort)
             SharedStore.postChange()
         }
     }

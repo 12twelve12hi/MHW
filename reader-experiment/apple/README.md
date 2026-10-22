@@ -8,10 +8,10 @@ and travel through an ntfy relay to the **Daylight Share** inbox on the tablet, 
 
 | Target | What it does |
 |---|---|
-| **Send to Daylight** (iPhone, iOS 16+) | Pair by scanning the Daylight's QR code, typing/pasting the code, or opening a `daylightshare://pair?…` link (which asks first). Send a link or a file (PDF, EPUB, DOCX, Markdown, HTML, text… up to 9 MB). History with the same words as every Send to Daylight app (*Sent · waiting for your Daylight*, *Delivered ✓*, *Waiting to send*, *Not delivered*, with *Retry now* or *Try again* where they help). Settings: this device's name, the relay, unpair. Re-sends what the Daylight has not acknowledged on launch, while open, and with background app refresh. |
+| **Send to Daylight** (iPhone, iOS 16+) | Pair by scanning the Daylight's QR code, typing/pasting the code, or opening a `daylightshare://pair?…` link (which asks first). Send a link or a file (PDF, EPUB, DOCX, Markdown, HTML, text… up to 9 MB). History with the same words as every Send to Daylight app (*Sent · waiting for your Daylight*, *Delivered ✓*, *Waiting to send*, *Not delivered*, with *Retry now* or *Try again* where they help). Settings: this device's name, the relay, unpair, and Comfort (see [Accessibility and Comfort](#accessibility-and-comfort)). Re-sends what the Daylight has not acknowledged on launch, while open, and with background app refresh. |
 | **Daylight** share sheet item (iOS Share Extension) | In the share sheet of Safari and other apps for web pages, links and documents. From Safari it sends the page as you see it (its HTML, captured by `GetPage.js`), so paywalled and logged-in articles work; links from other apps go as links; files as files (up to 9 MB, refused at once above). Shows "Sending to <your Daylight>…", then the item's status in the words the app's history uses (*Sent · waiting for your Daylight*: it reached the relay, not yet the Daylight; *Delivered ✓* if the Daylight already acknowledged it) and closes, or the item's status and sentence when it could not go yet (or *This device is out of space, so it can’t send this.* when the file cannot be copied). If the app isn't paired yet, you can paste the code right there; a shared `daylightshare://` link pairs after you confirm. |
 | **Send to Daylight** Safari extension (iOS) | The shared WebExtension from [`../extension`](../extension) packaged for Safari on iPhone. It reads the pairing from the app, so you pair once. |
-| **Send to Daylight** (Mac, macOS 13+) | A window and a menu bar item. Pair by pasting the code or a `daylightshare://` link. Drop PDFs, documents, `.webloc` files or links on the window or on the Dock icon; "Send Clipboard Link" (⇧⌘L in the menu bar item); history; settings. Re-sends unacknowledged items every minute while it runs. |
+| **Send to Daylight** (Mac, macOS 13+) | A window and a menu bar item. Pair by pasting the code or a `daylightshare://` link. Drop PDFs, documents, `.webloc` files or links on the window or on the Dock icon; "Send Clipboard Link" (⇧⌘L in the menu bar item); history; settings, Comfort included. Re-sends unacknowledged items every minute while it runs. |
 | **Daylight** Share menu item (macOS Share Extension) | Share › Daylight in Safari, Finder, Preview and other apps: links, pages and files. Team-signed builds use the app's pairing; the released (ad-hoc) build asks for the code once and remembers it. |
 | **Send to Daylight** Safari extension (Mac) | The same WebExtension in Safari on the Mac; its native handler answers the extension's `getPairing` message with the app's pairing. |
 | `DaylightShareKit` (Swift package) | The protocol: pairing codes and links, SHA-256 and AES-256-GCM (CryptoKit), raw DEFLATE (Apple's Compression `COMPRESSION_ZLIB`, which is RFC 1951 raw deflate — the tests check it against zlib and the JS vectors), base32/base64, frames, reassembly, the ntfy relay client, the outbox with acks and re-sends, and shared storage. `DaylightShareUI` holds the SwiftUI pieces the apps and extensions share. |
@@ -77,6 +77,26 @@ the iPhone app stays paired.
 A relay address that 1.0 accepted but 1.1 refuses when typed (for example one with an underscore in its host name,
 such as `http://ntfy_box:8080`) keeps working: a saved pairing is read with the relay as 1.0 saved it, so updating
 never quietly unpairs anyone or drops the items still on their way.
+
+## Accessibility and Comfort
+
+Every build, with Lab on or off, has the same accessibility baseline (LAB-PLAN F27; it is not a Lab feature):
+
+- **Comfort**, a switch in Settings (iPhone, iPad and Mac), off by default: *"Larger text and buttons, more contrast,
+  no motion."* On iPhone and iPad text stays between xxLarge and accessibility3 whatever the system size; on the Mac
+  (where text styles do not follow Dynamic Type) every text style is about 30% larger. Buttons are large, at least
+  52 × 52 pt, and standalone ones get a 2 pt border; secondary grey text becomes primary; nothing animates (spinners
+  become words). Turning Lab off leaves it as it is. The share sheet item and the Share menu item follow it when they
+  share the app's storage (an App Group).
+- **Every control has a label** for VoiceOver, decorative images are hidden from it, and headings are marked.
+- **States in words and glyphs**, never colour alone: each history row's label (*Delivered ✓*, *Waiting to send*,
+  *Not delivered*) comes after a glyph for its state, and errors carry a warning sign.
+- **Status labels wrap** instead of being cut, at every text size: at accessibility sizes (and in Comfort) a row's
+  button moves under its text, label/value rows stack, and the pairing buttons stack.
+- **Status changes are said out loud**: every banner (*Paired with …*, *Sent · waiting for your Daylight*, an error),
+  a row that becomes *Delivered ✓* or *Not delivered* ("Delivered ✓, <title>"), and the share sheet's outcome.
+- **Typing the pairing code is always offered**, next to the QR code on the iPhone, as the way to pair on the Mac,
+  and in the share sheet.
 
 ## Install on a Mac
 
@@ -162,10 +182,12 @@ The Swift tests read the vectors straight from `../share/vectors/test-vectors.js
 committed protocol. The Safari extension targets copy `../extension/dist/safari` into the extension bundle at build
 time (`scripts/copy-web-extension.sh`; run `npm run build` in `../extension` first); without it a placeholder goes in.
 
-CI ([`.github/workflows/rx-apple.yml`](../../.github/workflows/rx-apple.yml)) runs the tests, checks the Mac App Group
-build settings with and without a team, builds the iPhone app for the simulator and for devices, builds the Mac app
-(and fails if the ad-hoc build carries an App Group), smoke-tests both, and publishes `Send-to-Daylight-unsigned.ipa`
-and `Send-to-Daylight-mac.zip` to the release. The Mac smoke test gates the release: the app must render within
+CI ([`.github/workflows/rx-apple.yml`](../../.github/workflows/rx-apple.yml)) has one job per lane (LAB-PLAN 6.1):
+`kit` runs the Swift package tests; `ios` builds the iPhone app for the simulator and for devices, smoke-tests it and
+runs its UI tests and truncation audit; `mac` checks the Mac App Group build settings with and without a team, builds
+the Mac app (and fails if the ad-hoc build carries an App Group), smoke-tests it and runs its UI tests and truncation
+audit. Once all three pass, `publish` puts `Send-to-Daylight-unsigned.ipa` and `Send-to-Daylight-mac.zip` on the
+release. The Mac smoke test gates the release: the app must render within
 10 s and keep a main-thread heartbeat, pair through a `daylightshare://` launch argument, send a link the JavaScript
 receiver gets and acks, and then show that history row as *Delivered ✓*.
 
@@ -178,10 +200,47 @@ there), and the Mac smoke test checks the same in the running app after launch a
 download rule (https or the relay's own origin, the 12,713,984-byte and 64 MiB caps, the stop after a 429) and the
 takeover of a `sending` row 15 minutes after its last progress.
 
-Launch arguments for testing and debugging (only whoever starts the app can pass them): `-DLSPairLink <link>` pairs,
-`-DLSSendLink <url>` sends a link, and `-DLSStatusDump` makes the app write `debug-status.json` (storage, pairing,
-history rows with their labels, and a once-a-second heartbeat) to its Application Support folder, on the Mac
-`~/Library/Containers/com.daylight.share.mac/Data/Library/Application Support/DaylightShare/`.
+Launch arguments for testing and debugging (only whoever starts the app can pass them):
+
+| Argument | What it does |
+|---|---|
+| `-DLSPairLink <link>` | Pairs without asking. |
+| `-DLSSendLink <url>` | Sends a link. |
+| `-DLSStatusDump` | Writes `debug-status.json` (storage, pairing, Comfort, history rows with their labels, and a once-a-second heartbeat) to the app's Application Support folder, on the Mac `~/Library/Containers/com.daylight.share.mac/Data/Library/Application Support/DaylightShare/`. |
+| `-DLSComfort 0\|1` | Turns Comfort off or on before the first render (and saves it), LAB-PLAN 1.7. |
+| `-DLSTestStorage` | Runs on fresh, empty storage of its own (`DaylightShare-UITest` next to the app's own folder, a separate defaults suite, no App Group), emptied at every launch: the UI tests never see or touch a real pairing or history. |
+| `-DLSLab 0\|1` | Reserved for the Lab builds (LAB-PLAN 1.7); the UI tests already pass `-DLSLab 0`. |
+
+### UI tests, the truncation audit and the Lab-off baselines
+
+`xcodegen` makes four test targets, run by the app schemes' Test action (CI: the `ios` and `mac` jobs of
+`rx-apple.yml`, on a simulated iPhone and on the Mac runner):
+
+- `SendToDaylightUITests-iOS` and `SendToDaylightUITests-macOS` (XCUITest; the tree walk and helpers are in
+  `Shared/UITests`):
+  - `AccessibilityAuditTests` run Xcode's `performAccessibilityAudit()` on Home (the Mac's main window), Settings and
+    the pairing screen, with Comfort off and on (iOS 17+, macOS 14+; F27.2). Every issue is printed as an `AUDIT` line;
+    an issue on an element the system draws can be allowed only with a stated reason (`allowed`).
+  - `BaselineTests`: Comfort is in Settings, off by default, with its footer, and switches on; typing the code pairs.
+  - `LabOffParityTests` (F00.2): an explicit walk of the accessibility tree (element type, label and value, in order;
+    never `debugDescription`) of each main screen compared with `iOS/UITests/lab-off-baseline/*.json` and
+    `macOS/UITests/lab-off-baseline/*.json`. The baselines were recorded from the P0 close-out (protocol 1.1 and this
+    accessibility baseline) and are re-recorded only with a matching non-Lab change. Elements whose identifier starts
+    with `lab.` are left out (the Lab switch row shows even with Lab off). When a baseline is missing or differs, the
+    test fails and prints the new tree between `=====BEGIN lab-off-baseline <platform>-<screen>.json=====` and
+    `=====END …=====` in the job log (and CI uploads it): to re-record, copy it into the baseline file.
+- `SendToDaylightTests-iOS` and `SendToDaylightTests-macOS` (hosted in the app, Debug only): the truncation audit
+  (F27.4). `AuditScreens` hosts each main screen with a history row in every state at the narrowest width (320 pt, an
+  iPad's one-third split; the Mac window's 440 pt minimum and the 460 pt Settings sheet) with Comfort on and
+  accessibility3, and every text that carries a `truncationProbe` (all of them, through `wrapping(_:)`) reports its
+  frame and the size it needs; a text that got less, or runs past the window's edge, fails the test. The audit checks
+  itself on a deliberately cut text first.
+
+The UI tests run the app on its own storage (`-DLSTestStorage`) paired with the vectors' code and a relay nobody
+listens on, so every screen reads the same on every run. Screenshots of every screen (and of the truncation audit's
+windows) are uploaded as the `rx-apple-ios-screenshots` and `rx-apple-mac-screenshots` artifacts for review; they are
+never compared. A runner image that changes the iOS or macOS version can change a tree: the test then prints the new
+one, ready to copy.
 
 ### Notes
 

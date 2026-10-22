@@ -236,8 +236,15 @@ public final class ShareExtensionModel: ObservableObject {
         case nothing
     }
 
-    @Published public private(set) var phase: Phase = .reading
+    /// Each outcome is also said to VoiceOver (F27): the row's label and sentence, why it did not go, or the notice.
+    @Published public private(set) var phase: Phase = .reading {
+        didSet {
+            if phase != oldValue, let text = Self.announcement(for: phase) { Announcer.announce(text) }
+        }
+    }
     @Published public private(set) var summary = ""
+    /// Comfort (F27), as the app has it when they share storage.
+    @Published public private(set) var comfort = false
     /// A line about how something went, shown under the result: "The page is larger than 8 MB, so its link was
     /// sent." (CHANGES-v1.1 2.5) when a page went as its link.
     @Published public private(set) var note: String?
@@ -270,6 +277,7 @@ public final class ShareExtensionModel: ObservableObject {
             // The App Group is resolved in the background (never on this thread); wait for it before reading the pairing.
             await store.ready()
             sharesPairingWithApp = store.isShared
+            comfort = await AppModel.onStorage { store.comfort }
             let current = await AppModel.onStorage { store.pairing }
             daylightName = current?.displayName ?? "your Daylight"
             if case let .pairing(link)? = payloads.first {
@@ -427,6 +435,17 @@ public final class ShareExtensionModel: ObservableObject {
         }
     }
 
+    /// What VoiceOver hears when the phase changes to an outcome (nil while reading, sending or asking).
+    nonisolated static func announcement(for phase: Phase) -> String? {
+        switch phase {
+        case let .sent(text): return text.message
+        case let .result(title, message): return message.isEmpty ? title : "\(title). \(message)"
+        case let .paired(notice): return notice
+        case .nothing: return "There’s nothing here Send to Daylight can send."
+        case .reading, .needsPairing, .confirmPairing, .sending: return nil
+        }
+    }
+
     /// "The page is larger than 8 MB, so its link was sent." when a shared page is over `DLS.maxPageHTML` (it goes as
     /// its link, `input(for:)`), else nil.
     nonisolated static func note(for payloads: [SharePayload]) -> String? {
@@ -463,60 +482,89 @@ public struct ShareExtensionView: View {
     }
 
     public var body: some View {
+        // Centred when it fits; at large text sizes, when it does not fit the sheet (or the Mac's Share menu panel), it
+        // scrolls. (One copy of the content, so the pairing form keeps what was typed.)
+        GeometryReader { geometry in
+            ScrollView {
+                content.frame(minHeight: geometry.size.height)
+            }
+        }
+        .comfort(model.comfort)
+    }
+
+    private var content: some View {
         VStack(spacing: 14) {
             switch model.phase {
             case .reading, .sending:
-                ProgressView()
-                Text("Sending to \(model.daylightName)…").font(.headline)
+                if model.comfort {
+                    Text(RowText(status: .sending, errorCode: "", size: 0, created: Date()).label).dlsFont(.headline)
+                } else {
+                    ProgressView().accessibilityHidden(true)
+                }
+                Text("Sending to \(model.daylightName)…").dlsFont(.headline).multilineTextAlignment(.center)
+                    .wrapping("Sending to \(model.daylightName)…")
                 summaryText
             case let .sent(text):
                 Image(systemName: text.label == "Delivered ✓" ? "checkmark.circle.fill" : "paperplane.circle.fill")
                     .font(.system(size: 44))
                     .foregroundColor(text.label == "Delivered ✓" ? .green : .accentColor)
-                Text(text.label).font(.headline).multilineTextAlignment(.center)
+                    .accessibilityHidden(true)
+                Text(text.label).dlsFont(.headline).multilineTextAlignment(.center).wrapping(text.label)
                 summaryText
                 if let sentence = text.sentence {
-                    Text(sentence).font(.callout).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                    Text(sentence).dlsFont(.callout).multilineTextAlignment(.center).wrapping(sentence)
                 }
                 noteText
                 if model.note != nil {
-                    Button("Done") { model.done() }.buttonStyle(.borderedProminent)
+                    doneButton
                 }
             case let .result(title, message):
                 Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 40)).foregroundColor(.orange)
-                Text(title).font(.headline).multilineTextAlignment(.center)
+                    .accessibilityHidden(true)
+                Text(title).dlsFont(.headline).multilineTextAlignment(.center).wrapping(title)
                 summaryText
                 if !message.isEmpty {
-                    Text(message).font(.callout).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                    Text(message).dlsFont(.callout).multilineTextAlignment(.center).wrapping(message)
                 }
                 noteText
-                Button("Done") { model.done() }.buttonStyle(.borderedProminent)
+                doneButton
             case let .confirmPairing(confirmation):
                 PairingConfirmationView(confirmation: confirmation, onConfirm: { model.confirmPairing() },
                                         onCancel: { model.cancelPairing() })
             case let .paired(notice):
                 Image(systemName: "checkmark.circle.fill").font(.system(size: 44)).foregroundColor(.green)
-                Text(notice).font(.headline).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-                Button("Done") { model.done() }.buttonStyle(.borderedProminent)
+                    .accessibilityHidden(true)
+                Text(notice).dlsFont(.headline).multilineTextAlignment(.center).wrapping(notice)
+                doneButton
             case .nothing:
                 Image(systemName: "questionmark.circle").font(.system(size: 40)).foregroundColor(.secondary)
+                    .accessibilityHidden(true)
                 Text("There’s nothing here Send to Daylight can send.").multilineTextAlignment(.center)
-                Button("Done") { model.done() }.buttonStyle(.borderedProminent)
+                    .wrapping("There’s nothing here Send to Daylight can send.")
+                doneButton
             case .needsPairing:
-                Text("Pair with your Daylight").font(.headline)
+                Text("Pair with your Daylight").dlsFont(.headline).wrapping("Pair with your Daylight")
                 if !model.sharesPairingWithApp {
-                    Text(Self.pasteOnceText)
-                        .font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Text(Self.pasteOnceText).dlsFont(.callout).wrapping(Self.pasteOnceText)
                 }
                 PairingHelp()
                 PairingForm { model.pair($0) }
-                Button("Cancel", role: .cancel) { model.cancel() }
+                Button(role: .cancel) { model.cancel() } label: {
+                    Text("Cancel").wrapping("Cancel").comfortTarget()
+                }
             }
         }
         .padding(24)
         .frame(maxWidth: 420)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var doneButton: some View {
+        Button { model.done() } label: {
+            Text("Done").wrapping("Done").comfortTarget()
+        }
+        .buttonStyle(.borderedProminent)
+        .comfortBorder()
     }
 
     /// Shown when this build has no App Group, so the extension cannot read the app's pairing.
@@ -530,13 +578,16 @@ public struct ShareExtensionView: View {
 
     @ViewBuilder private var noteText: some View {
         if let note = model.note {
-            Text(note).font(.callout).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            Text(note).dlsFont(.callout).multilineTextAlignment(.center).wrapping(note)
         }
     }
 
+    /// What is being sent (a title, a link or a file name): two lines at most, except in Comfort.
     @ViewBuilder private var summaryText: some View {
         if !model.summary.isEmpty {
-            Text(model.summary).font(.callout).foregroundColor(.secondary).lineLimit(2).multilineTextAlignment(.center)
+            Text(model.summary).dlsFont(.callout).dlsSecondary().lineLimit(model.comfort ? nil : 2)
+                .multilineTextAlignment(.center)
+                .truncationProbe(model.summary)
         }
     }
 }

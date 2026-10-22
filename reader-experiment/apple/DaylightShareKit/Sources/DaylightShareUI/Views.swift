@@ -1,11 +1,17 @@
 import DaylightShareKit
 import SwiftUI
 
-/// Typing or pasting the pairing code (or a `daylightshare://` link).
+/// Typing or pasting the pairing code (or a `daylightshare://` link). Every pairing screen offers it, next to the QR
+/// code where there is one (F27: typed-code pairing is always available).
 public struct PairingForm: View {
     let onPair: (String) -> String?
     @State private var code = ""
     @State private var error: String?
+    @Environment(\.comfort) private var comfort
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// The text field's label and placeholder.
+    public static let fieldTitle = "Pairing code, e.g. ABCD-EFGH-…"
 
     /// `onPair` returns an error message, or nil when pairing worked.
     public init(onPair: @escaping (String) -> String?) {
@@ -13,20 +19,28 @@ public struct PairingForm: View {
     }
 
     public var body: some View {
+        // Side by side, or one under the other at accessibility text sizes and in Comfort, so no label is cut.
+        let stacked = comfort || typeSize.isAccessibilitySize
+        let buttons = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10)) : AnyLayout(HStackLayout(spacing: 8))
         VStack(alignment: .leading, spacing: 10) {
-            TextField("Pairing code, e.g. ABCD-EFGH-…", text: $code)
+            TextField(Self.fieldTitle, text: $code)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(.body, design: .monospaced))
+                .font(Comfort.font(.body, comfort: comfort).monospaced())
                 .autocorrectionDisabled()
                 #if os(iOS)
                 .textInputAutocapitalization(.characters)
                 .keyboardType(.asciiCapable)
                 #endif
                 .onSubmit(submit)
-            HStack {
-                Button("Pair", action: submit)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityLabel(Self.fieldTitle)
+                .comfortBorder()
+            buttons {
+                Button(action: submit) {
+                    Text("Pair").wrapping("Pair").comfortTarget()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .comfortBorder()
                 #if os(iOS)
                 PasteButton(payloadType: String.self) { strings in
                     guard let s = strings.first else { return }
@@ -39,7 +53,12 @@ public struct PairingForm: View {
                 #endif
             }
             if let error {
-                Text(error).font(.footnote).foregroundColor(.red).fixedSize(horizontal: false, vertical: true)
+                // An error: the words say so, with a glyph; not colour alone.
+                Label {
+                    Text(error).dlsFont(.footnote).wrapping(error)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange).accessibilityHidden(true)
+                }
             }
         }
     }
@@ -53,7 +72,8 @@ public struct PairingForm: View {
 }
 
 /// A row's label from the shared copy ("Sending…", "Sent · waiting for your Daylight", "Delivered ✓", "Waiting to
-/// send", "Not delivered"; CHANGES-v1.1 2.5).
+/// send", "Not delivered"; CHANGES-v1.1 2.5), after a glyph for the state: in words and a glyph, never colour alone
+/// (F27). The words wrap at large text sizes.
 public struct StatusLabel: View {
     let row: OutboxRow
 
@@ -62,11 +82,31 @@ public struct StatusLabel: View {
     }
 
     public var body: some View {
-        Text(Self.text(row)).font(.caption.weight(.medium)).foregroundColor(Self.color(row))
+        let text = Self.text(row)
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Image(systemName: Self.glyph(row))
+                .foregroundColor(Self.color(row))
+                .accessibilityHidden(true)
+            Text(text).wrapping(text)
+        }
+        .dlsFont(.caption, weight: .medium)
     }
 
     public static func text(_ row: OutboxRow) -> String { RowText(row: row).label }
 
+    /// The state's glyph: sending ↑, sent (a paper plane), delivered ✓, waiting to send (a clock that goes round), not
+    /// delivered (a warning).
+    public static func glyph(_ row: OutboxRow) -> String {
+        switch row.status {
+        case .sending: return "arrow.up.circle"
+        case .sent: return "paperplane"
+        case .delivered: return "checkmark.circle.fill"
+        case .failed: return "clock.arrow.circlepath"
+        case .expired: return "exclamationmark.triangle"
+        }
+    }
+
+    /// The glyph's colour (the words stay in the primary colour, for contrast).
     public static func color(_ row: OutboxRow) -> Color {
         switch row.status {
         case .sending, .sent: return .secondary
@@ -89,6 +129,8 @@ public struct StatusLabel: View {
 public struct HistoryRowView: View {
     let row: OutboxRow
     let onRetry: () -> Void
+    @Environment(\.comfort) private var comfort
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     public init(row: OutboxRow, onRetry: @escaping () -> Void) {
         self.row = row
@@ -97,26 +139,38 @@ public struct HistoryRowView: View {
 
     public var body: some View {
         let text = RowText(row: row)
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: StatusLabel.symbol(row))
-                .foregroundColor(.secondary)
-                .frame(width: 22)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(row.displayTitle).lineLimit(2)
-                Text(row.displaySubtitle).font(.caption).foregroundColor(.secondary).lineLimit(1)
-                HStack(spacing: 6) {
-                    StatusLabel(row: row)
-                    Text(row.created, style: .relative).font(.caption2).foregroundColor(.secondary)
-                }
-                if let sentence = text.sentence {
-                    Text(sentence).font(.caption2).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+        // At accessibility text sizes and in Comfort the button goes under the text, and nothing is cut short.
+        let stacked = comfort || typeSize.isAccessibilitySize
+        let layout = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 10))
+        layout {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: StatusLabel.symbol(row))
+                    .foregroundColor(.secondary)
+                    .frame(width: 22)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.displayTitle).lineLimit(stacked ? nil : 2).truncationProbe(row.displayTitle)
+                    Text(row.displaySubtitle).dlsFont(.caption).dlsSecondary().lineLimit(stacked ? nil : 1)
+                        .truncationProbe(row.displaySubtitle)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        StatusLabel(row: row)
+                        Text(row.created, style: .relative).dlsFont(.caption2).dlsSecondary()
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let sentence = text.sentence {
+                        Text(sentence).dlsFont(.caption2).dlsSecondary().wrapping(sentence)
+                    }
                 }
             }
-            Spacer(minLength: 4)
+            if !stacked { Spacer(minLength: 4) }
             if let title = text.buttonTitle {
-                Button(title, action: onRetry)
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                Button(action: onRetry) {
+                    Text(title).wrapping(title).comfortTarget()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(comfort ? .large : .small)
+                .comfortBorder()
             }
         }
         .padding(.vertical, 2)
@@ -138,22 +192,45 @@ public struct PairingConfirmationView: View {
     }
 
     public var body: some View {
+        let title = confirmation.title ?? "Pair with a Daylight?"
+        let button = confirmation.button ?? "Pair"
         VStack(alignment: .leading, spacing: 14) {
-            Text(confirmation.title ?? "Pair with a Daylight?").font(.title3.weight(.semibold))
+            Text(title).dlsFont(.title3, weight: .semibold).wrapping(title)
+                .accessibilityAddTraits(.isHeader)
             ForEach(confirmation.lines, id: \.self) { line in
-                Text(line).fixedSize(horizontal: false, vertical: true)
+                Text(line).wrapping(line)
             }
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel, action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-                Button(confirmation.button ?? "Pair", action: onConfirm)
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    Spacer()
+                    cancelButton
+                    confirmButton(button)
+                }
+                VStack(alignment: .trailing, spacing: 10) {
+                    confirmButton(button)
+                    cancelButton
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
         .padding(24)
         .frame(maxWidth: 420)
+    }
+
+    private var cancelButton: some View {
+        Button(role: .cancel, action: onCancel) {
+            Text("Cancel").wrapping("Cancel").comfortTarget()
+        }
+        .keyboardShortcut(.cancelAction)
+    }
+
+    private func confirmButton(_ title: String) -> some View {
+        Button(action: onConfirm) {
+            Text(title).wrapping(title).comfortTarget()
+        }
+        .buttonStyle(.borderedProminent)
+        .keyboardShortcut(.defaultAction)
+        .comfortBorder()
     }
 }
 
@@ -167,15 +244,19 @@ struct AppSheets<SheetContent: View>: ViewModifier {
 
     func body(content: Content) -> some View {
         content.sheet(item: $model.presented) { presented in
-            switch presented {
-            case let .pairing(pending):
-                // Answered only with its buttons ("Cancel" also on Escape): a swipe cannot leave it half decided.
-                PairingConfirmationView(confirmation: pending.confirmation, onConfirm: { model.confirmPairing() },
-                                        onCancel: { model.cancelPairing() })
-                    .interactiveDismissDisabled()
-            case let .sheet(sheet):
-                sheetContent(sheet)
+            Group {
+                switch presented {
+                case let .pairing(pending):
+                    // Answered only with its buttons ("Cancel" also on Escape): a swipe cannot leave it half decided.
+                    PairingConfirmationView(confirmation: pending.confirmation, onConfirm: { model.confirmPairing() },
+                                            onCancel: { model.cancelPairing() })
+                        .interactiveDismissDisabled()
+                case let .sheet(sheet):
+                    sheetContent(sheet)
+                }
             }
+            // A sheet is its own presentation: it gets Comfort from the model, like the window.
+            .comfort(model.comfort)
         }
     }
 }
@@ -200,7 +281,8 @@ public struct BannerView: View {
         HStack(spacing: 8) {
             Image(systemName: banner.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                 .foregroundColor(banner.isError ? .orange : .green)
-            Text(banner.text).font(.callout).fixedSize(horizontal: false, vertical: true)
+                .accessibilityHidden(true)
+            Text(banner.text).dlsFont(.callout).wrapping(banner.text)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -218,10 +300,11 @@ public struct PairingHelp: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("On your Daylight, open **Daylight Share** and choose **This is my Daylight**. It shows a QR code and a 28-character pairing code.")
+                .wrapping("On your Daylight, open Daylight Share and choose This is my Daylight.")
             Text("Everything you send is end-to-end encrypted with a key from that code. Items travel through the free ntfy.sh relay (or your own), which only sees ciphertext.")
-                .foregroundColor(.secondary)
+                .dlsSecondary()
+                .wrapping("Everything you send is end-to-end encrypted with a key from that code.")
         }
-        .font(.callout)
-        .fixedSize(horizontal: false, vertical: true)
+        .dlsFont(.callout)
     }
 }

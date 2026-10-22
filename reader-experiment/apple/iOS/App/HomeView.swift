@@ -21,6 +21,7 @@ struct HomeView: View {
                             .focused($linkFocused)
                             .submitLabel(.send)
                             .onSubmit(sendLink)
+                            .accessibilityLabel("Paste or type a link")
                         PasteButton(payloadType: String.self) { strings in
                             guard let s = strings.first else { return }
                             Task { @MainActor in link = s.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -29,23 +30,33 @@ struct HomeView: View {
                         .buttonBorderShape(.capsule)
                     }
                     Button(action: sendLink) {
-                        Label("Send the link", systemImage: "paperplane")
+                        Label {
+                            Text("Send the link").wrapping("Send the link")
+                        } icon: {
+                            Image(systemName: "paperplane")
+                        }
+                        .comfortTarget()
                     }
                     .disabled(link.trimmingCharacters(in: .whitespaces).isEmpty)
                     Button {
                         model.sheet = .files
                     } label: {
-                        Label("Send a file…", systemImage: "doc.badge.plus")
+                        Label {
+                            Text("Send a file…").wrapping("Send a file…")
+                        } icon: {
+                            Image(systemName: "doc.badge.plus")
+                        }
+                        .comfortTarget()
                     }
                 } header: {
-                    Text("Send to \(model.daylightName)")
+                    Text("Send to \(model.daylightName)").wrapping("Send to \(model.daylightName)")
                 } footer: {
-                    Text("Tip: in Safari or any app, tap Share › Send to Daylight. Safari sends the page as you see it, so paywalled and logged-in articles work.")
+                    Text(Self.tip).wrapping(Self.tip)
                 }
 
                 Section {
                     if model.rows.isEmpty {
-                        Text("Nothing sent yet.").foregroundColor(.secondary)
+                        Text("Nothing sent yet.").dlsSecondary().wrapping("Nothing sent yet.")
                     }
                     ForEach(model.rows) { row in
                         HistoryRowView(row: row) { Task { await model.retry(row) } }
@@ -55,23 +66,38 @@ struct HomeView: View {
                     }
                 } header: {
                     HStack {
-                        Text("History")
+                        Text("History").wrapping("History")
                         Spacer()
-                        if model.sendingCount > 0 { ProgressView() }
+                        if model.sendingCount > 0 {
+                            // In Comfort, words instead of a spinner (no motion).
+                            if model.comfort {
+                                Text(Self.sending).wrapping(Self.sending)
+                            } else {
+                                ProgressView().accessibilityLabel(Self.sending)
+                            }
+                        }
                     }
                 }
             }
             .navigationTitle("Send to Daylight")
+            // A large title is cut short at accessibility sizes; Comfort keeps it in the bar.
+            .navigationBarTitleDisplayMode(model.comfort ? .inline : .automatic)
             .refreshable { await model.refresh() }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button { model.sheet = .settings } label: { Image(systemName: "gearshape") }
-                        .accessibilityLabel("Settings")
+                    Button { model.sheet = .settings } label: {
+                        Image(systemName: "gearshape").comfortTarget()
+                    }
+                    .accessibilityLabel("Settings")
                 }
             }
             // Settings and the file picker are presented by RootView (`appSheets`), with the pairing question.
         }
     }
+
+    static let tip = "Tip: in Safari or any app, tap Share › Send to Daylight. Safari sends the page as you see it, so paywalled and logged-in articles work."
+    /// The history's "something is on its way" (the shared copy's `sending` label).
+    static let sending = RowText(status: .sending, errorCode: "", size: 0, created: Date()).label
 
     static let fileTypes: [UTType] = {
         var types: [UTType] = [.pdf, .epub, .html, .plainText, .rtf]
@@ -102,32 +128,60 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Your Daylight") {
-                    LabeledContent("Name", value: model.daylightName)
+                Section {
+                    InfoRow("Name", value: model.daylightName)
                     VStack(alignment: .leading) {
                         TextField("Relay", text: $relay)
                             .keyboardType(.URL)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .onSubmit(saveRelay)
-                        if let relayError { Text(relayError).font(.footnote).foregroundColor(.red) }
+                            .accessibilityLabel("Relay")
+                        if let relayError {
+                            Label {
+                                Text(relayError).font(.footnote).wrapping(relayError)
+                            } icon: {
+                                Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
+                                    .accessibilityHidden(true)
+                            }
+                        }
                     }
-                    Button("Unpair", role: .destructive) { confirmUnpair = true }
+                    Button(role: .destructive) { confirmUnpair = true } label: {
+                        Text("Unpair").wrapping("Unpair").comfortTarget()
+                    }
+                } header: {
+                    Text("Your Daylight").wrapping("Your Daylight")
+                }
+                // The accessibility baseline (F27), not Lab: on or off, with Lab on or off.
+                Section {
+                    Toggle(isOn: Binding(get: { model.comfort }, set: { model.setComfort($0) })) {
+                        Text(Comfort.title).wrapping(Comfort.title)
+                    }
+                    .accessibilityIdentifier("comfort")
+                } footer: {
+                    Text(Comfort.footer).wrapping(Comfort.footer)
                 }
                 Section {
                     TextField(model.defaultDeviceName, text: $deviceName)
                         .onSubmit { model.setDeviceName(deviceName) }
+                        .accessibilityLabel("This device’s name")
                 } header: {
-                    Text("This device’s name")
+                    Text("This device’s name").wrapping("This device’s name")
                 } footer: {
-                    Text("Shown on the Daylight as who sent each item.")
+                    Text("Shown on the Daylight as who sent each item.").wrapping("Shown on the Daylight as who sent each item.")
                 }
-                Section("History") {
-                    Button("Clear delivered and expired") { model.clearFinished() }
+                Section {
+                    Button { model.clearFinished() } label: {
+                        Text("Clear delivered and expired").wrapping("Clear delivered and expired").comfortTarget()
+                    }
+                } header: {
+                    Text("History").wrapping("History")
                 }
-                Section("About") {
-                    LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?")
-                    LabeledContent("Shared with the share extension", value: model.storageSummary)
+                Section {
+                    InfoRow("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?")
+                    InfoRow("Shared with the share extension", value: model.storageSummary)
+                } header: {
+                    Text("About").wrapping("About")
                 }
             }
             .navigationTitle("Settings")

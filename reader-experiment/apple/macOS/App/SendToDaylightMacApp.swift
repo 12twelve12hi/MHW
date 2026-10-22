@@ -13,7 +13,7 @@ struct SendToDaylightMacApp: App {
             MenuBarContent().environmentObject(model)
         }
         Settings {
-            MacSettingsView().environmentObject(model).frame(width: 460)
+            MacSettingsView().environmentObject(model).frame(width: MacRootView.settingsWidth).comfort(model.comfort)
         }
     }
 }
