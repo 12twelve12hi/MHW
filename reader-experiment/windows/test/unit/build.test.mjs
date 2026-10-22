@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dist, load } from '../helpers/built.mjs';
 import { SHARE_LIB } from '../../build.mjs';
+import { LAB_LIB, codeWave, holdFor, laterWave, w1Names, waveRank } from '../../scripts/lab-wave.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const tauriDir = path.join(root, 'src-tauri');
@@ -182,14 +183,53 @@ test('Comfort (F27, not Lab): its switch and footer in LAB_TEXT’s words; the c
   assert.deepEqual(fixed, []);
 });
 
-test('lab-wave.json names no Lab wave, or one the release gate knows (LAB-PLAN 6.2)', () => {
+test('scripts/lab-wave.mjs reads the Lab wave from the code: W0 for any Lab code, W1 for W1 code (LAB-PLAN 6.2)', () => {
+  const w1 = w1Names(fs.readFileSync(LAB_LIB, 'utf8'));
+  // The plan's W1 additions (2.7.2) are W1 names; W0's reference (L0) is not.
+  for (const n of ['normaliseShare', 'extractAppleNewsTarget', 'classifyShare', 'excerptHtml', 'excerptMarkdown', 'excerptFileName', 'textFragment', 'testArticle', 'redactDiagnostics']) assert.ok(w1.includes(n), n);
+  for (const n of ['LabLedger', 'labHook', 'labGate', 'LAB_TEXT', 'needsMessage', 'checkedInText', 'deriveLabTopics']) assert.ok(!w1.includes(n), n);
+  assert.throws(() => w1Names('export const A = 1;\n'), /no "\/\/ W1 \(L1\)" heading/);
+  const wave = (files) => codeWave(files.map(([name, text]) => ({ name, text })), { w1 }).wave;
+  const app = ['src/app.js', "import { createApp } from './core.js';\nconst x = { deferred: 1 };\n"];
+  assert.equal(wave([app, ['build.mjs', "fs.copyFileSync(SHARE_LIB, 'daylight-share.js');"]]), null);
+  // The reviewer's case: WIN0 adds src/lab.js and the daylight-lab.js copy but leaves lab-wave.json at null.
+  assert.equal(wave([app, ['src/lab.js', 'export const on = true;']]), 'w0');
+  assert.equal(wave([['src/app.js', "import { labGate } from './daylight-lab.js';"]]), 'w0');
+  assert.equal(wave([app, ['build.mjs', "fs.copyFileSync(path.join(share, 'daylight-lab.js'), out);"]]), 'w0');
+  assert.equal(wave([app, ['src/index.html', '<script type="module" src="daylight-lab.js"></script>']]), 'w0');
+  // ...and WIN1 leaving "w0" after w0 opens.
+  assert.equal(wave([['src/lab.js', "import { normaliseShare } from './daylight-lab.js';"]]), 'w1');
+  assert.equal(wave([['src/app.js', 'const d = describeLabRow(row, now, ctx);']]), 'w1');
+  assert.equal(wave([['src/app.js', 'await sender.flushNetwork();']]), 'w1');
+  assert.equal(wave([['src/core.js', 'await sender.send(item, { defer: true });']]), 'w1');
+  // A copy of the module itself isn't the app's code; a longer name that merely contains a W1 name isn't one.
+  assert.equal(wave([['src/daylight-lab.js', 'export function normaliseShare() {}']]), 'w0');
+  assert.equal(wave([app, ['src/core.js', 'const myTextFragmentText2 = 1;']]), null);
+  assert.equal(laterWave(null, 'w0'), 'w0');
+  assert.equal(laterWave('w1', 'w0'), 'w1');
+  assert.equal(laterWave(null, null), null);
+});
+
+test('lab-wave.json names the Lab wave of the code here, and one the release gate knows (LAB-PLAN 6.2)', () => {
   const gate = JSON.parse(fs.readFileSync(path.join(root, '..', 'lab-release-gate.json'), 'utf8'));
   const { wave } = JSON.parse(fs.readFileSync(path.join(root, 'lab-wave.json'), 'utf8'));
   assert.ok(wave === null || typeof gate[wave] === 'boolean', `windows/lab-wave.json: unknown wave ${wave}`);
+  // Not behind the code: a Lab build can't reach the release with lab-wave.json at null, or at "w0" with W1 code.
+  const { declared, code, why, hold } = holdFor();
+  assert.equal(declared, wave);
+  assert.ok(waveRank(wave) >= waveRank(code), `windows/lab-wave.json says ${wave ?? 'null'}, but the code is ${code} (${why.join('; ')}): set "wave": "${code}"`);
+  assert.equal(hold, wave);
+  // What the build ships agrees: a dist with daylight-lab.js is Lab code.
+  if (fs.existsSync(path.join(dist(), 'daylight-lab.js')) || fs.existsSync(path.join(dist(), 'lab.js'))) assert.notEqual(code, null);
   // The workflow's publish job reads both files before it uploads the installer.
   // A Windows checkout has CRLF line ends.
   const wf = fs.readFileSync(path.join(root, '..', '..', '.github', 'workflows', 'rx-windows.yml'), 'utf8').replace(/\r\n/g, '\n');
   assert.ok(wf.includes('reader-experiment/windows/lab-wave.json') && wf.includes('reader-experiment/lab-release-gate.json'));
+  // ...and holds the build for the code's own wave too (scripts/lab-wave.mjs, with what it reads checked out).
+  for (const p of ['reader-experiment/windows/scripts/lab-wave.mjs', 'reader-experiment/windows/build.mjs', 'reader-experiment/windows/src', 'reader-experiment/share/js/daylight-lab.js']) {
+    assert.match(wf, new RegExp(`^ {12}${p.replace(/[.]/g, '\\.')}$`, 'm'), `publish checks out ${p}`);
+  }
+  assert.match(wf, /wave=\$\(node reader-experiment\/windows\/scripts\/lab-wave\.mjs\)\n/);
   const jobs = wf.slice(wf.search(/^jobs:$/m));
   const names = [...jobs.matchAll(/^ {2}([a-z][\w-]*):$/gm)];
   assert.deepEqual(names.map((m) => m[1]), ['app', 'ui', 'publish']);

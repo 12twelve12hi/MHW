@@ -9,9 +9,11 @@ name: Reader experiment - Windows app
 # Lanes (LAB-PLAN 6.1): this file belongs to the win lane; every job carries a "# lane: win" comment.
 #
 # Lab release gate (LAB-PLAN 6.2): the Windows Lab build reaches the release only after the iPhone and Mac builds of
-# the same wave. reader-experiment/windows/lab-wave.json names the Lab wave of the code (null before any Lab code);
-# while reader-experiment/lab-release-gate.json has that wave false, the build is tested but not uploaded, and the log
-# says so. Flipping the gate starts this workflow, which then publishes the held build.
+# the same wave. reader-experiment/windows/lab-wave.json names the Lab wave of the code (null before any Lab code), and
+# reader-experiment/windows/scripts/lab-wave.mjs reads it from the code too (src/lab.js, daylight-lab, W1 calls); the
+# build is held for the later of the two, so a lab-wave.json left behind can't open the gate. While
+# reader-experiment/lab-release-gate.json has that wave false, the build is tested but not uploaded, and the log says
+# so. Flipping the gate starts this workflow, which then publishes the held build.
 on:
   push:
     branches: [claude/sweet-goldberg-ej1nb0]
@@ -164,7 +166,15 @@ jobs:
             .github/scripts
             reader-experiment/lab-release-gate.json
             reader-experiment/windows/lab-wave.json
+            reader-experiment/windows/scripts/lab-wave.mjs
+            reader-experiment/windows/build.mjs
+            reader-experiment/windows/src
+            reader-experiment/share/js/daylight-lab.js
           sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - uses: actions/download-artifact@v4
         with:
@@ -176,9 +186,11 @@ jobs:
         run: |
           set -euo pipefail
           gate=reader-experiment/lab-release-gate.json
-          wave=$(jq -r '.wave // ""' reader-experiment/windows/lab-wave.json)
+          # The later of lab-wave.json's wave and the code's own. When the script can't tell, it exits non-zero, this
+          # step fails and nothing is uploaded.
+          wave=$(node reader-experiment/windows/scripts/lab-wave.mjs)
           if [ -z "$wave" ]; then
-            echo "Windows app: no Lab code in this build (wave none in reader-experiment/windows/lab-wave.json): publishing the installer."
+            echo "Windows app: no Lab code in this build (lab-wave.json: none; none in windows/src or build.mjs): publishing the installer."
             echo "open=true" >> "$GITHUB_OUTPUT"
           elif [ "$(jq -r --arg w "$wave" '.[$w] == true' "$gate")" = true ]; then
             echo "Windows app: Lab wave $wave is open in $gate: publishing the installer."

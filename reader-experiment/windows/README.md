@@ -108,7 +108,9 @@ With or without Comfort:
   (*Delivered ✓: &lt;title&gt;*) without moving the focus; a send's own outcome is read from the line under the buttons;
 - states are written out in words (and ✓), never shown by colour alone;
 - status lines wrap instead of being cut off, also at the narrowest window and at twice the text size (Windows'
-  *Settings › Accessibility › Text size*); with Comfort, titles wrap too instead of ending in "…";
+  *Settings › Accessibility › Text size*); with Comfort, titles wrap too instead of ending in "…", and nothing is cut
+  off up to Windows' largest text size (225%): the pairing code and relay fields grow to show all you typed, and
+  side-by-side buttons go one under the other when their words no longer fit;
 - the pairing code can always be typed (no QR code needed), also while paired (**Change pairing…**).
 
 ## Uninstall
@@ -132,10 +134,11 @@ side (`src-tauri/src/`) is kept to what a web page can't do.
 | Where | What |
 |---|---|
 | `src/core.js` | Pairing (the module's `pairingConfirmation` and `applyPairingChange`), sending, the outbox and its timers, with `daylight-share.js` (no DOM, no Tauri; unit-tested in node) |
-| `src/app.js`, `index.html`, `styles.css` | The window: pairing and its confirmation, drop zone, history, settings (Comfort among them), the hotkey recorder, the screen-reader announcements |
+| `src/app.js`, `index.html`, `styles.css` | The window: pairing and its confirmation, drop zone, history, settings (Comfort among them), the hotkey recorder, the screen-reader announcements. The code and relay fields size to their text (CSS `field-sizing`, which WebView2 has had since Edge 123) |
 | `src/logic.js` | Small pure helpers (status labels, MIME types, the hotkey's key names, notification texts) |
 | `src/bridge.js` | Calls into Rust; the storage adapter (one JSON file per key in the app's data folder) |
 | `build.mjs` | Copies `src/` and `../share/js/daylight-share.js` into `dist/`, which Tauri embeds |
+| `lab-wave.json`, `scripts/lab-wave.mjs` | The Lab wave of this code, as declared and as read from the code, for the release gate (below) |
 | `src-tauri/src/main.rs` | Tray icon and menu, the window (closing hides it), single instance (a second launch hands over its arguments: Send To files, pairing links), the clipboard hotkey, notifications, start at login, commands for the page |
 | `src-tauri/src/args.rs` | The command line: files, `daylightshare:` links, `--autostart`, test-mode options and hooks |
 | `src-tauri/src/sendto.rs` | The **Send to › Daylight** shortcut (created on the first run if the installer didn't) |
@@ -223,9 +226,14 @@ links' real path.
 - **Comfort**: LAB_TEXT's words for the switch and its footer, off by default, before pairing too; on, the `comfort`
   class on `<body>` gives text at 125%, buttons at least 48 px high, 2 px borders and no transitions, and the next
   start opens in Comfort; a Comfort that can't be saved is put back and says why;
-- **no text cut short** (F27.4): with Comfort, for every element with text, `scrollWidth <= clientWidth` and
-  `scrollHeight <= clientHeight + 1`, and the window never scrolls sideways, in every view, also at 200% text; without
-  Comfort, status text still wraps at 200%;
+- **no text cut short** (F27.4): with Comfort, for every element with text and every text field (what is typed in it,
+  or its placeholder: a textarea's scroll size counts it, an input's is measured in its `::placeholder` font),
+  `scrollWidth <= clientWidth` and `scrollHeight <= clientHeight + 1`, and the window never scrolls sideways. At 100%
+  text in every view above; at 200% and 225% (Windows' largest text size) in every view too: the pairing screen with a
+  typed code and relay, a pasted pairing link and its error, Settings before and after pairing, the send view with a
+  row in every state, the hotkey recorder, Change pairing… with a typed code, and both questions (a link's *Pair*, a
+  code's *Switch*). A self-test shows the check catches a field that doesn't grow (its code, then its placeholder), an
+  input's placeholder and two buttons that can't wrap. Without Comfort, status text still wraps at 200%;
 - **announcements**: a row that the first tick ends as Not delivered, and one the Daylight acks (a real ack on the mock
   relay, read when Rust's tick event fires), are said through the polite live region.
 
@@ -253,8 +261,15 @@ and the test output (status file, screenshot) are kept as workflow artifacts.
 the same wave. [`lab-wave.json`](lab-wave.json) names the Lab wave of the code in this folder (`null` until WIN0 sets
 `"w0"`; WIN1 sets `"w1"`). While [`../lab-release-gate.json`](../lab-release-gate.json) has that wave `false`, the
 publish job skips the upload and says so in the log (a "Lab release gate" notice); the tests run all the same. Flipping
-the gate starts the workflow again, which then publishes the held build. A unit test checks that `lab-wave.json` names
-no wave or one the gate knows, and that every job carries its lane.
+the gate starts the workflow again, which then publishes the held build.
+
+The gate does not take `lab-wave.json` on trust: [`scripts/lab-wave.mjs`](scripts/lab-wave.mjs) reads the wave from
+the code too, and the publish job holds the build for the later of the two. Any Lab code is W0: `src/lab.js`, a
+`daylight-lab.js` in `src/`, or anything in `src/` or `build.mjs` that names `daylight-lab`. W1 code is `src/` using a
+W1 export of `daylight-lab.js` (those after its `// W1 (L1)` heading), `describeLabRow` (F01's rows) or the Sender's
+F07 calls (`flushNetwork`, `send(…, {defer})`). When the script can't tell (the module or its heading missing), it
+fails and nothing is uploaded. Unit tests check the script on made-up trees (WIN0 forgetting `"w0"`, WIN1 leaving it),
+that `lab-wave.json` is not behind the code here and names a wave the gate knows, and that every job carries its lane.
 
 ## Not yet
 
