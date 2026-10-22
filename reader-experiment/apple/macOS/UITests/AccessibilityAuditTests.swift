@@ -6,7 +6,23 @@ final class AccessibilityAuditTests: XCTestCase {
     /// Issues the app cannot fix because the system draws the element; each names why. Everything else fails.
     @available(macOS 14.0, *)
     static func allowed(_ issue: XCUIAccessibilityAuditIssue) -> String? {
-        nil
+        guard let element = issue.element, element.exists else { return nil }
+        switch element.elementType {
+        case .touchBar:
+            return "the system's Touch Bar element, which the runner's Mac does not even have"
+        case .helpTag:
+            return "the system's tooltip for the Settings button (its words are the button's label)"
+        default:
+            break
+        }
+        if element.label == "emoji & symbols" {
+            return "the system's emoji item in the Touch Bar of a text field"
+        }
+        if issue.auditType == .contrast, element.elementType == .staticText,
+           UITestSupport.text(element.value) == "Send to Daylight" {
+            return "the window's title, which the system dims while a sheet is open"
+        }
+        return nil
     }
 
     @MainActor

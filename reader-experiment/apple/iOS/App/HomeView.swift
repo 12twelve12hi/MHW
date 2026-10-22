@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 struct HomeView: View {
     @EnvironmentObject var model: AppModel
     @State private var link = ""
+    @State private var sendingLink = false
     @FocusState private var linkFocused: Bool
 
     var body: some View {
@@ -14,13 +15,15 @@ struct HomeView: View {
             List {
                 Section {
                     HStack {
-                        TextField("Paste or type a link", text: $link)
+                        // More lines rather than cut the link at large text sizes; Return sends.
+                        TextField("Paste or type a link", text: $link, axis: .vertical)
                             .keyboardType(.URL)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .focused($linkFocused)
                             .submitLabel(.send)
                             .onSubmit(sendLink)
+                            .submitOnReturn($link, perform: sendLink)
                             .accessibilityLabel("Paste or type a link")
                         PasteButton(payloadType: String.self) { strings in
                             guard let s = strings.first else { return }
@@ -31,9 +34,9 @@ struct HomeView: View {
                     }
                     Button(action: sendLink) {
                         Label {
-                            Text("Send the link").wrapping("Send the link")
+                            Text("Send the link").listRowText("Send the link")
                         } icon: {
-                            Image(systemName: "paperplane")
+                            Image(systemName: "paperplane").accessibilityHidden(true)
                         }
                         .comfortTarget()
                     }
@@ -42,21 +45,21 @@ struct HomeView: View {
                         model.sheet = .files
                     } label: {
                         Label {
-                            Text("Send a file…").wrapping("Send a file…")
+                            Text("Send a file…").listRowText("Send a file…")
                         } icon: {
-                            Image(systemName: "doc.badge.plus")
+                            Image(systemName: "doc.badge.plus").accessibilityHidden(true)
                         }
                         .comfortTarget()
                     }
                 } header: {
-                    Text("Send to \(model.daylightName)").wrapping("Send to \(model.daylightName)")
+                    Text("Send to \(model.daylightName)").dlsSecondary().listRowText("Send to \(model.daylightName)")
                 } footer: {
-                    Text(Self.tip).wrapping(Self.tip)
+                    Text(Self.tip).dlsSecondary().listRowText(Self.tip)
                 }
 
                 Section {
                     if model.rows.isEmpty {
-                        Text("Nothing sent yet.").dlsSecondary().wrapping("Nothing sent yet.")
+                        Text("Nothing sent yet.").dlsSecondary().listRowText("Nothing sent yet.")
                     }
                     ForEach(model.rows) { row in
                         HistoryRowView(row: row) { Task { await model.retry(row) } }
@@ -66,12 +69,12 @@ struct HomeView: View {
                     }
                 } header: {
                     HStack {
-                        Text("History").wrapping("History")
+                        Text("History").dlsSecondary().listRowText("History")
                         Spacer()
                         if model.sendingCount > 0 {
                             // In Comfort, words instead of a spinner (no motion).
                             if model.comfort {
-                                Text(Self.sending).wrapping(Self.sending)
+                                Text(Self.sending).dlsSecondary().listRowText(Self.sending)
                             } else {
                                 ProgressView().accessibilityLabel(Self.sending)
                             }
@@ -110,9 +113,12 @@ struct HomeView: View {
 
     private func sendLink() {
         let text = link
+        guard !sendingLink, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        sendingLink = true
         linkFocused = false
         Task {
             if await model.sendLink(text) { link = "" }
+            sendingLink = false
         }
     }
 }
@@ -131,15 +137,16 @@ struct SettingsView: View {
                 Section {
                     InfoRow("Name", value: model.daylightName)
                     VStack(alignment: .leading) {
-                        TextField("Relay", text: $relay)
+                        TextField("Relay", text: $relay, axis: .vertical)
                             .keyboardType(.URL)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .onSubmit(saveRelay)
+                            .submitOnReturn($relay, perform: saveRelay)
                             .accessibilityLabel("Relay")
                         if let relayError {
                             Label {
-                                Text(relayError).font(.footnote).wrapping(relayError)
+                                Text(relayError).font(.footnote).listRowText(relayError)
                             } icon: {
                                 Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.orange)
                                     .accessibilityHidden(true)
@@ -147,41 +154,43 @@ struct SettingsView: View {
                         }
                     }
                     Button(role: .destructive) { confirmUnpair = true } label: {
-                        Text("Unpair").wrapping("Unpair").comfortTarget()
+                        Text("Unpair").listRowText("Unpair").comfortTarget()
                     }
                 } header: {
-                    Text("Your Daylight").wrapping("Your Daylight")
+                    Text("Your Daylight").dlsSecondary().listRowText("Your Daylight")
                 }
                 // The accessibility baseline (F27), not Lab: on or off, with Lab on or off.
                 Section {
                     Toggle(isOn: Binding(get: { model.comfort }, set: { model.setComfort($0) })) {
-                        Text(Comfort.title).wrapping(Comfort.title)
+                        Text(Comfort.title).listRowText(Comfort.title)
                     }
                     .accessibilityIdentifier("comfort")
                 } footer: {
-                    Text(Comfort.footer).wrapping(Comfort.footer)
+                    Text(Comfort.footer).dlsSecondary().listRowText(Comfort.footer)
                 }
                 Section {
-                    TextField(model.defaultDeviceName, text: $deviceName)
+                    TextField(model.defaultDeviceName, text: $deviceName, axis: .vertical)
                         .onSubmit { model.setDeviceName(deviceName) }
+                        .submitOnReturn($deviceName) { model.setDeviceName(deviceName) }
                         .accessibilityLabel("This device’s name")
                 } header: {
-                    Text("This device’s name").wrapping("This device’s name")
+                    Text("This device’s name").dlsSecondary().listRowText("This device’s name")
                 } footer: {
-                    Text("Shown on the Daylight as who sent each item.").wrapping("Shown on the Daylight as who sent each item.")
+                    Text("Shown on the Daylight as who sent each item.").dlsSecondary()
+                        .listRowText("Shown on the Daylight as who sent each item.")
                 }
                 Section {
                     Button { model.clearFinished() } label: {
-                        Text("Clear delivered and expired").wrapping("Clear delivered and expired").comfortTarget()
+                        Text("Clear delivered and expired").listRowText("Clear delivered and expired").comfortTarget()
                     }
                 } header: {
-                    Text("History").wrapping("History")
+                    Text("History").dlsSecondary().listRowText("History")
                 }
                 Section {
                     InfoRow("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?")
                     InfoRow("Shared with the share extension", value: model.storageSummary)
                 } header: {
-                    Text("About").wrapping("About")
+                    Text("About").dlsSecondary().listRowText("About")
                 }
             }
             .navigationTitle("Settings")

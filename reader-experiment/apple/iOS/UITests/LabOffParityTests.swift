@@ -15,7 +15,7 @@ final class LabOffParityTests: XCTestCase {
         try UITestSupport.checkBaseline(app, screen: "home")
 
         settings.tap()
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), "Settings did not open")
+        XCTAssertTrue(app.switches["comfort"].waitForExistence(timeout: 10), "Settings did not open")
         UITestSupport.screenshot(app, "ios-lab-off-settings", in: self)
         try UITestSupport.checkBaseline(app, screen: "settings")
     }

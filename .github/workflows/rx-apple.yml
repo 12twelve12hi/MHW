@@ -179,19 +179,17 @@ jobs:
       # the app (F27.4). The apps run on their own empty storage (-DLSTestStorage) and a relay nobody listens on.
       - name: iPhone UI tests and truncation audit (F27.2, F27.4, F00.2)
         run: |
+          # The same simulator every run (the Lab-off baselines are its accessibility trees): an iPhone 16 on iOS 18,
+          # else the last iPhone listed. The log names the one used (re-record the baselines if it changed).
           DEVICE=$(xcrun simctl list devices available -j | python3 -c '
           import json, sys
           d = json.load(sys.stdin)["devices"]
-          phones = [x for k, v in d.items() if "iOS" in k for x in v if x["name"].startswith("iPhone")]
-          for want in ["iPhone 16", "iPhone 16 Pro", "iPhone 15", "iPhone 15 Pro"]:
-              found = [x for x in phones if x["name"] == want]
-              if found:
-                  print(found[-1]["udid"])
-                  break
-          else:
-              print(phones[-1]["udid"] if phones else "")')
+          phones = [(k, x) for k, v in sorted(d.items()) if "iOS" in k for x in v if x["name"].startswith("iPhone")]
+          pick = [p for p in phones if "iOS-18" in p[0] and p[1]["name"] == "iPhone 16"] or phones[-1:]
+          if pick:
+              print(pick[0][1]["udid"])
+              print("simulator:", pick[0][1]["name"], pick[0][0], file=sys.stderr)')
           [ -n "$DEVICE" ] || { echo "::error::no iPhone simulator"; exit 1; }
-          xcrun simctl list devices available | grep "$DEVICE"
           mkdir -p build/shots build/baselines
           set +e
           TEST_RUNNER_DLS_SHOTS="$PWD/build/shots" TEST_RUNNER_DLS_BASELINE_OUT="$PWD/build/baselines" \

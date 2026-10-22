@@ -23,7 +23,7 @@ public struct PairingForm: View {
         let stacked = comfort || typeSize.isAccessibilitySize
         let buttons = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10)) : AnyLayout(HStackLayout(spacing: 8))
         VStack(alignment: .leading, spacing: 10) {
-            TextField(Self.fieldTitle, text: $code)
+            field
                 .textFieldStyle(.roundedBorder)
                 .font(Comfort.font(.body, comfort: comfort).monospaced())
                 .autocorrectionDisabled()
@@ -32,6 +32,7 @@ public struct PairingForm: View {
                 .keyboardType(.asciiCapable)
                 #endif
                 .onSubmit(submit)
+                .submitOnReturn($code, perform: submit)
                 .accessibilityLabel(Self.fieldTitle)
                 .comfortBorder()
             buttons {
@@ -63,6 +64,15 @@ public struct PairingForm: View {
         }
     }
 
+    /// On iPhone and iPad the field grows to more lines rather than cut the code at large text sizes.
+    @ViewBuilder private var field: some View {
+        #if os(iOS)
+        TextField(Self.fieldTitle, text: $code, axis: .vertical)
+        #else
+        TextField(Self.fieldTitle, text: $code)
+        #endif
+    }
+
     private func submit() {
         let input = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else { return }
@@ -87,7 +97,7 @@ public struct StatusLabel: View {
             Image(systemName: Self.glyph(row))
                 .foregroundColor(Self.color(row))
                 .accessibilityHidden(true)
-            Text(text).wrapping(text)
+            Text(text).listRowText(text)
         }
         .dlsFont(.caption, weight: .medium)
     }
@@ -159,14 +169,14 @@ public struct HistoryRowView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if let sentence = text.sentence {
-                        Text(sentence).dlsFont(.caption2).dlsSecondary().wrapping(sentence)
+                        Text(sentence).dlsFont(.caption2).dlsSecondary().listRowText(sentence)
                     }
                 }
             }
             if !stacked { Spacer(minLength: 4) }
             if let title = text.buttonTitle {
                 Button(action: onRetry) {
-                    Text(title).wrapping(title).comfortTarget()
+                    Text(title).listRowText(title).comfortTarget()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(comfort ? .large : .small)

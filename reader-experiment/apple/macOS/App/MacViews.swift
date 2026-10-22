@@ -161,6 +161,7 @@ struct MacHomeView: View {
                 }
             }
             .listStyle(.inset)
+            .accessibilityLabel("History")
         }
         .padding(18)
         // Settings opens as a sheet of MacRootView (`appSheets`).
@@ -326,6 +327,7 @@ struct MacSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .accessibilityLabel("Settings")
         .onAppear {
             deviceName = model.deviceName
             relay = model.pairing?.relay ?? DLS.defaultRelay

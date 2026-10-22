@@ -20,7 +20,7 @@ final class AccessibilityAuditTests: XCTestCase {
         try UITestSupport.audit(app, "home", allowed: Self.allowed)
 
         settings.tap()
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), "Settings did not open")
+        XCTAssertTrue(app.switches["comfort"].waitForExistence(timeout: 10), "Settings did not open")
         UITestSupport.screenshot(app, "ios-settings", in: self)
         try UITestSupport.audit(app, "settings", allowed: Self.allowed)
         app.terminate()
@@ -46,7 +46,7 @@ final class AccessibilityAuditTests: XCTestCase {
         try UITestSupport.audit(app, "home (Comfort)", types: types, allowed: Self.allowed)
 
         settings.tap()
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), "Settings did not open")
+        XCTAssertTrue(app.switches["comfort"].waitForExistence(timeout: 10), "Settings did not open")
         UITestSupport.screenshot(app, "ios-settings-comfort", in: self)
         try UITestSupport.audit(app, "settings (Comfort)", types: types, allowed: Self.allowed)
         app.terminate()

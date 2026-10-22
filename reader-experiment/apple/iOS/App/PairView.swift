@@ -26,7 +26,7 @@ struct PairView: View {
                         Label {
                             Text("Scan the QR code").wrapping("Scan the QR code")
                         } icon: {
-                            Image(systemName: "qrcode.viewfinder")
+                            Image(systemName: "qrcode.viewfinder").accessibilityHidden(true)
                         }
                         .frame(maxWidth: .infinity)
                         .comfortTarget()

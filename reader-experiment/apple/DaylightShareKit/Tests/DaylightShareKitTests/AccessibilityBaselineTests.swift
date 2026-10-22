@@ -139,8 +139,10 @@ final class AccessibilityBaselineTests: XCTestCase {
         XCTAssertEqual(said, ["Sent · waiting for your Daylight"])
 
         outbox.update { state in state.rows[0].status = .delivered }
+        // The change notification starts a read of its own, which may overtake this one: wait for whichever publishes.
         await model.reloadNow()
-        XCTAssertEqual(said.last, "Delivered ✓, Long read")
+        try await waitFor("the delivery to be said") { said.last == "Delivered ✓, Long read" }
+        XCTAssertEqual(said.filter { $0.hasPrefix("Delivered") }.count, 1, "said once")
     }
 
     func testTheShareSheetSaysEachOutcome() {

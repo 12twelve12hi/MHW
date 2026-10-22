@@ -28,6 +28,35 @@ public enum Comfort {
     /// Every text size (no limit).
     static let allTypeSizes: ClosedRange<DynamicTypeSize> = DynamicTypeSize.xSmall ... DynamicTypeSize.accessibility5
 
+    /// The tint of buttons and links: a blue with at least 4.5:1 contrast both as text on the background and behind white
+    /// text (#0058CC, 6.4:1 on white), lighter in dark mode (#4DA3FF, 8:1 on black). The system blue is 4:1 on white.
+    public static let accent: Color = adaptive(light: (0x00, 0x58, 0xCC), dark: (0x4D, 0xA3, 0xFF))
+
+    /// Secondary text: the primary colour at 72% (about 9:1 on the background), where the system's secondary grey is
+    /// about 3.5:1 and fails the contrast audit. Comfort uses the primary colour itself.
+    public static let secondaryText = Color.primary.opacity(0.72)
+
+    static func adaptive(light: (Int, Int, Int), dark: (Int, Int, Int)) -> Color {
+        func rgb(_ c: (Int, Int, Int)) -> (CGFloat, CGFloat, CGFloat) {
+            (CGFloat(c.0) / 255, CGFloat(c.1) / 255, CGFloat(c.2) / 255)
+        }
+        let (lr, lg, lb) = rgb(light)
+        let (dr, dg, db) = rgb(dark)
+        #if os(iOS)
+        return Color(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark ? UIColor(red: dr, green: dg, blue: db, alpha: 1)
+                : UIColor(red: lr, green: lg, blue: lb, alpha: 1)
+        })
+        #elseif os(macOS)
+        return Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                ? NSColor(srgbRed: dr, green: dg, blue: db, alpha: 1) : NSColor(srgbRed: lr, green: lg, blue: lb, alpha: 1)
+        })
+        #else
+        return Color(red: Double(lr), green: Double(lg), blue: Double(lb))
+        #endif
+    }
+
     /// The test hook `-DLSComfort 0|1` (LAB-PLAN 1.7): true or false when it is given, else nil.
     public static func launchValue(_ arguments: [String] = ProcessInfo.processInfo.arguments) -> Bool? {
         guard let i = arguments.firstIndex(of: "-DLSComfort"), i + 1 < arguments.count else { return nil }
@@ -99,9 +128,10 @@ extension EnvironmentValues {
 
 /// Comfort at a window's root (LAB-PLAN F27, Apple): text from xxLarge to accessibility3 (on the Mac, larger fixed
 /// sizes), large controls, primary text instead of secondary (`dlsSecondary`), 2 pt borders around standalone controls
-/// (`comfortBorder`), 52 pt hit targets (`comfortTarget`) and no animations. With Comfort off it changes nothing except
-/// that animations also stop when the system's Reduce Motion is on. The view's structure is the same either way, so
-/// turning Comfort on or off keeps every view's state.
+/// (`comfortBorder`), 52 pt hit targets (`comfortTarget`) and no animations. Comfort on or off, it sets the baseline's
+/// tint (`Comfort.accent`, enough contrast for text and behind white text), and stops animations when the system's
+/// Reduce Motion is on. The view's structure is the same either way, so turning Comfort on or off keeps every view's
+/// state.
 public struct ComfortModifier: ViewModifier {
     public let isOn: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -115,6 +145,7 @@ public struct ComfortModifier: ViewModifier {
         let still = isOn || reduceMotion
         content
             .environment(\.comfort, isOn)
+            .tint(Comfort.accent)
             .dynamicTypeSize(isOn ? Comfort.typeSizes : Comfort.allTypeSizes)
             .controlSize(isOn ? .large : .regular)
             #if os(macOS)
@@ -140,12 +171,12 @@ struct ComfortFontModifier: ViewModifier {
     }
 }
 
-/// Secondary text, primary in Comfort (more contrast).
+/// Secondary text with enough contrast (`Comfort.secondaryText`), primary in Comfort.
 struct SecondaryTextModifier: ViewModifier {
     @Environment(\.comfort) private var comfort
 
     func body(content: Content) -> some View {
-        content.foregroundColor(comfort ? .primary : .secondary)
+        content.foregroundColor(comfort ? .primary : Comfort.secondaryText)
     }
 }
 
@@ -188,7 +219,8 @@ extension View {
         modifier(ComfortFontModifier(style: style, weight: weight))
     }
 
-    /// Secondary text, primary in Comfort.
+    /// Secondary text with enough contrast, primary in Comfort. Use it on section headers and footers too: the
+    /// system's own grey there fails the contrast audit.
     public func dlsSecondary() -> some View {
         modifier(SecondaryTextModifier())
     }
@@ -207,6 +239,28 @@ extension View {
     /// truncation audit's recorder when a test sets one (F27.4).
     public func wrapping(_ text: String) -> some View {
         truncationProbe(text).fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Text in a List or Form row (and its section headers and footers): on iPhone and iPad the row gives it the height
+    /// it needs, and a forced height there can clip it at large sizes, so it only reports to the truncation audit; on
+    /// the Mac it wraps like `wrapping(_:)`.
+    @ViewBuilder
+    public func listRowText(_ text: String) -> some View {
+        #if os(iOS)
+        truncationProbe(text)
+        #else
+        wrapping(text)
+        #endif
+    }
+
+    /// For a text field that grows to more lines (`axis: .vertical`, so long text wraps instead of being cut at large
+    /// sizes): Return runs `action` instead of starting a new line.
+    public func submitOnReturn(_ text: Binding<String>, perform action: @escaping () -> Void) -> some View {
+        onChange(of: text.wrappedValue) { value in
+            guard value.contains("\n") else { return }
+            text.wrappedValue = value.replacingOccurrences(of: "\n", with: "")
+            action()
+        }
     }
 }
 
@@ -372,12 +426,12 @@ public struct InfoRow: View {
         let layout = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
         layout {
-            Text(label).wrapping(label)
+            Text(label).listRowText(label)
             if !stacked { Spacer(minLength: 8) }
             Text(value)
                 .dlsSecondary()
                 .multilineTextAlignment(stacked ? .leading : .trailing)
-                .wrapping(value)
+                .listRowText(value)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)

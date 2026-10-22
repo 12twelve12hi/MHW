@@ -216,7 +216,16 @@ enum UITestSupport {
     static func describe(_ issue: XCUIAccessibilityAuditIssue) -> String {
         var element = "no element"
         if let e = issue.element, e.exists {
+            let value = text(e.value)
             element = "\(typeNames[e.elementType] ?? "type \(e.elementType.rawValue)") “\(e.label)”"
+                + (value.isEmpty ? "" : " = “\(value.prefix(80))”")
+                + (e.identifier.isEmpty ? "" : " id \(e.identifier)")
+                + " at \(Int(e.frame.minX)),\(Int(e.frame.minY)) \(Int(e.frame.width))×\(Int(e.frame.height))"
+            // An element without words: say what it holds, to tell which view it is (diagnostics only).
+            if e.label.isEmpty && value.isEmpty {
+                let tree = e.debugDescription.split(separator: "\n").prefix(8).joined(separator: " | ")
+                element += " [\(tree.prefix(600))]"
+            }
         }
         return "[\(names(issue.auditType))] \(issue.compactDescription) — \(element) — \(issue.detailedDescription)"
     }
