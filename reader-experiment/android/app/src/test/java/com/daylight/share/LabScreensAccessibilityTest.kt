@@ -22,6 +22,8 @@ import org.robolectric.annotation.GraphicsMode
  * home with the delivery timeline and the queue, and Setup check. As shipped, the Accessibility Test Framework's rules on the semantics
  * tree (labels, 48 dp targets, one control per spot); with Comfort at the largest text on a 360 dp phone, no text cut
  * short and no control under 56 dp (F27.4). Each is saved as a PNG for review (`lab-*.png` among the F27 screenshots).
+ * The share-in-place card with Options open and the automation sheet, which are other activities' windows, get the same
+ * checks in [LabCardsAccessibilityTest].
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w360dp-h16000dp")

@@ -1,7 +1,7 @@
 package com.daylight.share.sender
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.activity.OnBackPressedCallback
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,20 +10,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.daylight.share.App
@@ -37,11 +40,14 @@ import com.daylight.share.ui.Buttons
 import com.daylight.share.ui.Choice
 import com.daylight.share.ui.Field
 import com.daylight.share.ui.Ink
+import com.daylight.share.ui.LocalStillScroll
 import com.daylight.share.ui.Paper
 import com.daylight.share.ui.PrimaryButton
 import com.daylight.share.ui.SecondaryButton
 import com.daylight.share.ui.TextAction
 import com.daylight.share.ui.announced
+import com.daylight.share.ui.rememberStillScroll
+import com.daylight.share.ui.stillViewport
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -62,10 +68,13 @@ import kotlinx.coroutines.withContext
  * for its "Send results" notice and then handed to its `send-<id>` job ([SendWorker]), and the card closes. Tapping
  * outside it before that, Back, Close in Options or the card going sends nothing, and the copies made meanwhile are
  * deleted ([discard]); process death during the countdown queues nothing (no half rows; what it left in
- * `outbox-incoming` goes at the next start, [SenderRepo.sweepIncoming]). A refused share (too big, unreadable) shows
- * its sentence on the card, with the F02 entry point under the too-big one. The first link-only share on this device
- * shows F03's hint once, and the first excerpt "Excerpts wait for a tap on your Daylight for now."; the card then
- * stays until OK.
+ * `outbox-incoming` goes at the next start, [SenderRepo.sweepIncoming]). Once sending, a tap outside and Back wait: the
+ * card stays until the items are in the outbox (a file may still be copying from a slow provider), then closes by
+ * itself; and the copies run in the app's scope, so a card that goes anyway (its task swiped away) still stores what
+ * it was copying. A refused share (too big, unreadable) shows its sentence on the card, with the F02 entry point under
+ * the too-big one. The first link-only share on this device shows F03's hint once, and the first excerpt "Excerpts
+ * wait for a tap on your Daylight for now."; the card then stays until OK. The card scrolls when it is taller than the
+ * screen (the largest text on a small phone).
  */
 class ShareInPlace(
     private val activity: ShareActivity,
@@ -107,8 +116,10 @@ class ShareInPlace(
     private var committed = false
 
     init {
+        // In the app's scope, not the card's: once [commit] has taken them they finish even if the card goes; before
+        // that, [discard] stops them whenever the card goes (finish and onDestroy both call it).
         copies = items.map { s ->
-            if (s is Shared.Stream) activity.lifecycleScope.async { runCatching { app.sender.copy(s.uri, s.mime) } } else null
+            if (s is Shared.Stream) app.scope.async { runCatching { app.sender.copy(s.uri, s.mime) } } else null
         }
         title = defaultTitle()
         // A file's title comes with its copy.
@@ -124,6 +135,10 @@ class ShareInPlace(
                 commit()
             }
         }
+        // Back is a tap outside the card ([dismiss]): before the countdown ends it sends nothing; once sending, it waits.
+        activity.onBackPressedDispatcher.addCallback(activity, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() = dismiss()
+        })
         logi("lab: share in place, ${items.size} item(s)${if (noTimer) ", Options first (no countdown)" else ""}")
     }
 
@@ -151,12 +166,17 @@ class ShareInPlace(
     }
 
     /**
-     * Tapping outside the card: before the countdown ends nothing is sent. Once sending, the card stays until the items
-     * are in the outbox (a file is still being copied while the share's grant lives with this card); then it closes by
-     * itself.
+     * Whether the card is putting the items into the outbox: it stays until they are in (a file may still be copying,
+     * and the share's grant lives with this card), then closes by itself.
+     */
+    val busy: Boolean get() = sending && error == null && hint == null
+
+    /**
+     * Tapping outside the card, or Back: before the countdown ends nothing is sent. While [busy] the card stays; then
+     * it closes by itself.
      */
     fun dismiss() {
-        if (sending && error == null && hint == null) return
+        if (busy) return
         countdown?.cancel()
         activity.finish()
     }
@@ -240,39 +260,47 @@ class ShareInPlace(
     /** The card. */
     @Composable
     fun Content() {
-        val none = remember { MutableInteractionSource() }
         Box(
             Modifier
                 .fillMaxSize()
-                .clickable(interactionSource = none, indication = null) { dismiss() }
+                // A tap outside the card is [dismiss]. A gesture only, not a control: a screen reader never lands on an
+                // unlabelled control the size of the screen, and closes the card with Close or Back.
+                .pointerInput(Unit) { detectTapGestures { dismiss() } }
                 .navigationBarsPadding()
                 .padding(16.dp),
             contentAlignment = Alignment.BottomCenter,
         ) {
             Card(
-                modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth().clickable(interactionSource = none, indication = null) { },
+                // A tap on the card stays there (it does not close it); a gesture too, so its words read as text.
+                modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth().pointerInput(Unit) { detectTapGestures { } },
                 shape = RoundedCornerShape(6.dp),
                 border = BorderStroke(2.dp, Ink),
                 colors = CardDefaults.cardColors(containerColor = Paper, contentColor = Ink),
                 elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
             ) {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Daylight Share", style = MaterialTheme.typography.bodySmall)
-                    Text(LabText.fill(LabText["shareInPlace.card"], mapOf("name" to name)), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.announced())
-                    val e = error
-                    val h = hint
-                    when {
-                        e != null -> {
-                            Text(e, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.announced())
-                            if (bigFiles) BigFilesEntry(app)
-                            Buttons { SecondaryButton("Close") { activity.finish() } }
+                // It scrolls when it is taller than the screen (Options at the largest text on a small phone), so Send
+                // and Close stay reachable; still with Comfort, as the app's screens are (Still.kt).
+                val scroll = rememberScrollState()
+                val still = rememberStillScroll(scroll)
+                CompositionLocalProvider(LocalStillScroll provides still) {
+                    Column(Modifier.stillViewport(still).verticalScroll(scroll).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Daylight Share", style = MaterialTheme.typography.bodySmall)
+                        Text(LabText.fill(LabText["shareInPlace.card"], mapOf("name" to name)), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.announced())
+                        val e = error
+                        val h = hint
+                        when {
+                            e != null -> {
+                                Text(e, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.announced())
+                                if (bigFiles) BigFilesEntry(app)
+                                Buttons { SecondaryButton("Close") { activity.finish() } }
+                            }
+                            h != null -> {
+                                Text(h, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced())
+                                Buttons { TextAction(LabText.NOTE_BUTTON) { activity.finish() } }
+                            }
+                            optionsOpen -> OptionsContent()
+                            !sending -> Buttons { SecondaryButton(LabText["shareInPlace.options"]) { openOptions() } }
                         }
-                        h != null -> {
-                            Text(h, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced())
-                            Buttons { TextAction(LabText.NOTE_BUTTON) { activity.finish() } }
-                        }
-                        optionsOpen -> OptionsContent()
-                        !sending -> Buttons { SecondaryButton(LabText["shareInPlace.options"]) { openOptions() } }
                     }
                 }
             }

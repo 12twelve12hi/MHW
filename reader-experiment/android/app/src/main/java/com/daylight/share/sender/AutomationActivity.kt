@@ -8,8 +8,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,16 +17,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -79,7 +80,7 @@ class AutomationActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { DaylightTheme { view.value?.let { SheetContent(it) } } }
+        setContent { Screen() }
         if (savedInstanceState != null) {
             finish()
             return
@@ -151,25 +152,34 @@ class AutomationActivity : ComponentActivity() {
         })
     }
 
+    /** What the sheet shows, in the app's theme (tests host it at other text sizes). */
+    @Composable
+    internal fun Screen() {
+        DaylightTheme { view.value?.let { SheetContent(it) } }
+    }
+
     @Composable
     private fun SheetContent(sheet: Sheet) {
-        val none = remember { MutableInteractionSource() }
         Box(
             Modifier
                 .fillMaxSize()
-                .clickable(interactionSource = none, indication = null) { finish() }
+                // A tap outside the sheet closes it. A gesture only, not a control: a screen reader never lands on an
+                // unlabelled control the size of the screen, and closes the sheet with Cancel, Close or Back.
+                .pointerInput(Unit) { detectTapGestures { finish() } }
                 .navigationBarsPadding()
                 .padding(16.dp),
             contentAlignment = Alignment.BottomCenter,
         ) {
             Card(
-                modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth().clickable(interactionSource = none, indication = null) { },
+                // A tap on the sheet stays there; a gesture too, so its words read as text.
+                modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth().pointerInput(Unit) { detectTapGestures { } },
                 shape = RoundedCornerShape(6.dp),
                 border = BorderStroke(2.dp, Ink),
                 colors = CardDefaults.cardColors(containerColor = Paper, contentColor = Ink),
                 elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
             ) {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // It scrolls when it is taller than the screen (the largest text on a small phone), so Send stays reachable.
+                Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Daylight Share", style = MaterialTheme.typography.bodySmall)
                     when (sheet) {
                         is Sheet.Refused -> {

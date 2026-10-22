@@ -61,26 +61,7 @@ class ShareActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            DaylightTheme {
-                val card = inPlace.value
-                if (card != null) {
-                    card.Content()
-                } else {
-                    val h = hint.value
-                    val extra: (@Composable ColumnScope.() -> Unit)? = when {
-                        bigFiles.value -> {
-                            { BigFilesEntry(App.of(this@ShareActivity)) }
-                        }
-                        h != null -> {
-                            { CardHint(h) { finish() } }
-                        }
-                        else -> null
-                    }
-                    StatusCard(text.value, action.value, onDismiss = ::finish, close = h == null && (action.value != null || stays.value), extra = extra)
-                }
-            }
-        }
+        setContent { Screen() }
         if (savedInstanceState != null) {
             finish() // recreated after process death: the share's grant is gone
             return
@@ -105,6 +86,29 @@ class ShareActivity : ComponentActivity() {
                 inPlace.value = ShareInPlace(this, app, shared, PhoneLab.daylightName(app), sourceApp(), noTimer = needsTime(this) || app.prefs.labAlwaysOptions)
             }
             else -> send(app, shared, pairing.name.ifEmpty { "your Daylight" })
+        }
+    }
+
+    /** What the card shows, in the app's theme (tests host it at other text sizes). */
+    @Composable
+    internal fun Screen() {
+        DaylightTheme {
+            val card = inPlace.value
+            if (card != null) {
+                card.Content()
+            } else {
+                val h = hint.value
+                val extra: (@Composable ColumnScope.() -> Unit)? = when {
+                    bigFiles.value -> {
+                        { BigFilesEntry(App.of(this@ShareActivity)) }
+                    }
+                    h != null -> {
+                        { CardHint(h) { finish() } }
+                    }
+                    else -> null
+                }
+                StatusCard(text.value, action.value, onDismiss = ::finish, close = h == null && (action.value != null || stays.value), extra = extra)
+            }
         }
     }
 

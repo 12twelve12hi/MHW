@@ -285,7 +285,11 @@ Inbox's waits for its own Wave 1 build).
   Without notification permission nothing is posted and F04's row says "Needs notifications"; the app asks once, after
   a share in place (Android 13 and later). A shared file is copied into `files/outbox-incoming` while the card is up; a
   card that goes before it sends (a tap outside, Back, Close in Options) deletes that copy, a copy cut short deletes
-  what it wrote, and copies a dead process left behind go at the next start. F04's Use switch off: the v1.1 card.
+  what it wrote, and copies a dead process left behind go at the next start. Once it is sending, Back and a tap
+  outside wait: the card stays until the items are in the outbox (a big file from a slow provider may still be
+  copying), then closes by itself, and a card that goes anyway (its task swiped away) still stores what it was
+  copying. The card scrolls when it is taller than the screen (the largest text on a small phone), and the tap outside
+  it is a gesture, not a control a screen reader would land on. F04's Use switch off: the v1.1 card.
 - **The link-only hint (F03).** The first share that brings only a link shows once, on whichever card the share used
   (share in place's, or the v1.1 card with F04's Use switch off), and the card stays until OK: "Only the link came
   through. For pages behind a login, send from your computer’s browser with the Send to Daylight extension." After that
@@ -357,6 +361,12 @@ it’s off, …"); TalkBack reads "Use {feature}". The one Lab switch still turn
   selection (`#:~:text=`) arrives as a link unless sent as an excerpt.
 - **F01.1, F01.2, F26.1:** a link reaching "In your Reader ✓", a PDF reading "Waiting for a tap on your Daylight" then
   "Handed to the Reader", and the test article ticking Delivered and In your Reader, in each condition of F01.1.
+- **F04 (Back while a file copies):** share a 9 MB PDF from Google Drive and press Back (the button and the gesture)
+  right after the countdown: the card stays until the item is in the outbox, then closes, and the row is on the home
+  screen; the same after swiping the sharing app away from Recents while the card says "Sending to {name}".
+- **F27.4 (the cards on a small phone):** with Comfort and the largest text, the share card with Options and the
+  automation sheet scroll, Send and Close (Cancel) can be reached, and the title field stays above the keyboard on
+  Android 15 (edge to edge); with TalkBack, swiping through the card never lands on the area outside it.
 
 ## Build
 
@@ -384,6 +394,10 @@ the F27 screenshots (`daylight-share-f27-screenshots`) and any re-recorded Lab-o
 choice; the phone unpaired, paired with a row in every state, and its Settings; the Inbox new (with its code), with
 items, and its Settings.
 
+- `LabCardsAccessibilityTest` (F27, K4) runs the screen tests' accessibility checks (the rules as shipped; Comfort at
+  the largest text on a 360 dp phone) on the share-in-place card with Options open and on the automation sheet with
+  its needs-quick-sends note, which are other activities' windows, with a 58-character Daylight name and a long title;
+  and on a 360 x 640 dp phone at the largest text, it checks that every control on them can be scrolled to.
 - `DialogsAndScrollingTest` (F27) covers what the screen tests do not reach. It opens each of the three questions
   with Comfort on and checks that every text in the dialog is laid out at 1.3 times the system's font scale, as on the
   screen behind it (`TextLayoutResult.layoutInput.density`), then at the largest text size on a 360 dp phone that nothing in

@@ -3,9 +3,11 @@ package com.daylight.share
 import android.content.ComponentName
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
 import android.view.View
 import android.content.Intent
 import android.content.IntentFilter
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -19,6 +21,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
+import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.TextLayoutResult
@@ -195,6 +198,15 @@ object ScreenKit {
         compose.waitForIdle()
     }
 
+    /**
+     * Shows another activity's own [content] at the largest system font scale (the share card and the automation sheet,
+     * which are not MainActivity's): [content] is what the activity sets, its theme included.
+     */
+    fun showAtLargestText(compose: ComposeTestRule, activity: ComponentActivity, content: @Composable () -> Unit) {
+        compose.runOnUiThread { activity.setContent { LargestText(content) } }
+        compose.waitForIdle()
+    }
+
     @Composable
     private fun LargestText(content: @Composable () -> Unit) {
         val d = LocalDensity.current
@@ -209,7 +221,7 @@ object ScreenKit {
      * read here: the semantics action lays the text out again at its constraint's full width, so a single line that is
      * narrower than its column always reads as overflowing.)
      */
-    fun textOverflows(compose: AppRule): List<String> {
+    fun textOverflows(compose: ComposeTestRule): List<String> {
         val out = ArrayList<String>()
         val nodes = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult), useUnmergedTree = true)
             .fetchSemanticsNodes()
@@ -230,7 +242,7 @@ object ScreenKit {
     }
 
     /** Every control (merged tree) whose touch target is under [minDp] in either direction. */
-    fun smallControls(compose: AppRule, minDp: Float): List<String> {
+    fun smallControls(compose: ComposeTestRule, minDp: Float): List<String> {
         val dp = compose.density.density
         return compose.onAllNodes(hasClickAction()).fetchSemanticsNodes()
             .mapNotNull { n ->
@@ -245,7 +257,7 @@ object ScreenKit {
      * Every control (merged tree: a button, a switch, a choice, a text field) without words for a screen reader, in the
      * app's window and in any dialog open over it.
      */
-    fun unlabelledControls(compose: AppRule): List<String> =
+    fun unlabelledControls(compose: ComposeTestRule): List<String> =
         compose.onAllNodes(isRoot()).fetchSemanticsNodes().flatMap { tree(it) }
             .filter { it.isControl && it.label.isNullOrBlank() }.map { it.toString() }
 
@@ -259,7 +271,7 @@ object ScreenKit {
      * (DuplicateClickableBoundsCheck), and a text field is named by its label, not a content description
      * (EditableContentDescCheck).
      */
-    fun accessibilityProblems(compose: AppRule, minTargetDp: Float = 48f): List<String> {
+    fun accessibilityProblems(compose: ComposeTestRule, minTargetDp: Float = 48f): List<String> {
         val out = ArrayList<String>()
         unlabelledControls(compose).forEach { out += "no label: $it" }
         smallControls(compose, minTargetDp).forEach { out += "touch target under $minTargetDp dp: $it" }
@@ -281,23 +293,42 @@ object ScreenKit {
      * holds anything but white (the test window is very tall). Compose's `captureToImage()` is not used: it waits for
      * the window to draw a frame, which Robolectric never does, and times out after 2 s (Compose 1.8, Robolectric 4.14);
      * drawing the window's views gives the same pixels. Returns the file, or null outside Gradle.
+     *
+     * A see-through window (the share card, the automation sheet: [onWhite]) is drawn on white and cut 16 dp above the
+     * first row that holds anything, too, as its card sits at the bottom of the tall window.
      */
-    fun screenshot(compose: AppRule, name: String, window: View = compose.activity.window.decorView): File? {
+    fun screenshot(
+        compose: ComposeTestRule,
+        name: String,
+        window: View = (compose as AndroidComposeTestRule<*, *>).activity.window.decorView,
+        onWhite: Boolean = false,
+    ): File? {
         val dir = System.getProperty("dls.screenshots")?.let(::File) ?: return null
         compose.waitForIdle()
         check(window.width > 0 && window.height > 0) { "$name: the window is not laid out (${window.width} x ${window.height})" }
         val full = Bitmap.createBitmap(window.width, window.height, Bitmap.Config.ARGB_8888)
+        if (onWhite) full.eraseColor(Color.WHITE)
         compose.runOnUiThread { window.draw(Canvas(full)) }
         val inked = lastInkedRow(full)
         check(inked > 0) { "$name: the screenshot is blank" }
         val pad = (16 * compose.density.density).roundToInt()
-        val height = minOf(full.height, inked + 1 + pad)
-        val shot = Bitmap.createBitmap(full, 0, 0, full.width, height)
+        val top = if (onWhite) maxOf(0, firstInkedRow(full) - pad) else 0
+        val height = minOf(full.height, inked + 1 + pad) - top
+        val shot = Bitmap.createBitmap(full, 0, top, full.width, height)
         dir.mkdirs()
         val file = File(dir, "$name.png")
         file.outputStream().use { shot.compress(Bitmap.CompressFormat.PNG, 100, it) }
         println("f27-screenshot: ${file.name} ${shot.width}x${shot.height}")
         return file
+    }
+
+    private fun firstInkedRow(b: Bitmap): Int {
+        val row = IntArray(b.width)
+        for (y in 0 until b.height) {
+            b.getPixels(row, 0, b.width, 0, y, b.width, 1)
+            if (row.any { it != WHITE }) return y
+        }
+        return 0
     }
 
     private fun lastInkedRow(b: Bitmap): Int {

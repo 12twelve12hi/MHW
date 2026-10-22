@@ -4,13 +4,17 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.Looper
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
@@ -36,8 +40,12 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.io.File
+import java.io.IOException
+import java.io.InputStream
 import java.io.RandomAccessFile
 import java.time.Duration
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Share in place on the phone (LAB-PLAN F04; F04.4, F04.5), with what rides on its card: F03's link-only hint once,
@@ -72,6 +80,9 @@ class ShareInPlaceTest {
     }
 
     private fun rows(): List<OutboxRow> = PhoneKit.store(app).load().first
+
+    /** A tap at the top of the window, outside the card (which sits at the bottom). */
+    private fun tapOutside() = compose.onRoot().performTouchInput { click(Offset(width / 2f, 8f)) }
 
     private val card: String get() = LabText.fill(LabText["shareInPlace.card"], mapOf("name" to "Kitchen Daylight"))
 
@@ -243,6 +254,117 @@ class ShareInPlaceTest {
             assertTrue(PhoneKit.incoming(app).isEmpty())
         } finally {
             f.delete()
+        }
+    }
+
+    /**
+     * A tap on the card leaves it up; a tap outside it during the countdown closes it and sends nothing. Both are
+     * gestures, not controls (the F27 checks in LabCardsAccessibilityTest).
+     */
+    @Test
+    fun aTapOutsideTheCardClosesItAndATapOnItDoesNot() {
+        PhoneKit.phone(app, relay)
+        share("Tapped https://example.com/tapped").use { s ->
+            val a = s.activity()
+            waitMs(300)
+            compose.onNodeWithText(card).performClick()
+            waitMs(300)
+            assertFalse("a tap on the card leaves it up", a.isFinishing)
+            tapOutside()
+            PhoneKit.until(what = "the card to finish") { a.isFinishing }
+            waitMs(5_000)
+            assertTrue("nothing sent", rows().isEmpty())
+        }
+    }
+
+    /**
+     * A shared file from a slow provider (Google Drive fetching a 9 MB PDF) is still copying when the countdown ends:
+     * Back then does not take the card away, nor does a tap outside; the card stays until the item is in the
+     * outbox, with its job asked for and its notice remembered, then closes by itself. A card that goes anyway while it
+     * sends (its task swiped away) still stores what it was copying.
+     */
+    @Test
+    fun backWhileAFileIsStillCopyingKeepsTheShare() {
+        PhoneKit.phone(app, relay)
+        fun shareSlow(name: String): Pair<SlowStream, ActivityScenario<ShareActivity>> {
+            val uri = Uri.parse("content://com.example.slowdrive/document/$name")
+            val slow = SlowStream(ByteArray(300_000) { (it % 251).toByte() })
+            shadowOf(app.contentResolver).registerInputStream(uri, slow)
+            val i = Intent(app, ShareActivity::class.java).setAction(Intent.ACTION_SEND).setType("application/pdf").putExtra(Intent.EXTRA_STREAM, uri)
+            return slow to ActivityScenario.launch<ShareActivity>(i)
+        }
+        val (slow, scenario) = shareSlow("slow-report.pdf")
+        try {
+            scenario.use { s ->
+                val a = s.activity()
+                PhoneKit.until(what = "the copy to start") { slow.started }
+                waitMs(ShareInPlace.COUNTDOWN_MS)
+                // The countdown ended: the card is sending, and the copy has not finished.
+                compose.onNodeWithText(card).assertIsDisplayed()
+                assertTrue("no Options once sending", compose.onAllNodes(hasText(LabText["shareInPlace.options"]) and hasClickAction()).fetchSemanticsNodes().isEmpty())
+                s.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+                waitMs(1_000)
+                assertFalse("Back waits while the card sends", a.isFinishing)
+                tapOutside()
+                waitMs(1_000)
+                assertFalse("so does a tap outside", a.isFinishing)
+                assertTrue(rows().isEmpty())
+                compose.onNodeWithText(card).assertIsDisplayed()
+                slow.release()
+                PhoneKit.until(what = "the card to finish") { a.isFinishing }
+            }
+        } finally {
+            slow.release()
+        }
+        val row = rows().single()
+        assertEquals(Kind.FILE, row.kind)
+        assertEquals("slow-report.pdf", row.name)
+        assertTrue(PhoneKit.jobs().contains(SendWorker.name(row.id)))
+        assertTrue("remembered for its notice", app.prefs.labInPlaceIds().contains(row.id))
+        assertTrue("the copy moved into the outbox", PhoneKit.incoming(app).isEmpty())
+
+        val (slow2, scenario2) = shareSlow("swiped-away.pdf")
+        try {
+            scenario2.use { s ->
+                PhoneKit.until(what = "the second copy to start") { slow2.started }
+                waitMs(ShareInPlace.COUNTDOWN_MS)
+                s.moveToState(Lifecycle.State.DESTROYED)
+                slow2.release()
+                PhoneKit.until(what = "the second item in the outbox") { rows().size == 2 }
+            }
+        } finally {
+            slow2.release()
+        }
+        val gone = rows().single { it.name == "swiped-away.pdf" }
+        assertTrue(PhoneKit.jobs().contains(SendWorker.name(gone.id)))
+        PhoneKit.until(what = "the second copy to move into the outbox") { PhoneKit.incoming(app).isEmpty() }
+    }
+
+    /** A shared file whose provider is slow: its stream gives nothing until [release], then its bytes. */
+    private class SlowStream(private val bytes: ByteArray) : InputStream() {
+        private val gate = CountDownLatch(1)
+        private var at = 0
+
+        /** Whether the copy has started reading. */
+        @Volatile
+        var started = false
+            private set
+
+        fun release() = gate.countDown()
+
+        override fun read(): Int {
+            val one = ByteArray(1)
+            return if (read(one, 0, 1) < 0) -1 else one[0].toInt() and 0xFF
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            started = true
+            if (!gate.await(30, TimeUnit.SECONDS)) throw IOException("the slow stream was never released")
+            if (at >= bytes.size) return -1
+            val n = minOf(len, bytes.size - at)
+            System.arraycopy(bytes, at, b, off, n)
+            at += n
+            return n
         }
     }
 
