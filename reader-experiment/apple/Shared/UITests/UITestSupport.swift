@@ -91,7 +91,7 @@ enum UITestSupport {
         for child in s.children { visit(child, into: &out) }
     }
 
-    static func text(_ value: Any?) -> String {
+    nonisolated static func text(_ value: Any?) -> String {
         switch value {
         case let s as String: return s
         case let n as NSNumber: return n.stringValue
