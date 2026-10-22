@@ -1,19 +1,13 @@
 package com.daylight.share.ui
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,10 +33,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun RoleScreen(activity: MainActivity, onPick: (Role) -> Unit) {
     val suggestInbox = remember { Prefs.looksLikeDaylight(activity) }
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
+    ScreenColumn(padding = 20.dp) {
         Text("Daylight Share", style = MaterialTheme.typography.headlineSmall)
         Text("Send articles, web pages and documents from your phone to your Daylight, where they go into the Daylight Reader.", style = MaterialTheme.typography.bodyLarge)
         Text("Which device is this?", style = MaterialTheme.typography.titleLarge)
@@ -79,10 +70,7 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     @Suppress("UNUSED_VARIABLE") val tick = activity.resumes.intValue
 
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
+    ScreenColumn(padding = 16.dp) {
         HeaderRow(title = { Text("Settings", style = MaterialTheme.typography.headlineSmall) }) {
             SecondaryButton("Done") { onBack() }
         }
@@ -207,24 +195,18 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
 
     val target = confirmRole
     if (target != null) {
-        AlertDialog(
-            onDismissRequest = { confirmRole = null },
-            title = { Text(if (target == Role.INBOX) "Make this the Daylight Inbox?" else "Send from this device?") },
-            text = {
-                Text(
-                    if (target == Role.INBOX) "It will receive items and hand them to the Daylight Reader. Phones pair with the code it shows."
-                    else "It stops receiving. Its pairing code stays, in case you switch back."
-                )
+        DaylightDialog(
+            title = if (target == Role.INBOX) "Make this the Daylight Inbox?" else "Send from this device?",
+            text = if (target == Role.INBOX) "It will receive items and hand them to the Daylight Reader. Phones pair with the code it shows."
+            else "It stops receiving. Its pairing code stays, in case you switch back.",
+            confirm = "Switch",
+            onConfirm = {
+                confirmRole = null
+                if (target == Role.SENDER) InstantDeliveryService.stop(activity)
+                app.setRole(target)
+                onBack()
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmRole = null
-                    if (target == Role.SENDER) InstantDeliveryService.stop(activity)
-                    app.setRole(target)
-                    onBack()
-                }) { Text("Switch") }
-            },
-            dismissButton = { TextButton(onClick = { confirmRole = null }) { Text("Cancel") } },
+            onDismiss = { confirmRole = null },
         )
     }
 }

@@ -3,6 +3,7 @@ package com.daylight.share
 import android.content.ComponentName
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.view.View
 import android.content.Intent
 import android.content.IntentFilter
 import androidx.activity.compose.setContent
@@ -19,7 +20,6 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
@@ -241,9 +241,16 @@ object ScreenKit {
             }
     }
 
-    /** Every control (merged tree: a button, a switch, a choice, a text field) without words for a screen reader. */
+    /**
+     * Every control (merged tree: a button, a switch, a choice, a text field) without words for a screen reader, in the
+     * app's window and in any dialog open over it.
+     */
     fun unlabelledControls(compose: AppRule): List<String> =
-        tree(compose.onRoot().fetchSemanticsNode()).filter { it.isControl && it.label.isNullOrBlank() }.map { it.toString() }
+        compose.onAllNodes(isRoot()).fetchSemanticsNodes().flatMap { tree(it) }
+            .filter { it.isControl && it.label.isNullOrBlank() }.map { it.toString() }
+
+    /** The root of the window [n] is in (the app's, or a dialog's). */
+    private fun rootOf(n: SemanticsNode): SemanticsNode = generateSequence(n) { it.parent }.last()
 
     /**
      * The Accessibility Test Framework's error rules, applied to the Compose semantics tree (the framework itself sees
@@ -257,9 +264,9 @@ object ScreenKit {
         unlabelledControls(compose).forEach { out += "no label: $it" }
         smallControls(compose, minTargetDp).forEach { out += "touch target under $minTargetDp dp: $it" }
         compose.onAllNodes(hasClickAction()).fetchSemanticsNodes()
-            .groupBy { it.boundsInRoot.run { listOf(left, top, right, bottom).map { v -> v.toInt() } } }
+            .groupBy { listOf(rootOf(it).id) + it.boundsInRoot.run { listOf(left, top, right, bottom).map { v -> v.toInt() } } }
             .filterValues { it.size > 1 }
-            .forEach { (bounds, nodes) -> out += "controls on the same spot $bounds: ${nodes.map { describe(it)?.label }}" }
+            .forEach { (spot, nodes) -> out += "controls on the same spot ${spot.drop(1)}: ${nodes.map { describe(it)?.label }}" }
         compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.SetText)).fetchSemanticsNodes()
             .filter { !it.config.getOrNull(SemanticsProperties.ContentDescription).isNullOrEmpty() }
             .forEach { out += "text field with a content description: ${describe(it)?.label}" }
@@ -275,10 +282,10 @@ object ScreenKit {
      * the window to draw a frame, which Robolectric never does, and times out after 2 s (Compose 1.8, Robolectric 4.14);
      * drawing the window's views gives the same pixels. Returns the file, or null outside Gradle.
      */
-    fun screenshot(compose: AppRule, name: String): File? {
+    fun screenshot(compose: AppRule, name: String, window: View = compose.activity.window.decorView): File? {
         val dir = System.getProperty("dls.screenshots")?.let(::File) ?: return null
         compose.waitForIdle()
-        val window = compose.activity.window.decorView
+        check(window.width > 0 && window.height > 0) { "$name: the window is not laid out (${window.width} x ${window.height})" }
         val full = Bitmap.createBitmap(window.width, window.height, Bitmap.Config.ARGB_8888)
         compose.runOnUiThread { window.draw(Canvas(full)) }
         val inked = lastInkedRow(full)
@@ -309,9 +316,10 @@ object ScreenKit {
     /**
      * Where each text is: the unmerged tree's texts (scrubbed as in the parity tree) with their boxes, to the pixel, in
      * the root, or from the top of the text [from] (and only the texts from there down). The Inbox's connection line is
-     * left out: the test relay's connection comes and goes on its own. Only the app's window is read, not a popup.
+     * left out: the test relay's connection comes and goes on its own, and so are the texts in [ignore] (a field's
+     * placeholder, which shows once it is focused). Only the app's window is read, not a popup.
      */
-    fun positions(compose: AppRule, from: String? = null): List<String> {
+    fun positions(compose: AppRule, from: String? = null, ignore: Set<String> = emptySet()): List<String> {
         val nodes = ArrayList<Pair<String, androidx.compose.ui.geometry.Rect>>()
         fun walk(n: SemanticsNode) {
             val c = n.config
@@ -319,7 +327,7 @@ object ScreenKit {
                 c.getOrNull(SemanticsProperties.ContentDescription).orEmpty() +
                 listOfNotNull(c.getOrNull(SemanticsProperties.EditableText)?.text)
             val words = texts.joinToString(" | ") { scrub(it) }
-            if (texts.isNotEmpty() && !words.contains("<connection status>")) nodes += words to n.boundsInRoot
+            if (texts.isNotEmpty() && !words.contains("<connection status>") && words !in ignore) nodes += words to n.boundsInRoot
             n.children.forEach(::walk)
         }
         // The app's window; a focused field's cursor handle is a popup with a root of its own.
@@ -334,18 +342,18 @@ object ScreenKit {
     /**
      * What moves after [action] (a tap, a focus), frame by frame for 1.5 s: the screen may change once (at once, or
      * when a tap is recognised), then it must hold still. An animation changes it frame after frame; this returns those
-     * changes (empty when there is no motion). Places are measured [from] a text when given ([positions]). F27:
-     * Comfort's "no motion", and the DC-1 Inbox never animates.
+     * changes (empty when there is no motion). Places are measured [from] a text when given, without the texts in
+     * [ignore] ([positions]). F27: Comfort's "no motion", and the DC-1 Inbox never animates.
      */
-    fun motionAfter(compose: AppRule, from: String? = null, action: () -> Unit): List<String> {
+    fun motionAfter(compose: AppRule, from: String? = null, ignore: Set<String> = emptySet(), action: () -> Unit): List<String> {
         compose.waitForIdle()
         compose.mainClock.autoAdvance = false
         try {
-            val states = arrayListOf(positions(compose, from))
+            val states = arrayListOf(positions(compose, from, ignore))
             action()
             repeat(MOTION_FRAMES) {
                 compose.mainClock.advanceTimeByFrame()
-                val now = positions(compose, from)
+                val now = positions(compose, from, ignore)
                 if (now != states.last()) states += now
             }
             if (states.size <= 2) return emptyList()

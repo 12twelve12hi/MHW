@@ -8,10 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -197,12 +194,12 @@ class MainActivity : ComponentActivity() {
         if (pending != null) {
             val c = pending.confirmation
             val lines = c.lines + if (pending.inboxRole) listOf(INBOX_LINE) else emptyList()
-            AlertDialog(
-                onDismissRequest = { pendingPair.value = null },
-                title = { Text(c.title ?: "Pair with a Daylight?") },
-                text = { Text(lines.joinToString("\n\n")) },
-                confirmButton = { TextButton(onClick = { confirmPairing() }) { Text(c.button ?: "Pair") } },
-                dismissButton = { TextButton(onClick = { pendingPair.value = null }) { Text("Cancel") } },
+            DaylightDialog(
+                title = c.title ?: "Pair with a Daylight?",
+                text = lines.joinToString("\n\n"),
+                confirm = c.button ?: "Pair",
+                onConfirm = { confirmPairing() },
+                onDismiss = { pendingPair.value = null },
             )
         }
     }

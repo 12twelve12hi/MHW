@@ -7,6 +7,12 @@
         <item name="android:navigationBarColor">@color/white</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>
+        <!-- Dialogs appear and go at once: the DC-1 Inbox never animates, and Comfort is "no motion". -->
+        <item name="android:dialogTheme">@style/DaylightShareDialog</item>
+    </style>
+
+    <style name="DaylightShareDialog" parent="android:ThemeOverlay.Material.Dialog">
+        <item name="android:windowAnimationStyle">@null</item>
     </style>
 
     <style name="Theme.DaylightShare.Translucent" parent="Theme.DaylightShare">

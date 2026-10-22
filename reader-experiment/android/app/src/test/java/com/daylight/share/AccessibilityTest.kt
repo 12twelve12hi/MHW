@@ -4,10 +4,12 @@ import android.view.accessibility.AccessibilityManager
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalOverscrollFactory
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalCursorBlinkEnabled
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -42,10 +44,13 @@ import com.daylight.share.ui.COMFORT_TARGET
 import com.daylight.share.ui.COMFORT_TEXT_SCALE
 import com.daylight.share.ui.DaylightTheme
 import com.daylight.share.ui.MainActivity
+import com.daylight.share.ui.NoBringIntoViewScroll
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -222,6 +227,8 @@ class AccessibilityTest {
         var target: Dp = 0.dp
         var ripple: Any? = "unread"
         var overscroll: Any? = "unread"
+        var blink: Boolean? = null
+        var scrollIntoView: Any? = null
         compose.runOnUiThread {
             compose.activity.setContent {
                 baseScale = LocalDensity.current.fontScale
@@ -232,6 +239,8 @@ class AccessibilityTest {
                     target = LocalMinimumInteractiveComponentSize.current
                     ripple = LocalRippleConfiguration.current
                     overscroll = LocalOverscrollFactory.current
+                    blink = LocalCursorBlinkEnabled.current
+                    scrollIntoView = LocalBringIntoViewSpec.current
                 }
             }
         }
@@ -241,13 +250,26 @@ class AccessibilityTest {
         assertEquals(56.dp, target)
         assertNull("Comfort: no ripples", ripple)
         assertNull("Comfort: no overscroll stretch", overscroll)
+        assertEquals("Comfort: a steady cursor", false, blink)
+        assertSame("Comfort: no scrolling animation into view", NoBringIntoViewScroll, scrollIntoView)
 
         // The phone role without Comfort keeps the usual feedback; the Inbox role never animates.
         app.setRole(Role.SENDER)
-        compose.runOnUiThread { compose.activity.setContent { DaylightTheme { ripple = LocalRippleConfiguration.current; overscroll = LocalOverscrollFactory.current } } }
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                DaylightTheme {
+                    ripple = LocalRippleConfiguration.current
+                    overscroll = LocalOverscrollFactory.current
+                    blink = LocalCursorBlinkEnabled.current
+                    scrollIntoView = LocalBringIntoViewSpec.current
+                }
+            }
+        }
         compose.waitForIdle()
         assertNotNull(ripple)
         assertNotNull(overscroll)
+        assertEquals(true, blink)
+        assertNotSame(NoBringIntoViewScroll, scrollIntoView)
         app.prefs.inboxRelay = ScreenKit.NOWHERE
         app.setRole(Role.INBOX)
         compose.runOnUiThread {
@@ -256,6 +278,8 @@ class AccessibilityTest {
                     ripple = LocalRippleConfiguration.current
                     target = LocalMinimumInteractiveComponentSize.current
                     overscroll = LocalOverscrollFactory.current
+                    blink = LocalCursorBlinkEnabled.current
+                    scrollIntoView = LocalBringIntoViewSpec.current
                 }
             }
         }
@@ -263,6 +287,8 @@ class AccessibilityTest {
         assertNull("the Inbox: no ripples", ripple)
         assertNull("the Inbox: no overscroll stretch", overscroll)
         assertEquals(48.dp, target)
+        assertEquals("the Inbox: a steady cursor", false, blink)
+        assertSame("the Inbox: no scrolling animation into view", NoBringIntoViewScroll, scrollIntoView)
     }
 
     /**

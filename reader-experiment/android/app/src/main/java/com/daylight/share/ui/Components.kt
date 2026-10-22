@@ -8,6 +8,7 @@ import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -28,12 +29,17 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -50,9 +56,11 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,6 +74,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalCursorBlinkEnabled
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -144,8 +153,8 @@ private class ComfortDensity(private val base: Density) : Density {
 
 /**
  * Black on white, large type, no colour: made for the DC-1's e-paper screen, fine on a phone. It follows the app's
- * Comfort switch, and in the Inbox role (the DC-1) nothing moves: no ripples, no stretch at the end of a list, and the
- * app's own controls and fields are static.
+ * Comfort switch, and in the Inbox role (the DC-1) nothing moves: no ripples, no stretch at the end of a list, no
+ * blinking cursor, no scrolling animation, and the app's own controls and fields are static.
  */
 @Composable
 fun DaylightTheme(content: @Composable () -> Unit) {
@@ -157,7 +166,8 @@ fun DaylightTheme(content: @Composable () -> Unit) {
 
 /**
  * The theme with Comfort ([comfort]: text x1.3 via [LocalDensity], 56 dp touch targets, more contrast, no motion) and
- * [still] (no ripples and no overscroll stretch: the DC-1 Inbox, and Comfort).
+ * [still] (the DC-1 Inbox, and Comfort: no ripples, no overscroll stretch, a cursor that does not blink, and no
+ * scrolling animation to bring a field into view: the app scrolls in one step instead, see Still.kt).
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -166,14 +176,20 @@ fun DaylightTheme(comfort: Boolean, still: Boolean = comfort, content: @Composab
         val base = LocalDensity.current
         val density = remember(base, comfort) { if (comfort) ComfortDensity(base) else base }
         val overscroll = LocalOverscrollFactory.current
+        val bringIntoView = LocalBringIntoViewSpec.current
         // One provider whatever the values, so switching Comfort keeps every screen's state (where you are, what you typed).
         CompositionLocalProvider(
             LocalComfort provides comfort,
+            LocalStill provides still,
             LocalDensity provides density,
             LocalMinimumInteractiveComponentSize provides if (comfort) COMFORT_TARGET else USUAL_TARGET,
             LocalRippleConfiguration provides if (still) null else RippleConfiguration(),
             // Android 12+ stretches a list pulled past its end, and lets it spring back.
             LocalOverscrollFactory provides if (still) null else overscroll,
+            // The cursor shows steadily instead of blinking twice a second.
+            LocalCursorBlinkEnabled provides !still,
+            // A focused field is brought into view by the app, in one step (Still.kt), not by Compose's scroll.
+            LocalBringIntoViewSpec provides if (still) NoBringIntoViewScroll else bringIntoView,
             content = content,
         )
     }
@@ -214,6 +230,28 @@ fun TextAction(text: String, modifier: Modifier = Modifier, onClick: () -> Unit)
     TextButton(onClick = onClick, modifier = if (LocalComfort.current) modifier.heightIn(min = COMFORT_TARGET) else modifier) { Text(text) }
 }
 
+/**
+ * A question in a dialog: [title], [text] (it scrolls when it is taller than the screen), [confirm] and [dismiss]. A
+ * dialog is a window of its own, and Compose gives it that window's density again, so Comfort's x1.3 text would stop at
+ * its edge: the density of the screen that opens it is provided again inside it. The buttons are [TextAction]s (56 dp
+ * with Comfort). It appears and goes without animating (the app theme's `android:dialogTheme`).
+ */
+@Composable
+fun DaylightDialog(title: String, text: String, confirm: String, onConfirm: () -> Unit, onDismiss: () -> Unit, dismiss: String = "Cancel") {
+    val density = LocalDensity.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { InDensity(density) { Text(title) } },
+        text = { InDensity(density) { Text(text, Modifier.verticalScroll(rememberScrollState())) } },
+        confirmButton = { InDensity(density) { TextAction(confirm, onClick = onConfirm) } },
+        dismissButton = { InDensity(density) { TextAction(dismiss, onClick = onDismiss) } },
+    )
+}
+
+@Composable
+private fun InDensity(density: Density, content: @Composable () -> Unit) =
+    CompositionLocalProvider(LocalDensity provides density, content = content)
+
 /** A row of buttons that wraps onto the next line when they do not fit (large text, Comfort, narrow phones). */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -233,12 +271,12 @@ fun Buttons(modifier: Modifier = Modifier, content: @Composable FlowRowScope.() 
 @Composable
 fun HeaderRow(title: @Composable ColumnScope.() -> Unit, button: @Composable () -> Unit) {
     if (LocalComfort.current) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.stillBringIntoView(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             title()
             button()
         }
     } else {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.stillBringIntoView(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), content = title)
             button()
         }
@@ -331,7 +369,7 @@ private fun RadioMark(on: Boolean, modifier: Modifier = Modifier) {
 @Composable
 fun Section(title: String? = null, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Card(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().stillBringIntoView(),
         shape = square,
         border = BorderStroke(2.dp, Ink),
         colors = CardDefaults.cardColors(containerColor = Paper, contentColor = Ink),
@@ -349,7 +387,8 @@ fun Section(title: String? = null, modifier: Modifier = Modifier, content: @Comp
  * text fields slide their label into the border and fade the border on focus; here the [label] always sits above the
  * box, focus thickens the border at once, and [placeholder] shows while the field is focused and empty. The label is
  * part of the field for a screen reader ("Pairing code, edit box"); [errorText] is its error (the sentence under it
- * says it in words).
+ * says it in words). On a still screen it comes into view in one step when focused, and stays in view when the
+ * keyboard opens (Still.kt).
  */
 @Composable
 fun Field(
@@ -365,10 +404,17 @@ fun Field(
     val source = remember { MutableInteractionSource() }
     val focused by source.collectIsFocusedAsState()
     val style = MaterialTheme.typography.bodyLarge.copy(color = Ink)
+    val requester = remember { BringIntoViewRequester() }
+    val still = LocalStillScroll.current
+    if (still != null && focused) {
+        // The keyboard opening shrinks the list's box: the field is shown again, in one step.
+        LaunchedEffect(still) { snapshotFlow { still.height }.collect { requester.bringIntoView() } }
+    }
+    val field = modifier.stillBringIntoView().bringIntoViewRequester(requester)
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = if (errorText != null) modifier.semantics { error(errorText) } else modifier,
+        modifier = if (errorText != null) field.semantics { error(errorText) } else field,
         textStyle = style,
         keyboardOptions = keyboardOptions,
         keyboardActions = keyboardActions,

@@ -161,21 +161,45 @@ is):
 
 - **Settings › Comfort** (off by default): "Larger text and buttons, more contrast, no motion." Text is 1.3 times the
   system's size, buttons and rows are at least 56 dp tall, secondary text and outlines are black, and nothing ripples.
-  The share card and the Inbox's card over the Reader follow it (the card's text is larger, nothing is cut short, its
-  buttons are stacked).
+  The app's three questions (the pairing question a camera-scanned code opens, "Make this the Daylight Inbox?" / "Send
+  from this device?", "Reset pairing?") follow it too: a dialog is a window of its own, so `DaylightDialog` provides
+  the screen's text size again inside it, its buttons are 56 dp, and its text scrolls when it is taller than the
+  screen. The share card and the Inbox's card over the Reader follow it (the card's text is larger, nothing is cut
+  short, its buttons are stacked).
 - Every control has a label; a switch or a choice is one control with its words (TalkBack reads "Instant delivery,
   off, switch"). States are words and glyphs ("Delivered ✓", "In your Reader ✓"), never colour alone.
 - Status lines are announced when they change: a sent item's label ("Delivered ✓"), an Inbox item's ("In your Reader
   ✓"), a share's result, the relay check's sentence. They wrap instead of being cut short, at any text size.
-- The Inbox (the DC-1's e-paper) never animates: no ripples, no stretch when a list is pulled past its end, and the
+- The Inbox (the DC-1's e-paper) does not animate: no ripples, no stretch when a list is pulled past its end, the
   app's own switches, choices and text fields are drawn still (a field's label sits above it instead of sliding into
-  its border). Comfort does the same on a phone. The app uses no animated transitions in either role.
+  its border), the text cursor shows steadily instead of blinking, and dialogs appear and go at once (the app theme's
+  `android:dialogTheme` has no window animation, in both roles). A field below the fold, or one the keyboard would
+  cover, comes into view in one step: Compose 1.8 scrolls it there with an animation whose speed an app cannot change
+  (`BringIntoViewSpec`'s animation spec is deprecated and no longer read), so on these screens the theme turns that
+  scroll off and the app's sections and fields scroll their list the needed distance at once (`ui/Still.kt`). Comfort
+  does all of this on a phone too; without Comfort the phone keeps Android's usual feedback (ripples, stretch, the
+  blinking cursor, the animated scroll). What still moves is Android's, not the app's: the keyboard sliding in, a
+  scroll that TalkBack asks for (its own scroll actions, which Compose animates), and a list flung with a finger.
 - Pairing by typing the code always works: the phone has a "Pairing code" field, the Inbox shows the code in words
   under its QR code.
 - The share card stays up, with **Close**, while Comfort, TalkBack or Switch Access is on, instead of closing after a
   second or two.
 - Sizes are in the units of the status sentences (decimal, rounded up, `Text.formatMB`): a row says "PDF · 14.2 MB"
   above "Too big to send. Files can be up to 9 MB; this one is 14.2 MB."
+
+### Still to check on a device
+
+Robolectric cannot show these; they belong to the W0 device round on the DC-1 (Rooted 2), with an Android phone:
+
+- **F27.3**: a recorded TalkBack run of pair → send → delivered on the phone, and of an item arriving on the Inbox,
+  that announces each state change ("Sent · waiting for your Daylight", "Delivered ✓", "In your Reader ✓").
+- The device re-check of cb57057 (waiting documents announced at once on the "New items" channel, the three-way
+  **Documents** choice) and of the document hand-off workaround (a fresh task and 25 seconds between imports, above),
+  with the import times DEVICE-CHECKS.md does not have yet.
+- Stillness with the real keyboard: on the DC-1, Settings › Relay URL and the Daylight name come into view in one step
+  when tapped and when the keyboard opens (no scroll animation), the cursor does not blink, and "Reset pairing?" and
+  the role question appear without animating; the same on a phone with Comfort.
+- A camera-scanned pairing link with Comfort on: the pairing question is as large as the rest of the app.
 
 ## Build
 
@@ -203,6 +227,15 @@ the F27 screenshots (`daylight-share-f27-screenshots`) and any re-recorded Lab-o
 choice; the phone unpaired, paired with a row in every state, and its Settings; the Inbox new (with its code), with
 items, and its Settings.
 
+- `DialogsAndScrollingTest` (F27) covers what the screen tests do not reach. It opens each of the three questions
+  with Comfort on and checks that every text in the dialog is laid out at 1.3 times the system's size, as on the screen
+  behind it (`TextLayoutResult.layoutInput.density`), then at the largest text size on a 360 dp phone that nothing in
+  it is cut short and its buttons are labelled and 56 dp (`dialog-*-comfort-200.png` among the screenshots), and that
+  dialog windows have no animation in either role. In windows short enough that a field is below the fold (360 and
+  480 dp tall, where the screen tests' tall window never scrolls), focusing Settings › Relay URL on the Inbox, or the
+  phone's "Pairing code" with Comfort (a list), brings it into view in one step, and a focused field stays in view, in
+  one step, when the screen shrinks as the keyboard opens; a self-test shows the same check catching Compose's
+  animated scroll on the phone without Comfort.
 - `AccessibilityTest` (F27) checks each screen against the Accessibility Test Framework's error rules (F27.2): every
   control has words for a screen reader, a touch target of at least 48 dp and its own place, and text fields are named
   by their labels; the text colours are at least 4.5:1. Compose's `enableAccessibilityChecks()` runs as well, but under
@@ -214,8 +247,9 @@ items, and its Settings.
   1.7): `<screen>-lab-off.png` (Comfort off, the usual text size) and `<screen>-comfort-200.png`, in
   `app/build/f27-screenshots/` (CI uploads them as `daylight-share-f27-screenshots`). Motion: the source may use no
   animation API and none of Material's components that move by themselves (a self-test shows what the check catches),
-  Comfort and the Inbox provide no ripple and no overscroll effect, and tapping a field or "Show pairing code" changes
-  the screen once and then nothing moves for 1.5 s, frame by frame. It also checks the Comfort switch and its words
+  Comfort and the Inbox provide no ripple, no overscroll effect, no cursor blink and no animated scroll into view, and
+  tapping a field or "Show pairing code" changes the screen once and then nothing moves for 1.5 s, frame by frame. It
+  also checks the Comfort switch and its words
   against `LAB_TEXT`, the announcements, the typed code, and the Inbox's relay-check and out-of-space sentences on
   screen.
 - Comfort outside Compose: `HandoffDecisionsTest` checks the Inbox's card over the Reader with Comfort (text x1.3,

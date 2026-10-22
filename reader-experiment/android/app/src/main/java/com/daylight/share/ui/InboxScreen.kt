@@ -10,21 +10,16 @@ import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -95,11 +90,7 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
     }
     val pairingOpen = showPairing ?: received.isEmpty()
 
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
+    ScreenList {
         item {
             HeaderRow(title = {
                 Text("Daylight Inbox", style = MaterialTheme.typography.headlineSmall)
@@ -254,18 +245,16 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
     }
 
     if (confirmReset) {
-        AlertDialog(
-            onDismissRequest = { confirmReset = false },
-            title = { Text("Reset pairing?") },
-            text = { Text("This makes a new code. Every phone and computer paired with this Daylight has to pair again.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmReset = false
-                    app.inbox.resetPairing()
-                    showPairing = true
-                }) { Text("Reset") }
+        DaylightDialog(
+            title = "Reset pairing?",
+            text = "This makes a new code. Every phone and computer paired with this Daylight has to pair again.",
+            confirm = "Reset",
+            onConfirm = {
+                confirmReset = false
+                app.inbox.resetPairing()
+                showPairing = true
             },
-            dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("Cancel") } },
+            onDismiss = { confirmReset = false },
         )
     }
 }
