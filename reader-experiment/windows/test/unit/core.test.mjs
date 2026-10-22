@@ -312,6 +312,62 @@ test('applyPairing refuses when the pairing changed after the user was asked', a
   assert.equal((await app.state()).codeStart, d2.code.slice(0, 4));
 });
 
+test('a send, retry, removal or tick queued behind a pairing change uses the new pairing (CHANGES-v1.1 note a)', async () => {
+  // Before 1.1's close-out the app looked up the Sender before taking its outbox lock: a send queued behind Switch went
+  // to the old Daylight while its row sat in the new one's outbox (and was later re-sent there).
+  const d1 = await daylight('One');
+  const d2 = await daylight('Two');
+  const { app } = newApp();
+  await app.pair(d1.link);
+  const toTwo = await app.preparePairing(d2.link, { source: 'link' });
+  const switching = app.applyPairing(toTwo.next, { expect: toTwo.current.code });
+  const queued = app.sendLink('https://example.com/after-switch');
+  await switching;
+  const row = await queued;
+  assert.deepEqual((await app.rows()).map((r) => r.id), [row.id]);
+  assert.deepEqual((await d1.receiver.pollOnce()).items, [], 'nothing reaches the Daylight it was switched away from');
+  assert.deepEqual((await d2.receiver.pollOnce()).items.map((i) => i.header.url), ['https://example.com/after-switch']);
+
+  // A send started before the answer goes to the old Daylight, and Switch then drops its row: it is not sent again.
+  const back = await app.preparePairing(d1.link, { source: 'link' });
+  const before = app.sendLink('https://example.com/before-switch');
+  await app.applyPairing(back.next, { expect: back.current.code });
+  await before;
+  assert.deepEqual(await app.rows(), []);
+  assert.deepEqual((await d2.receiver.pollOnce()).items.map((i) => i.header.url), ['https://example.com/before-switch']);
+  assert.deepEqual((await d1.receiver.pollOnce()).items, []);
+
+  // Retry now and Remove look the row up in the outbox in use when they run.
+  const unpairing = app.unpair();
+  await assert.rejects(app.retry(row.id), (e) => e.code === 'pairing');
+  assert.equal(await app.remove(row.id), false);
+  await unpairing;
+});
+
+test('a tick queued behind a move to another relay re-sends through the new relay', async () => {
+  const relay2 = await startMockRelay();
+  try {
+    let clock = Date.now();
+    const d = await daylight('Desk');
+    const { app } = newApp({ extra: { now: () => clock } });
+    await app.pair(d.link);
+    const pending = await app.sendFile({ name: 'pending.txt', bytes: ds.utf8('not picked up yet') });
+    await d.receiver.pollOnce(); // the first copy is picked up, but no ack is read yet
+    const r2 = new ds.Receiver({ pairing: { secret: d.secret, relay: relay2.url }, storage: new ds.MemoryStorage() });
+    clock += 12 * 3600000; // the re-send is due
+    const moved = await ds.pairingLink({ secret: d.secret, relay: relay2.url, name: 'Desk' });
+    const pre = await app.preparePairing(moved, { source: 'link' });
+    const applying = app.applyPairing(pre.next, { expect: pre.current.code });
+    const ticking = app.tick();
+    await applying;
+    assert.deepEqual(await ticking, { delivered: 0, resent: 1 });
+    assert.deepEqual((await r2.pollOnce()).items.map((i) => i.header.id), [pending.id], 'the re-send went through the new relay');
+    assert.deepEqual((await d.receiver.pollOnce()).items, [], 'and not through the old one');
+  } finally {
+    await relay2.close();
+  }
+});
+
 test('vectors > pairingConfirmation: the app asks exactly as the protocol says, for links and typed codes', async () => {
   const fs = await import('node:fs');
   const V = JSON.parse(fs.readFileSync(new URL('../../../share/vectors/test-vectors.json', import.meta.url), 'utf8'));

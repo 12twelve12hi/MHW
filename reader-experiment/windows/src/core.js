@@ -80,11 +80,17 @@ export function createApp({
     return cache.sender;
   }
 
-  async function requireSender() {
-    const s = await getSender();
+  function requireSender(s) {
     if (!s) throw new ds.ShareError('pairing', 'Pair with your Daylight first.');
     return s;
   }
+
+  /**
+   * Runs fn(sender) under the app's outbox lock, with the Sender of the pairing in use when fn runs (null when
+   * unpaired). A send, retry, removal or tick queued behind a pairing change therefore uses the new pairing: a row is
+   * only ever published with the keys and relay of the outbox it sits in (CHANGES-v1.1 note a; PROTOCOL 3.3 step 6).
+   */
+  const withSender = (fn) => run(async () => fn(await getSender()));
 
   /**
    * A pairing that arrives, and what the protocol says to do with it (PROTOCOL 1.3 "Confirmation", 3.3 step 6), in
@@ -161,8 +167,7 @@ export function createApp({
   // --- sending ------------------------------------------------------------------------------------------------------
 
   async function sendItem(item) {
-    const sender = await requireSender();
-    const row = await run(() => sender.send(item));
+    const row = await withSender((s) => requireSender(s).send(item));
     afterSend();
     return row;
   }
@@ -245,16 +250,14 @@ export function createApp({
 
   /** "Retry now" (a failed row) and "Try again" (an expired one), as the library allows. -> the row */
   async function retry(id) {
-    const s = await requireSender();
-    const row = await run(() => s.retry(id));
+    const row = await withSender((s) => requireSender(s).retry(id));
     afterSend();
     return row;
   }
 
   /** "Remove": the row and its stored content. -> true when there was such a row */
   async function remove(id) {
-    const s = await getSender();
-    return s ? run(() => s.remove(id)) : false;
+    return withSender((s) => (s ? s.remove(id) : false));
   }
 
   // --- acks and re-sends ----------------------------------------------------------------------------------------------
@@ -264,10 +267,9 @@ export function createApp({
    * drops expired rows' content after 14 days); the ack topic is read only while a row could still be acked.
    */
   async function tick() {
-    const s = await getSender();
-    if (!s) return { delivered: 0, resent: 0 };
     lastTick = now();
-    return run(async () => {
+    return withSender(async (s) => {
+      if (!s) return { delivered: 0, resent: 0 };
       try { return await maintain(s, now()); } catch (e) { log.warn?.('Send to Daylight: tick failed', e); return { delivered: 0, resent: 0 }; }
     });
   }
