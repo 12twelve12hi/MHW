@@ -11,7 +11,8 @@ import * as ds from './daylight-share.js';
 import { statusInfo, rowMessage, kindLabel, displayTitle, relativeTime, titleFromName, maintain, relayForInput, wantsAcks } from './logic.js';
 import { readParams, hasShareParams, sharedLink, normalizeUserUrl, mimeFor, deviceName, shortcutPrefix, serial, APP } from './web-logic.js';
 import { openStorage, takeShared, pruneShared } from './web-storage.js';
-import { createWebLab, labTestHook, withoutLabParam, labLinkItem, copiedLink } from './web-lab.js';
+import { createWebLab, labTestHook, withoutLabParam, labLinkItem, copiedLink, PLATFORM } from './web-lab.js';
+import { needsMessage } from './daylight-lab.js';
 import { createLabPage, LAB_VIEWS } from './web-lab-page.js';
 import { WebSender, flushPass, flushDue, isWaitingRow, SYNC_TAG, OUTBOX_LOCK } from './web-flush.js';
 import { wantsStates } from './lab-send.js';
@@ -42,7 +43,7 @@ let backTo = 'view-send'; // the view Settings' Back returns to
 const lastStatus = new Map(); // row id -> the status last shown, to announce changes (F27)
 const defaultFrom = deviceName(navigator.userAgent, navigator.maxTouchPoints);
 let flushTimer = null; // F07: the next capped pass, while rows wait for a connection
-let installPrompt = null; // F26: the browser's install prompt, kept while Lab is on (Setup check's "Installed as an app")
+let installPrompt = null; // F26: the browser's install prompt, kept for Setup check's "Installed as an app" (never cancelled)
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -389,7 +390,9 @@ async function sendCopied(text) {
 
 /** F26's test article: sent as a page with x-cap "test"; Setup check follows its row. */
 async function sendTest() {
-  if (!sender || !labOn()) throw new ds.ShareError('pairing', 'Pair with your Daylight first.');
+  if (!labOn()) return null; // Setup check is Lab's: another tab turned Lab off
+  // Another tab unpaired while Setup check was open: LAB_TEXT's sentence, as Setup check's pairing line says it.
+  if (!sender) throw new ds.ShareError('pairing', needsMessage('needs-pairing', { platform: PLATFORM }));
   const row = await sendItem(await lab.testItem());
   await lab.noteTest(row.id);
   return row;
@@ -679,8 +682,9 @@ function wire() {
   // F07: the timeline says "Waiting for connection" while offline; back online, the waiting rows go now.
   window.addEventListener('online', () => { if (labOn()) { renderHistory(); flushOffline(); } });
   window.addEventListener('offline', () => { if (labOn()) renderHistory(); });
-  // F26's "Installed as an app": with Lab on, the browser's install prompt waits for Setup check's button.
-  window.addEventListener('beforeinstallprompt', (e) => { if (labOn()) { e.preventDefault(); installPrompt = e; } });
+  // F26's "Installed as an app": the browser's install prompt is kept for Setup check's button but never cancelled, so
+  // the browser still shows its own install banner, as in v1.1 (Chrome allows prompt() on the event later).
+  window.addEventListener('beforeinstallprompt', (e) => { installPrompt = e; });
   window.addEventListener('appinstalled', () => { installPrompt = null; });
   window.addEventListener('hashchange', async () => {
     await handleAddress();

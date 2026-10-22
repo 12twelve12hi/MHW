@@ -9,7 +9,8 @@
 //   F16  a typed link loses its tracking and carries the link as typed in x-orig; F16's Use switch off sends it as typed
 //   F33  Paste and send: "Send {host}?", Send and Cancel; "No link on the clipboard."; gone with its Use switch off
 //   F09  the bookmarklet, dragged or copied from Shortcuts and automation, sends the page it runs on
-//   F26  Setup check: the lines, the test article followed to "In your Reader", the activity log, Copy diagnostics
+//   F26  Setup check: the lines, the test article followed to "In your Reader", the activity log, Copy diagnostics; the
+//        browser's install offer kept but never cancelled; needs-pairing in LAB_TEXT's words after another tab unpairs
 //   F00.3  W1's rows in What's in Lab: their short states, and the sentence under a tapped one (needs-pairing,
 //        needs-inbox); the Use switches' names and footers (6.5 Q5)
 //
@@ -433,6 +434,57 @@ test('F26: Setup check’s lines; the test article is followed to “In your Rea
     await page.getByRole('button', { name: '‹ Back' }).first().click();
     await page.waitForFunction(() => document.activeElement?.closest('li')?.dataset.feature === 'F26', null, { timeout: 20000 });
   } finally { await ctx.close(); }
+});
+
+/**
+ * Fires a stand-in for the browser's beforeinstallprompt (Chromium fires the real one only when it decides to offer the
+ * install), whose prompt() counts in window.__prompted. -> whether the page cancelled it (hiding the browser's banner).
+ */
+const offerInstall = (page) => page.evaluate(() => {
+  const e = new Event('beforeinstallprompt', { cancelable: true });
+  window.__prompted = 0;
+  e.prompt = async () => { window.__prompted += 1; };
+  e.userChoice = Promise.resolve({ outcome: 'dismissed', platform: 'web' });
+  window.dispatchEvent(e);
+  return e.defaultPrevented;
+});
+
+test('F26: the browser’s install offer is kept, never cancelled (its own banner still shows, Lab on or off), and Open setting opens it; a test article after another tab unpaired says LAB_TEXT’s needs-pairing sentence', { timeout: 90000 }, async () => {
+  const { ctx, page } = await openPaired();
+  try {
+    assert.equal(await offerInstall(page), false, 'Lab on: the browser still shows its own install banner');
+    await openWhats(page);
+    await page.locator('li[data-feature="F26"] .lab-row').click();
+    await page.waitForSelector('#view-setup:not([hidden]) .lab-check-line');
+    const install = page.getByRole('button', { name: `${LAB_TEXT.buttons['needs-quick-sends']}: ${LAB_TEXT.setup.checks.installed}`, exact: true });
+    assert.equal(await install.count(), 1, 'Open setting while the browser offers to install the page');
+    await install.click();
+    await page.waitForFunction(() => window.__prompted === 1);
+    await page.waitForFunction(() => !document.querySelector('#view-setup li[data-check="installed"] button'));
+    assert.equal(await page.textContent('#view-setup li[data-check="installed"] .lab-check-line'), `! ${LAB_TEXT.setup.checks.installed}`);
+
+    // Another tab unpairs while Setup check is open; the test article then asks for the pairing in LAB_TEXT's words.
+    assert.equal(await page.evaluate(() => document.getElementById('lab-paste').hidden), false, 'Paste and send is drawn while paired');
+    const other = await ctx.newPage();
+    await other.goto(`${site.url}/`);
+    await ready(other);
+    await other.getByRole('button', { name: 'Settings', exact: true }).click();
+    await other.click('#unpair');
+    await other.click('#unpair');
+    await other.waitForSelector('#view-pair:not([hidden])');
+    await page.waitForFunction(() => document.getElementById('lab-paste').hidden, null, { timeout: 20000 });
+    await page.getByRole('button', { name: LAB_TEXT.setup.testSend, exact: true }).click();
+    await page.locator('#view-setup .lab-test .error').waitFor();
+    assert.equal(await page.textContent('#view-setup .lab-test .error'), L.needsMessage('needs-pairing', { platform: 'web' }));
+    assert.equal(await page.textContent('#view-setup .lab-test .error'), LAB_TEXT.needs['needs-pairing']);
+    await other.close();
+  } finally { await ctx.close(); }
+
+  // Lab off: the page is v1.1's and leaves the browser's offer alone too.
+  const off = await openPaired({ settings: { lab: false } });
+  try {
+    assert.equal(await offerInstall(off.page), false, 'Lab off: the browser still shows its own install banner');
+  } finally { await off.ctx.close(); }
 });
 
 // --- What's in Lab (F00.3 for W1, 6.5 Q5) -------------------------------------------------------------------------------

@@ -148,7 +148,8 @@ the page says what the popup says):
   (`#autosend=1&url=…&title=…`, in the fragment, which never reaches a server), and the page sends it; the pairing stays
   in this browser. Clicking it on this page copies it. `?url=…&autosend=1` and the fragment forms work as before.
 - **Setup check** (F26), What's in Lab › Setup check: ✓ or ! for the pairing (**Open setting**: the pairing form),
-  *Installed as an app* (**Open setting** when the browser has offered to install the page: its own prompt) and
+  *Installed as an app* (**Open setting** when the browser has offered to install the page: its own prompt, which the
+  page keeps without cancelling it, so Chrome's own install banner still shows as in v1.1) and
   *Storage kept by the browser* (**Allow** asks the browser to keep this page's storage); **Send a test article** (a
   page of about 400 words at `https://daylight.invalid/test/…`, `x-cap: "test"`), followed until *✓ Delivered* and *✓
   In your Reader* (or *Waiting for a tap on your Daylight* meanwhile; the page reads the confirmation channel every
@@ -291,6 +292,8 @@ only once the gate opens W1 for it, so until then use `node build.mjs --serve` o
 - [ ] **F01.2** With Documents = Ask, a PDF reads *Waiting for a tap on your Daylight*, then, after the tap, *Handed to
   the Reader* and *The Reader doesn’t confirm documents yet.* at the next check.
 - [ ] **F01.3** The header reads *Your Daylight checked in N min ago*; with the Daylight off, sends still go out.
+- [ ] **F01.6** VoiceOver (iPhone Safari) and TalkBack (Android Chrome) read each history row as *{label}. {sentence}*,
+  never the step line, and a row whose label changes (*On your Daylight ✓* → *In your Reader ✓*) is announced.
 - [ ] **F07.1** Flight mode on the iPhone and on Android, Wi-Fi off on the laptop: a send reads *Waiting for
   connection* in **Waiting to send (1)**; with the network back it goes within a minute while the page is open. On
   Android Chrome (the page installed or not), close the page while it waits and turn the network back on: Chrome's own
@@ -308,6 +311,9 @@ only once the gate opens W1 for it, so until then use `node build.mjs --serve` o
   iPhone, where the line stays *!* until the page is added to the Home Screen and opened from there); **Allow** for
   *Storage kept by the browser* gets a ✓ where the browser grants it (Chrome grants an installed or bookmarked page;
   Safari and Firefox decide for themselves).
+- [ ] **F26 install banner** Android Chrome, Lab on and the page not installed: Chrome's own *Add to Home screen*
+  banner (or menu item) still appears as with Lab off, and **Open setting** in Setup check opens the same install
+  prompt, also after the banner was dismissed.
 - [ ] **F33** **Paste and send** on the iPhone (Safari shows its Paste callout first), Safari on the Mac, Android Chrome
   and Firefox on a computer: a copied link asks *Send {host}?* before anything goes; copied text without a link says *No link on the
   clipboard.*
