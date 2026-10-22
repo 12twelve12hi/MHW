@@ -23,6 +23,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.toSize
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import com.daylight.share.core.FileOutboxStore
 import com.daylight.share.core.ItemHeader
@@ -317,9 +318,10 @@ object ScreenKit {
      * Where each text is: the unmerged tree's texts (scrubbed as in the parity tree) with their boxes, to the pixel, in
      * the root, or from the top of the text [from] (and only the texts from there down). The Inbox's connection line is
      * left out: the test relay's connection comes and goes on its own, and so are the texts in [ignore] (a field's
-     * placeholder, which shows once it is focused). Only the app's window is read, not a popup.
+     * placeholder, which shows once it is focused). Only the app's window is read, not a popup. A box is what shows of
+     * the text ([clipped]), or where the whole text is laid out.
      */
-    fun positions(compose: AppRule, from: String? = null, ignore: Set<String> = emptySet()): List<String> {
+    fun positions(compose: AppRule, from: String? = null, ignore: Set<String> = emptySet(), clipped: Boolean = true): List<String> {
         val nodes = ArrayList<Pair<String, androidx.compose.ui.geometry.Rect>>()
         fun walk(n: SemanticsNode) {
             val c = n.config
@@ -327,7 +329,8 @@ object ScreenKit {
                 c.getOrNull(SemanticsProperties.ContentDescription).orEmpty() +
                 listOfNotNull(c.getOrNull(SemanticsProperties.EditableText)?.text)
             val words = texts.joinToString(" | ") { scrub(it) }
-            if (texts.isNotEmpty() && !words.contains("<connection status>") && words !in ignore) nodes += words to n.boundsInRoot
+            val box = if (clipped) n.boundsInRoot else androidx.compose.ui.geometry.Rect(n.positionInRoot, n.size.toSize())
+            if (texts.isNotEmpty() && !words.contains("<connection status>") && words !in ignore) nodes += words to box
             n.children.forEach(::walk)
         }
         // The app's window; a focused field's cursor handle is a popup with a root of its own.
@@ -343,17 +346,17 @@ object ScreenKit {
      * What moves after [action] (a tap, a focus), frame by frame for 1.5 s: the screen may change once (at once, or
      * when a tap is recognised), then it must hold still. An animation changes it frame after frame; this returns those
      * changes (empty when there is no motion). Places are measured [from] a text when given, without the texts in
-     * [ignore] ([positions]). F27: Comfort's "no motion", and the DC-1 Inbox never animates.
+     * [ignore], [clipped] or not ([positions]). F27: Comfort's "no motion", and the DC-1 Inbox never animates.
      */
-    fun motionAfter(compose: AppRule, from: String? = null, ignore: Set<String> = emptySet(), action: () -> Unit): List<String> {
+    fun motionAfter(compose: AppRule, from: String? = null, ignore: Set<String> = emptySet(), clipped: Boolean = true, action: () -> Unit): List<String> {
         compose.waitForIdle()
         compose.mainClock.autoAdvance = false
         try {
-            val states = arrayListOf(positions(compose, from, ignore))
+            val states = arrayListOf(positions(compose, from, ignore, clipped))
             action()
             repeat(MOTION_FRAMES) {
                 compose.mainClock.advanceTimeByFrame()
-                val now = positions(compose, from, ignore)
+                val now = positions(compose, from, ignore, clipped)
                 if (now != states.last()) states += now
             }
             if (states.size <= 2) return emptyList()

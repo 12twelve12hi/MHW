@@ -102,13 +102,13 @@ class DialogsAndScrollingTest {
 
         // Comfort at the system's text size: 1.3 times, in the dialog as on the screen behind it.
         val system = compose.activity.resources.configuration.fontScale
-        assertTextSize(q, "Comfort", 18f * system * COMFORT_TEXT_SCALE)
+        assertTextScale(q, "Comfort", system * COMFORT_TEXT_SCALE)
 
         // Comfort at the largest text size on a 360 dp phone (F27.4).
         ScreenKit.showAtLargestText(compose)
         q.screen.open(compose)
         ask(q)
-        assertTextSize(q, "Comfort at ${ScreenKit.LARGEST_FONT_SCALE}x text", 18f * ScreenKit.LARGEST_FONT_SCALE * COMFORT_TEXT_SCALE)
+        assertTextScale(q, "Comfort at ${ScreenKit.LARGEST_FONT_SCALE}x text", ScreenKit.LARGEST_FONT_SCALE * COMFORT_TEXT_SCALE)
         val cut = ScreenKit.textOverflows(compose)
         assertTrue("${q.file}, Comfort at ${ScreenKit.LARGEST_FONT_SCALE}x text: text cut short or clipped:\n${cut.joinToString("\n")}", cut.isEmpty())
         val problems = ScreenKit.accessibilityProblems(compose, minTargetDp = COMFORT_TARGET.value)
@@ -120,18 +120,23 @@ class DialogsAndScrollingTest {
             .onFailure { println("f27-screenshot: ${q.file}-comfort-200 not taken: ${it.message}") }
     }
 
-    /** Every text in the open dialog is laid out at [dp] dp for 18 sp, and so is the screen's text behind it. */
-    private fun assertTextSize(q: Question, how: String, dp: Float) {
+    /**
+     * Every text in the open dialog is laid out at the font scale [scale], as the screen's text behind it, and 18 sp
+     * comes out the same size in both. (A text is laid out with its node's density and font scale, and on Android 14
+     * and later a font scale goes through Android's non-linear curve: 18 sp at x1.3 is 21.6 dp there, not 23.4.)
+     */
+    private fun assertTextScale(q: Question, how: String, scale: Float) {
+        val behind = texts(!hasAnyAncestor(isDialog()) and !isDialog())
+        assertTrue("${q.file}: no text behind the dialog", behind.isNotEmpty())
+        val (behindWords, b) = behind.first()
+        assertEquals("${q.file}, $how: \"$behindWords\" behind the dialog: font scale", scale, b.layoutInput.density.fontScale, 0.001f)
+        val size = with(b.layoutInput.density) { 18.sp.toDp().value }
         val inDialog = texts(hasAnyAncestor(isDialog()))
         assertTrue("${q.file}: no text in the dialog", inDialog.isNotEmpty())
         for ((words, r) in inDialog) {
-            val size = with(r.layoutInput.density) { 18.sp.toDp().value }
-            assertEquals("${q.file}, $how: \"$words\" in the dialog has 18 sp at $size dp", dp, size, 0.05f)
+            assertEquals("${q.file}, $how: \"$words\" in the dialog: font scale", scale, r.layoutInput.density.fontScale, 0.001f)
+            assertEquals("${q.file}, $how: \"$words\" in the dialog: 18 sp in dp", size, with(r.layoutInput.density) { 18.sp.toDp().value }, 0.01f)
         }
-        val behind = texts(!hasAnyAncestor(isDialog()) and !isDialog())
-        assertTrue("${q.file}: no text behind the dialog", behind.isNotEmpty())
-        val (words, r) = behind.first()
-        assertEquals("${q.file}, $how: \"$words\" behind the dialog", dp, with(r.layoutInput.density) { 18.sp.toDp().value }, 0.05f)
     }
 
     private fun texts(where: SemanticsMatcher): List<Pair<String, TextLayoutResult>> =
@@ -229,7 +234,8 @@ class DialogsAndScrollingTest {
         compose.waitForIdle()
         relay.assertIsFocused()
         assertTrue("Relay URL is in view once focused", fullyShown(relay))
-        val moved = ScreenKit.motionAfter(compose) { height.value = 280.dp }
+        // Places unclipped: the shrinking itself moves nothing, it only cuts the bottom off.
+        val moved = ScreenKit.motionAfter(compose, clipped = false) { height.value = 280.dp }
         assertTrue("keeping Relay URL in view moved:\n${moved.joinToString("\n")}", moved.isEmpty())
         assertTrue("Relay URL is in view after the screen shrank", fullyShown(relay))
     }

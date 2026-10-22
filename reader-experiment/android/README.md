@@ -160,7 +160,9 @@ Every build has the accessibility baseline (LAB-PLAN F27; it is not a Lab featur
 is):
 
 - **Settings › Comfort** (off by default): "Larger text and buttons, more contrast, no motion." Text is 1.3 times the
-  system's size, buttons and rows are at least 56 dp tall, secondary text and outlines are black, and nothing ripples.
+  system's size (the font scale times 1.3; where Android scales large text less than small text, as on Android 14,
+  which the tests run as, a large size grows a little less: 18 sp becomes 21.6 dp rather than 23.4), buttons and rows
+  are at least 56 dp tall, secondary text and outlines are black, and nothing ripples.
   The app's three questions (the pairing question a camera-scanned code opens, "Make this the Daylight Inbox?" / "Send
   from this device?", "Reset pairing?") follow it too: a dialog is a window of its own, so `DaylightDialog` provides
   the screen's text size again inside it, its buttons are 56 dp, and its text scrolls when it is taller than the
@@ -228,14 +230,14 @@ choice; the phone unpaired, paired with a row in every state, and its Settings; 
 items, and its Settings.
 
 - `DialogsAndScrollingTest` (F27) covers what the screen tests do not reach. It opens each of the three questions
-  with Comfort on and checks that every text in the dialog is laid out at 1.3 times the system's size, as on the screen
-  behind it (`TextLayoutResult.layoutInput.density`), then at the largest text size on a 360 dp phone that nothing in
+  with Comfort on and checks that every text in the dialog is laid out at 1.3 times the system's font scale, as on the
+  screen behind it (`TextLayoutResult.layoutInput.density`), then at the largest text size on a 360 dp phone that nothing in
   it is cut short and its buttons are labelled and 56 dp (`dialog-*-comfort-200.png` among the screenshots), and that
   dialog windows have no animation in either role. In windows short enough that a field is below the fold (360 and
   480 dp tall, where the screen tests' tall window never scrolls), focusing Settings › Relay URL on the Inbox, or the
   phone's "Pairing code" with Comfort (a list), brings it into view in one step, and a focused field stays in view, in
-  one step, when the screen shrinks as the keyboard opens; a self-test shows the same check catching Compose's
-  animated scroll on the phone without Comfort.
+  one step, when the screen shrinks as the keyboard opens (places measured unclipped there, so the shrinking itself
+  is not a move); a self-test shows the same check catching Compose's animated scroll on the phone without Comfort.
 - `AccessibilityTest` (F27) checks each screen against the Accessibility Test Framework's error rules (F27.2): every
   control has words for a screen reader, a touch target of at least 48 dp and its own place, and text fields are named
   by their labels; the text colours are at least 4.5:1. Compose's `enableAccessibilityChecks()` runs as well, but under
