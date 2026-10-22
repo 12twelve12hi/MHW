@@ -142,6 +142,8 @@ test('lab vectors: text', () => {
   for (const c of V.labText.serverSection.moved) assert.equal(lab.serverMovedText(c.moved), c.expect);
   for (const c of V.labText.serverSection.labInboxSeen) assert.equal(lab.labInboxSeenText(c.lastSeen, c.now), c.expect, JSON.stringify(c));
   for (const c of V.labText.serverSection.aiToday) assert.equal(lab.aiTodayText(c.used, c.cap), c.expect, JSON.stringify(c));
+  assert.ok(V.labText.serverSection.setupConfirm.length >= 4);
+  for (const c of V.labText.serverSection.setupConfirm) assert.equal(lab.setupConfirmText(c.server), c.expect, c.server);
   for (const s of Object.values(V.labText.strings)) assert.ok(!/[A-Za-z]'[A-Za-z]/.test(s), `ASCII apostrophe in ${s}`);
 });
 
@@ -465,6 +467,26 @@ test('labGate reads caps through a LabLedger and the server through a DaylightSe
   assert.equal((await lab.labGate('F01', ctx)).ready, true);
   assert.equal(lab.inboxLabText({ inboxLab: await ledger.inboxLab(), checkedIn: await ledger.checkedIn() }, T0 + 4 * MIN),
     'Your Daylight: Lab on · checked in 4 min ago');
+});
+
+test('setup link (LAB-PLAN 2.6, server DESIGN 3.5): the copy is the plan’s table, and the confirmation names the parsed link’s host', async () => {
+  const srv = await import('../../../server/client/daylight-server.js'); // read only: the server lane owns it
+  const S = lab.LAB_TEXT.serverSection;
+  assert.deepEqual([S.setupRow, S.setupButton, S.setupConfirmTitle, S.setupConfirm, S.setupCancel, S.setupWorking],
+    ['Set up with a link', 'Set up', 'Use this Daylight server?', 'Use it', 'Cancel', 'Setting up…']);
+  assert.equal(S.setupPlaceholder, 'https://daylight-….workers.dev/setup#SETUP-…');
+  assert.equal(S.setupFooter, 'Paste the setup link from your deploy. It gives your own Daylight server this pairing’s Server code, once.');
+  assert.equal(S.setupDone, 'Your Daylight server is set up. Your other devices and your Daylight will find it on their own.');
+  // the moved sheet's lines are unchanged
+  assert.equal(lab.serverMovedText('https://daylight.example.org:8443/x'), 'Your Daylight server moved to daylight.example.org:8443. Use it?');
+  const origin = 'https://daylight-3f9a0c1d2e4b.me.workers.dev';
+  const link = await srv.formatSetupLink(origin, new Uint8Array(16).fill(7));
+  const parsed = await srv.parseSetupLink(`  ${link.replace('https://daylight-', 'HTTPS://Daylight-')}  `);
+  assert.equal(parsed.server, origin);
+  assert.equal(lab.setupConfirmText(parsed.server),
+    'daylight-3f9a0c1d2e4b.me.workers.dev will get this pairing’s Server code. Continue only if this address is on your own Cloudflare account.');
+  assert.equal(lab.setupConfirmText(parsed.server), lab.setupConfirmText(link), 'a link and its origin name the same host');
+  assert.equal(lab.setupConfirmText(parsed.server).split(' ')[0], lab.serverMovedText(parsed.server).split(' ')[5].replace(/\.$/, ''));
 });
 
 test('labGate with the server lane’s DaylightServer: needs-server before a deploy, OFFLINE at 5 s from a relay that never answers (F00.6)', async () => {

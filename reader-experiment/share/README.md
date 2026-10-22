@@ -58,7 +58,7 @@ spec; `test-vectors.json` did not change.
 `LabLedger` (per publisher; `snapshot()` reads it all at once) and `labHook`, `describeLabRow`, `labRowA11yLabel`,
 `wantsFastChecks`, `checkedInText`, `inboxLabText`, `LAB_TEXT`, `needsMessage`, `labGate`, `deriveLabTopics`,
 `LabInbox` and `LabInboxSim`; for the Daylight server's row and section (1.1, 1.4, 2.6) `serverHeadingShort`,
-`serverRowSubtitle`, `serverFeatureShort`, `serverMovedText`, `labInboxSeenText`, `aiTodayText` and `formatUsd`. The extension, web and Windows builds copy it next to `daylight-share.js`; every export is
+`serverRowSubtitle`, `serverFeatureShort`, `serverMovedText`, `labInboxSeenText`, `aiTodayText`, `setupConfirmText` and `formatUsd`. The extension, web and Windows builds copy it next to `daylight-share.js`; every export is
 a single `export const|function|class`, which their classic bundle needs (a test checks it).
 
 **Choices the reference made where LAB-PROTOCOL leaves room** (the vectors pin them; ports follow):
@@ -76,10 +76,13 @@ a single `export const|function|class`, which their classic bundle needs (a test
 - `needsMessage`: the server's states take the server module's text (`message`); `needs-notifications` on a platform
   without a settings path (Chrome, Safari, web) is the first sentence alone.
 - The server's row and section: `LAB_TEXT.serverSection` holds 2.6's own lines (the move sheet, "Lab Inbox last seen
-  {rel}" and its not-yet line, "AI today: US${used} of US${cap}", and the labels Server code, Copy and Server
-  address). The row's `{short}` is the heading form (`serverRowSubtitle('needs-server')` is "Optional · Not set up");
+  {rel}" and its not-yet line, "AI today: US${used} of US${cap}", the labels Server code, Copy and Server
+  address, and the **Set up with a link** row's ten `setup…` strings: row, footer, placeholder, button, confirmation
+  title, body, confirm and cancel buttons, working and done lines). The row's `{short}` is the heading form (`serverRowSubtitle('needs-server')` is "Optional · Not set up");
   an unknown server state reads as `error`. A server feature's row shows its short state only when its state differs
   from the heading's (`serverFeatureShort`). `{host}` is the new origin minus its scheme and path, as text.
+  `setupConfirmText(server)` fills the setup link's confirmation the same way; `server` is a string, the server
+  module's `parseSetupLink(link).server` (ports pass their own parse result's server), never the parse result itself.
   `inbox.lastSeen` is read by rule D. Dollar amounts round n × 100 half up in double precision and drop ".00"
   (never printf or `toFixed`).
 - `LabInbox` (storage key `lab/out`): one frame per `flush()`; the order is the `lab: 0` frame, digest frames, states,

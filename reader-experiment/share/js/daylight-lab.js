@@ -348,7 +348,8 @@ export const LAB_TEXT = {
   serverRow: 'Daylight server',
   serverRowSubtitle: 'Optional · {short}',
   serverHeading: 'With your Daylight server (optional)',
-  // 2.6: the Daylight server section's own lines (W0); serverMovedText, labInboxSeenText and aiTodayText fill them
+  // 2.6: the Daylight server section's own lines (W0); serverMovedText, labInboxSeenText, aiTodayText and
+  // setupConfirmText fill them
   serverSection: {
     moved: 'Your Daylight server moved to {host}. Use it?',
     labInboxSeen: 'Lab Inbox last seen {rel}',
@@ -357,6 +358,17 @@ export const LAB_TEXT = {
     serverCode: 'Server code',
     copy: 'Copy',
     serverAddress: 'Server address',
+    // 2.6 "Setup link" (server DESIGN 3.5): the Set up with a link row, its confirmation and its result
+    setupRow: 'Set up with a link',
+    setupFooter: 'Paste the setup link from your deploy. It gives your own Daylight server this pairing’s Server code, once.',
+    setupPlaceholder: 'https://daylight-….workers.dev/setup#SETUP-…',
+    setupButton: 'Set up',
+    setupConfirmTitle: 'Use this Daylight server?',
+    setupConfirmBody: '{host} will get this pairing’s Server code. Continue only if this address is on your own Cloudflare account.',
+    setupConfirm: 'Use it',
+    setupCancel: 'Cancel',
+    setupWorking: 'Setting up…',
+    setupDone: 'Your Daylight server is set up. Your other devices and your Daylight will find it on their own.',
   },
   comfort: 'Comfort',
   comfortFooter: 'Larger text and buttons, more contrast, no motion.',
@@ -738,17 +750,34 @@ export function serverFeatureShort(state, headingState) {
 }
 
 /**
+ * {host} of the server section's lines (2.6): an origin without its scheme and anything from the first '/' after it,
+ * read as text (no URL parser: the port stays, as relayHost keeps it). null and undefined are "".
+ */
+const originHost = (origin) => {
+  let host = String(origin ?? '');
+  const scheme = host.indexOf('://');
+  if (scheme >= 0) host = host.slice(scheme + 3);
+  const slash = host.indexOf('/');
+  return slash >= 0 ? host.slice(0, slash) : host;
+};
+
+/**
  * The sheet when the server moved (2.6): "Your Daylight server moved to {host}. Use it?". moved: DaylightServer
  * discover()'s `moved` (the new origin); {host} is that text without its scheme and anything from the first '/' after
  * it, read as text (no URL parser: the port stays, as relayHost keeps it).
  */
 export function serverMovedText(moved) {
-  let host = String(moved ?? '');
-  const scheme = host.indexOf('://');
-  if (scheme >= 0) host = host.slice(scheme + 3);
-  const slash = host.indexOf('/');
-  if (slash >= 0) host = host.slice(0, slash);
-  return fill(LAB_TEXT.serverSection.moved, { host });
+  return fill(LAB_TEXT.serverSection.moved, { host: originHost(moved) });
+}
+
+/**
+ * The setup link's confirmation (2.6 "Setup link", step 3): "{host} will get this pairing’s Server code. …". server:
+ * the server module's parseSetupLink(link).server, the origin the link names (a string, so ports pass their own
+ * parse result's server). {host} is filled exactly as serverMovedText fills it: the text without its scheme and
+ * anything from the first '/' after it (the port stays). Run parseSetupLink first: a refused link has no confirmation.
+ */
+export function setupConfirmText(server) {
+  return fill(LAB_TEXT.serverSection.setupConfirmBody, { host: originHost(server) });
 }
 
 /**
