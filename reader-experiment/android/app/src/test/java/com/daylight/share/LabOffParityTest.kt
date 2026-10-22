@@ -107,7 +107,8 @@ class LabOffParityTest {
         }
         assertEquals(emptyList<String>(), problems())
         more.value = true
-        assertTrue(problems().joinToString("\n"), problems().any { it.startsWith("shown with Lab off") && it.contains("What’s in Lab") })
+        // The problems quote nodes as JSON, with non-ASCII as \u escapes.
+        assertTrue(problems().joinToString("\n"), problems().any { it.startsWith("shown with Lab off") && it.contains("\"Button\"") && it.contains("in Lab") })
         more.value = false
         on.value = true
         assertTrue(problems().joinToString("\n"), problems().any { it.startsWith("the Lab switch is not off") })

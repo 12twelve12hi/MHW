@@ -18,6 +18,7 @@ import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -311,7 +312,7 @@ object ScreenKit {
     /**
      * Where each text is: the unmerged tree's texts (scrubbed as in the parity tree) with their boxes, to the pixel, in
      * the root, or from the top of the text [from] (and only the texts from there down). The Inbox's connection line is
-     * left out: the test relay's connection comes and goes on its own.
+     * left out: the test relay's connection comes and goes on its own. Only the app's window is read, not a popup.
      */
     fun positions(compose: AppRule, from: String? = null): List<String> {
         val nodes = ArrayList<Pair<String, androidx.compose.ui.geometry.Rect>>()
@@ -324,7 +325,9 @@ object ScreenKit {
             if (texts.isNotEmpty() && !words.contains("<connection status>")) nodes += words to n.boundsInRoot
             n.children.forEach(::walk)
         }
-        walk(compose.onRoot(useUnmergedTree = true).fetchSemanticsNode())
+        // The app's window; a focused field's cursor handle is a popup with a root of its own.
+        val roots = compose.onAllNodes(isRoot(), useUnmergedTree = true).fetchSemanticsNodes()
+        walk(roots.maxBy { it.size.width.toLong() * it.size.height })
         val top = if (from == null) 0f else nodes.firstOrNull { it.first == from }?.second?.top ?: error("no text \"$from\" on screen")
         return nodes.filter { from == null || it.second.top >= top }.map { (words, b) ->
             "$words @ ${b.left.roundToInt()},${(b.top - top).roundToInt()} ${b.width.roundToInt()}x${b.height.roundToInt()}"

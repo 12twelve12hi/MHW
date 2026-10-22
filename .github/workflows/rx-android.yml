@@ -127,6 +127,8 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           ls -la app/build/f27-screenshots || echo "None: the screen tests did not run."
+          # Each one's size, and how it was taken (captureToImage, or drawing the window if that failed).
+          grep -ho "f27-screenshot: [^<]*" app/build/test-results/testDebugUnitTest/*.xml || true
 
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
