@@ -476,7 +476,9 @@ async function onUnpair() {
   clearTimeout(unpairArmed);
   unpairArmed = null;
   await lock(async () => {
-    await ds.applyPairingChange(storage, await ds.loadPairing(storage).catch(() => null), null);
+    const current = await ds.loadPairing(storage).catch(() => null);
+    await lab?.beforeUnpair(current); // a typed Server address goes with the pairing (LAB-PLAN 2.6)
+    await ds.applyPairingChange(storage, current, null);
     await storage.remove('pairing');
   });
   await loadState();

@@ -135,9 +135,13 @@ test('Lab off and on: pairing, sending and Settings have no axe violations, ligh
   } finally { await ctx.close(); }
 });
 
-test('Lab’s screens: What’s in Lab with a note open, the Daylight server (not set up, ready) and the re-pairing follow-up; notes wrap at 200%', { timeout: 300000 }, async () => {
+test('Lab’s screens: What’s in Lab with a note open, the Daylight server (not set up, ready, moved) and the re-pairing follow-up; notes wrap at 200%', { timeout: 300000 }, async () => {
   const ctx = await browser.newContext({ viewport: { width: 360, height: 760 } });
   await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: site.url });
+  // A server that moved (2.6): its old address refuses connections.
+  const OLD = 'https://daylight-aaaaaaaaaaaa.example.workers.dev';
+  const MOVED = 'https://daylight-bbbbbbbbbbbb.example.workers.dev';
+  await ctx.route(`${OLD}/**`, (route) => route.abort('connectionrefused'));
   const page = await ctx.newPage();
   await page.goto(`${site.url}/`);
   await ready(page);
@@ -191,14 +195,31 @@ test('Lab’s screens: What’s in Lab with a note open, the Daylight server (no
       await page.getByRole('button', { name: '‹ Back' }).click();
 
       // Another Daylight while this server is known: the follow-up in the send view.
+      const next = ds.generateSecret();
       await page.click('#repair');
-      await page.fill('#code', await ds.formatCode(ds.generateSecret()));
+      await page.fill('#code', await ds.formatCode(next));
       await page.click('#pair-btn');
       await page.waitForSelector('#view-confirm:not([hidden])');
       await page.click('#confirm-yes');
       await page.waitForSelector('#repaired:not([hidden])');
       await check(page, 'web: the re-pairing follow-up', 'a11y-repaired', comfort);
       await page.getByRole('region', { name: LAB_TEXT.serverRow }).getByRole('button', { name: LAB_TEXT.noteButton, exact: true }).click();
+
+      // The new pairing's server was pinned at OLD and announces itself at MOVED: "moved to {host}. Use it?".
+      const values = await S.deriveServerValues(await S.deriveServerSeed(next));
+      await new ds.RelayClient({ relay: relay.url }).publish(values.configTopic, await S.buildConfigFrame(values, { server: MOVED }));
+      await store(page, { 'server/pin': { origin: OLD, fingerprint: values.fingerprint } });
+      await openSettings(page);
+      await page.click('#open-server');
+      await page.waitForSelector('body[data-fresh="1"]', { timeout: 20000 });
+      await page.locator('.lab-server-moved').waitFor();
+      await check(page, 'web: Daylight server, moved', 'a11y-server-moved', comfort);
+      await scaleText(page, 2);
+      await assertNotClipped(page, `web: Daylight server, moved, at 200%${tag}`);
+      await scaleText(page, 1);
+      await page.getByRole('button', { name: LAB_TEXT.serverSection.setupCancel, exact: true }).click();
+      await page.getByRole('button', { name: '‹ Back' }).click();
+      await page.click('#close-settings');
     }
   } finally { await ctx.close(); }
 });

@@ -5,8 +5,9 @@
 //
 //   Settings › Lab                the switch (on by default), its footer, and while Lab is on "What’s in Lab ›" and
 //                                 "Daylight server ›" ("Optional · Not set up")
-//   #view-whats-in-lab            short states only; a feature's one sentence shows under it when it is tapped (1.5)
-//   #view-server                  the Daylight server section, with the long texts (2.6)
+//   #view-whats-in-lab            short states only (the cached ones at once, 1.5); a feature's one sentence shows under
+//                                 it when it is tapped
+//   #view-server                  the Daylight server section, with the long texts and the move question (2.6)
 //   #repaired (the send view)     after a re-pairing that locked the server, until OK or a ready server (DESIGN 12.7)
 //
 // With Lab off only the switch and its footer show (1.3): the Lab views close and the follow-up hides.
@@ -116,9 +117,13 @@ export function createLabPage({ lab, $, show, toSettings, announce = () => {}, c
    */
   function updateLines(box, model) {
     if (!updateWhatsInLab(box, model) && !box.querySelector('.lab-note > *')) renderWhatsInLab(box, model, { onTap: onFeature });
-    if (model.fresh) fresh(true);
+    if (model.fresh && !model.cached) fresh(true);
   }
 
+  /**
+   * What's in Lab: the cached states at once (the server's answer of the last 10 minutes, 1.5), else "Checking your
+   * Daylight server…" on the heading; then the ack topic and the server, asked now, update the lines in place.
+   */
   async function openWhats() {
     if (!on) return;
     const s = ++seq;
@@ -136,13 +141,17 @@ export function createLabPage({ lab, $, show, toSettings, announce = () => {}, c
     updateLines(box, model);
   }
 
-  /** The ledger learnt something (an ack check ran): What's in Lab's header line follows, with no network. */
+  /**
+   * The ledger learnt something (an ack check ran): What's in Lab's header line follows, with no network. Once the
+   * server's live answer is on screen, the rows keep it (the cached states can be older than an answer that ran out of
+   * time).
+   */
   async function ledgerChanged() {
     if (current() !== 'view-whats-in-lab') return;
     const s = seq;
     let model;
     try { model = await lab.overview({ refresh: false }); } catch { return; }
-    if (s === seq && model.lab) updateWhatsInLab($('whats'), model);
+    if (s === seq && model.lab) updateWhatsInLab($('whats'), document.body.dataset.fresh === '1' ? { ...model, fresh: false } : model);
   }
 
   // --- the Daylight server ----------------------------------------------------------------------------------------------
@@ -160,6 +169,16 @@ export function createLabPage({ lab, $, show, toSettings, announce = () => {}, c
     setupSaid = null;
     renderServerSection(box, model, {
       copy: (code) => copyText(code ?? ''),
+      // "Your Daylight server moved to {host}. Use it?" (2.6): the module's confirmMove, then the section is drawn
+      // again with the new server's state and the focus on its heading, so the state is read next. Cancel changes
+      // nothing, so the section asks again the next time it opens.
+      move: async (yes) => {
+        if (!yes) return;
+        await lab.confirmMove();
+        changed();
+        await openServer({ focus: false });
+        $('server-h').focus();
+      },
       setupCheck: (link) => lab.checkSetupLink(link),
       setup: async (link) => {
         const r = await lab.setupServer(link);

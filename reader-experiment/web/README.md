@@ -62,8 +62,11 @@ pairing, unpairing and renaming leave it as it is, and every open tab follows it
 While Lab is on, two rows under the switch open:
 
 - **What’s in Lab ›**: the features this page has, each with a short state ("Ready", "Not set up", "In a later
-  update", …). The header line says whether your Daylight has confirmed Lab ("Your Daylight: Lab on · checked in 4 min
-  ago"), from what it says on its confirmation channel; opening the list reads that channel once. In this first Lab
+  update", …). The states of the server's last answer show at once when it is 10 minutes old or less (otherwise the
+  heading says *Checking your Daylight server…*), and the server is asked again as the list opens. The header line
+  says whether your Daylight has confirmed Lab ("Your Daylight: Lab on · checked in 4 min ago"), from what it says on
+  its confirmation channel; opening the list reads that channel once, and an item it confirms shows *Delivered ✓* in
+  the history at once. In this first Lab
   build (Wave 0) the list holds only the features that run on your own **Daylight server** (Files over 9 MB,
   Summaries with Claude, Email-in address, Feeds and daily digest). They are always shown and never greyed out:
   tapping one that isn't set up shows one sentence under it, saying what's missing, with at most one button that fixes
@@ -80,20 +83,27 @@ While Lab is on, two rows under the switch open:
     *Use this Daylight server?* names the link's address, and only **Use it** sends the server this pairing's Server
     code (*Setting up…*); the section then reads the server again. Your other devices and your Daylight find it on
     their own.
+  - **The server moved.** When your server announces itself at a new address (a deploy with *New setup link* makes a
+    new Worker and deletes the old one), the section asks *Your Daylight server moved to {host}. Use it?*. Until you
+    answer, it keeps using the address you had. **Use it** switches to the new one; **Cancel** changes nothing, and
+    the question comes back the next time the section opens. Opening the section or What’s in Lab reads the server's
+    announcements again, however recently they were read (otherwise they are kept for 6 hours), so the question comes
+    at once. When a server feature is tapped and the server found from those kept announcements fails (gone,
+    unreachable, or not recognising this pairing), they are read again then too; a server that keeps saying it
+    doesn't recognise the pairing costs one such read, not one per tap.
 
 The page calls your Daylight server itself (the server answers any web page, with its bearer token, never a cookie:
 server DESIGN 10.2), so unlike the extension it asks no site permission. A server answer is used for 10 minutes; a
 server that doesn't answer within 5 seconds reads as *Couldn’t reach the Daylight server*. Before this browser is
 paired with another Daylight, a server that knows the old pairing is locked (Lab on or off), so a lost or replaced
-pairing can't use it, and a typed Server address (the old server's) is forgotten. Afterwards, while Lab is on, the
-sending screen shows the locked text with the new **Server code**, **Copy** and how to re-run the deploy, under
+pairing can't use it, and a typed Server address (the old server's) is forgotten. **Unpair** forgets a typed Server
+address too (it locks nothing: the same Daylight may come back). Afterwards, while Lab is on, the sending screen shows the locked text with the new **Server code**, **Copy** and how to re-run the deploy, under
 *Daylight server*, until **OK** (or until the new server answers).
 
-**Not there yet** (strings the shared copy, `LAB_TEXT`, doesn't have; reported to the share and server lanes, as for
-the extension): the sheet for a server that moved (*Your Daylight server moved to {host}. Use it?* exists, its buttons
-don't), so a server redeployed at a new address with the same pairing keeps reading *Couldn’t reach the Daylight
-server* here until its address is typed in *Server address* or its new setup link is used; the setup steps in brief;
-and labels for the delivery mode and for the host and fingerprint line.
+**Not there yet** (strings the shared copy, `LAB_TEXT`, doesn't have; reported to the share lane, as for the
+extension): the setup steps in brief; labels for the delivery mode and for the host and fingerprint line; and keys for
+the Server address field's **Save** button and `https://` placeholder, which use the page's own words until then. The
+server-moved question uses the setup confirmation's **Use it** and **Cancel**, which answer it word for word.
 
 **Test hook** (LAB-PLAN 1.7): `?lab=0` or `?lab=1` in the address sets the switch, only when the page is served from
 `127.0.0.1` (the tests' server, or `node build.mjs --serve`); the page then takes it out of the address.
@@ -112,7 +122,10 @@ Lab (card B0, Wave 0): `web-lab.js` is the data, with no page code (`createWebLa
 missing means on, and the first start writes `true`), the sender ledger (`daylight-lab.js` `LabLedger`, fed by every
 frame on the Daylight's confirmation topic through the Sender's `onAckHeader`, Lab on or off, and pruned to the outbox
 after each check), the gates (`labGate` with its 5 s deadline), the Daylight server (`DaylightServer`; discovery only
-with Lab on) and the lock before re-pairing (then `lab/repaired` until OK or a ready server). `web-lab-page.js` draws
+with Lab on; forced when Lab settings open, and once more when a server found from the cached config fails; the move
+question from `server/pendingMove`, `confirmMove` on Use it), What's in Lab's cached states (`lab/server` and the
+module's `server/status`, 10 minutes), the lock before re-pairing (then `lab/repaired` until OK or a ready server) and
+Unpair's `beforeUnpair` (a typed Server address goes with the pairing). `web-lab-page.js` draws
 Settings' Lab rows, What's in Lab, the server section and the follow-up with `lab-ui.js`, the same parts as the
 extension's `lab.html`. Every word is `LAB_TEXT`'s or the server module's. `LAB_FEATURES`, `LAB_SERVER_FEATURES` and
 `BUILT_FEATURES` in `web-lab.js` say what this page lists and runs; `LAB_NOTE_ENABLED` is `false` until a build has the
@@ -143,8 +156,8 @@ the accessibility checks in `../extension/test/e2e/a11y.e2e.mjs`: axe-core, noth
 on, status text at 200%); see [the extension README](../extension/README.md#build-and-test). Lab's are
 `../extension/test/unit/web-lab.test.mjs` (node: `web-lab.js` against the mock relay, a stand-in Daylight server and
 Lab Daylights from `daylight-lab.js`; the build; the release gate), `../extension/test/e2e/web-lab.e2e.mjs`
-(Chromium: Settings' Lab rows, What's in Lab, the server section and the follow-up, with Lab on and off, the stand-in
-server behind the server's own CORS answer), `../extension/test/e2e/web-lab-a11y.e2e.mjs` (axe-core with Lab on and
+(Chromium: Settings' Lab rows, What's in Lab with its cached states, the server section with the move question, the
+follow-up and Unpair, with Lab on and off, the stand-in server behind the server's own CORS answer), `../extension/test/e2e/web-lab-a11y.e2e.mjs` (axe-core with Lab on and
 off, light and dark, Comfort off and on; nothing clipped at 360 px; notes at 200%; screenshots in
 `test-results/web-lab`) and the Lab-off parity test `../extension/test/e2e/web-lab-off-parity.e2e.mjs` with its
 baselines `../extension/test/e2e/lab-off-baseline/web-*.yml` (re-recorded only with a non-Lab change).

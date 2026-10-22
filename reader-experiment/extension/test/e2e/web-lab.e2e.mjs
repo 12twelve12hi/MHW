@@ -12,7 +12,8 @@
 //   F00.6  needs-server within 5 s; a relay that never answers: "Checking your Daylight server…", then OFFLINE at 5 s
 //   F00.7  no setup sentence or secret name on a screen before a feature is tapped or the server section opened
 //   F17.2  What's in Lab's header from the ledger: nothing heard, a v1.1 ack, a Lab hello
-//   2.6    re-pairing with another Daylight while a server is known: the follow-up until OK; Set up with a link
+//   2.6    re-pairing with another Daylight while a server is known: the follow-up until OK; Set up with a link; the
+//          server moved ("Use it?"); What's in Lab's cached states (1.5); Unpair forgets a typed Server address
 //
 //   PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node --test test/e2e/web-lab.e2e.mjs      (HEADED=1 to watch)
 
@@ -360,7 +361,75 @@ test('with a server: the typed Server address, then Ready, the rows’ own state
     await shot(page, 'whats-in-lab-ready');
     await page.getByRole('button', { name: '‹ Back' }).click();
     await page.waitForFunction(() => document.querySelector('#server-sub').textContent === 'Optional · Ready');
+
+    // Unpair forgets the typed Server address (2.6): another Daylight's pairing must not find this server through it.
+    await page.click('#unpair');
+    await page.click('#unpair');
+    await page.waitForSelector('#view-pair:not([hidden])');
+    assert.equal(await storageGet(page, 'server/manualUrl'), undefined);
   } finally { await ctx.close(); }
+});
+
+test('the server moved: the section asks “moved to {host}. Use it?”; Cancel asks again next time; Use it pins the new address. What’s in Lab shows the cached states at once (2.6, 1.5)', { timeout: 120000 }, async () => {
+  const { ctx, page } = await openWeb();
+  const OLD = 'https://daylight-aaaaaaaaaaaa.example.workers.dev';
+  const MOVED = 'https://daylight-bbbbbbbbbbbb.example.workers.dev';
+  try {
+    const secret = ds.generateSecret();
+    const values = await S.deriveServerValues(await S.deriveServerSeed(secret));
+    await serveFor(secret);
+    // The old Worker is gone (its address refuses connections); the new one answers from the stand-in.
+    const sent = [];
+    await ctx.route(`${OLD}/**`, (route) => route.abort('connectionrefused'));
+    await ctx.route(`${MOVED}/**`, async (route) => {
+      const u = new URL(route.request().url());
+      sent.push(`${route.request().method()} ${u.pathname}`);
+      const res = await route.fetch({ url: `${worker.url}${u.pathname}${u.search}` });
+      await route.fulfill({ response: res, headers: { ...res.headers(), 'access-control-allow-origin': '*' } });
+    });
+    await pairStored(page, { code: await ds.formatCode(secret), name: 'Moved Daylight', extra: { 'server/pin': { origin: OLD, fingerprint: values.fingerprint } } });
+    await new ds.RelayClient({ relay: relay.url }).publish(values.configTopic, await S.buildConfigFrame(values, { server: MOVED }));
+
+    await openLabView(page, 'server');
+    const ask = page.locator('.lab-server-moved');
+    await ask.waitFor();
+    assert.equal(await ask.locator('.lab-note-text').textContent(), L.serverMovedText(MOVED));
+    assert.equal(await ask.getAttribute('role'), 'group');
+    assert.equal(await page.locator('.lab-server-state .lab-note-body').getAttribute('data-state'), 'OFFLINE', 'still on the old pin');
+    assert.ok((await page.textContent('.lab-server-where')).startsWith('daylight-aaaaaaaaaaaa.example.workers.dev · '));
+    await shot(page, 'server-moved');
+    // Cancel: nothing sent, nothing pinned; the focus goes on to Copy; asked again the next time the section opens.
+    await ask.getByRole('button', { name: LAB_TEXT.serverSection.setupCancel, exact: true }).click();
+    assert.equal(await ask.count(), 0);
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('lab-server-copy')), true);
+    assert.deepEqual(sent, [], 'nothing went to the new address');
+    assert.deepEqual(await storageGet(page, 'server/pin'), { origin: OLD, fingerprint: values.fingerprint });
+    await page.getByRole('button', { name: '‹ Back' }).click();
+    await openLabView(page, 'server');
+    await ask.waitFor();
+
+    // Use it: the new address is pinned, the section reads it (Ready) and the focus is on its heading.
+    await ask.getByRole('button', { name: LAB_TEXT.serverSection.setupConfirm, exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('.lab-server-ready')?.textContent === 'Ready', null, { timeout: 15000 });
+    assert.deepEqual(await storageGet(page, 'server/pin'), { origin: MOVED, fingerprint: values.fingerprint });
+    assert.ok((await page.textContent('.lab-server-where')).startsWith('daylight-bbbbbbbbbbbb.example.workers.dev · '));
+    assert.equal(await ask.count(), 0);
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'server-h');
+    assert.ok(sent.includes('GET /v1/status'));
+    await page.getByRole('button', { name: '‹ Back' }).click();
+
+    // What's in Lab opened within 10 minutes of that answer: its states at once, while the server is asked again.
+    worker.state.statusDelayMs = 2500;
+    await page.click('#open-whats-in-lab');
+    await page.waitForSelector('#view-whats-in-lab:not([hidden]) .lab-group-state');
+    assert.equal(await page.textContent('.lab-group-state'), 'Ready', 'the cached state, not “Checking your Daylight server…”');
+    assert.equal(await page.evaluate(() => document.body.dataset.fresh ?? null), null, 'the live answer is still on its way');
+    await page.waitForSelector('body[data-fresh="1"]', { timeout: 20000 });
+    assert.equal(await page.textContent('.lab-group-state'), 'Ready');
+  } finally {
+    worker.state.statusDelayMs = 0;
+    await ctx.close();
+  }
 });
 
 test('a relay that never answers: “Checking your Daylight server…”, then OFFLINE at 5 s (F00.6)', { timeout: 120000 }, async () => {
