@@ -23,6 +23,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.tryPerformAccessibilityChecks
+import androidx.compose.foundation.layout.width
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -95,6 +96,25 @@ class AccessibilityTest {
         compose.onRoot().tryPerformAccessibilityChecks()
         val unlabelledComfort = ScreenKit.unlabelledControls(compose)
         assertTrue("${screen.file}, Comfort: controls without a label:\n${unlabelledComfort.joinToString("\n")}", unlabelledComfort.isEmpty())
+    }
+
+    /** The F27.4 measure itself: a text cut to one line is caught, a short line in a wide column is not. */
+    @Test
+    fun theOverflowCheckSeesCutText() {
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.width(200.dp)) {
+                    androidx.compose.material3.Text("Short")
+                    androidx.compose.material3.Text("A sentence far too long for one line of two hundred dp", maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    androidx.compose.material3.Text("Unwrapped words that run past the edge of the column", softWrap = false)
+                }
+            }
+        }
+        compose.waitForIdle()
+        val cut = ScreenKit.textOverflows(compose)
+        assertEquals(cut.joinToString("\n"), 2, cut.size)
+        assertTrue(cut[0], cut[0].startsWith("\"A sentence far too long"))
+        assertTrue(cut[1], cut[1].startsWith("\"Unwrapped words"))
     }
 
     // ------------------------------------------------------------------------------------------------- Comfort

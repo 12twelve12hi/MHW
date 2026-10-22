@@ -183,7 +183,12 @@ object ScreenKit {
 
     // ------------------------------------------------------------------------------------------ what the tests read
 
-    /** Every laid-out text (unmerged: each Text on its own) whose layout is cut short or spills out of its box. */
+    /**
+     * Every laid-out text (unmerged: each Text on its own) that is cut short or spills out of its box: the visual
+     * overflow of F27.4, measured against the text's own box. ([TextLayoutResult.hasVisualOverflow] itself cannot be
+     * read here: the semantics action lays the text out again at its constraint's full width, so a single line that is
+     * narrower than its column always reads as overflowing.)
+     */
     fun textOverflows(compose: AppRule): List<String> {
         val out = ArrayList<String>()
         val nodes = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult), useUnmergedTree = true)
@@ -192,10 +197,13 @@ object ScreenKit {
             val results = ArrayList<TextLayoutResult>()
             n.config[SemanticsActions.GetTextLayoutResult].action?.invoke(results)
             for (r in results) {
-                if (r.hasVisualOverflow) {
-                    val how = listOfNotNull(if (r.didOverflowWidth) "width" else null, if (r.didOverflowHeight) "height" else null)
-                    out += "\"${r.layoutInput.text}\" overflows its ${how.joinToString(" and ")} (${r.size.width} x ${r.size.height} px)"
-                }
+                val widest = (0 until r.lineCount).maxOfOrNull { r.getLineRight(it) - r.getLineLeft(it) } ?: 0f
+                val how = listOfNotNull(
+                    if (r.multiParagraph.didExceedMaxLines) "is cut short after ${r.lineCount} lines" else null,
+                    if (widest > r.size.width + 0.5f) "is ${widest.toInt()} px wide in a ${r.size.width} px box" else null,
+                    if (r.multiParagraph.height > r.size.height + 0.5f) "is ${r.multiParagraph.height.toInt()} px tall in a ${r.size.height} px box" else null,
+                )
+                if (how.isNotEmpty()) out += "\"${r.layoutInput.text}\" ${how.joinToString(" and ")}"
             }
         }
         return out
