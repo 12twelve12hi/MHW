@@ -438,6 +438,65 @@ Inbox from this build. With Lab off every screen, notice and hand-off is v1.1's.
   other apps" for Daylight Share, the battery list).
 - **F11.4:** an excerpt of a page already in the Reader arrives as a new document, not "already in your library".
 
+### The handover to the Lab Reader (card K6)
+
+On the lab tablet (Rooted 2) the Lab Reader, the side-by-side Reader copy `com.daylightcomputer.readerexperiment`
+(LAB-PLAN 5.1), can take over receiving for the Inbox's pairing with its built-in inbox (R1), so items go into its
+library quietly. One app receives per pairing: two would both take every item. `inbox/handover/` (LAB-PLAN 5.3.4):
+
+1. **Let Daylight Reader (lab) receive**, in the Lab card on the Inbox (Lab on, and only where the Lab Reader is
+   installed: on every other DC-1 the card has no such row), arms a 2-minute grant and shows "Open Daylight Reader (lab)
+   › Settings › Labs › Send to Daylight and choose Take over."
+2. `HandoverProvider` (authority `com.daylight.share.handover`, exported) answers `call("pairing")` with `{code, relay,
+   name, since}` (`since`: where the Inbox's receive cursor is, for the Lab Reader to start from; it may ignore it)
+   only while armed, with Lab on, in the Inbox role, and only when Android names the calling package
+   `com.daylightcomputer.readerexperiment` (`getCallingPackage()`, and that uid owns it). The Lab Reader, while not
+   armed, gets `{error: "not-armed"}`; any other app, nothing. The grant is used up.
+3. Then `Prefs.receivingElsewhere` is the Lab Reader's package: the Inbox stops polling (the 15-minute job, the app's
+   start, Check now: `Handover.beforePoll` in `InboxRepo.pollOnce`), the live connection and Instant delivery (its
+   service stops itself if started), sends one `lab: 0` hello (`LabReporter` reads its Lab as off while another app
+   receives; the Lab Reader says its own hellos), and Inbox health does not call Instant delivery stopped. The Lab card
+   and the top of the Inbox say "Daylight Reader (lab) receives for this Daylight now."
+4. **Resume rule.** Before each would-be poll the Inbox asks the Lab Reader's `ShareInboxProvider`
+   (`com.daylightcomputer.readerexperiment.shareinbox`, `call("receiving")`, visible through the manifest's
+   `<queries>`). It receives here again by itself only when the answer is `{receiving: false}` or PackageManager says
+   the package is gone. A provider it cannot reach while the package is installed (none, not visible, throwing, an
+   answer without a Boolean `receiving`) never makes it resume: it keeps waiting and shows "Can’t reach Daylight Reader
+   (lab) right now." **Receive here again** shows only once the Reader said false, and asks once more first.
+
+On receiving here again, the receive cursor moves up to the last time the Lab Reader may have been receiving (the
+handover, then each answer but "not receiving"), less the protocol's 30-minute overlap, so the Inbox does not take again
+what the Lab Reader took (a few items from just before it stopped may arrive in both); anything nobody took is still on
+the relay or comes with its sender's re-send. Instant delivery starts again when it is on (from the background Android
+may refuse; then the health card offers Turn on), and a hello goes. A new pairing on the Inbox (Reset pairing) ends a
+handover at once. **Lab off does not end a handover** (the Lab Reader still receives; LAB-PLAN 1.3: Lab off never
+stops a receiver), so the Inbox screen keeps its line with Lab off, and the resume rule still runs. The server lane (S0,
+Wave S) is not part of it: it stays with Daylight Share until the Lab Reader's hello carries the cap `server`.
+
+The five sentences are the plan's, in the K6 block of `res/values/strings.xml`: LAB_TEXT has no handover strings yet
+(the share lane is asked to add them; the app then shows LAB_TEXT's). Log lines (`adb logcat -s DaylightShare`):
+`lab: handover: armed for 120 s`, `… <package> receives for this Daylight now; the Inbox stops polling`, `… <package>
+receives; poll skipped`, `… can't reach <package>; poll skipped …`, `… the Inbox receives here again (<why>)`,
+`… receiving from relay time <s> on …`, `… refused the pairing to <package>`.
+
+**For R1 (the Lab Reader side).** Its `ShareInboxProvider.call("receiving")` should answer `true` only while it
+receives with the pairing it took over (after its own Reset pairing, or with its switch off, `false`), and answer
+`com.daylight.share` only. Its manifest needs `<queries><package android:name="com.daylight.share"/></queries>`.
+
+**Still to check on a device** (W1 device round on Rooted 2, once R1 exists):
+
+- **R1.4:** after Take over, Daylight Share shows "Daylight Reader (lab) receives for this Daylight now." in Settings ›
+  Lab and on the Inbox, and polls nothing for 20 minutes (`adb logcat -s DaylightShare` shows only "poll skipped" lines,
+  no "inbox: poll" and no live connection, and Instant delivery's notification is gone); turning off the Reader's switch
+  makes Daylight Share receive again at its next poll (within 15 minutes, or at once on opening it).
+- The real `getCallingPackage()` path: the Lab Reader's Take over gets the pairing while armed and `not-armed` after 2
+  minutes; `adb shell content call --uri content://com.daylight.share.handover --method pairing` (the shell's package)
+  gets nothing.
+- Package visibility on Android 14: with the Lab Reader installed, Daylight Share sees it (the Lab card's row shows) and
+  reaches `ShareInboxProvider`; `pm disable` on the Lab Reader shows "Can’t reach Daylight Reader (lab) right now." and
+  no resume; `pm uninstall` makes it resume at the next poll.
+- TalkBack reads the row, the step after it and the "Can’t reach" sentence (announced), at Comfort's largest text too.
+
 ## Build
 
 Requirements: JDK 17 or 21. The protocol module needs nothing else; the APK needs the Android SDK (platform 35).
@@ -549,6 +608,13 @@ unless a test says so.
 
 `HandoffDecisionsTest` runs v1.1's hand-off decisions with Lab off (LAB-PLAN 1.3); `LabReporterTest` expects the
 hello's `cap-kind`.
+
+### Lab tests (K6, the handover)
+
+| Test | Covers |
+|---|---|
+| `HandoverTest` | LAB-PLAN 5.3.4 with a fake provider on each side (the Lab Reader's `ShareInboxProvider`, and Daylight Share's provider as a named calling package reaches it): the authorities and the manifest's `<queries>`; the pairing only while armed (2 minutes; a clock set back), with Lab on, on the Inbox, only to the Lab Reader, used up, nothing to an unnamed caller; then no poll, no 15-minute job's poll, no live connection, Instant delivery stopped and stopping itself, health not "stopped", one `lab: 0` frame and no hello through Lab off and on; the resume rule: a "not receiving" answer or an uninstall resumes, and an **invisible provider while the package is installed** (none, throwing SecurityException, IllegalArgumentException or another, no Boolean answer) never does; Receive here again asks first; the cursor skips what the Lab Reader took; the cursor in the answer; a new pairing ends it; Lab off keeps it; a new process reads it back |
+| `HandoverScreenTest` | the Lab card without the Lab Reader (no row); Let Daylight Reader (lab) receive and its step; the handed-over line in Settings and on the Inbox; "Can’t reach …" with no button; Receive here again once the Reader said false, which resumes; F27 checks for each (as shipped, and Comfort at 200 % on a 360 dp phone) with `lab-handover-*.png` |
 
 ### Layout
 

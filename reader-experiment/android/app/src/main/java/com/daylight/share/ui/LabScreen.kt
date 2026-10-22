@@ -82,6 +82,8 @@ fun LabCard(activity: MainActivity, onOpen: (LabPage) -> Unit) {
         if (lab) {
             LabNavRow("${LabText.WHATS_IN_LAB} ›") { onOpen(LabPage.WHATS_IN_LAB) }
             LabNavRow("${LabText.SERVER_ROW} ›", detail = subtitle) { onOpen(LabPage.SERVER) }
+            // Lab: K6 (LAB-PLAN 5.3.4): the handover to the Lab Reader, on the Inbox where the Lab Reader is installed.
+            if (role == com.daylight.share.Role.INBOX) com.daylight.share.inbox.handover.HandoverRows(activity)
         }
     }
 }

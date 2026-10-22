@@ -29,6 +29,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -54,7 +56,10 @@ object Live {
     @OptIn(ExperimentalCoroutinesApi::class)
     fun start(app: App) {
         app.scope.launch {
-            combine(holders, app.role, app.inbox.pairingFlow) { h, role, pairing -> Triple(h.isNotEmpty(), role, pairing) }
+            // Lab: K6 (LAB-PLAN 5.3.4): no live connection while the Lab Reader receives for this pairing.
+            combine(holders, app.role, app.inbox.pairingFlow, app.handover.state.map { it.elsewhere }.distinctUntilChanged()) { h, role, pairing, _ ->
+                Triple(h.isNotEmpty() && app.handover.receivingElsewhere() == null, role, pairing)
+            }
                 .collectLatest { (wanted, role, pairing) ->
                     if (wanted && role == Role.INBOX && pairing != null) { connect(app) } else { _state.value = State.OFF }
                 }
@@ -133,7 +138,8 @@ class InstantDeliveryService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        if (app.prefs.role != Role.INBOX || !app.prefs.instantDelivery) {
+        // Lab: K6 (LAB-PLAN 5.3.4): not while the Lab Reader receives for this pairing; it starts again on resuming.
+        if (app.prefs.role != Role.INBOX || !app.prefs.instantDelivery || app.handover.receivingElsewhere() != null) {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY

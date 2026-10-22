@@ -42,6 +42,9 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="content" android:mimeType="*/*" />
         </intent>
+        <!-- Lab: K6 (LAB-PLAN 5.3.4): the Lab Reader's built-in inbox (its package is listed above), which the Inbox asks
+             "receiving" before each would-be poll while the Lab Reader receives for this Daylight. -->
+        <provider android:authorities="com.daylightcomputer.readerexperiment.shareinbox" />
     </queries>
 
     <application
@@ -167,6 +170,13 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <!-- Lab: K6 (LAB-PLAN 5.3.4): hands the Inbox's pairing to the Lab Reader (com.daylightcomputer.readerexperiment),
+             only while "Let Daylight Reader (lab) receive" is armed and only to that package; it answers nothing else. -->
+        <provider
+            android:name=".inbox.handover.HandoverProvider"
+            android:authorities="${applicationId}.handover"
+            android:exported="true" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

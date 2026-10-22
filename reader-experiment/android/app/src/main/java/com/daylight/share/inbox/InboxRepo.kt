@@ -317,6 +317,8 @@ class InboxRepo(private val app: App) {
 
     /** Polls once (catch-up). Returns the number of new items; errors land in [sync]. */
     suspend fun pollOnce(): Int = withContext(Dispatchers.IO) {
+        // Lab: K6 (LAB-PLAN 5.3.4): while the Lab Reader receives for this pairing, no poll, unless it says it stopped.
+        if (!app.handover.beforePoll()) return@withContext 0
         sync.value = sync.value.copy(checking = true)
         try {
             val r = receiver().pollOnce()

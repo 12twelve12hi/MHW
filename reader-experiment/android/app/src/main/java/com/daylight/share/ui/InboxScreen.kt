@@ -110,6 +110,8 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
     val labNote = lab && app.prefs.labNoteDue()
     // Lab (F15): the health card's line and its one warning (Instant delivery stopped, notifications off, the poll's error).
     val stopped = remember(resumes, live, instant) { InboxHealth.stopped(app) }
+    // Lab: K6: who receives for this pairing (the handover to the Lab Reader).
+    val handover by app.handover.state.collectAsStateWithLifecycle()
 
     ScreenList {
         item {
@@ -145,6 +147,8 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
                 },
             )
         }
+        // Lab: K6 (LAB-PLAN 5.3.4): while the Lab Reader receives for this Daylight, the Inbox says so.
+        if (handover.elsewhere != null) item { com.daylight.share.inbox.handover.HandoverLine(activity) }
         if (notice != null) item {
             Section {
                 Text(notice, modifier = Modifier.announced())

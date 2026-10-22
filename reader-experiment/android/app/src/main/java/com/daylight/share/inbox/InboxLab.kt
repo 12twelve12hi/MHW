@@ -209,7 +209,9 @@ object InboxHealth {
 
     /** [stopped] for this app now: the switch, the service in this process, and its last heartbeat or start. */
     fun stopped(app: App, now: Long = System.currentTimeMillis()): Boolean =
-        stopped(app.prefs.instantDelivery, InstantDeliveryService.running, maxOf(app.prefs.labInstantBeat, InstantDeliveryService.startedAt), now)
+        // Lab: K6 (LAB-PLAN 5.3.4): while the Lab Reader receives for this pairing, Instant delivery is off on purpose.
+        app.handover.receivingElsewhere() == null &&
+            stopped(app.prefs.instantDelivery, InstantDeliveryService.running, maxOf(app.prefs.labInstantBeat, InstantDeliveryService.startedAt), now)
 
     /** The card's warning: Instant delivery stopped, then notifications off, then the last poll's error. */
     fun warning(stopped: Boolean, notificationsOk: Boolean, pollError: String?): Warning? = when {

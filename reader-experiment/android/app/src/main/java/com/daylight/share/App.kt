@@ -45,6 +45,10 @@ class App : Application() {
     /** The Inbox's Lab frames (F17): its hellos and item states on the ack topic. */
     val labReporter: LabReporter by lazy { LabReporter(this) }
 
+    // Lab: K6
+    /** The handover to the Lab Reader (LAB-PLAN 5.3.4): who receives for the Inbox's pairing, and the resume rule. */
+    val handover: com.daylight.share.inbox.handover.Handover by lazy { com.daylight.share.inbox.handover.Handover(this) }
+
     /** How many of our activities are started (visible), and the one in front. */
     private var started = 0
     @Volatile var front: Activity? = null
@@ -437,6 +441,35 @@ class Prefs(private val context: Context) {
     var labReaderTestId: String?
         get() = sp.getString("labReaderTestId", null)
         set(v) = sp.edit().putString("labReaderTestId", v).apply()
+
+    // Lab: K6 (the handover to the Lab Reader, LAB-PLAN 5.3.4; `inbox.handover.Handover`). Like the switch, these belong
+    // to the device: never synced, never in a pairing link. Lab off leaves a handover as it is: the Lab Reader still
+    // receives for the pairing, and two receivers would both take every item.
+
+    /** "Let Daylight Reader (lab) receive" armed the pairing's grant until then (ms; 0: not armed). */
+    var labHandoverArmedUntil: Long
+        get() = sp.getLong("labHandoverArmedUntil", 0L)
+        set(v) = sp.edit().putLong("labHandoverArmedUntil", v).apply()
+
+    /** The package that receives for this Daylight's pairing instead of the Inbox (the Lab Reader), or null. */
+    var receivingElsewhere: String?
+        get() = sp.getString("receivingElsewhere", null)
+        set(v) = sp.edit().putString("receivingElsewhere", v).apply()
+
+    /** The inbox topic of the pairing that was handed over: another pairing (Reset pairing) ends the handover. */
+    var labHandoverTopic: String?
+        get() = sp.getString("labHandoverTopic", null)
+        set(v) = sp.edit().putString("labHandoverTopic", v).apply()
+
+    /** The Lab Reader's last answer to `receiving` ("receiving", "not-receiving", "unreachable"), or null. */
+    var labHandoverReach: String?
+        get() = sp.getString("labHandoverReach", null)
+        set(v) = sp.edit().putString("labHandoverReach", v).apply()
+
+    /** The last time the Lab Reader may have been receiving (ms): the handover, then each answer but "not receiving". */
+    var labHandoverSeenAt: Long
+        get() = sp.getLong("labHandoverSeenAt", 0L)
+        set(v) = sp.edit().putLong("labHandoverSeenAt", v).apply()
 
     fun senderPairing(): Pairing? = senderLink?.let { runCatching { Pairing.parse(it) }.getOrNull() }
 

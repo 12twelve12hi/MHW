@@ -108,11 +108,18 @@ class LabReporter(private val app: App) {
      * Lab on exactly when it is 1), `android/<versionName>`, its [caps], and whether Instant delivery is connected now.
      */
     fun info(): LabInboxInfo = LabInboxInfo(
-        lab = if (app.prefs.lab) Lab.LAB_LEVEL else 0,
+        lab = if (labOn()) Lab.LAB_LEVEL else 0,
         app = "android/${BuildConfig.VERSION_NAME}",
         caps = caps(),
         live = app.prefs.instantDelivery && Live.state.value == Live.State.LIVE,
     )
+
+    /**
+     * The Inbox's Lab as its frames say it: the switch, and (Lab: K6, LAB-PLAN 5.3.4) off while another app (the Lab
+     * Reader) receives for this pairing, which then sends its own hellos: one `lab: 0` frame when it took over, a hello
+     * again when the Inbox receives here again ([labSwitched] after each).
+     */
+    private fun labOn(): Boolean = app.prefs.lab && app.handover.receivingElsewhere() == null
 
     /**
      * The hello's caps (2.2.2): `st` and `tap`, `reader-link` when the app links go to first takes SAVE_PAGE (the
@@ -231,9 +238,10 @@ class LabReporter(private val app: App) {
     fun flushNow(): LabInbox.FlushResult? {
         val li = inbox() ?: return null
         val on = li.debugState()["on"] == true
+        val want = labOn()
         val r = when {
-            on == app.prefs.lab -> li.flush()
-            app.prefs.lab -> li.labTurnedOn()
+            on == want -> li.flush()
+            want -> li.labTurnedOn()
             else -> li.labTurnedOff()
         }
         afterFlush(r)
