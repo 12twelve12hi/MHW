@@ -48,9 +48,11 @@ main {
   overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
 }
 
-.top { display: flex; align-items: center; gap: 10px; margin: 4px 0 20px; }
+/* The header wraps at large text sizes: Settings moves under the title, still on the right. */
+.top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 4px 0 20px; }
 .top .mark { flex: none; border-radius: 6px; }
-h1 { font-size: 1.1765em; font-weight: 650; margin: 0; flex: 1; letter-spacing: .005em; }
+.top #open-settings { margin-left: auto; }
+h1 { font-size: 1.1765em; font-weight: 650; margin: 0; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; letter-spacing: .005em; }
 h2 { font-size: 1.0588em; font-weight: 650; margin: 0 0 6px; }
 h3 { font-size: .9412em; font-weight: 650; margin: 26px 0 4px; }
 .hint { color: var(--muted); margin: 0 0 14px; }

@@ -47,7 +47,10 @@ export function clipped(page, { only = null } = {}) {
       }
     }
     const d = document.documentElement;
-    if (d.scrollWidth > d.clientWidth) bad.push(`the page scrolls sideways: ${d.scrollWidth} > ${d.clientWidth}`);
+    if (d.scrollWidth > d.clientWidth) {
+      const out = [...document.body.querySelectorAll('*')].filter((e) => e.checkVisibility() && e.getBoundingClientRect().right > d.clientWidth + 0.5);
+      bad.push(`the page scrolls sideways: ${d.scrollWidth} > ${d.clientWidth}, past the edge: ${out.slice(0, 5).map(name).join(', ')}`);
+    }
     return bad;
   }, { only });
 }

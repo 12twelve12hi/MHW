@@ -51,9 +51,11 @@ main { padding: 14px 16px 16px; }
   overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
 }
 
-.top { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+/* The header wraps at large text sizes: ⋯ moves under the title, still on the right. */
+.top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
 .top .mark { flex: none; border-radius: 5px; }
-h1 { font-size: 1.0667em; font-weight: 650; margin: 0; flex: 1; letter-spacing: .01em; }
+.top #open-settings { margin-left: auto; }
+h1 { font-size: 1.0667em; font-weight: 650; margin: 0; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; letter-spacing: .01em; }
 h2 { font-size: 1em; font-weight: 650; margin: 4px 0 6px; }
 .hint { color: var(--muted); margin: 0 0 12px; }
 .small { font-size: .8667em; }
