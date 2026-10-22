@@ -21,6 +21,8 @@ let pollTimer = null;
 let pendingPerm = null;
 let pendingPair = null; // a pairing waiting for the user's answer: {input, from, relay, expect, title, lines, button}
 let unpairArmed = null;
+let backTo = 'view-send'; // the view Settings' Back returns to
+const lastStatus = new Map(); // row id -> the status last shown, to announce changes (F27)
 
 const isTouchApple = /iPhone|iPad|iPod/.test(navigator.userAgent)
   || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
@@ -57,7 +59,35 @@ function setStatus(text, bad = false) {
 
 function show(view) {
   for (const v of ['view-pair', 'view-confirm', 'view-send', 'view-settings']) $(v).hidden = v !== view;
-  $('open-settings').hidden = view !== 'view-send';
+  // Settings (Comfort among them) is one tap away before pairing too.
+  $('open-settings').hidden = view !== 'view-send' && view !== 'view-pair';
+}
+
+// --- accessibility (F27, not Lab) -----------------------------------------------------------------------------------
+
+/** Comfort: the comfort class on <body> (popup.css): larger text and buttons, more contrast, no motion. */
+function applyComfort(on) {
+  document.body.classList.toggle('comfort', !!on);
+  $('comfort').checked = !!on;
+  if (st) st.comfort = !!on;
+}
+
+async function onComfort() {
+  const want = $('comfort').checked;
+  applyComfort(want);
+  try {
+    applyComfort((await call('setComfort', { comfort: want })).comfort);
+  } catch {
+    applyComfort(!want);
+  }
+}
+
+/** Says a history row's new state to screen readers (the row itself changes without moving focus). */
+function announce(text) {
+  const a = $('announce');
+  a.textContent = '';
+  // A fresh text node after a tick, so the same words twice are still read.
+  setTimeout(() => { a.textContent = text; }, 50);
 }
 
 // --- pairing --------------------------------------------------------------------------------------------------------
@@ -283,6 +313,14 @@ function renderHistory() {
   list.textContent = '';
   const shown = rows.slice(0, HISTORY_SHOWN);
   $('recent-h').hidden = shown.length === 0;
+  const changed = [];
+  for (const row of rows) {
+    const was = lastStatus.get(row.id);
+    // Delivered, Waiting to send and Not delivered are said when a row reaches them; a send's own outcome is in #status.
+    if (was && was !== row.status && ['delivered', 'failed', 'expired'].includes(row.status)) changed.push(row);
+    lastStatus.set(row.id, row.status);
+  }
+  if (changed.length) announce(changed.map((r) => `${statusInfo(r).label}: ${displayTitle(r)}`).join('. '));
   for (const row of shown) {
     const li = el('li');
     li.dataset.id = row.id;
@@ -329,7 +367,10 @@ function startPolling() {
 // --- settings -------------------------------------------------------------------------------------------------------
 
 function renderSettings() {
+  backTo = $('view-pair').hidden ? 'view-send' : 'view-pair';
   show('view-settings');
+  $('comfort').checked = !!st.comfort;
+  $('settings-paired').hidden = !st.paired;
   $('set-daylight').textContent = st.name || 'Your Daylight (no name given)';
   $('set-relay').textContent = st.relay.replace(/^https:\/\//, '');
   const hasCommands = !!api.commands;
@@ -393,13 +434,17 @@ async function init() {
   $('perm-allow').addEventListener('click', onPermAllow);
   $('perm-link').addEventListener('click', onPermLink);
   $('open-settings').addEventListener('click', renderSettings);
-  $('close-settings').addEventListener('click', () => renderSend());
+  $('close-settings').addEventListener('click', () => (backTo === 'view-pair' || !st?.paired ? renderPair() : renderSend()));
+  $('comfort').addEventListener('change', onComfort);
   $('name-form').addEventListener('submit', onSaveName);
   $('unpair').addEventListener('click', onUnpair);
   api.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     if (changes.outbox) { rows = changes.outbox.newValue ?? []; renderHistory(); }
+    if (changes.settings) applyComfort(changes.settings.newValue?.comfort);
   });
+  // Comfort first, so the popup opens at its size.
+  try { applyComfort((await api.storage.local.get('settings'))?.settings?.comfort); } catch { /* the background says */ }
 
   try {
     st = await call('state');
@@ -410,6 +455,7 @@ async function init() {
     return;
   }
   call('clearBadge').catch(() => {});
+  applyComfort(st.comfort);
   if (!st.paired) renderPair({ fresh: true });
   else {
     await renderSend();

@@ -27,6 +27,8 @@ let rows = [];
 let pendingShare = null;
 let pendingAsk = null; // the open pairing question: {resolve(yes)}
 let unpairArmed = null;
+let backTo = 'view-send'; // the view Settings' Back returns to
+const lastStatus = new Map(); // row id -> the status last shown, to announce changes (F27)
 const defaultFrom = deviceName(navigator.userAgent, navigator.maxTouchPoints);
 
 function el(tag, cls, text) {
@@ -44,7 +46,37 @@ function setStatus(text, tone = '') {
 
 function show(view) {
   for (const v of ['view-pair', 'view-confirm', 'view-send', 'view-settings']) $(v).hidden = v !== view;
-  $('open-settings').hidden = view !== 'view-send';
+  // Settings (Comfort among them) is one tap away before pairing too.
+  $('open-settings').hidden = view !== 'view-send' && view !== 'view-pair';
+}
+
+// --- accessibility (F27, not Lab) -----------------------------------------------------------------------------------
+
+/** Comfort: the comfort class on <body> (styles.css): larger text and buttons, more contrast, no motion. */
+function applyComfort(on) {
+  document.body.classList.toggle('comfort', !!on);
+  $('comfort').checked = !!on;
+}
+
+/** settings.comfort, off by default; pairing, unpairing and Lab leave it as it is. Other open tabs follow. */
+async function onComfort() {
+  const want = $('comfort').checked;
+  applyComfort(want);
+  try {
+    settings = { ...((await storage.get('settings')) ?? {}), comfort: want };
+    await storage.set('settings', settings);
+    channel?.postMessage('changed');
+  } catch {
+    applyComfort(!want);
+  }
+}
+
+/** Says a history row's new state to screen readers (the row itself changes without moving focus). */
+function announce(text) {
+  const a = $('announce');
+  a.textContent = '';
+  // A fresh text node after a tick, so the same words twice are still read.
+  setTimeout(() => { a.textContent = text; }, 50);
 }
 
 // --- state ----------------------------------------------------------------------------------------------------------
@@ -53,6 +85,7 @@ async function loadState() {
   pairing = await ds.loadPairing(storage).catch(() => null);
   settings = (await storage.get('settings')) ?? {};
   sender = pairing ? new ds.Sender({ pairing, storage, from: settings.from || defaultFrom, app: APP }) : null;
+  applyComfort(settings.comfort);
 }
 
 async function loadRows() {
@@ -327,6 +360,14 @@ function renderHistory() {
   list.textContent = '';
   const shown = rows.slice(0, HISTORY_SHOWN);
   $('recent-h').hidden = shown.length === 0;
+  const changed = [];
+  for (const row of rows) {
+    const was = lastStatus.get(row.id);
+    // Delivered, Waiting to send and Not delivered are said when a row reaches them; a send's own outcome is in #status.
+    if (was && was !== row.status && ['delivered', 'failed', 'expired'].includes(row.status)) changed.push(row);
+    lastStatus.set(row.id, row.status);
+  }
+  if (changed.length) announce(changed.map((r) => `${statusInfo(r).label}: ${displayTitle(r)}`).join('. '));
   for (const row of shown) {
     const li = el('li');
     li.dataset.id = row.id;
@@ -368,7 +409,11 @@ async function renderSend() {
 }
 
 async function renderSettings() {
+  backTo = $('view-pair').hidden ? 'view-send' : 'view-pair';
   show('view-settings');
+  $('comfort').checked = !!settings.comfort;
+  $('settings-paired').hidden = !pairing;
+  if (!pairing) return;
   $('set-daylight').textContent = pairing.name || 'Your Daylight (no name given)';
   $('set-relay').textContent = pairing.relay.replace(/^https:\/\//, '');
   $('set-relay-2').textContent = pairing.relay.replace(/^https?:\/\//, '');
@@ -479,7 +524,8 @@ function wire() {
   $('url-form').addEventListener('submit', onSendUrl);
   $('file').addEventListener('change', async (e) => { const input = e.target; await sendFiles(input.files); input.value = ''; });
   $('open-settings').addEventListener('click', renderSettings);
-  $('close-settings').addEventListener('click', () => renderSend());
+  $('close-settings').addEventListener('click', () => (backTo === 'view-pair' || !pairing ? renderPair() : renderSend()));
+  $('comfort').addEventListener('change', onComfort);
   $('name-form').addEventListener('submit', onSaveName);
   $('unpair').addEventListener('click', onUnpair);
   $('copy-shortcut').addEventListener('click', onCopyShortcut);

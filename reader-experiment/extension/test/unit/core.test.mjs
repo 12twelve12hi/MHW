@@ -612,3 +612,24 @@ test('a local HTML file (file://) goes as an HTML file item', async () => {
     assert.equal(new TextDecoder().decode(item.content), '<!DOCTYPE html>\n<html><body>notes</body></html>');
   } finally { await s.close(); }
 });
+
+test('Comfort (F27, not Lab): off by default, saved in settings, kept through renaming, pairing changes and unpairing', async () => {
+  const s = await setup({ paired: false });
+  try {
+    const st = async () => (await s.app.onMessage({ type: 'state' }));
+    assert.equal((await st()).comfort, false, 'off by default');
+    assert.deepEqual(await s.app.onMessage({ type: 'setComfort', comfort: true }), { comfort: true });
+    assert.equal((await s.fb.api.storage.local.get('settings')).settings.comfort, true);
+    assert.equal((await st()).comfort, true, 'before pairing too');
+    await s.app.pair({ input: s.link, from: 'Kitchen Chrome' });
+    await s.app.onMessage({ type: 'setName', from: 'Desk Chrome' });
+    assert.deepEqual((await s.fb.api.storage.local.get('settings')).settings, { from: 'Desk Chrome', comfort: true });
+    await s.app.pair({ input: await ds.pairingLink({ secret: ds.generateSecret(), relay: s.relay.url }), confirm: true });
+    await s.app.unpair();
+    assert.equal((await st()).comfort, true, 'pairing changes and unpairing leave it');
+    // Saved together, neither change is lost.
+    await Promise.all([s.app.onMessage({ type: 'setName', from: 'Laptop Chrome' }), s.app.onMessage({ type: 'setComfort', comfort: false })]);
+    assert.deepEqual((await s.fb.api.storage.local.get('settings')).settings, { from: 'Laptop Chrome', comfort: false });
+    assert.equal((await st()).comfort, false);
+  } finally { await s.close(); }
+});

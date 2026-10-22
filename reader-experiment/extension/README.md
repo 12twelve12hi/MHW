@@ -88,8 +88,16 @@ the last few sends in the words every Send to Daylight app uses:
 - **Not delivered**, with why, and **Try again** where trying again can help (for example the Daylight didn't pick it
   up within a week).
 
-Every row has **Remove**. The **⋯** button opens settings: the Daylight's name, the relay, this browser's name,
-**Change pairing…** and **Unpair**.
+Every row has **Remove**. The **⋯** button opens settings: **Comfort** (below), the Daylight's name, the relay, this
+browser's name, **Change pairing…** and **Unpair**. Before pairing it opens Comfort alone.
+
+**Accessibility.** Every control has a name, states are said in words and glyphs (never colour alone), status text
+wraps instead of being cut short (also at 200% zoom), and a history row that turns *Delivered ✓*, *Waiting to send* or
+*Not delivered* is announced to screen readers. Pairing by typing the code is always available (⋯ › **Change
+pairing…** once paired). **Comfort** (⋯ › Comfort, off by default; *Larger text and buttons, more contrast, no
+motion.*) makes text 125% larger, every button at least 48 px high, borders 2 px and muted text full ink, turns off
+transitions, and lets titles wrap instead of ending in "…". It is part of the plain app, not Lab: it is kept in
+`settings.comfort` (`storage.local`), and pairing, unpairing and Lab leave it as it is.
 
 When a PDF can't be read inside its tab (Safari's PDF viewer, for example) and the server doesn't allow it otherwise,
 the popup asks for permission to download from that one site. Saying no sends the link instead.
@@ -117,7 +125,8 @@ sites is optional and asked for one site at a time, only to download a PDF.
 
 ## Build and test
 
-Needs Node 22. No npm packages are needed to build; Playwright is only for the end-to-end tests and the icons.
+Needs Node 22. No npm packages are needed to build; Playwright (and `@axe-core/playwright`, pinned in
+`package.json`) is only for the end-to-end tests and the icons.
 
 ```sh
 cd reader-experiment/extension
@@ -150,6 +159,13 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   same code on a new relay, then another Daylight's code with its question). `test/e2e/web.e2e.mjs` does the same for
   the web sender, including the `#pair=` question, a file over 9 MB refused before it is read, the Android share
   target and offline use. Screenshots land in `test-results/`.
+- `test/e2e/a11y.e2e.mjs` is the accessibility baseline (LAB-PLAN F27) for the popup and the web sender: axe-core
+  finds no violations in any view (pairing, the pairing question, sending with a row in every state, settings), light
+  and dark, Comfort off and on (F27.1); with Comfort on at 360 px no text is clipped (`scrollWidth <= clientWidth`,
+  `scrollHeight <= clientHeight + 1` for every element with text) and status text wraps at 200% text (F27.4); every
+  control has a name; Comfort's switch and its words (`LAB_TEXT.comfort`, `.comfortFooter`); the announcements; and
+  typed-code pairing. Its screenshots (`test-results/a11y/`) are uploaded by CI for review, not compared. The checks
+  live in `test/helpers/a11y.mjs`.
 - CI: [`.github/workflows/rx-extension.yml`](../../.github/workflows/rx-extension.yml) builds, runs both test suites,
   publishes the two zips to the release, uploads `dist/safari` as the `send-to-daylight-safari` artifact, and deploys
   the web sender to GitHub Pages (see [`../web/README.md`](../web/README.md)).

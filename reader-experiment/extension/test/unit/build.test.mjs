@@ -110,3 +110,14 @@ test('lab-wave.json names no Lab wave, or one the release gate knows (LAB-PLAN 6
   const { wave } = JSON.parse(fs.readFileSync(path.join(here, '..', '..', 'lab-wave.json'), 'utf8'));
   assert.ok(wave === null || typeof gate[wave] === 'boolean', `extension/lab-wave.json: unknown wave ${wave}`);
 });
+
+test('the popup’s Comfort switch says exactly what LAB_TEXT says (F27, LAB-PLAN 1.6)', async () => {
+  const { LAB_TEXT } = await import('../../../share/js/daylight-lab.js');
+  const html = fs.readFileSync(path.join(targets.chrome.dir, 'popup.html'), 'utf8');
+  assert.match(html, /<label for="comfort" class="switch-label">([^<]*)<\/label>/);
+  assert.equal(/<label for="comfort" class="switch-label">([^<]*)<\/label>/.exec(html)[1], LAB_TEXT.comfort);
+  assert.equal(/<p id="comfort-footer"[^>]*>([^<]*)<\/p>/.exec(html)[1], LAB_TEXT.comfortFooter);
+  assert.match(html, /<input id="comfort" class="switch" type="checkbox" role="switch" aria-describedby="comfort-footer">/);
+  // Comfort is not Lab: no Lab module in a build without Lab.
+  assert.doesNotMatch(html, /daylight-lab/);
+});

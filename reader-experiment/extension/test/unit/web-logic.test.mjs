@@ -192,3 +192,11 @@ test('web/lab-wave.json names no Lab wave, or one the release gate knows (LAB-PL
   const { wave } = read('../../../web/lab-wave.json');
   assert.ok(wave === null || typeof gate[wave] === 'boolean', `web/lab-wave.json: unknown wave ${wave}`);
 });
+
+test('the web sender’s Comfort switch says exactly what LAB_TEXT says (F27, LAB-PLAN 1.6)', async () => {
+  const { LAB_TEXT } = await import('../../../share/js/daylight-lab.js');
+  const html = fs.readFileSync(path.join(w.dir, 'index.html'), 'utf8');
+  assert.equal(/<label for="comfort" class="switch-label">([^<]*)<\/label>/.exec(html)?.[1], LAB_TEXT.comfort);
+  assert.equal(/<p id="comfort-footer"[^>]*>([^<]*)<\/p>/.exec(html)?.[1], LAB_TEXT.comfortFooter);
+  assert.match(html, /<input id="comfort" class="switch" type="checkbox" role="switch" aria-describedby="comfort-footer">/);
+});

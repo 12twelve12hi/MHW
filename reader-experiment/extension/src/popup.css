@@ -26,15 +26,17 @@
   }
 }
 
+/* Text sizes are relative: the root follows the browser's text size (15 px at its default), the body is 1rem, and
+   everything inside is in em, so Comfort's 125% on <body> (F27) scales all of it. */
 * { box-sizing: border-box; }
-html { background: var(--paper); }
+html { background: var(--paper); font-size: 93.75%; }
 body {
   margin: 0;
   width: 360px;
   min-height: 120px;
   background: var(--paper);
   color: var(--ink);
-  font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  font: 1rem/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
   -webkit-text-size-adjust: 100%;
 }
 /* iPhone and iPad show the popup as a sheet, and the standalone pairing page fills a tab. */
@@ -43,18 +45,24 @@ html.wide main { padding: 20px 18px 28px; }
 
 main { padding: 14px 16px 16px; }
 [hidden] { display: none !important; }
+/* Read by screen readers, not shown. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}
 
 .top { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .top .mark { flex: none; border-radius: 5px; }
-h1 { font-size: 16px; font-weight: 650; margin: 0; flex: 1; letter-spacing: .01em; }
-h2 { font-size: 15px; font-weight: 650; margin: 4px 0 6px; }
+h1 { font-size: 1.0667em; font-weight: 650; margin: 0; flex: 1; letter-spacing: .01em; }
+h2 { font-size: 1em; font-weight: 650; margin: 4px 0 6px; }
 .hint { color: var(--muted); margin: 0 0 12px; }
-.small { font-size: 13px; }
+.small { font-size: .8667em; }
 .opt { color: var(--muted); font-weight: 400; }
 
-label { display: block; font-size: 13px; font-weight: 600; margin: 10px 0 4px; }
+label { display: block; font-size: .8667em; font-weight: 600; margin: 10px 0 4px; }
 input, textarea {
   width: 100%;
+  min-width: 0;
   font: inherit;
   color: var(--ink);
   background: var(--card);
@@ -62,11 +70,11 @@ input, textarea {
   border-radius: 8px;
   padding: 9px 10px;
 }
-textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; letter-spacing: .02em; }
+textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9333em; letter-spacing: .02em; }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 
 details { margin: 10px 0 0; }
-summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 4px 0; }
+summary { cursor: pointer; color: var(--muted); font-size: .8667em; padding: 4px 0; }
 details[open] summary { color: var(--ink); }
 
 .btn {
@@ -79,11 +87,12 @@ details[open] summary { color: var(--ink); }
   cursor: pointer;
   border: 1.5px solid var(--ink);
   margin-top: 10px;
+  overflow-wrap: anywhere;
 }
 .btn.primary { background: var(--ink); color: var(--btn-ink); }
 .btn.secondary { background: transparent; color: var(--ink); border-color: var(--rule-strong); }
 .btn.danger { background: transparent; color: var(--bad); border-color: currentColor; margin-top: 18px; }
-.btn.big { font-size: 17px; padding: 14px; margin-top: 12px; }
+.btn.big { font-size: 1.1333em; padding: 14px; margin-top: 12px; }
 .btn:disabled { opacity: .45; cursor: default; }
 .btn:not(:disabled):active { transform: translateY(1px); }
 :focus-visible { outline: 2.5px solid var(--focus); outline-offset: 2px; }
@@ -95,58 +104,93 @@ details[open] summary { color: var(--ink); }
 .icon-btn:hover { background: var(--rule); }
 .back { border: 0; background: none; color: var(--muted); font: inherit; padding: 0; cursor: pointer; margin-bottom: 6px; }
 
-.target { margin: 0 0 10px; color: var(--muted); }
+.target { margin: 0 0 10px; color: var(--muted); overflow-wrap: anywhere; }
 .target strong { color: var(--ink); }
 
 .page-card { border: 1px solid var(--rule); background: var(--card); border-radius: 10px; padding: 10px 12px; }
 .page-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
-.page-host { color: var(--muted); font-size: 13px; margin-top: 2px; overflow-wrap: anywhere; }
+.page-host { color: var(--muted); font-size: .8667em; margin-top: 2px; overflow-wrap: anywhere; }
 
-.status { min-height: 1.4em; margin: 10px 0 0; font-size: 14px; }
+/* Status text always wraps (F27: at 200% text too). */
+.status { min-height: 1.4em; margin: 10px 0 0; font-size: .9333em; overflow-wrap: anywhere; }
 .status.bad, .error { color: var(--bad); }
-.error { margin: 10px 0 0; font-size: 14px; min-height: 0; }
+.error { margin: 10px 0 0; font-size: .9333em; min-height: 0; overflow-wrap: anywhere; }
 .error:empty { display: none; }
 
 .permission { margin-top: 12px; border: 1px solid var(--rule-strong); border-radius: 10px; padding: 10px 12px; }
-.permission p { margin: 0; font-size: 14px; }
+.permission p { margin: 0; font-size: .9333em; overflow-wrap: anywhere; }
 .row { display: flex; gap: 8px; align-items: stretch; }
 .row .btn { margin-top: 10px; }
 .row input { flex: 1; }
 #name-form .row .btn { width: auto; margin-top: 0; }
 
-.recent-h { margin: 18px 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+.recent-h { margin: 18px 0 4px; font-size: .8667em; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
 .history { list-style: none; margin: 0; padding: 0; }
 .history li { border-top: 1px solid var(--rule); padding: 9px 0; }
 .history li:last-child { border-bottom: 1px solid var(--rule); }
 .item-line { display: flex; align-items: baseline; gap: 8px; }
 .kind {
-  flex: none; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  flex: none; font-size: .7333em; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
   border: 1px solid var(--rule-strong); border-radius: 4px; padding: 0 4px; color: var(--muted);
 }
 .item-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
-.item-meta { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); margin-top: 3px; flex-wrap: wrap; }
-.st { font-weight: 600; color: var(--ink); }
+.item-meta { display: flex; align-items: center; gap: 6px; font-size: .8667em; color: var(--muted); margin-top: 3px; flex-wrap: wrap; }
+.st { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
 .st.busy { color: var(--muted); }
 .st.ok { color: var(--ink); }
 .st.bad { color: var(--bad); }
 .acts { margin-left: auto; display: flex; gap: 6px; align-items: center; }
 .retry {
-  font: inherit; font-size: 13px; font-weight: 600; color: var(--ink); background: transparent;
+  font: inherit; font-weight: 600; color: var(--ink); background: transparent;
   border: 1px solid var(--rule-strong); border-radius: 7px; padding: 2px 10px; cursor: pointer;
 }
 .remove {
-  font: inherit; font-size: 12.5px; color: var(--muted); background: transparent; border: 0; padding: 2px 4px;
+  font: inherit; font-size: .9615em; color: var(--muted); background: transparent; border: 0; padding: 2px 4px;
   cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
 }
 .retry:disabled, .remove:disabled { opacity: .45; cursor: default; }
-.note { margin: 3px 0 0; font-size: 12.5px; color: var(--muted); }
+.note { margin: 3px 0 0; font-size: .8333em; color: var(--muted); overflow-wrap: anywhere; }
 .note.bad { color: var(--bad); }
 
-.confirm-lines p { margin: 0 0 8px; }
+.confirm-lines p { margin: 0 0 8px; overflow-wrap: anywhere; }
 .confirm-lines .code-start { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .04em; }
 #view-confirm .row .btn { flex: 1; }
 
-.facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 6px 0 4px; font-size: 14px; }
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 6px 0 4px; font-size: .9333em; }
 .facts dt { color: var(--muted); }
-.facts dd { margin: 0; overflow-wrap: anywhere; }
+.facts dd { margin: 0; overflow-wrap: anywhere; min-width: 0; }
 .version { margin-top: 14px; text-align: center; }
+
+/* A switch (Comfort): the knob's side shows the state, not only its colour. */
+.switch-row { display: flex; align-items: center; gap: 12px; margin: 8px 0 2px; min-height: 40px; }
+.switch-row .switch-label { flex: 1; min-width: 0; margin: 0; font-size: 1em; font-weight: 600; cursor: pointer; }
+input.switch {
+  -webkit-appearance: none; appearance: none; flex: none; position: relative; cursor: pointer;
+  width: 2.8em; min-width: 2.8em; height: 1.6em; margin: 0; padding: 0;
+  border: 1.5px solid var(--rule-strong); border-radius: 999px; background: var(--card);
+  transition: background-color .15s, border-color .15s;
+}
+input.switch::before {
+  content: ""; position: absolute; top: 50%; left: .18em; width: 1.05em; height: 1.05em; border-radius: 50%;
+  background: var(--muted); transform: translateY(-50%); transition: left .15s;
+}
+input.switch:checked { background: var(--ink); border-color: var(--ink); }
+input.switch:checked::before { left: calc(100% - 1.23em); background: var(--btn-ink); }
+.switch-footer { margin: 0 0 14px; }
+
+/* Comfort (F27, not Lab): larger text and buttons, more contrast, no motion. */
+body.comfort { font-size: 125%; --muted: var(--ink); --rule: var(--rule-strong); }
+body.comfort *, body.comfort *::before, body.comfort *::after { transition: none !important; animation: none !important; }
+body.comfort .btn:not(:disabled):active { transform: none; }
+body.comfort ::placeholder { opacity: 1; }
+body.comfort :is(button, summary, .switch-row) { min-height: 48px; }
+body.comfort summary { display: flex; align-items: center; }
+body.comfort :is(.back, .remove) { display: inline-flex; align-items: center; }
+body.comfort .icon-btn { min-width: 48px; display: inline-flex; align-items: center; justify-content: center; border: 2px solid var(--rule-strong); }
+body.comfort :is(.btn, .retry, input, textarea, .page-card, .permission, .kind) { border-width: 2px; }
+body.comfort input.switch { border-width: 2px; }
+body.comfort .history li { border-top-width: 2px; }
+body.comfort .history li:last-child { border-bottom-width: 2px; }
+/* Nothing is cut short: titles wrap instead of ending in "…". */
+body.comfort .item-title { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+body.comfort .page-title { display: block; -webkit-line-clamp: none; overflow: visible; }

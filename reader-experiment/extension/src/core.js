@@ -189,9 +189,19 @@ export function createApp({
   }
 
   async function setDeviceName(from) {
-    await storage.set('settings', { ...(await getSettings()), from: ds.cleanName(from) });
+    // Under the lock, like every settings write, so a name and Comfort saved together both stay.
+    await run(async () => storage.set('settings', { ...(await getSettings()), from: ds.cleanName(from) }));
     cache = null;
     return { from: (await getSettings()).from };
+  }
+
+  /**
+   * Comfort (F27, the accessibility baseline; not Lab): settings.comfort, off by default. Pairing, unpairing and Lab
+   * leave it as it is. -> {comfort}
+   */
+  async function setComfort(on) {
+    await run(async () => storage.set('settings', { ...(await getSettings()), comfort: !!on }));
+    return { comfort: !!(await getSettings()).comfort };
   }
 
   /** Safari: the Mac or iPhone app may already be paired; its native handler shares the pairing. */
@@ -235,6 +245,7 @@ export function createApp({
       paired: !!pairing, name: pairing?.name ?? '', relay: pairing?.relay ?? '',
       defaultRelay: !pairing || pairing.relay === ds.DEFAULT_RELAY,
       from: settings.from ?? '', defaultFrom: await defaultFrom(), target, version, shortcut: await shortcut(),
+      comfort: !!settings.comfort,
     };
   }
 
@@ -534,6 +545,7 @@ export function createApp({
       case 'pair': return pair(msg);
       case 'unpair': return unpair();
       case 'setName': return setDeviceName(msg.from);
+      case 'setComfort': return setComfort(msg.comfort);
       case 'sendTab': {
         const tab = await api.tabs.get(msg.tabId);
         return withBadge(() => sendTab(tab, { linkOnly: !!msg.linkOnly }));
@@ -560,7 +572,7 @@ export function createApp({
   }
 
   return {
-    storage, state, pair, unpair, setDeviceName, pairFromApp, sendTab, sendPdf, sendUrl, retry, remove, tick, start,
+    storage, state, pair, unpair, setDeviceName, setComfort, pairFromApp, sendTab, sendPdf, sendUrl, retry, remove, tick, start,
     setupMenus, ensureAlarms, onMenu, onCommand, onAlarm, onPermissionsAdded, onMessage, handleMessage,
     getSender, getPairing, claim,
   };

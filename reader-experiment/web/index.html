@@ -88,36 +88,46 @@
 
       <h2 id="recent-h" class="recent-h" hidden>Recent</h2>
       <ol id="history" class="history" aria-labelledby="recent-h"></ol>
+      <!-- F27: a history row's new state (Delivered ✓, Waiting to send, Not delivered), said to screen readers. -->
+      <p id="announce" class="sr-only" role="status" aria-live="polite"></p>
     </section>
 
-    <!-- Settings -->
+    <!-- Settings (also before pairing, for Comfort) -->
     <section id="view-settings" hidden>
       <button id="close-settings" class="back" type="button">‹ Back</button>
       <h2>Settings</h2>
-      <dl class="facts">
-        <dt>Daylight</dt><dd id="set-daylight"></dd>
-        <dt>Relay</dt><dd id="set-relay"></dd>
-      </dl>
-      <form id="name-form">
-        <label for="set-from">Name for this device</label>
-        <div class="row">
-          <input id="set-from" type="text" maxlength="60" autocomplete="off">
-          <button class="btn secondary" type="submit">Save</button>
-        </div>
-        <p id="name-saved" class="hint small" role="status"></p>
-      </form>
-
-      <h3>iPhone Shortcut</h3>
-      <p class="hint small">To send from the iPhone share sheet, make a Shortcut that opens this link with the shared address added at the end. It includes your pairing, so it keeps working even if Safari clears this site’s data. Keep it private.</p>
-      <div class="copy-box">
-        <code id="shortcut-link"></code>
-        <button id="copy-shortcut" class="btn secondary" type="button">Copy</button>
+      <!-- F27 Comfort: part of the accessibility baseline, not Lab; the text is LAB_TEXT.comfort and .comfortFooter. -->
+      <div class="switch-row">
+        <label for="comfort" class="switch-label">Comfort</label>
+        <input id="comfort" class="switch" type="checkbox" role="switch" aria-describedby="comfort-footer">
       </div>
-      <p class="hint small"><a href="https://github.com/12twelve12hi/MHW/blob/claude/sweet-goldberg-ej1nb0/reader-experiment/web/SHORTCUT.md" target="_blank" rel="noopener">Step-by-step Shortcut instructions</a></p>
+      <p id="comfort-footer" class="hint small switch-footer">Larger text and buttons, more contrast, no motion.</p>
+      <div id="settings-paired">
+        <dl class="facts">
+          <dt>Daylight</dt><dd id="set-daylight"></dd>
+          <dt>Relay</dt><dd id="set-relay"></dd>
+        </dl>
+        <form id="name-form">
+          <label for="set-from">Name for this device</label>
+          <div class="row">
+            <input id="set-from" type="text" maxlength="60" autocomplete="off">
+            <button class="btn secondary" type="submit">Save</button>
+          </div>
+          <p id="name-saved" class="hint small" role="status"></p>
+        </form>
 
-      <button id="repair" class="btn secondary" type="button">Change pairing…</button>
-      <button id="unpair" class="btn danger" type="button">Unpair this device</button>
-      <p class="hint small fine">Everything you send is end-to-end encrypted with a key from the pairing code. The relay (<span id="set-relay-2"></span>) only sees scrambled data.</p>
+        <h3>iPhone Shortcut</h3>
+        <p class="hint small">To send from the iPhone share sheet, make a Shortcut that opens this link with the shared address added at the end. It includes your pairing, so it keeps working even if Safari clears this site’s data. Keep it private.</p>
+        <div class="copy-box">
+          <code id="shortcut-link"></code>
+          <button id="copy-shortcut" class="btn secondary" type="button">Copy</button>
+        </div>
+        <p class="hint small"><a href="https://github.com/12twelve12hi/MHW/blob/claude/sweet-goldberg-ej1nb0/reader-experiment/web/SHORTCUT.md" target="_blank" rel="noopener">Step-by-step Shortcut instructions</a></p>
+
+        <button id="repair" class="btn secondary" type="button">Change pairing…</button>
+        <button id="unpair" class="btn danger" type="button">Unpair this device</button>
+        <p class="hint small fine">Everything you send is end-to-end encrypted with a key from the pairing code. The relay (<span id="set-relay-2"></span>) only sees scrambled data.</p>
+      </div>
     </section>
   </main>
 </body>

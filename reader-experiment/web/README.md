@@ -28,6 +28,14 @@ anywhere: unzip `send-to-daylight-web.zip` from the
    **Delivered ✓** once the Daylight confirms it; **Waiting to send** with why (and **Retry now** when the relay
    couldn't be reached); **Not delivered** with why (and **Try again** where that can help). Every row has **Remove**.
 
+**Settings** (top right, also before pairing) starts with **Comfort**: *Larger text and buttons, more contrast, no
+motion.* It is off by default; on, text is 125% larger, every button at least 48 px high, borders 2 px and muted text
+full ink, transitions stop and titles wrap instead of ending in "…". It is part of the plain page, not Lab
+(`settings.comfort` in IndexedDB), and pairing, unpairing and Lab leave it as it is. The rest of the accessibility
+baseline holds with Comfort off too: every control has a name, states are said in words and glyphs, status text wraps
+(also at 200% zoom), a history row that turns *Delivered ✓*, *Waiting to send* or *Not delivered* is announced to
+screen readers, and the typed-code pairing form is always one tap away.
+
 Links into the page can carry what to send, for Shortcuts, bookmarklets and other apps:
 
 | Address | Effect |
@@ -69,8 +77,9 @@ cd reader-experiment/web
 node build.mjs --serve 8080    # builds dist/site and dist/send-to-daylight-web.zip, then serves http://127.0.0.1:8080/
 ```
 
-Tests live with the extension's (`../extension/test/unit/web-logic.test.mjs`, `../extension/test/e2e/web.e2e.mjs`);
-see [the extension README](../extension/README.md#build-and-test).
+Tests live with the extension's (`../extension/test/unit/web-logic.test.mjs`, `../extension/test/e2e/web.e2e.mjs`,
+and the accessibility checks in `../extension/test/e2e/a11y.e2e.mjs`: axe-core, nothing clipped at 360 px with
+Comfort on, status text at 200%); see [the extension README](../extension/README.md#build-and-test).
 
 ## GitHub Pages
 
