@@ -2,11 +2,14 @@
 //
 //   node scripts/changes.mjs        -> server=true|false in $GITHUB_OUTPUT
 //
-// "Since its last deploy" is the commit of the newest run of this workflow on the branch whose deploy step ran, not the
+// "Its last deploy" is the commit of the run of this workflow on the branch whose deploy step finished last, not the
 // push's parent: GitHub keeps one pending run per concurrency group and cancels the older one, so comparing with the
-// parent would lose the cancelled run's change. "The server" is everything under reader-experiment/server/ but
-// Markdown, this workflow, and the share/js files the Worker bundles (found from src/index.ts's imports); other
-// share/js changes are tested, not deployed. Not a push, or any doubt (no deploy found, an API error): true.
+// parent would lose the cancelled run's change. Nor the newest run that deployed: "Re-run all jobs" on an older run
+// deploys that run's older commit, which is then what is live. A run is re-run within 30 days of its start, and its
+// deploy step ends before the run's last update, so the search stops at runs that can't have deployed later. "The
+// server" is everything under reader-experiment/server/ but Markdown, this workflow, and the share/js files the Worker
+// bundles (found from src/index.ts's imports); other share/js changes are tested, not deployed. Not a push, or any
+// doubt (no deploy found, a last deploy step that failed or was cancelled, an API error): true.
 // Environment: GITHUB_EVENT_NAME, GITHUB_SHA, GITHUB_REPOSITORY, GITHUB_REF_NAME, GITHUB_API_URL, GH_TOKEN (needs
 // actions: read), GITHUB_OUTPUT. Prints only file names and commits, which are public.
 
@@ -17,6 +20,11 @@ import { fileURLToPath } from 'node:url';
 const WORKFLOW = 'rx-server.yml';
 const DEPLOY_JOB = 'Deploy to Cloudflare';
 const DEPLOY_STEP = 'Deploy the Worker with its secrets';
+const DAY = 86_400_000;
+const RERUN_WINDOW = 31 * DAY;    // GitHub re-runs a run up to 30 days after it started; a day for the queue and the run
+const PER_PAGE = 100;
+const MAX_PAGES = 5;
+const MAX_JOB_READS = 40;
 
 /** The files under reader-experiment/share/ the Worker bundles: relative imports followed from src/index.ts. */
 export function bundledShareFiles(root) {
@@ -47,19 +55,40 @@ export async function serverChanged({ event, sha, repo, branch, token, api = 'ht
     if (r.status !== 200) throw new Error(`GitHub API HTTP ${r.status}`);
     return r.json();
   };
-  let base = null;
+  // The deploy step that finished last: {sha, at, ok, run}. Steps that ran (success, failure, cancelled) count: one that
+  // failed or was cancelled may or may not have deployed its commit.
+  let last = null;
+  let reads = 0;
   try {
-    const { workflow_runs: runs = [] } = await gh(`/repos/${repo}/actions/workflows/${WORKFLOW}/runs?branch=${encodeURIComponent(branch)}&status=completed&per_page=30`);
-    for (const run of runs) {
-      const { jobs = [] } = await gh(`/repos/${repo}/actions/runs/${run.id}/jobs?filter=all&per_page=50`);
-      const deployed = jobs.some((j) => String(j?.name ?? '').startsWith(DEPLOY_JOB)
-        && (j.steps ?? []).some((st) => st?.name === DEPLOY_STEP && st?.conclusion === 'success'));
-      if (deployed) { base = run.head_sha; break; }
+    let done = false;
+    for (let page = 1; page <= MAX_PAGES && !done; page++) {
+      const { workflow_runs: runs = [] } = await gh(`/repos/${repo}/actions/workflows/${WORKFLOW}/runs?branch=${encodeURIComponent(branch)}&status=completed&per_page=${PER_PAGE}&page=${page}`);
+      for (const run of runs) {
+        // Newest created first: a run started over 31 days before that deploy can't have deployed after it, nor any below.
+        if (last && Date.parse(run.created_at) + RERUN_WINDOW < last.at) { done = true; break; }
+        // A run last updated before that deploy finished all its deploy steps earlier.
+        if (last && Date.parse(run.updated_at) < last.at) continue;
+        if (++reads > MAX_JOB_READS) return { changed: true, base: null, reason: `no answer within ${MAX_JOB_READS} runs` };
+        const { jobs = [] } = await gh(`/repos/${repo}/actions/runs/${run.id}/jobs?filter=all&per_page=100`);  // every attempt
+        for (const j of jobs) {
+          if (!String(j?.name ?? '').startsWith(DEPLOY_JOB)) continue;
+          for (const st of j.steps ?? []) {
+            if (st?.name !== DEPLOY_STEP || !['success', 'failure', 'cancelled'].includes(st?.conclusion)) continue;
+            const at = Date.parse(st.completed_at);
+            if (!Number.isFinite(at)) throw new Error(`run ${run.id}'s deploy step has no end time`);
+            if (!last || at > last.at) last = { sha: run.head_sha, at, ok: st.conclusion === 'success', run: run.run_number ?? run.id };
+          }
+        }
+      }
+      if (runs.length < PER_PAGE) done = true;
     }
+    if (!done) return { changed: true, base: null, reason: `no answer within ${MAX_PAGES * PER_PAGE} runs` };
   } catch (e) {
     return { changed: true, base: null, reason: `couldn't read the earlier runs (${e.message})` };
   }
-  if (!base) return { changed: true, base: null, reason: 'no earlier deploy found' };
+  if (!last) return { changed: true, base: null, reason: 'no earlier deploy found' };
+  if (!last.ok) return { changed: true, base: null, reason: `the last deploy (run ${last.run}) didn't finish, so what is live isn't known` };
+  const base = last.sha;
   let files;
   try {
     const c = await gh(`/repos/${repo}/compare/${base}...${sha}`);

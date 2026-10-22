@@ -307,7 +307,7 @@ test('the deploy steps as the workflow runs them: setup.mjs, secrets.mjs and der
     const env1 = readKv(j1.GITHUB_ENV), out1 = readKv(j1.GITHUB_OUTPUT);
     assert.match(env1.WORKER_NAME, /^daylight-[0-9a-f]{12}$/);
     assert.equal(env1.SERVER_URL, `https://${env1.WORKER_NAME}.anjan.workers.dev`);
-    assert.deepEqual(out1, { mode: 'setup', setup: 'pending', reason: 'first' });
+    assert.deepEqual(out1, { new_worker: 'true', mode: 'setup', setup: 'pending', reason: 'first' }, 'a new name: this run creates the Worker');
     const tokenFile = path.join(j1.dir, 'dls-setup-token');
     assert.match(fs.readFileSync(tokenFile, 'utf8'), /^[0-9a-f]{64}$/);
     assert.equal(fs.statSync(tokenFile).mode & 0o777, 0o600);
@@ -327,6 +327,21 @@ test('the deploy steps as the workflow runs them: setup.mjs, secrets.mjs and der
     assert.match(fs.readFileSync(path.join(j1.dir, 'delete.txt'), 'utf8'), /^ANTHROPIC_API_KEY$/m);
     await t.restart({ ...put, SERVER_URL: env1.SERVER_URL, ANTHROPIC_API_KEY: undefined });
     const local = String(await t.mf.ready).replace(/\/$/, '');
+
+    // The deploy row (migration 0005) on the Worker's own D1: this run created the Worker, which D1 then shows without
+    // DAYLIGHT_PAIRING; a later Lab deploy whose listing fails reads that, a v1 deploy marks it first.
+    const { pairingRecord, recordFromEnv, beforeUpload } = await import('../scripts/secrets.mjs');
+    const rec = pairingRecord({ query: d1Query(t), worker: env1.WORKER_NAME });
+    assert.equal(await rec.mayHold(), true, 'no row yet');
+    await rec.set(false);
+    assert.equal(await rec.mayHold(), false);
+    assert.equal(await pairingRecord({ query: d1Query(t), worker: 'daylight-ffffffffffff' }).mayHold(), true, 'another Worker');
+    assert.deepEqual(await beforeUpload({ DAYLIGHT_PAIRING: 'P' }, { record: rec, say: () => {} }), { ok: true });
+    assert.equal(await rec.mayHold(), true);
+    await rec.set(false);
+    assert.deepEqual((await t.db.prepare('SELECT worker, pairing FROM deploy').all()).results, [{ worker: env1.WORKER_NAME, pairing: 0 }]);
+    assert.ok(recordFromEnv({ ...cfEnv, WORKER_NAME: env1.WORKER_NAME }), 'the deploy step has what the row needs');
+    assert.equal(recordFromEnv({ ...cfEnv, WORKER_NAME: '' }), null);
 
     // The announce step before setup: checks pass, the summary says where the link is and never shows it.
     const a1 = await run(['scripts/derive.mjs', 'announce', local], { ...j1.base, SETUP: 'pending', SETUP_REASON: 'first', R2: 'on', HAS_AI: 'false', DLS_TEST_HELLO_TRIES: '1' });
@@ -352,7 +367,7 @@ test('the deploy steps as the workflow runs them: setup.mjs, secrets.mjs and der
     const s3 = await run(['scripts/setup.mjs'], { ...j2.base, ...cfEnv });
     assert.equal(s3.status, 0, s3.stdout);
     const out2 = readKv(j2.GITHUB_OUTPUT);
-    assert.deepEqual({ ...out2, fingerprint: undefined }, { mode: 'setup', setup: 'claimed', reason: '', fingerprint: undefined });
+    assert.deepEqual({ ...out2, fingerprint: undefined }, { new_worker: 'false', mode: 'setup', setup: 'claimed', reason: '', fingerprint: undefined });
     assert.equal(out2.fingerprint, srv.showFingerprint(t.values.fingerprint));
     assert.equal(readKv(j2.GITHUB_ENV).WORKER_NAME, env1.WORKER_NAME, 'the same Worker');
     assert.equal(fs.readFileSync(path.join(j2.dir, 'dls-server-code'), 'utf8'), t.serverCode);
@@ -405,12 +420,12 @@ test('Re-run all jobs of a manual “New setup link” run keeps the server and 
     };
     // A week later the user adds ANTHROPIC_API_KEY and, as told, re-runs the latest run: that manual run.
     const rerun = await step(2);
-    assert.deepEqual({ ...rerun.out, fingerprint: undefined }, { mode: 'setup', setup: 'claimed', reason: '', fingerprint: undefined });
+    assert.deepEqual({ ...rerun.out, fingerprint: undefined }, { new_worker: 'false', mode: 'setup', setup: 'claimed', reason: '', fingerprint: undefined });
     assert.equal(rerun.env.WORKER_NAME, WORKER, 'the same Worker');
     assert.deepEqual(await query('SELECT worker, code FROM setup'), [{ worker: WORKER, code: t.serverCode }], 'the Server code is kept');
     // The manual run's own first attempt is what makes the new link.
     const first = await step(1);
-    assert.deepEqual(first.out, { mode: 'setup', setup: 'pending', reason: 'requested' });
+    assert.deepEqual(first.out, { new_worker: 'true', mode: 'setup', setup: 'pending', reason: 'requested' });
     assert.notEqual(first.env.WORKER_NAME, WORKER);
   } finally { await cf.close(); await t.close(); }
 });

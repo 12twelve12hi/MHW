@@ -1452,7 +1452,7 @@ All answer `409 NOT_CONFIGURED` without a domain or R2.
 
 ## 11. Storage
 
-### 11.1 D1 (`migrations/0001_init.sql`, `0002_bounded_reads.sql`, `0003_setup.sql`, `0004_holds.sql`)
+### 11.1 D1 (`migrations/0001_init.sql`, `0002_bounded_reads.sql`, `0003_setup.sql`, `0004_holds.sql`, `0005_deploy.sql`)
 
 ```sql
 CREATE TABLE settings (k TEXT PRIMARY KEY, v TEXT NOT NULL);                 -- JSON values: digest, ai, lock, cursors, inbox
@@ -1514,6 +1514,10 @@ CREATE TABLE setup (                                                          --
 CREATE TABLE holds (                                                          -- 0004: POST /v1/ai reservations (9.3)
   id TEXT PRIMARY KEY, day TEXT NOT NULL, micros INTEGER NOT NULL,
   until INTEGER NOT NULL);                                                    -- past this, Cron keeps it as spent
+CREATE TABLE deploy (                                                         -- 0005: CI's record of the Worker's secrets (12.3), one row
+  id INTEGER PRIMARY KEY CHECK (id = 1), worker TEXT NOT NULL,                -- the Worker it is about
+  pairing INTEGER NOT NULL,                                                   -- 1: may hold DAYLIGHT_PAIRING; 0: shown not to
+  at INTEGER NOT NULL);
 ```
 
 The setup row is read only by the Worker it names (`SERVER_URL`'s host is `<worker>.<subdomain>.workers.dev`): every
@@ -1667,7 +1671,14 @@ link waits and deleted once it is used or replaced (3.5). It is never a GitHub s
 Optional secrets that disappear from GitHub are deleted from the Worker on the next deploy (`wrangler deploy
 --secrets-file` only adds): `secrets.mjs remove` lists the Worker's secrets and deletes the ones that are gone, each
 tried three times. One it could not remove, or check, is a warning; for `DAYLIGHT_PAIRING` it fails the job, because
-the summary and the apps would otherwise say the server does not hold the pairing code while it does. Test-only behaviour hangs
+the summary and the apps would otherwise say the server does not hold the pairing code while it does. Only when the
+Worker may really hold it: every Lab deploy lists `DAYLIGHT_PAIRING` to remove, so a listing that keeps failing would
+otherwise fail the job for a Worker that never had it. The D1 row `deploy` (11.1, written only by CI) says whether the
+Worker may hold it: a v1 deploy sets it before uploading the pairing code (and does not deploy when it can't), and a
+listing that shows the Worker without it, or a delete that worked, clears it. When the listing fails, the job fails
+only if that row does not name this Worker as holding none, or D1 can't be read. A Worker this run created (a new
+setup-link name, `setup.mjs`'s `new_worker`) holds only what was just uploaded, so nothing is listed or removed. (A
+`DAYLIGHT_PAIRING` added by hand in the dashboard is outside what the deploy can know.) Test-only behaviour hangs
 on the build-time constant `__TESTING__`, which is `false` in every deploy bundle. CI checks that the bundle does not
 contain the test variable's name.
 
@@ -1685,9 +1696,12 @@ branch).
 
 **Job `test`** (always): `npm ci`, the type check, `npm test`, the vectors check (`npm run vectors` leaves no diff),
 and the bundle check (`wrangler deploy --dry-run`; under 3 MB gzipped; no test-only names). It also decides whether
-a push changed the server since its last deploy (`changes.mjs`): it compares with the commit of the newest run whose
-deploy step ran, not with the push's parent, because GitHub cancels an older pending run of the concurrency group and
-that run's change must still ship. Changes under `reader-experiment/server/` (not Markdown), the workflow and the
+a push changed the server since its last deploy (`changes.mjs`): it compares with the commit of the run whose deploy
+step finished last, not with the push's parent, because GitHub cancels an older pending run of the concurrency group and
+that run's change must still ship. Finished last, not the newest run that deployed: **Re-run all jobs** on an older run
+deploys that run's older commit, which is then what is live. The jobs of every attempt count. A run is re-run within
+30 days of its start and a deploy step ends before its run's last update, which bounds the search; a last deploy step
+that failed or was cancelled leaves what is live unknown, so the push deploys. Changes under `reader-experiment/server/` (not Markdown), the workflow and the
 `share/js` files the Worker bundles (found from `src/index.ts`'s imports: today `daylight-share.js`) count; other
 `share/js` changes are tested, not deployed. With no deploy found, or an API error, it counts as changed.
 
@@ -1703,7 +1717,7 @@ that run's change must still ship. Changes under `reader-experiment/server/` (no
 | Server code or setup link (`setup.mjs`) | The workers.dev subdomain (created only when the API says there is none). In setup mode, the D1 `setup` row (3.5): a new Worker name and link the first time, after a lock or on request; else the waiting link, or the Server code an app sent. Writes `WORKER_NAME` and `SERVER_URL`; hands the token or the code to later steps in `$RUNNER_TEMP` files (0600). |
 | R2 bucket | With R2: finds or creates the bucket and its lifecycle rules (14 days `f/`, 8 days `m/`, 1 day `a/`). A token that can't create it leaves R2 off with a warning instead of failing. |
 | Deploy config | The Worker name, the R2 binding when on, `cpu_ms = 60000` on Workers Paid. |
-| Deploy | `secrets.mjs` splits the Worker's secrets (GitHub's, plus `DAYLIGHT_SETUP_TOKEN` while a link waits) into the ones to upload and the ones to delete; `wrangler deploy --secrets-file` with `--var` for `SERVER_URL`, `GIT_SHA`, the plan, the delivery mode and the AI ceilings; without the rate-limit binding if the account refuses it; then `secrets.mjs remove` deletes the secrets that are gone (12.3). |
+| Deploy | `secrets.mjs` splits the Worker's secrets (GitHub's, plus `DAYLIGHT_SETUP_TOKEN` while a link waits) into the ones to upload and the ones to delete; `wrangler deploy --secrets-file` with `--var` for `SERVER_URL`, `GIT_SHA`, the plan, the delivery mode and the AI ceilings; without the rate-limit binding if the account refuses it; then `secrets.mjs remove` deletes the secrets that are gone and keeps the D1 `deploy` row (12.3). |
 | Remove earlier Workers | Every `daylight-<12 hex>` Worker but this one (an earlier Server code or setup link). A failed listing or delete is a warning ("Re-run all jobs"); such a Worker reads nothing from the setup row meanwhile (3.5). |
 | Email routing | With a domain and R2, once the Server code is known: the routing rule to this Worker. |
 | Smoke test and summary (`derive.mjs announce`) | Waits up to 5 minutes for `GET /v1/hello` (a new workers.dev address can take that long; if it never answers, a warning and "re-run in a few minutes"), then checks the CORS preflight, that `GET /v1/status` without a token and with a wrong one is refused (`401`, or `503 NOT_CONFIGURED` before setup), and that `POST /v1/setup` with a wrong token is refused. With a Server code it then publishes the config frame from the runner, calls `/v1/admin/announce` and the CPU canary, checks the token is accepted, and reads the feature states. It writes the job summary itself and fails the job when the live Worker fails a check. |

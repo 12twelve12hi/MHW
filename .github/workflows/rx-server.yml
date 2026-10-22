@@ -81,8 +81,9 @@ jobs:
         id: changes
         env:
           GH_TOKEN: ${{ github.token }}
-        # Compares this commit with the one the last successful deploy shipped (not with this push's parent, so a
-        # change whose run was cancelled while pending still ships), counting the share/js files the Worker bundles.
+        # Compares this commit with the one live now: the run whose deploy step finished last (not this push's parent, so
+        # a change whose run was cancelled while pending still ships; nor the newest run that deployed, since Re-run all
+        # jobs on an older run deploys older code), counting the share/js files the Worker bundles.
         run: node scripts/changes.mjs
 
   ntfy-attach:
@@ -253,7 +254,11 @@ jobs:
           NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
           AI_MAX_USD: ${{ vars.DAYLIGHT_AI_MAX_USD_DAY || '10' }}
           AI_MAX_REQ: ${{ vars.DAYLIGHT_AI_MAX_REQ_DAY || '100' }}
+          NEW_WORKER: ${{ steps.setup.outputs.new_worker }}         # this run's deploy creates the Worker (a new name)
           CI: 'true'
+        # secrets.mjs keeps the D1 deploy row (migration 0005): whether the Worker may hold DAYLIGHT_PAIRING. A v1 deploy
+        # marks it before the upload (and stops if it can't); a Lab deploy whose secret listing keeps failing fails only
+        # when the Worker may still hold the pairing code (not a new Worker, nor one D1 shows without it).
         run: |
           umask 077
           node scripts/secrets.mjs "$RUNNER_TEMP/put.json" "$RUNNER_TEMP/delete.txt"   # DAYLIGHT_SETUP_TOKEN from its file
@@ -269,7 +274,8 @@ jobs:
           fi
           rm -f "$RUNNER_TEMP/put.json" "$RUNNER_TEMP/deploy.err" "$RUNNER_TEMP/deploy.out"
           # Optional secrets removed from GitHub (and a used setup token) are removed from the Worker too: --secrets-file
-          # only adds. Retried; a secret it could not remove is a warning, and DAYLIGHT_PAIRING fails the job.
+          # only adds. Retried; a secret it could not remove is a warning, and DAYLIGHT_PAIRING the Worker may still
+          # hold fails the job.
           node scripts/secrets.mjs remove "$RUNNER_TEMP/delete.txt" wrangler.deploy.toml
           rm -f "$RUNNER_TEMP/delete.txt"
 

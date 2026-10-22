@@ -17,8 +17,9 @@
 // Environment: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, D1_ID, WORKER_NAME (optional), NEW_SETUP_LINK,
 // GITHUB_RUN_ATTEMPT (set by GitHub), RUNNER_TEMP.
 // Writes WORKER_NAME and SERVER_URL to $GITHUB_ENV; mode (code | setup), setup (none | pending | claimed), reason
-// (first | locked | requested | invalid) and fingerprint to $GITHUB_OUTPUT; $RUNNER_TEMP/dls-setup-token while a link
-// waits, $RUNNER_TEMP/dls-server-code once an app used it.
+// (first | locked | requested | invalid), fingerprint and new_worker (true when the name is new, so this run's deploy
+// creates the Worker: secrets.mjs remove then knows it holds only what was uploaded) to $GITHUB_OUTPUT;
+// $RUNNER_TEMP/dls-setup-token while a link waits, $RUNNER_TEMP/dls-server-code once an app used it.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -131,6 +132,7 @@ async function main() {
   setEnv('WORKER_NAME', worker);
   setEnv('SERVER_URL', `https://${host}`);
   say(created ? 'Created a workers.dev subdomain for this account.' : 'workers.dev subdomain: ok.');
+  out('new_worker', String(!!plan?.rotate));
   if (!plan) {
     out('mode', 'code'); out('setup', 'none');
     return;

@@ -405,6 +405,107 @@ test('secrets.mjs remove: deletes what the Worker has, retries, warns, and fails
   assert.doesNotMatch(step, /secret (list|delete)/);
 });
 
+test('secrets.mjs remove: a failed listing fails the job only when the Worker may really hold DAYLIGHT_PAIRING (12.3)', async () => {
+  const { removeSecrets, pairingRecord, beforeUpload } = await import('../scripts/secrets.mjs');
+  const W = 'daylight-0123456789ab';
+  /** A D1 `deploy` table of one row (migration 0005), or one whose every query fails. */
+  const d1 = (row, { fail = false } = {}) => {
+    const db = { row, queries: 0 };
+    db.query = async (sql, params = []) => {
+      db.queries++;
+      if (fail) throw new Error('D1 query failed (HTTP 500)');
+      if (/^SELECT worker, pairing FROM deploy WHERE id = 1$/.test(sql)) return db.row ? [db.row] : [];
+      assert.match(sql, /^INSERT OR REPLACE INTO deploy \(id, worker, pairing, at\) VALUES \(1, \?1, \?2, \?3\)$/);
+      db.row = { worker: params[0], pairing: params[1], at: params[2] };
+      return [];
+    };
+    db.record = (worker = W) => pairingRecord({ query: db.query, worker, now: () => 7 });
+    return db;
+  };
+  const worker = (script) => {
+    const calls = [];
+    return { calls, wrangler: async (args) => { calls.push(args.join(' ')); return script(args); } };
+  };
+  const listed = (...n) => ({ status: 0, stdout: JSON.stringify(n.map((name) => ({ name, type: 'secret_text' }))) });
+  const run = async (names, w, opts = {}) => {
+    const said = [];
+    const r = await removeSecrets(names, { wrangler: w.wrangler, say: (l) => said.push(l), sleep: async () => {}, ...opts });
+    return { ...r, said: said.join('\n') };
+  };
+  const lab = ['ANTHROPIC_API_KEY', 'DAYLIGHT_PAIRING', 'DAYLIGHT_SETUP_TOKEN'];   // a Lab deploy never uploads DAYLIGHT_PAIRING
+
+  // A Worker this run created holds only what this deploy uploaded: nothing is listed or removed, and nothing is wrong
+  // even while the listing would fail. D1 then shows it without DAYLIGHT_PAIRING.
+  const down = worker(() => ({ status: 1, stdout: '' }));
+  const fresh = d1(null);
+  const r1 = await run(lab, down, { newWorker: true, record: fresh.record() });
+  assert.deepEqual([r1.ok, r1.removed, r1.failed], [true, [], []]);
+  assert.deepEqual(down.calls, []);
+  assert.doesNotMatch(r1.said, /::(error|warning)/);
+  assert.deepEqual(fresh.row, { worker: W, pairing: 0, at: 7 });
+
+  // Its next deploy can't list the secrets: D1 shows it without DAYLIGHT_PAIRING, so only the others warn.
+  const r2 = await run(lab, down, { record: fresh.record() });
+  assert.equal(r2.ok, true, r2.said);
+  assert.doesNotMatch(r2.said, /::error/);
+  assert.match(r2.said, /^::warning title=Worker secrets::[^\n]*ANTHROPIC_API_KEY/m);
+  assert.doesNotMatch(r2.said, /::warning[^\n]*DAYLIGHT_PAIRING/);
+  assert.equal(down.calls.length, 3, 'the listing was still tried three times');
+  assert.deepEqual(fresh.row, { worker: W, pairing: 0, at: 7 }, 'left as it was');
+
+  // Fail safe: no row, another Worker's row, a row that says it may hold it, D1 failing, or no D1 at all.
+  for (const [db, why] of [[d1(null), 'no row'], [d1({ worker: 'daylight-ffffffffffff', pairing: 0, at: 1 }), 'another Worker'],
+    [d1({ worker: W, pairing: 1, at: 1 }), 'may hold it'], [d1({ worker: W, pairing: 0, at: 1 }, { fail: true }), 'D1 down']]) {
+    const r = await run(lab, down, { record: db.record() });
+    assert.equal(r.ok, false, why);
+    assert.match(r.said, /^::error title=Worker secrets::Couldn’t list the Worker’s secrets to remove DAYLIGHT_PAIRING, and D1 doesn’t show this Worker without it, so the Worker may still hold your pairing code/m, why);
+  }
+  assert.equal((await run(lab, down)).ok, false, 'no record');
+
+  // A listing that works keeps D1 true: removed or absent -> 0; a delete that keeps failing -> 1 (and the error).
+  const had = d1({ worker: W, pairing: 1, at: 1 });
+  assert.equal((await run(lab, worker((a) => (a[1] === 'list' ? listed('DAYLIGHT_PAIRING') : { status: 0, stdout: '' })), { record: had.record() })).ok, true);
+  assert.equal(had.row.pairing, 0, 'removed');
+  const other = d1({ worker: 'daylight-ffffffffffff', pairing: 0, at: 1 });
+  assert.equal((await run(lab, worker(() => listed('NTFY_TOKEN')), { record: other.record() })).ok, true);
+  assert.deepEqual(other.row, { worker: W, pairing: 0, at: 7 }, 'absent: this Worker’s row now');
+  const stuck = d1({ worker: W, pairing: 0, at: 1 });
+  const r3 = await run(lab, worker((a) => (a[1] === 'list' ? listed('DAYLIGHT_PAIRING') : { status: 1, stdout: '' })), { record: stuck.record() });
+  assert.equal(r3.ok, false);
+  assert.equal(stuck.row.pairing, 1, 'a delete that failed: it may still be there');
+  // v1: DAYLIGHT_PAIRING was uploaded (it is not in the list to remove), so the row says it may hold it.
+  const v1 = d1({ worker: W, pairing: 0, at: 1 });
+  assert.equal((await run(['NTFY_TOKEN'], worker(() => listed('DAYLIGHT_PAIRING')), { record: v1.record() })).ok, true);
+  assert.equal(v1.row.pairing, 1);
+  // A row that can't be written never fails the step: a later failed listing then fails safe.
+  const ro = d1({ worker: W, pairing: 1, at: 1 }, { fail: true });
+  const r4 = await run(lab, worker(() => listed()), { record: ro.record() });
+  assert.equal(r4.ok, true);
+  assert.doesNotMatch(r4.said, /::(error|warning)/);
+
+  // Before a v1 deploy uploads the pairing code, the row says the Worker may hold it; if it can't, nothing deploys.
+  const before = d1({ worker: W, pairing: 0, at: 1 });
+  const said = [];
+  assert.deepEqual(await beforeUpload({ DAYLIGHT_PAIRING: 'P' }, { record: before.record(), say: (l) => said.push(l), sleep: async () => {} }), { ok: true });
+  assert.deepEqual(before.row, { worker: W, pairing: 1, at: 7 });
+  const broken = d1({ worker: W, pairing: 0, at: 1 }, { fail: true });
+  assert.deepEqual(await beforeUpload({ DAYLIGHT_PAIRING: 'P' }, { record: broken.record(), say: (l) => said.push(l), sleep: async () => {} }), { ok: false });
+  assert.equal(broken.queries, 3, 'tried three times');
+  assert.deepEqual(await beforeUpload({ DAYLIGHT_PAIRING: 'P' }, { record: null, say: (l) => said.push(l), sleep: async () => {} }), { ok: false });
+  assert.match(said.join('\n'), /^::error title=Worker secrets::Couldn’t record in D1 that the Worker gets DAYLIGHT_PAIRING/m);
+  const labPut = d1(null, { fail: true });
+  assert.deepEqual(await beforeUpload({ ANTHROPIC_API_KEY: 'sk' }, { record: labPut.record() }), { ok: true });
+  assert.equal(labPut.queries, 0, 'a Lab deploy writes nothing before it');
+
+  // The workflow hands the deploy step setup.mjs's new_worker; WORKER_NAME and D1_ID come from the job's environment.
+  const wf = workflow();
+  const deployStep = wf.slice(wf.indexOf('- name: Deploy the Worker with its secrets'), wf.indexOf('- name: Remove the Workers of earlier'));
+  assert.match(deployStep, /^\s+NEW_WORKER: \$\{\{ steps\.setup\.outputs\.new_worker \}\}/m);
+  assert.match(deployStep, /^\s+CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/m);
+  assert.match(wf, /echo "D1_ID=\$id" >> "\$GITHUB_ENV"/);
+  assert.ok(fs.readdirSync(path.join(root, 'migrations')).includes('0005_deploy.sql'));
+});
+
 test('change check: against the last deployed commit (a cancelled pending run’s change still ships), and the share/js the Worker bundles', async () => {
   const { serverChanged, bundledShareFiles } = await import('../scripts/changes.mjs');
   assert.deepEqual(bundledShareFiles(root), ['reader-experiment/share/js/daylight-share.js'], 'what src/ and client/ import from share/js');
@@ -426,12 +527,12 @@ test('change check: against the last deployed commit (a cancelled pending run’
     };
     return { calls, fetchFn };
   };
-  const deployed = [{ name: 'Deploy to Cloudflare (when the secrets exist)', steps: [{ name: 'Deploy the Worker with its secrets', conclusion: 'success' }] }];
-  const testedOnly = [{ name: 'Deploy to Cloudflare (when the secrets exist)', steps: [{ name: 'Deploy the Worker with its secrets', conclusion: 'skipped' }] }];
+  const deployed = [{ name: 'Deploy to Cloudflare (when the secrets exist)', steps: [{ name: 'Deploy the Worker with its secrets', conclusion: 'success', completed_at: '2026-10-01T10:04:00Z' }] }];
+  const testedOnly = [{ name: 'Deploy to Cloudflare (when the secrets exist)', steps: [{ name: 'Deploy the Worker with its secrets', conclusion: 'skipped', completed_at: '2026-10-02T10:04:00Z' }] }];
   const runs = [
-    { id: 3, head_sha: 'bbbb', conclusion: 'cancelled', status: 'completed' },
-    { id: 2, head_sha: 'aaa1', conclusion: 'success', status: 'completed' },
-    { id: 1, head_sha: 'aaaa', conclusion: 'success', status: 'completed' },
+    { id: 3, head_sha: 'bbbb', conclusion: 'cancelled', status: 'completed', created_at: '2026-10-03T10:00:00Z', updated_at: '2026-10-03T10:00:30Z' },
+    { id: 2, head_sha: 'aaa1', conclusion: 'success', status: 'completed', created_at: '2026-10-02T10:00:00Z', updated_at: '2026-10-02T10:05:00Z' },
+    { id: 1, head_sha: 'aaaa', conclusion: 'success', status: 'completed', created_at: '2026-10-01T10:00:00Z', updated_at: '2026-10-01T10:05:00Z' },
   ];
   const jobs = { 2: testedOnly, 1: deployed };
   const check = (gh, over = {}) => serverChanged({ event: 'push', sha: 'cccc', repo: REPO, branch: 'claude/sweet-goldberg-ej1nb0', token: 't', api: 'https://api.github.test', root, fetchFn: gh.fetchFn, ...over });
@@ -458,4 +559,72 @@ test('change check: against the last deployed commit (a cancelled pending run’
   assert.match(step, /run: node scripts\/changes\.mjs/);
   assert.doesNotMatch(wf, /github\.event\.before/);
   assert.match(wf.slice(wf.indexOf('\n  test:'), wf.indexOf('\n  ntfy-attach:')), /actions: read/);
+});
+
+test('change check: the base is the commit whose deploy step finished last, so Re-run all jobs on an older run counts', async () => {
+  const { serverChanged } = await import('../scripts/changes.mjs');
+  const REPO = '12twelve12hi/MHW';
+  const calls = [];
+  const deploy = (...steps) => [
+    { name: 'Build and test', steps: [] },
+    { name: 'Deploy to Cloudflare (when the secrets exist)', steps: steps.map(([conclusion, completed_at]) => ({ name: 'Deploy the Worker with its secrets', conclusion, completed_at })) },
+  ];
+  // Run 21 (commit bbbb) deployed on Oct 10. On Oct 12 someone chose Re-run all jobs on run 20 (commit aaaa, Oct 1),
+  // whose second attempt deployed aaaa: that is live, without bbbb's change to src/feeds.ts. This push (cccc) changes
+  // only a README since bbbb, but the server must deploy.
+  const day = (d, t = '09:00:00') => `2026-${d}T${t}Z`;
+  const runs = [
+    { id: 22, run_number: 22, head_sha: 'dddd', created_at: day('10-13'), updated_at: day('10-13', '09:02:00') },
+    { id: 21, run_number: 21, head_sha: 'bbbb', created_at: day('10-10'), updated_at: day('10-10', '09:06:00') },
+    { id: 20, run_number: 20, head_sha: 'aaaa', created_at: day('10-01'), updated_at: day('10-12', '09:06:00') },
+    { id: 19, run_number: 19, head_sha: '9999', created_at: day('09-30'), updated_at: day('09-30', '09:06:00') },
+    // A full page: 96 runs from July, then a second page the search never needs.
+    ...Array.from({ length: 96 }, (_, i) => ({ id: 100 + i, run_number: 18 - i, head_sha: '7777', created_at: day('07-01'), updated_at: day('07-01', '09:06:00') })),
+  ];
+  const jobs = {
+    22: deploy(['skipped', day('10-13', '09:02:00')]),
+    21: deploy(['success', day('10-10', '09:05:00')]),
+    20: deploy(['success', day('10-01', '09:05:00')], ['success', day('10-12', '09:05:00')]),
+    19: deploy(['success', day('09-30', '09:05:00')]),
+  };
+  const files = { bbbb: ['reader-experiment/server/README.md'], aaaa: ['reader-experiment/server/src/feeds.ts', 'reader-experiment/server/README.md'], dddd: [] };
+  const check = (over = {}) => {
+    calls.length = 0;
+    const j = { ...jobs, ...over.jobs };
+    const fetchFn = async (url) => {
+      const u = new URL(url);
+      calls.push(u.pathname + u.search);
+      if (u.pathname === `/repos/${REPO}/actions/workflows/rx-server.yml/runs`) {
+        const page = Number(u.searchParams.get('page') ?? 1), per = Number(u.searchParams.get('per_page') ?? 30);
+        return Response.json({ total_count: runs.length + 1, workflow_runs: [...runs, { id: 999, head_sha: '6666', created_at: day('06-01') }].slice((page - 1) * per, page * per) });
+      }
+      const m = /\/actions\/runs\/(\d+)\/jobs$/.exec(u.pathname);
+      if (m) return Response.json({ jobs: j[m[1]] ?? deploy(['skipped', day('07-01')]) });
+      const c = /\/compare\/([0-9a-f]+)\.\.\.([0-9a-f]+)$/.exec(u.pathname);
+      if (c) return Response.json({ files: (files[c[1]] ?? []).map((filename) => ({ filename })) });
+      return new Response('{}', { status: 404 });
+    };
+    return serverChanged({ event: 'push', sha: 'cccc', repo: REPO, branch: 'claude/sweet-goldberg-ej1nb0', token: 't', api: 'https://api.github.test', root, fetchFn });
+  };
+  const r = await check();
+  assert.equal(r.base, 'aaaa', 'the re-run of run 20 deployed after run 21');
+  assert.equal(r.changed, true, r.reason);
+  assert.ok(calls.some((c) => c.includes('/compare/aaaa...cccc')));
+  assert.ok(calls.some((c) => /[?&]filter=all/.test(c)), 'jobs of every attempt');
+  // Bounded: run 19 was last updated before Oct 12, so it can't have deployed later (its jobs aren't read); the July
+  // runs started over 31 days before, too long ago for a re-run, which ends the search (no second page).
+  assert.ok(!calls.some((c) => /\/runs\/(19|1\d\d)\/jobs/.test(c)), calls.join('\n'));
+  assert.deepEqual(calls.filter((c) => c.includes('/workflows/rx-server.yml/runs')).map((c) => new URL(c, 'https://x').searchParams.get('page')), ['1']);
+
+  // A later deploy is the base again: run 22 deploying dddd on Oct 13.
+  const later = await check({ jobs: { 22: deploy(['success', day('10-13', '09:01:00')]) } });
+  assert.deepEqual([later.base, later.changed], ['dddd', false], later.reason);
+  // The deploy step that finished last failed or was cancelled: what is live isn't known, so the push deploys.
+  for (const conclusion of ['failure', 'cancelled']) {
+    const failed = await check({ jobs: { 22: deploy([conclusion, day('10-13', '09:01:00')]) } });
+    assert.deepEqual([failed.changed, failed.base], [true, null]);
+    assert.match(failed.reason, /the last deploy \(run 22\) didn’t finish|the last deploy \(run 22\) didn't finish/);
+  }
+  // A deploy step without its end time: doubt.
+  assert.equal((await check({ jobs: { 22: deploy(['success', null]) } })).changed, true);
 });
