@@ -133,39 +133,37 @@ public struct StatusLabel: View {
     }
 }
 
-/// One history row: its label, its sentence when it has one, and the one button the shared copy offers for it
-/// ("Retry now" or "Try again"); removing is in the row's menu or swipe actions.
+/// One history row: its title, where it is from and when, its label, its sentence when it has one, and the one button
+/// the shared copy offers for it ("Retry now" or "Try again"); removing is in the row's menu or swipe actions. Nothing
+/// in it is cut short at any text size, and nothing in it changes by itself.
 public struct HistoryRowView: View {
     let row: OutboxRow
     let onRetry: () -> Void
     @Environment(\.comfort) private var comfort
     @Environment(\.dynamicTypeSize) private var typeSize
 
-    /// The accessibility identifier of a row's age ("2 days, 3 hr", which counts on by itself): the UI tests' Lab-off
-    /// walk writes its words as "<when>" (`AXTree.rowTimeID`).
+    /// The accessibility identifier of a row's time ("Today at 1:05 PM"): the UI tests' Lab-off walk writes its words
+    /// as "<when>" (`AXTree.rowTimeID`), since they depend on when the test runs.
     public static let timeID = "history-row-time"
 
-    /// The name the truncation audit knows a row's age by. Its words change every second, so the probe takes a fixed
-    /// name, one per row, and compares whatever the text says at the time it is measured.
-    public static func timeProbe(_ row: OutboxRow) -> String { "the age of row \(row.id)" }
+    /// The name the truncation audit knows a row's time by: its words depend on when it is measured, so the probe takes
+    /// a fixed name, one per row.
+    public static func timeProbe(_ row: OutboxRow) -> String { "the time of row \(row.id)" }
 
-    /// The accessibility identifier of a row's words as one element on iPhone and iPad (`spokenLabel`, with the row's
-    /// age as its value): the UI tests' walk writes that value as "<when>" (`AXTree.rowID`).
-    public static let rowID = "history-row"
-
-    /// What VoiceOver says for a row on iPhone and iPad, where its words are one element: its title, where it is from
-    /// (a link's site, not the whole link), its label and its sentence. "A long read, example.com, Waiting to send.
-    /// Couldn’t send right now. It will try again by itself." The row's age follows as the element's value.
-    public static func spokenLabel(_ row: OutboxRow, now: Date = Date()) -> String {
-        let source = spokenSource(row)
-        let title = row.displayTitle
-        return [title, title.localizedCaseInsensitiveContains(source) ? "" : source, RowText(row: row, now: now).message]
-            .filter { !$0.isEmpty }.joined(separator: ", ")
+    /// When a row was shared, in the system's words: "Today at 1:05 PM", "Yesterday at 9:12 AM", "10/14/26, 6:30 PM". It
+    /// never changes on screen. (1.1 showed `Text(date, style: .relative)`, "10 min, 13 sec", a count that ran on every
+    /// second: motion, which Comfort leaves out (F27), and a row that changed under VoiceOver and the audits.)
+    public static func when(_ created: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        formatter.doesRelativeDateFormatting = true
+        return formatter.string(from: created)
     }
 
-    /// Where a row is from, to be said: a link's or a page's site ("example.com"; a whole address is not something to
-    /// listen to), or a file's name and size.
-    public static func spokenSource(_ row: OutboxRow) -> String {
+    /// Where a row is from: a link's or a page's site ("example.com"; the whole address is long, cut short in a row and
+    /// not something to listen to), or a file's name and size.
+    public static func source(_ row: OutboxRow) -> String {
         switch row.kind {
         case .url, .page:
             guard let host = URL(string: row.url)?.host, !host.isEmpty else { return row.kind == .page ? "Web page" : "" }
@@ -175,6 +173,20 @@ public struct HistoryRowView: View {
         }
     }
 
+    /// The accessibility identifier of a row's words as one element on iPhone and iPad (`spokenLabel`, with the row's
+    /// time as its value): the UI tests' walk writes that value as "<when>" (`AXTree.rowID`).
+    public static let rowID = "history-row"
+
+    /// What VoiceOver says for a row on iPhone and iPad, where its words are one element: its title, where it is from,
+    /// its label and its sentence. "A long read, example.com, Waiting to send. Couldn’t send right now. It will try
+    /// again by itself." The row's time follows as the element's value.
+    public static func spokenLabel(_ row: OutboxRow, now: Date = Date()) -> String {
+        let source = Self.source(row)
+        let title = row.displayTitle
+        return [title, title.localizedCaseInsensitiveContains(source) ? "" : source, RowText(row: row, now: now).message]
+            .filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+
     public init(row: OutboxRow, onRetry: @escaping () -> Void) {
         self.row = row
         self.onRetry = onRetry
@@ -182,7 +194,9 @@ public struct HistoryRowView: View {
 
     public var body: some View {
         let text = RowText(row: row)
-        // At accessibility text sizes and in Comfort the button goes under the text, and nothing is cut short.
+        let source = Self.source(row)
+        let when = Self.when(row.created)
+        // At accessibility text sizes and in Comfort the button goes under the text.
         let stacked = comfort || typeSize.isAccessibilitySize
         let layout = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
             : AnyLayout(HStackLayout(alignment: .top, spacing: 10))
@@ -193,14 +207,21 @@ public struct HistoryRowView: View {
                     .frame(width: 22)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(row.displayTitle).lineLimit(stacked ? nil : 2).truncationProbe(row.displayTitle)
-                    Text(row.displaySubtitle).dlsFont(.caption).dlsSecondary().lineLimit(stacked ? nil : 1)
-                        .truncationProbe(row.displaySubtitle)
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        StatusLabel(row: row)
-                        Text(row.created, style: .relative).dlsFont(.caption2).dlsSecondary()
-                            .accessibilityIdentifier(Self.timeID)
-                            .wrapping(Self.timeProbe(row))
+                    Text(row.displayTitle).listRowText(row.displayTitle)
+                    if !source.isEmpty {
+                        Text(source).dlsFont(.caption).dlsSecondary().listRowText(source)
+                    }
+                    // The label and the time side by side, or one under the other where they do not fit on a line
+                    // (never a word broken in two).
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            StatusLabel(row: row)
+                            time(when)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            StatusLabel(row: row)
+                            time(when)
+                        }
                     }
                     if let sentence = text.sentence {
                         Text(sentence).dlsFont(.caption2).dlsSecondary().listRowText(sentence)
@@ -213,7 +234,7 @@ public struct HistoryRowView: View {
                 // element of its own. On the Mac each text stays an element, as VoiceOver reads a table row's cells.
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(Self.spokenLabel(row))
-                .accessibilityValue(Text(row.created, style: .relative))
+                .accessibilityValue(when)
                 .accessibilityIdentifier(Self.rowID)
                 #endif
             }
@@ -229,6 +250,12 @@ public struct HistoryRowView: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    private func time(_ when: String) -> some View {
+        Text(when).dlsFont(.caption2).dlsSecondary()
+            .accessibilityIdentifier(Self.timeID)
+            .wrapping(Self.timeProbe(row))
     }
 }
 

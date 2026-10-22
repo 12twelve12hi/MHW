@@ -93,11 +93,16 @@ Every build, with Lab on or off, has the same accessibility baseline (LAB-PLAN F
 - **Every control has a label** for VoiceOver, decorative images are hidden from it, and headings are marked. On
   iPhone and iPad each history row's words are one element, read in one go: its title, its site rather than the whole
   link, its label and its sentence, with its age as the value ("A long read, example.com, Waiting to send. Couldn't
-  send right now. It will try again by itself.", "10 minutes"); its *Retry now* or *Try again* stays a button of its
+  send right now. It will try again by itself.", "Today at 1:05 PM"); its *Retry now* or *Try again* stays a button of its
   own. (The row's swipe action, Remove, is offered on each element of a row, which made each small line of text a
   target too small to hit.) On the Mac each text stays an element, as VoiceOver reads a table row's cells.
 - **States in words and glyphs**, never colour alone: each history row's label (*Delivered ✓*, *Waiting to send*,
   *Not delivered*) comes after a glyph for its state, and errors carry a warning sign.
+- **Nothing in a history row is cut short or runs on by itself**: a row shows its whole title, where it is from (a
+  link's site, *example.com*, rather than a whole address cut off after one line; a file's name and size) and when it
+  was shared in the system's words (*Today at 1:05 PM*), which never changes on screen, where 1.1 showed a count of
+  seconds (*10 min, 13 sec*) that changed every second on screen and under VoiceOver. The state and the time sit side
+  by side, or one under the other where they do not fit, so no word is broken.
 - **Status labels wrap** instead of being cut, at every text size: at accessibility sizes (and in Comfort) a row's
   button moves under its text, label/value rows stack, and the pairing buttons stack.
 - **Status changes are said out loud**: every banner (*Paired with …*, *Sent · waiting for your Daylight*, an error),
@@ -235,8 +240,9 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
   - `AccessibilityAuditTests` run Xcode's `performAccessibilityAudit()` on Home (the Mac's main window), Settings and
     the pairing screen, with Comfort off and on (iOS 17+, macOS 14+; F27.2). Home and the main window are audited
     empty and with the sample history (`-DLSSampleHistory`): at the top of the history and again after every step
-    of scrolling it to its end (`UITestSupport.auditHistory`), so every row's status label, age, sentence and *Retry
-    now* or *Try again* button is audited where it shows. On the iPhone the history runs leave Dynamic Type out: at
+    of scrolling it to its end (`UITestSupport.auditHistory`; with Comfort at the largest size, where Home is many
+    screens long, at its top, at its second row and at its end), so every row's status label, time, sentence and
+    *Retry now* or *Try again* button is audited where it shows. On the iPhone the history runs leave Dynamic Type out: at
     the largest size the audit loses every row that was on screen (the list scrolls it away) and reports each of its
     texts, so each row text is measured growing by `testEveryTextGrowsWithTheTextSize` instead (Home with the same
     rows), and the empty Home keeps the audit's Dynamic Type check. Every issue is printed as an `AUDIT` line
@@ -247,7 +253,10 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     report that names no element, text the open Settings sheet covers or has scrolled partly out of view, and the
     text of a history row the History list has scrolled partly or wholly out of view (its outline keeps every row in
     the tree; the audit measures each text where it is laid out, also where it is hidden); on the iPhone, contrast
-    reports on an element the list has scrolled partly under the navigation bar or off the screen, a navigation-bar
+    reports on an element the list has scrolled partly under the navigation bar or off the screen, contrast and
+    clipping reports that come without an element while a history row's text shows partly under the navigation bar
+    or past the screen's edge (a row's words are one element, so the audit cannot point at the text; the allowance
+    names the texts, `UITestSupport.auditHere`), a navigation-bar
     button's capped text size, and Dynamic
     Type reports on exactly the texts `iOS/UITests/DynamicTypeWaivers.swift` names for the screen (today *Nothing
     sent yet.* on the empty Home and the device name's footer in Settings, which the audit loses at the largest size). That
@@ -270,8 +279,8 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     the sample history (`main`; its History outline keeps all six rows in the tree whatever it shows) and empty
     (`main-empty`); Settings, pairing, the share card in each of its states (`-DLSShareCard`), and on the Mac the menu
     bar item's menu with the sample history (`menu-bar`, its six rows) and empty (`menu-bar-empty`). The rows are the
-    ones W1's timeline (F01) changes: with Lab off they must read exactly as v1.1's. Each row's age (*2 days, 3 hr*),
-    which counts on by itself, is written `<when>`, as Android's walk does: on the Mac the age's own text
+    ones W1's timeline (F01) changes: with Lab off they must read exactly as this baseline's. Each row's time (*Today
+    at 1:05 PM*), which depends on when the test runs, is written `<when>`, as Android's walk does: on the Mac the age's own text
     (`history-row-time`, `HistoryRowView.timeID`), on the iPhone the value of the row's one element (`history-row`,
     `HistoryRowView.rowID`). The baselines were recorded from the P0 close-out (protocol 1.1 and this
     accessibility baseline) and are re-recorded only with a matching non-Lab change.

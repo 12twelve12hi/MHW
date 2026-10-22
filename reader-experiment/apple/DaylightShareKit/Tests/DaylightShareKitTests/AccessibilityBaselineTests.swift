@@ -312,7 +312,8 @@ final class AccessibilityBaselineTests: XCTestCase {
     }
 
     /// On iPhone and iPad a row's words are one VoiceOver element (the row's swipe action makes each small line a target
-    /// of its own otherwise): its title, its site rather than the whole link, its label and its sentence.
+    /// of its own otherwise): its title, where it is from (a link's site, not the whole link), its label and its
+    /// sentence. The row shows the same site.
     @MainActor
     func testARowIsSaidInOneGoWithItsSite() {
         let now = Date()
@@ -322,20 +323,38 @@ final class AccessibilityBaselineTests: XCTestCase {
                        "\(HistorySample.title), example.com, Waiting to send. Couldn’t send right now. It will try again by itself.")
         XCTAssertEqual(HistoryRowView.spokenLabel(rows[3], now: now),
                        "\(HistorySample.title), example.com, Delivered ✓ Saved on your Daylight.")
-        for row in rows { XCTAssertFalse(HistoryRowView.spokenLabel(row, now: now).contains("https://"), "a whole link is said") }
+        for row in rows {
+            XCTAssertFalse(HistoryRowView.spokenLabel(row, now: now).contains("https://"), "a whole link is said")
+            XCTAssertEqual(HistoryRowView.source(row), "example.com")
+        }
 
         let link = "https://www.nytimes.com/2026/10/22/a-story.html"
         let untitled = OutboxRow(id: "a", kind: .url, url: link, header: ItemHeader(id: "a", kind: .url, url: link, sent: ""),
                                  created: now, status: .delivered)
-        XCTAssertEqual(HistoryRowView.spokenSource(untitled), "nytimes.com")
+        XCTAssertEqual(HistoryRowView.source(untitled), "nytimes.com")
         XCTAssertEqual(HistoryRowView.spokenLabel(untitled, now: now), "www.nytimes.com, Delivered ✓ Saved on your Daylight.",
                        "the site once, when it is the title")
         let file = OutboxRow(id: "b", kind: .file, name: "Report.pdf", mime: "application/pdf", size: 2_400_000,
                              header: ItemHeader(id: "b", kind: .file, name: "Report.pdf", sent: ""), created: now,
                              status: .sent)
-        XCTAssertEqual(HistoryRowView.spokenSource(file), file.displaySubtitle)
+        XCTAssertEqual(HistoryRowView.source(file), file.displaySubtitle)
+        let page = OutboxRow(id: "c", kind: .page, header: ItemHeader(id: "c", kind: .page, sent: ""), created: now,
+                             status: .sent)
+        XCTAssertEqual(HistoryRowView.source(page), "Web page")
         XCTAssertEqual(HistoryRowView.rowID, "history-row")
         XCTAssertEqual(HistoryRowView.timeID, "history-row-time")
+    }
+
+    /// A row says when it was shared, which never changes on screen (no count that runs on by itself: no motion, F27;
+    /// the row stays the same under VoiceOver and the audits).
+    @MainActor
+    func testARowsTimeDoesNotRunOn() {
+        let created = Date(timeIntervalSinceNow: -600)
+        let first = HistoryRowView.when(created)
+        XCTAssertFalse(first.isEmpty)
+        XCTAssertFalse(first.contains("sec"), first)
+        XCTAssertEqual(HistoryRowView.when(created), first, "the same time reads the same")
+        XCTAssertNotEqual(HistoryRowView.when(Date(timeIntervalSinceNow: -8 * 86_400)), first)
     }
 
     // MARK: The UI tests' storage

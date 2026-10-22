@@ -93,7 +93,8 @@ final class AccessibilityAuditTests: XCTestCase {
         XCTAssertTrue(history.buttons["Settings"].waitForExistence(timeout: 30), "Home did not show")
         XCTAssertTrue(UITestSupport.waitForHistory(history), "the sample history did not show")
         UITestSupport.screenshot(history, "ios-home-comfort", in: self)
-        try UITestSupport.auditHistory(history, "home (Comfort)", types: types, allowed: Self.allowed(on: "home"))
+        try UITestSupport.auditHistory(history, "home (Comfort)", types: types, everyStep: false,
+                                       allowed: Self.allowed(on: "home"))
         UITestSupport.screenshot(history, "ios-home-end-comfort", in: self)
         history.terminate()
 

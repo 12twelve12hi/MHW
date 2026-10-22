@@ -532,16 +532,87 @@ enum UITestSupport {
     // MARK: Audits (F27.2)
 
     /// Audits the screen with the sample history at its top, then after every step of scrolling it to its end
-    /// (`scrollHistory`), so every row is audited where it shows.
+    /// (`scrollHistory`), so every row is audited where it shows. With `everyStep` false (a history many screens long:
+    /// Comfort at the largest text size) it flicks instead, and audits where the second row's button shows and at the
+    /// end.
     @available(iOS 17.0, macOS 14.0, *)
     static func auditHistory(_ app: XCUIApplication, _ screen: String, types: XCUIAccessibilityAuditType = .all,
+                             everyStep: Bool = true,
                              allowed: @escaping (XCUIAccessibilityAuditIssue) -> String? = { _ in nil }) throws {
-        try audit(app, screen, types: types, allowed: allowed)
-        try scrollHistory(app) { step in
-            try audit(app, "\(screen), scrolled \(step)", types: types, allowed: allowed)
+        try auditHere(app, screen, types: types, allowed: allowed)
+        if everyStep {
+            try scrollHistory(app) { step in
+                try auditHere(app, "\(screen), scrolled \(step)", types: types, allowed: allowed)
+            }
+        } else {
+            let second = app.buttons[historySecondButton]
+            XCTAssertTrue(flick(to: second, in: app), "\(screen): the history's second row was not reached")
+            try auditHere(app, "\(screen), at its second row", types: types, allowed: allowed)
+            XCTAssertTrue(flick(to: historyEnd(in: app), in: app), "\(screen): the history's last row was not reached")
+            try auditHere(app, "\(screen), at its end", types: types, allowed: allowed)
         }
         XCTAssertTrue(historyEnd(in: app).isHittable, "\(screen): the history's last row was not reached")
     }
+
+    /// Flicks the history on (on the Mac, scrolls it a step) until `element` can be hit, at most `tries` times.
+    static func flick(to element: XCUIElement, in app: XCUIApplication, tries: Int = 30) -> Bool {
+        for _ in 0..<tries {
+            if element.exists && element.isHittable { return true }
+            #if os(macOS)
+            scrollStep(app)
+            #else
+            app.swipeUp()
+            #endif
+            Thread.sleep(forTimeInterval: 1)
+        }
+        return element.exists && element.isHittable
+    }
+
+    /// `audit` of a screen with the sample history. On the iPhone a row's words are one element
+    /// (`HistoryRowView.rowID`), so the audit reports its texts' contrast and clipping without an element; such a report
+    /// is allowed only while a row's text shows partly under the navigation bar or past the screen's edge, where the
+    /// audit measures it, and says which.
+    @available(iOS 17.0, macOS 14.0, *)
+    static func auditHere(_ app: XCUIApplication, _ screen: String, types: XCUIAccessibilityAuditType,
+                          allowed: @escaping (XCUIAccessibilityAuditIssue) -> String?) throws {
+        #if os(iOS)
+        let hidden = try rowTextsPartlyHidden(app)
+        let here: (XCUIAccessibilityAuditIssue) -> String? = { issue in
+            if issue.element == nil, issue.auditType == .contrast || issue.auditType == .textClipped, !hidden.isEmpty {
+                let texts = hidden.map { "“\($0.prefix(40))”" }.joined(separator: ", ")
+                return "reported without an element while a history row's text shows partly under the navigation bar "
+                    + "or past the screen's edge (a row's words are one element, so the audit cannot point at it): \(texts)"
+            }
+            return allowed(issue)
+        }
+        try audit(app, screen, types: types, allowed: here)
+        #else
+        try audit(app, screen, types: types, allowed: allowed)
+        #endif
+    }
+
+    #if os(iOS)
+    /// The texts of history rows that show partly under the navigation bar (through its blur) or past the bottom of the
+    /// screen.
+    static func rowTextsPartlyHidden(_ app: XCUIApplication) throws -> [String] {
+        var bar = CGRect.null
+        var screen = CGRect.null
+        var rows: [CGRect] = []
+        var texts: [(words: String, frame: CGRect)] = []
+        func visit(_ s: XCUIElementSnapshot) {
+            if s.elementType == .navigationBar && bar.isNull { bar = s.frame }
+            if s.elementType == .window && screen.isNull { screen = s.frame }
+            if s.identifier == AXTree.rowID { rows.append(s.frame) }
+            if s.elementType == .staticText { texts.append((s.label, s.frame)) }
+            for child in s.children { visit(child) }
+        }
+        visit(try app.snapshot())
+        return texts.filter { text in
+            guard rows.contains(where: { $0.insetBy(dx: -1, dy: -1).contains(text.frame) }) else { return false }
+            return (!bar.isNull && text.frame.minY < bar.maxY) || (!screen.isNull && text.frame.maxY > screen.maxY)
+        }.map { $0.words }
+    }
+    #endif
 
     /// Runs Xcode's accessibility audit on what the app shows. Every issue is printed; an issue is ignored only when
     /// `allowed` names why (an element the app does not draw), and anything else fails the test.
