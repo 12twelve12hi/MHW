@@ -1,0 +1,13 @@
+[
+  {"type": "List"},
+  {"type": "Text", "label": "Daylight Share"},
+  {"type": "Text", "label": "Not paired yet"},
+  {"type": "Button", "label": "Settings"},
+  {"type": "Text", "label": "Pair with your Daylight"},
+  {"type": "Text", "label": "On the Daylight, install Daylight Share and choose \u201cThis is my Daylight\u201d. It shows a QR code and a typed code."},
+  {"type": "Button", "label": "Scan the QR code"},
+  {"type": "Text", "label": "Or type the code:"},
+  {"type": "TextField", "label": "Pairing code"},
+  {"type": "Button", "label": "Pair", "enabled": false},
+  {"type": "Text", "label": "Scanning the code with the camera app works too: it opens Daylight Share."}
+]

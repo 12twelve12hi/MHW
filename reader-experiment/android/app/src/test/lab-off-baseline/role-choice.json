@@ -1,0 +1,13 @@
+[
+  {"type": "Scroll"},
+  {"type": "Text", "label": "Daylight Share"},
+  {"type": "Text", "label": "Send articles, web pages and documents from your phone to your Daylight, where they go into the Daylight Reader."},
+  {"type": "Text", "label": "Which device is this?"},
+  {"type": "Text", "label": "Send from this phone (suggested)"},
+  {"type": "Text", "label": "Adds \u201cSend to Daylight\u201d to the share menu, for links and files."},
+  {"type": "Button", "label": "Send from this phone"},
+  {"type": "Text", "label": "This is my Daylight"},
+  {"type": "Text", "label": "Receive what your phone sends and hand it to the Daylight Reader. Shows a code your phone scans once."},
+  {"type": "Button", "label": "This is my Daylight"},
+  {"type": "Text", "label": "You can change this later in Settings."}
+]

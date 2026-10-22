@@ -1,0 +1,23 @@
+[
+  {"type": "Scroll"},
+  {"type": "Text", "label": "Settings"},
+  {"type": "Button", "label": "Done"},
+  {"type": "Switch", "label": "Comfort\nLarger text and buttons, more contrast, no motion.", "value": "off"},
+  {"type": "Text", "label": "This device"},
+  {"type": "RadioButton", "label": "This is my Daylight (Inbox)", "value": "not selected"},
+  {"type": "RadioButton", "label": "Send from this device", "value": "selected"},
+  {"type": "TextField", "label": "Device name (shown on the Daylight)", "value": "Test phone"},
+  {"type": "Button", "label": "Save name"},
+  {"type": "Text", "label": "Relay"},
+  {"type": "Text", "label": "The ntfy relay your Daylight uses. It comes with the pairing; change it only if your Daylight did. Items not yet delivered are sent through the new one."},
+  {"type": "Text", "label": "ntfy.sh, the default relay, is free and needs no account. It keeps links for 12 hours and files for 3 hours, takes files in parts of up to 2 MB (Send to Daylight sends files of up to 9 MB that way), and lets each network send about 250 messages and 200 MB a day. Another ntfy server works if anyone can use it without a login and it accepts files of at least 2 MB; the Inbox checks that before saving it."},
+  {"type": "TextField", "label": "Relay URL", "value": "http://127.0.0.1:9"},
+  {"type": "Button", "label": "Save relay"},
+  {"type": "Button", "label": "Use ntfy.sh"},
+  {"type": "Text", "label": "Pairing"},
+  {"type": "Text", "label": "Paired with Kitchen Daylight."},
+  {"type": "Button", "label": "Unpair"},
+  {"type": "Text", "label": "About"},
+  {"type": "Text", "label": "Daylight Share <version>"},
+  {"type": "Text", "label": "Protocol: Daylight Share v1 over ntfy, AES-256-GCM end to end."}
+]
