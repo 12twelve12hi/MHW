@@ -474,42 +474,25 @@ public struct WhatsInLabView: View {
         }
     }
 
-    /// A feature's name, sentence and short state.
-    private func featureWords(_ row: LabCenter.Row) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(row.name).dlsFont(.body, weight: .semibold).listRowText(row.name)
-            Text(row.sentence).dlsFont(.footnote).dlsSecondary().listRowText(row.sentence)
-            if let short = row.short {
-                Text(short).dlsFont(.footnote, weight: .medium).listRowText(short)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
-    }
-
     @ViewBuilder private func featureRow(_ row: LabCenter.Row) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            #if os(iOS)
-            // On iPhone and iPad the row's words are one element that acts as a button, as a history row's are: in a
-            // Button's label the iPhone's audit reported the words as clipped text it could not point at.
-            featureWords(row)
-                .onTapGesture { Task { await tap(row.id) } }
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel([row.name, row.sentence, row.short].compactMap { $0 }.joined(separator: ", "))
-                .accessibilityAddTraits(.isButton)
-                .accessibilityAction { Task { await tap(row.id) } }
-                .accessibilityIdentifier(LabIDs.feature(row.id))
-            #else
             Button {
                 Task { await tap(row.id) }
             } label: {
-                featureWords(row)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.name).dlsFont(.body, weight: .semibold).listRowText(row.name)
+                    Text(row.sentence).dlsFont(.footnote).dlsSecondary().listRowText(row.sentence)
+                    if let short = row.short {
+                        Text(short).dlsFont(.footnote, weight: .medium).listRowText(short)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
             .accessibilityIdentifier(LabIDs.feature(row.id))
-            #endif
             if let use = useSwitch?(row.id) {
                 Toggle(isOn: use) {
                     Text(LabText.useLabel).listRowText(LabText.useLabel)
