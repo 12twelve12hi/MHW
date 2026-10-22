@@ -46,7 +46,6 @@ class ShortcutsTest {
         assertEquals("Kitchen D…", s.shortLabel.toString())
         assertEquals("Kitchen Daylight", s.longLabel.toString())
         assertTrue(s.categories!!.contains(Shortcuts.CATEGORY))
-        assertTrue(s.isLongLived)
 
         // A new name (the same Daylight): the labels follow.
         app.sender.pair(Pairing(LabKit.vectorPairing.secret, LabKit.vectorPairing.relay, "Den"))

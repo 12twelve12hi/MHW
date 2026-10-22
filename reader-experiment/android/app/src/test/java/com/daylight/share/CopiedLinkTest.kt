@@ -48,8 +48,9 @@ class CopiedLinkTest {
 
     private fun chips() = compose.onAllNodes(hasText(LabText["copiedLink.chip"]) and hasClickAction()).fetchSemanticsNodes()
 
+    /** What a resume does for the chip: the screen reads the clipboard's description again. */
     private fun resume() {
-        compose.activity.resumes.intValue++
+        compose.runOnUiThread { compose.activity.resumes.intValue++ }
         compose.waitForIdle()
     }
 
