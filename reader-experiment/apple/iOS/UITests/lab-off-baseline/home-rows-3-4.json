@@ -1,0 +1,161 @@
+{
+  "nodes" : [
+    {
+      "label" : "Send to Daylight",
+      "type" : "application",
+      "value" : ""
+    },
+    {
+      "label" : "Send to Daylight",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Settings",
+      "type" : "other",
+      "value" : ""
+    },
+    {
+      "label" : "Settings",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "SEND TO TEST DAYLIGHT",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Paste or type a link",
+      "type" : "textField",
+      "value" : ""
+    },
+    {
+      "label" : "Paste",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "Send the link",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "Send",
+      "type" : "image",
+      "value" : ""
+    },
+    {
+      "label" : "Send the link",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Send a file…",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "doc.badge.plus",
+      "type" : "image",
+      "value" : ""
+    },
+    {
+      "label" : "Send a file…",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Tip: in Safari or any app, tap Share › Send to Daylight. Safari sends the page as you see it, so paywalled and logged-in articles work.",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "HISTORY",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Link",
+      "type" : "image",
+      "value" : ""
+    },
+    {
+      "label" : "A very long article title that goes on for a while, to see that it wraps instead of being cut short, example.com, Not delivered. Too big to send. Files can be up to 9 MB; this one is 14.2 MB.",
+      "type" : "other",
+      "value" : "<when>"
+    },
+    {
+      "label" : "A very long article title that goes on for a while, to see that it wraps instead of being cut short",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "example.com",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Warning",
+      "type" : "image",
+      "value" : ""
+    },
+    {
+      "label" : "Not delivered",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "<when>",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Too big to send. Files can be up to 9 MB; this one is 14.2 MB.",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Link",
+      "type" : "image",
+      "value" : ""
+    },
+    {
+      "label" : "A very long article title that goes on for a while, to see that it wraps instead of being cut short, example.com, Delivered ✓ Saved on your Daylight.",
+      "type" : "other",
+      "value" : "<when>"
+    },
+    {
+      "label" : "A very long article title that goes on for a while, to see that it wraps instead of being cut short",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "example.com",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Selected",
+      "type" : "image",
+      "value" : ""
+    },
+    {
+      "label" : "Delivered ✓",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "<when>",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Saved on your Daylight.",
+      "type" : "staticText",
+      "value" : ""
+    }
+  ],
+  "platform" : "ios",
+  "screen" : "home-rows-3-4"
+}

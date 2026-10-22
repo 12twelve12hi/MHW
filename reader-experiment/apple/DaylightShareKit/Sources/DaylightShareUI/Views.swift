@@ -239,7 +239,9 @@ public struct HistoryRowView: View {
                         }
                     }
                     if let sentence = text.sentence {
-                        Text(sentence).dlsFont(.caption2).dlsSecondary().listRowText(sentence)
+                        // In the primary colour: what to know or do about the row, in small text (the iPhone's
+                        // contrast audit failed it now and then at 72%).
+                        Text(sentence).dlsFont(.caption2).listRowText(sentence)
                     }
                 }
                 #if os(iOS)
