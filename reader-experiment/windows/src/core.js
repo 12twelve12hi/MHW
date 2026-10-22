@@ -1,7 +1,9 @@
-// The app's logic, with no DOM and no Tauri: pairing, sending, the outbox and its timers. app.js draws the window
-// around it and wires it to Tauri (bridge.js); the unit tests drive it with a fake bridge and the mock relay.
+// The app's logic, with no DOM and no Tauri: pairing, sending, the outbox and its timers, and Lab (lab.js). app.js
+// draws the window around it and wires it to Tauri (bridge.js); the unit tests drive it with a fake bridge and the
+// mock relay.
 
 import * as ds from './daylight-share.js';
+import { createLab } from './lab.js';
 import {
   fileNameFor, mimeFor, titleFromName, nameFromPath, isInternetShortcut, urlFromInternetShortcut, maintain,
   sendSummary, hostOf, rowView,
@@ -34,9 +36,13 @@ export function serial() {
   };
 }
 
-/** A storage adapter that reports changes to the outbox, the pairing and the settings. */
+/**
+ * A storage adapter that reports changes to the outbox, the pairing and the settings, and to what Lab's ledger heard
+ * from the Daylight (What's in Lab's header line follows it).
+ */
+export const WATCHED_KEYS = ['outbox', 'pairing', 'settings', 'lab/inbox', 'lab/heard'];
 export function watchedStorage(storage, onChange) {
-  const watched = (k) => k === 'outbox' || k === 'pairing' || k === 'settings';
+  const watched = (k) => WATCHED_KEYS.includes(k);
   return {
     get: (k) => storage.get(k),
     async set(k, v) { await storage.set(k, v); if (watched(k)) onChange(k); },
@@ -47,9 +53,11 @@ export function watchedStorage(storage, onChange) {
 /**
  * bridge: {notify(title, body), showWindow(), readFile(path, max) -> Uint8Array (rejects "too-large:<size>" over max)}
  * storage: a daylight-share storage adapter (get/set/remove of JSON values).
+ * gateDeadlineMs: Lab's gate deadline (LAB-PLAN 1.5: 5 s; tests shorten it).
  */
 export function createApp({
   bridge, storage: baseStorage, fetch, now = () => Date.now(), version = '0', timers = globalThis, log = console,
+  gateDeadlineMs,
 } = {}) {
   const listeners = new Set();
   const storage = watchedStorage(baseStorage, (key) => {
@@ -63,6 +71,16 @@ export function createApp({
   let lastTick = 0;
   /** Things to send that arrived before the app was paired: sent once it is. */
   const waiting = [];
+  const settingsRun = serial();
+
+  /**
+   * Lab (LAB-PLAN 1, 2.2.6, 2.6): the switch, the sender ledger (fed by every Sender below through onAckHeader, Lab on
+   * or off), the gates and the Daylight server.
+   */
+  const lab = createLab({
+    storage, fetch, now, log, getPairing, getSettings, updateSettings, from: FROM, app,
+    refreshAcks: () => checkAcksNow(), gateDeadlineMs,
+  });
 
   const notify = (n) => { try { Promise.resolve(bridge?.notify?.(n.title, n.body)).catch(() => {}); } catch { /* no notifications */ } };
 
@@ -76,7 +94,7 @@ export function createApp({
     const pairing = await getPairing();
     if (!pairing) return null;
     const key = `${pairing.code}|${pairing.relay}`;
-    if (cache?.key !== key) cache = { key, sender: new ds.Sender({ pairing, storage, from: FROM, app, fetch, now }) };
+    if (cache?.key !== key) cache = { key, sender: new ds.Sender({ pairing, storage, from: FROM, app, fetch, now, onAckHeader: lab.hook }) };
     return cache.sender;
   }
 
@@ -109,12 +127,14 @@ export function createApp({
 
   /**
    * Saves a pairing from preparePairing. The same secret (a new relay or name) keeps the outbox, whose pending items
-   * then go through the new relay; another secret deletes it (ds.applyPairingChange, under the sender lock).
+   * then go through the new relay; another secret deletes it (ds.applyPairingChange, under the sender lock), with Lab's
+   * ledger; a Daylight server that knows the old pairing is locked first, Lab on or off (LAB-PLAN 2.6).
    * expect: the code of the pairing in use when the user was asked ('' for none): if it changed since, nothing is
-   * saved and this throws. -> {name, relay}
+   * saved and this throws. -> {name, relay, serverLocked?: true when a known server was locked (or tried)}
    */
   async function applyPairing(next, { expect } = {}) {
     const p = { ...next };
+    let repair = {};
     await run(async () => {
       const current = await getPairing();
       if (expect !== undefined && (current?.code ?? '') !== expect) {
@@ -122,15 +142,19 @@ export function createApp({
       }
       // A typed code, or a link without a name, for the Daylight already paired keeps the name it has.
       if (!ds.cleanName(p.name) && current && ds.samePairingSecret(current, p)) p.name = current.name;
+      repair = await lab.beforeRepair(current, p);
       await ds.applyPairingChange(storage, current, p);
       await ds.savePairing(storage, p);
       cache = null;
+      await lab.afterPairingChange(current, p, repair);
     });
     const queued = waiting.splice(0);
     if (queued.length) {
       (async () => { for (const a of queued) await handleAction(a); })().catch((e) => log.warn?.('Send to Daylight:', e));
     }
-    return { name: ds.cleanName(p.name), relay: ds.normalizeRelay(p.relay) };
+    const out = { name: ds.cleanName(p.name), relay: ds.normalizeRelay(p.relay) };
+    if (repair.known) out.serverLocked = true;
+    return out;
   }
 
   /** Pairs without asking (a typed code on the pairing screen when nothing is paired, and the e2e test's --e2e-pair). */
@@ -141,9 +165,11 @@ export function createApp({
 
   async function unpair() {
     await run(async () => {
-      await ds.applyPairingChange(storage, await getPairing(), null);
+      const current = await getPairing();
+      await ds.applyPairingChange(storage, current, null);
       await storage.remove('pairing');
       cache = null;
+      await lab.afterPairingChange(current, null);
     });
   }
 
@@ -158,15 +184,20 @@ export function createApp({
   const rows = async () => (await storage.get('outbox')) ?? [];
 
   async function getSettings() { return (await storage.get('settings')) ?? {}; }
-  /** Merges patch into the settings (the hotkey, Comfort), one write at a time so none is lost. -> the settings */
-  const settingsRun = serial();
-  function setSettings(patch) {
+  /**
+   * Changes the settings (the hotkey, Comfort, Lab), one change at a time so none is lost: fn(settings) -> the new
+   * settings, or the same object to write nothing. -> the settings
+   */
+  function updateSettings(fn) {
     return settingsRun(async () => {
-      const s = { ...(await getSettings()), ...patch };
-      await storage.set('settings', s);
+      const cur = await getSettings();
+      const s = fn(cur);
+      if (s !== cur) await storage.set('settings', s);
       return s;
     });
   }
+  /** Merges patch into the settings. -> the settings */
+  function setSettings(patch) { return updateSettings((s) => ({ ...s, ...patch })); }
 
   // --- sending ------------------------------------------------------------------------------------------------------
 
@@ -272,10 +303,18 @@ export function createApp({
    */
   async function tick() {
     lastTick = now();
-    return withSender(async (s) => {
+    const r = await withSender(async (s) => {
       if (!s) return { delivered: 0, resent: 0 };
       try { return await maintain(s, now()); } catch (e) { log.warn?.('Send to Daylight: tick failed', e); return { delivered: 0, resent: 0 }; }
     });
+    // Lab's ledger keeps the states of the rows still here (LAB-PLAN 2.2.6).
+    await lab.prune();
+    return r;
+  }
+
+  /** Reads the ack topic now, whatever the outbox holds (What's in Lab opening: its header line is then current). */
+  function checkAcksNow() {
+    return withSender(async (s) => (s ? s.checkAcks() : 0));
   }
 
   const tickQuietly = () => { tick().catch(() => {}); };
@@ -304,11 +343,12 @@ export function createApp({
     interval = soonTimer = null;
   }
 
-  /** The state as the end-to-end test reads it (the window draws the same). */
+  /** The state as the end-to-end test reads it (the window draws the same), with Lab's (LAB-PLAN 1.7). */
   async function snapshot() {
     return {
       at: new Date(now()).toISOString(),
       ...(await state()),
+      ...(await lab.status()),
       waiting: waiting.length,
       rows: (await rows()).map((r) => {
         const v = rowView(r, now());
@@ -322,8 +362,9 @@ export function createApp({
   }
 
   return {
-    storage, preparePairing, applyPairing, pair, unpair, state, rows, getSettings, setSettings, sendLink, sendFile, sendPaths,
-    sendClipboard, handleAction, retry, remove, tick, tickIfStale, start, stop, snapshot, settle,
+    storage, lab, preparePairing, applyPairing, pair, unpair, state, rows, getSettings, setSettings, updateSettings,
+    sendLink, sendFile, sendPaths, sendClipboard, handleAction, retry, remove, tick, tickIfStale, checkAcksNow, start,
+    stop, snapshot, settle,
     onChange: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
   };
 }

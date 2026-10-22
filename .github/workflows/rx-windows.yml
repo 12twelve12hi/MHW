@@ -1,8 +1,9 @@
 name: Reader experiment - Windows app
 
 # Builds Send to Daylight for Windows (Tauri), tests it end to end on the runner against the mock relay (installer,
-# pairing links with their confirmation, Send to, the clipboard hotkey's path, acks, restarts, an update, uninstall),
-# checks the window's page for accessibility and Lab-off parity in Chromium, then publishes
+# pairing links with their confirmation, Send to, the clipboard hotkey's path, acks, restarts, an update, uninstall;
+# and Lab, LAB-PLAN F00 and F17: the Lab switch with --e2e-lab, a Lab Daylight's hello and states), checks the window's
+# page for accessibility, Lab's screens and Lab-off parity in Chromium, then publishes
 # Send-to-Daylight-windows-setup.exe to the "reader-experiment-latest" release. Unsigned for now: SmartScreen warns on
 # first run.
 #
@@ -21,6 +22,8 @@ on:
       - 'reader-experiment/windows/**'
       - 'reader-experiment/share/js/**'
       - '!reader-experiment/share/**/*.md'
+      # The Daylight server's client module, which build.mjs copies into the window (Lab, LAB-PLAN 2.6).
+      - 'reader-experiment/server/client/**'
       - 'reader-experiment/lab-release-gate.json'
       - '.github/workflows/rx-windows.yml'
   workflow_dispatch:
@@ -61,7 +64,7 @@ jobs:
       - name: Install the Tauri CLI
         run: npm ci
 
-      - name: Build the frontend (copies in ../share/js/daylight-share.js)
+      - name: Build the frontend (copies in daylight-share.js, daylight-lab.js and daylight-server.js)
         run: node build.mjs
 
       - name: Unit tests (frontend, against the mock relay)

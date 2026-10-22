@@ -1,17 +1,23 @@
-// The window: pairing, the drop zone, "Send the link on the clipboard", the history and the settings. Sending and the
-// outbox live in core.js (with daylight-share.js); bridge.js talks to the Rust side. The window can be hidden (closed
-// to the tray) for days: this page keeps running, handles Send To and the hotkey, and keeps the outbox moving.
+// The window: pairing, the drop zone, "Send the link on the clipboard", the history and the settings, with Lab's
+// switch and screens (LAB-PLAN 1, 2.6). Sending and the outbox live in core.js (with daylight-share.js), Lab's logic in
+// lab.js and its screens' parts in lab-ui.js; bridge.js talks to the Rust side. The window can be hidden (closed to the
+// tray) for days: this page keeps running, handles Send To and the hotkey, and keeps the outbox moving.
 
 import { bridge, appStorage } from './bridge.js';
 import { createApp, serial, MAX_FILE, tooBig } from './core.js';
 import { ShareError } from './daylight-share.js';
+import { LAB_TEXT } from './daylight-lab.js';
+import {
+  labNote, noteFollowUp, clearNote, noteBox, dismissNotesOnOtherControls, renderWhatsInLab, updateWhatsInLab,
+  renderServerSection, renderRepaired,
+} from './lab-ui.js';
 import {
   rowView, kindLabel, displayTitle, relativeTime, sendSummary, linkFromDrop, accelFromEvent, describeAccel,
   hostOf, DEFAULT_HOTKEY,
 } from './logic.js';
 
 const $ = (id) => document.getElementById(id);
-const VIEWS = ['view-pair', 'view-confirm', 'view-send', 'view-settings'];
+const VIEWS = ['view-pair', 'view-confirm', 'view-send', 'view-settings', 'view-whats', 'view-server'];
 const HISTORY_SHOWN = 50;
 
 let app = null;
@@ -26,6 +32,7 @@ let pendingPair = null; // a pairing waiting for the user's answer: {next, expec
 let dataProblem = ''; // saved data that couldn't be read and was set aside, said once the window is drawn
 let ready = false; // the first view is drawn: actions from Rust can be handled
 let comfort = false; // F27 Comfort (settings.comfort), not Lab
+let labIsOn = true; // the Lab switch as last read (LAB-PLAN 1.2: a missing key means on)
 let settingsFrom = 'view-send'; // the view Settings' Back returns to
 const lastLabel = new Map(); // row id -> the label last drawn, to announce a row's new state (F27)
 const log = []; // recent events, for the end-to-end test's status file
@@ -405,6 +412,14 @@ function renderHistory() {
 
 let refreshTimer = null;
 function onStorageChange(key) {
+  if (key.startsWith('lab/')) {
+    // The ledger learnt something (LAB-PLAN 2.2.6): What's in Lab's header line follows.
+    if (view === 'view-whats') {
+      app.lab.overview({ refresh: false }).then((m) => { if (m.lab && view === 'view-whats') updateWhats($('whats'), m); }, () => {});
+    }
+    writeStatusSoon();
+    return;
+  }
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(async () => {
     try {
@@ -493,9 +508,10 @@ function renderSendTo() {
   $('sendto-add').hidden = !!s.exists || !s.path;
 }
 
-function renderSettings() {
-  settingsFrom = view === 'view-pair' ? 'view-pair' : 'view-send';
+function renderSettings({ focus = 'close-settings' } = {}) {
+  if (view === 'view-pair' || view === 'view-send') settingsFrom = view;
   show('view-settings');
+  renderLabBlock();
   $('comfort').checked = comfort;
   $('comfort-msg').textContent = '';
   // Before pairing, only what works without a Daylight: Comfort, the hotkey and the Windows settings.
@@ -511,7 +527,7 @@ function renderSettings() {
   $('version').textContent = `Send to Daylight ${info?.version ?? ''} for Windows`;
   unpairArmed = null;
   $('unpair').textContent = 'Unpair this PC';
-  $('close-settings').focus();
+  $(focus).focus();
 }
 
 async function onAutostart() {
@@ -554,6 +570,174 @@ async function onUnpair() {
   } catch (e) { b.textContent = e.message; }
 }
 
+// --- Lab (LAB-PLAN 1, 1.5, 2.6; card WIN0) ---------------------------------------------------------------------------
+
+/** How long a gate may take before its note says LAB_TEXT.checking (1.5). */
+const CHECKING_AFTER_MS = 150;
+let labSeq = 0; // the Lab view drawn last: a slower answer for an earlier one is dropped
+let labBlockSeq = 0;
+let setupSaid = null; // the setup's done line, said once the server section is drawn again
+
+/** Lab's Copy: Rust writes the clipboard. -> true, or why it couldn't (the system's words). */
+async function copyText(text) {
+  try { await bridge.writeClipboard(text); note('copied the Server code'); return true; } catch (e) { return String(e?.message ?? e); }
+}
+
+/**
+ * Settings' Lab block (1.1): the switch; with Lab on, What's in Lab › and Daylight server ›, whose subtitle is the
+ * server's short state ("Optional · Not set up"): the last answer at once, then a fresh one when it is over 10 minutes
+ * old (within the gate's 5 s). With Lab off only the switch and its footer show (1.3).
+ */
+async function renderLabBlock() {
+  const seq = ++labBlockSeq;
+  $('lab').checked = labIsOn;
+  $('lab-rows').hidden = !labIsOn;
+  if (!labIsOn) return;
+  try {
+    let r = await app.lab.state({ refresh: false });
+    if (seq !== labBlockSeq) return;
+    $('server-sub').textContent = r.serverSubtitle ?? '';
+    r = await app.lab.state({ refresh: true });
+    if (seq === labBlockSeq && r.lab) $('server-sub').textContent = r.serverSubtitle ?? '';
+  } catch (e) { note(`Lab state: ${e?.message ?? e}`); }
+  writeStatusSoon();
+}
+
+async function onLab() {
+  const want = $('lab').checked;
+  $('lab-msg').textContent = '';
+  labIsOn = want;
+  $('lab-rows').hidden = !want;
+  try {
+    labIsOn = (await app.lab.setLab(want)).lab;
+    note(`lab ${labIsOn ? 'on' : 'off'}`);
+  } catch (e) {
+    labIsOn = !want;
+    $('lab-msg').textContent = `Couldn’t change that: ${e?.message ?? e}`;
+  }
+  renderLabBlock();
+  writeStatusSoon();
+}
+
+/** A click on a feature runs its gate (1.5). Not ready: its one sentence under the row, with Copy Server code for needs-server. */
+async function onFeature(f, box) {
+  const timer = setTimeout(() => labNote(box, LAB_TEXT.checking, { state: 'checking', ok: false }), CHECKING_AFTER_MS);
+  let r;
+  try {
+    r = await app.lab.gate(f.id);
+  } catch (e) {
+    r = { ready: false, state: 'error', message: e?.message ?? String(e) };
+  } finally {
+    clearTimeout(timer);
+  }
+  note(`lab gate ${f.id}: ${r.state}`);
+  if (r.ready) { clearNote(box); return; } // W0 runs no Lab feature here: a ready server feature is `later`
+  const shown = labNote(box, r.message, {
+    state: r.state, button: r.button,
+    onButton: async (b) => {
+      if (r.state === 'needs-server') {
+        const done = await copyText(r.serverCode ?? '');
+        noteFollowUp(shown, done === true ? LAB_TEXT.setup.copied : done);
+      }
+      b.focus();
+    },
+  });
+  writeStatusSoon();
+}
+
+/** A newer What's in Lab answer: lines change in place; a list with other features is drawn again, unless a note is open. */
+function updateWhats(box, model) {
+  if (!updateWhatsInLab(box, model) && !box.querySelector('.lab-note > *')) renderWhatsInLab(box, model, { onTap: onFeature });
+  if (model.fresh) box.dataset.fresh = '1';
+}
+
+/** What's in Lab (1.4): short states at once from what is known, then the ack topic and the server are asked. */
+async function openWhats() {
+  const seq = ++labSeq;
+  show('view-whats');
+  const box = $('whats');
+  box.textContent = '';
+  box.dataset.fresh = '0';
+  $('whats-back').focus();
+  let model;
+  try { model = await app.lab.overview({ refresh: false }); } catch (e) { box.textContent = e?.message ?? String(e); return; }
+  if (seq !== labSeq || view !== 'view-whats') return;
+  if (!model.lab) { renderSettings(); return; }
+  renderWhatsInLab(box, model, { onTap: onFeature, checking: !model.fresh });
+  try { model = await app.lab.overview({ refresh: true }); } catch { return; }
+  if (seq !== labSeq || view !== 'view-whats' || !model.lab) return;
+  updateWhats(box, model);
+  writeStatusSoon();
+}
+
+/** The Daylight server section (2.6). Drawn again after a setup, a move or a new address. */
+async function renderServer() {
+  const seq = ++labSeq;
+  const box = $('server');
+  box.dataset.fresh = '0';
+  if (!box.firstChild) {
+    // While the server is asked (within the gate's 5 s): the checking line where the state goes.
+    const b = noteBox();
+    labNote(b, LAB_TEXT.checking, { state: 'checking', ok: false });
+    box.append(b);
+  }
+  let model;
+  try { model = await app.lab.serverView(); } catch (e) { box.textContent = e?.message ?? String(e); return; }
+  if (seq !== labSeq || view !== 'view-server') return;
+  if (!model.lab) { renderSettings(); return; }
+  const said = setupSaid;
+  setupSaid = null;
+  renderServerSection(box, model, {
+    copy: copyText,
+    move: async (yes) => { if (yes) { await app.lab.confirmMove(); await renderServer(); } },
+    setupCheck: (link) => app.lab.checkSetupLink(link),
+    setup: async (link) => {
+      const r = await app.lab.setupServer(link);
+      note(`server setup: ${r.done ? 'done' : r.error}`);
+      if (r.done) { setupSaid = r.done; await renderServer(); }
+      return r;
+    },
+    setupSaid: said ?? undefined,
+    saveAddress: async (url) => {
+      const r = await app.lab.setServerAddress(url);
+      if (!r.error) await renderServer();
+      return r;
+    },
+  });
+  box.dataset.fresh = '1';
+  writeStatusSoon();
+}
+
+async function openServer() {
+  show('view-server');
+  $('server').textContent = '';
+  $('server-back').focus();
+  await renderServer();
+}
+
+/** The re-pairing follow-up in the send view (2.6, DESIGN 12.7), while Lab is on and until OK. */
+async function renderRepairedBlock() {
+  const box = $('lab-repaired');
+  let r = null;
+  try { r = (await app.lab.repaired()).repaired; } catch { r = null; }
+  box.hidden = !r;
+  if (!r) { box.textContent = ''; return; }
+  renderRepaired(box, r, {
+    copy: copyText,
+    ok: async () => {
+      try { await app.lab.repairSeen(); } catch { /* shown again next time */ }
+      box.hidden = true;
+      box.textContent = '';
+      $('send-clip').focus();
+    },
+  });
+}
+
+/** Back from a Lab view: Settings, with the focus on the row that opened it. */
+function backToSettings() {
+  renderSettings({ focus: view === 'view-server' ? 'open-server' : 'open-whats' });
+}
+
 // --- start ----------------------------------------------------------------------------------------------------------
 
 function renderSend() {
@@ -561,6 +745,7 @@ function renderSend() {
   $('daylight-name').textContent = st.name || 'your Daylight';
   renderHotkey();
   renderHistory();
+  renderRepairedBlock();
 }
 
 /** The end-to-end test reads the outbox from a file (only with --e2e-status; Rust ignores this otherwise). */
@@ -591,7 +776,8 @@ function closeSettings() {
 function onKey(e) {
   if (recording) { onRecordKey(e); return; }
   if (e.key !== 'Escape' || e.defaultPrevented) return;
-  if (view === 'view-settings') closeSettings();
+  if (view === 'view-whats' || view === 'view-server') backToSettings();
+  else if (view === 'view-settings') closeSettings();
   else if (view === 'view-confirm') onConfirm(false);
   else if (view === 'view-pair' && st.paired) { renderSend(); $('open-settings').focus(); }
   else if (view === 'view-send') bridge.hideWindow().catch(() => {});
@@ -635,9 +821,15 @@ async function init() {
     if (files.length) sendFiles(files);
   });
   $('send-clip').addEventListener('click', onSendClipboard);
-  $('open-settings').addEventListener('click', renderSettings);
+  $('open-settings').addEventListener('click', () => renderSettings());
   $('close-settings').addEventListener('click', closeSettings);
   $('comfort').addEventListener('change', onComfort);
+  $('lab').addEventListener('change', onLab);
+  $('open-whats').addEventListener('click', openWhats);
+  $('open-server').addEventListener('click', openServer);
+  $('whats-back').addEventListener('click', backToSettings);
+  $('server-back').addEventListener('click', backToSettings);
+  dismissNotesOnOtherControls($('app'));
   $('repair').addEventListener('click', () => { $('code').value = ''; $('relay').value = ''; renderPair(); });
   $('pair-back').addEventListener('click', () => { renderSend(); $('open-settings').focus(); });
   $('hotkey-change').addEventListener('click', startRecording);
@@ -671,9 +863,20 @@ async function init() {
   await bridge.onTick(() => app.tick().catch(() => {}));
   await bridge.onAutostart((on) => { info.autostart = !!on; $('autostart').checked = !!on; note(`start at login ${on ? 'on' : 'off'}`); writeStatusSoon(); });
 
+  // Lab (LAB-PLAN 1.2): a missing switch means on, and the first start of a build with Lab writes it. In test mode,
+  // --e2e-lab 0|1 sets it (1.7), as a click on the switch would.
+  try {
+    await app.lab.ensureDefault();
+    if (info.e2e?.status && typeof info.e2e.lab === 'boolean') {
+      await app.lab.setLab(info.e2e.lab);
+      note(`lab ${info.e2e.lab ? 'on' : 'off'} (--e2e-lab)`);
+    }
+  } catch (e) { note(`couldn’t save the Lab switch: ${e?.message ?? e}`); }
+
   let settings = {};
   try { settings = await app.getSettings(); } catch (e) { onBadData('settings', e); }
   applyComfort(settings.comfort);
+  labIsOn = settings.lab !== false;
   await applyHotkey(settings.hotkey ?? DEFAULT_HOTKEY, { save: false });
 
   if (info.e2e?.pair) {

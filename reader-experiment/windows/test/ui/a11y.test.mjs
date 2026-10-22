@@ -84,7 +84,8 @@ test('not paired: typed-code pairing; Settings before pairing with Comfort, off 
   assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('#comfort')).transitionDuration), '0s', 'no motion');
   assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('#comfort')).borderTopWidth), '2px', '2 px borders');
   for (let i = 0; i < 20 && !(await stored(page, 'settings'))?.comfort; i++) await page.waitForTimeout(50);
-  assert.deepEqual(await stored(page, 'settings'), { comfort: true }, 'kept in the app’s settings');
+  // Next to the Lab switch, which the first start wrote (LAB-PLAN 1.2); Comfort isn't under Lab (F27).
+  assert.deepEqual(await stored(page, 'settings'), { lab: true, comfort: true }, 'kept in the app’s settings');
   await axeBoth(page, 'settings, not paired, Comfort');
   await assertNotClipped(page, 'settings, not paired, Comfort');
   await shot(page, 'settings-unpaired-comfort');

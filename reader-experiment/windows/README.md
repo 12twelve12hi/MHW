@@ -114,6 +114,55 @@ With or without Comfort:
   one under the other when their words no longer fit;
 - the pairing code can always be typed (no QR code needed), also while paired (**Change pairing…**).
 
+## Lab
+
+New features are tried out behind one **Lab** switch, the first row of **⋯ › Settings** (LAB-PLAN 1). It is **on** by
+default, also after an update from a build without Lab; turn it off for the plain app (*New features we’re trying out.
+Turn Lab off for the plain app; nothing you sent is lost.*). Off, the window is exactly the plain app's but for the
+switch and that line: it keeps the pairing, the history, the items still waiting to go and the Daylight server's
+settings, and an item already on its way still goes. The switch belongs to this PC: pairing, unpairing and re-pairing
+leave it as it is.
+
+While Lab is on, two rows under the switch open Lab's screens (**Back** or Esc returns to Settings):
+
+- **What’s in Lab ›**: the features this build has, each with a short state ("Ready", "Pair first", "Not set up", "In a
+  later update", …). The header line says whether your Daylight has confirmed Lab ("Your Daylight: Lab on · checked in 4
+  min ago", or "Needs Lab on your Daylight · checked in …"), from what Daylight Share on it says on its confirmation
+  channel; opening the screen reads that channel once. In this first Lab build (Wave 0) the list holds the one feature
+  of your own **Daylight server** that comes to Windows, **Files over 9 MB** (the other server features, Summaries
+  with Claude, Email-in and Feeds, are for the phone and browser apps). It is always shown and never greyed out:
+  clicking it when something is missing shows one sentence under it, saying what (with **Copy Server code** when there
+  is no server yet) and **OK**; screen readers say it. A ready server answers "comes to this app in a later Lab update"
+  until the feature is built here.
+- **Daylight server ›** (*Optional · Not set up*): where setup happens. It shows the server's state in full (with the
+  exact GitHub secret names), the server's address and fingerprint, the **Server code** with **Copy**, when the
+  Daylight last said hello to the server, today's AI spend, **Set up with a link**, the optional **Server address**
+  field and how to re-run the deploy. See [`../server/README.md`](../server/README.md) to turn the server on.
+  - **Set up with a link** takes the one-time setup link the deploy makes (`https://daylight-….workers.dev/setup#SETUP-…`;
+    server DESIGN 3.5). It comes right after the state while that state says to paste one (not set up, the previous
+    pairing, locked, or not recognised), else last. The link is read here first: anything else (the Server code, the
+    pairing code, another address) says why and sends nothing. Then *Use this Daylight server?* names the link's
+    address, and only **Use it** sends the server this pairing's Server code (*Setting up…*); the section then reads
+    the server again. Your other devices and your Daylight find it on their own.
+  - A server that was deployed again at a new address with the same pairing asks *Your Daylight server moved to {host}.
+    Use it?* (**Use it**, **Cancel**).
+
+The server is asked only while Lab is on (but for the lock below). An answer is used for 10 minutes; a server that doesn't answer within 5
+seconds reads as *Couldn’t reach the Daylight server* (the screen says *Checking your Daylight server…* meanwhile).
+Before this PC is paired with another Daylight, a server that knows the old pairing is locked (Lab on or off), so a lost
+or replaced pairing can't use it, and a typed Server address (the old server's) is forgotten. Afterwards, while Lab is
+on, the send view shows the locked text with the new **Server code**, **Copy** and how to re-run the deploy, under
+*Daylight server*, until **OK** (or until the new server answers).
+
+Whether Lab is on or off, the app keeps what Daylight Share says about Lab on the confirmation channel (whether it has
+Lab, what it can report, and each item's state in the Reader), so turning Lab on shows the right states at once. The
+history still reads as before in this build: the Reader's states come with the delivery timeline, in the next Lab
+build (Wave 1). The one-time "Lab is on" note waits for that build too.
+
+**Not there yet** (strings the shared copy, `LAB_TEXT`, doesn't have; reported to the share lane): the server setup
+steps in brief, and labels for the delivery mode and for the host and fingerprint line; the Server address field's
+**Save** button and `https://` placeholder are the window's own words until `LAB_TEXT` has them.
+
 ## Uninstall
 
 Quit it (right-click the icon › **Quit**), then *Settings › Apps › Installed apps › Send to Daylight › Uninstall* (or
@@ -125,7 +174,10 @@ handler and the start-at-login entry. Tick *Delete the application data* to remo
 
 Everything is encrypted on this PC with a key derived from the pairing code before it leaves; the relay sees only
 random topic names and scrambled data. The pairing, the settings and the outbox (including a copy of each item until
-the Daylight confirms it) are JSON files in `%APPDATA%\com.daylight.share.windows\store`.
+the Daylight confirms it) are JSON files in `%APPDATA%\com.daylight.share.windows\store`, as are Lab's: what the Daylight
+said about Lab (`lab~…`) and the Daylight server's address and last answer (`server~…`). The Daylight server, your own
+Cloudflare Worker, is contacted only while Lab is on, and, Lab on or off, to lock it before this PC pairs with another
+Daylight (see *Lab*).
 
 ## How it's built
 
@@ -135,23 +187,29 @@ side (`src-tauri/src/`) is kept to what a web page can't do.
 | Where | What |
 |---|---|
 | `src/core.js` | Pairing (the module's `pairingConfirmation` and `applyPairingChange`), sending, the outbox and its timers, with `daylight-share.js` (no DOM, no Tauri; unit-tested in node) |
-| `src/app.js`, `index.html`, `styles.css` | The window: pairing and its confirmation, drop zone, history, settings (Comfort among them), the hotkey recorder, the screen-reader announcements. The code and relay fields size to their text (CSS `field-sizing`, which WebView2 has had since Edge 123) |
+| `src/app.js`, `index.html`, `styles.css` | The window: pairing and its confirmation, drop zone, history, settings (Comfort and Lab among them), Lab's screens, the hotkey recorder, the screen-reader announcements. The code and relay fields size to their text (CSS `field-sizing`, which WebView2 has had since Edge 123) |
+| `src/lab.js` | Lab (no DOM, no Tauri; unit-tested in node): the switch (`settings.lab`, a missing key means on), the sender ledger fed by every ack-topic frame (`LabLedger` through the Sender's `onAckHeader`), the gates (`labGate`), the Daylight server (`DaylightServer`: discovery, status, Set up with a link, the Server address, the lock before a re-pairing) and the status file's Lab fields |
+| `src/lab-ui.js` | Lab's screens' parts (DOM only): the needs-setup note (a polite live region under the clicked control), What's in Lab (with room for Wave 1's per-feature **Use** switches), the Daylight server section, the re-pairing follow-up |
 | `src/logic.js` | Small pure helpers (status labels, MIME types, the hotkey's key names, notification texts) |
 | `src/bridge.js` | Calls into Rust; the storage adapter (one JSON file per key in the app's data folder) |
-| `build.mjs` | Copies `src/` and `../share/js/daylight-share.js` into `dist/`, which Tauri embeds |
+| `build.mjs` | Copies `src/`, `../share/js/daylight-share.js`, `../share/js/daylight-lab.js` (unchanged) and `../server/client/daylight-server.js` (with its one import pointed at the copy next to it) into `dist/`, which Tauri embeds |
 | `lab-wave.json`, `scripts/lab-wave.mjs` | The Lab wave of this code, as declared and as read from the code, for the release gate (below) |
 | `src-tauri/src/main.rs` | Tray icon and menu, the window (closing hides it), single instance (a second launch hands over its arguments: Send To files, pairing links), the clipboard hotkey, notifications, start at login, commands for the page |
 | `src-tauri/src/args.rs` | The command line: files, `daylightshare:` links, `--autostart`, test-mode options and hooks |
 | `src-tauri/src/sendto.rs` | The **Send to › Daylight** shortcut (created on the first run if the installer didn't) |
 | `src-tauri/src/store.rs`, `atomic.rs` | The page's key-value storage: each write flushed to disk, then renamed into place; a damaged file is set aside |
 | `src-tauri/windows/installer-hooks.nsh` | Installer extras: adds and removes the Send to shortcut; puts start at login back after an update |
-| `test/unit/` | Unit tests (node): `core.js` against the mock relay with a Receiver playing the Daylight, helpers, configuration |
-| `test/ui/` | The window's page (`dist/index.html`) in Chromium with a fake bridge in place of Rust (`test/helpers/ui.mjs`): the accessibility checks (below) |
+| `test/unit/` | Unit tests (node): `core.js` against the mock relay with a Receiver playing the Daylight, helpers, configuration; `lab.test.mjs`: Lab against the mock relay, a Lab Daylight (`LabInbox`) and a stand-in Daylight server (`test/helpers/fake-worker.mjs`) |
+| `test/ui/` | The window's page (`dist/index.html`) in Chromium with a fake bridge in place of Rust (`test/helpers/ui.mjs`): the accessibility checks, the Lab-off parity baselines and Lab's screens (below) |
 | `test/e2e/windows.e2e.mjs` | The end-to-end test on Windows (below) |
 
 Plugins (all used from Rust only, so the page needs no plugin permissions): single-instance, deep-link (the
-`daylightshare` scheme), global-shortcut, clipboard-manager, notification, autostart. Versions are pinned in
-`src-tauri/Cargo.toml`, `Cargo.lock` and `package-lock.json`.
+`daylightshare` scheme), global-shortcut, clipboard-manager (reading the link for the hotkey, and Lab's **Copy**),
+notification, autostart. Versions are pinned in `src-tauri/Cargo.toml`, `Cargo.lock` and `package-lock.json`.
+
+The window's CSP (`tauri.conf.json`) runs only the app's own scripts and styles. Its `connect-src` takes any `https:`
+and `http:` address, because the relay can be your own ntfy server and the Daylight server any address you type; it
+names `https://*.workers.dev`, where the deploy puts the Daylight server, as well, so a narrower list later keeps it.
 
 ### Build it yourself (on Windows)
 
@@ -175,39 +233,49 @@ uses an installed Microsoft Edge, the engine of WebView2). Icons come from the e
 ### CI and the end-to-end test
 
 [`.github/workflows/rx-windows.yml`](../../.github/workflows/rx-windows.yml) (the win lane's, LAB-PLAN 6.1: every job
-carries `# lane: win`) runs for every push that touches this folder, `share/js/` or the Lab release gate. Its jobs:
+carries `# lane: win`) runs for every push that touches this folder, `share/js/`, `server/client/` (the Daylight server's
+client module, which the build copies in) or the Lab release gate. Its jobs:
 
 - **app** (`windows-latest`): unit tests (node, and Rust's `args.rs` and `atomic.rs`), `tauri build`, then
   `test/e2e/windows.e2e.mjs` against the mock relay;
-- **ui** (`windows-latest`, so with Windows' own fonts): `test/ui/` in Playwright's Chromium, the accessibility checks
-  and the Lab-off parity baselines (below); screenshots are kept as the `rx-windows-a11y-screenshots` artifact;
+- **ui** (`windows-latest`, so with Windows' own fonts): `test/ui/` in Playwright's Chromium, the accessibility checks,
+  the Lab-off parity baselines and Lab's screens (below); screenshots are kept as the `rx-windows-a11y-screenshots`
+  artifact;
 - **publish** (after both): the Lab release gate, then the upload (below).
 
 The end-to-end test runs against the mock relay (`../share/js/mock-relay.mjs`), with `Receiver`s from
 `daylight-share.js` acting as the Daylight. Test mode is `--e2e-status <file>`: the app writes its state (pairing,
-outbox, view, the pairing question, the status line) to the file as it changes. The test hooks `--e2e-confirm`,
-`--e2e-cancel` (answer the pairing question), `--e2e-hotkey` (the hotkey's code path; pressing a global hotkey on a CI
-machine isn't practical) and `--e2e-autostart` (the tray switch) work only in an app started in test mode; otherwise
-none of these options does anything. The test:
+outbox, view, the pairing question, the status line, and Lab's: `lab`, `inboxLab`, `caps`, `checkedIn`, `labHeader`,
+`labStates`, LAB-PLAN 1.7) to the file as it changes. The test hooks `--e2e-confirm`, `--e2e-cancel` (answer the
+pairing question), `--e2e-hotkey` (the hotkey's code path; pressing a global hotkey on a CI machine isn't practical),
+`--e2e-autostart` (the tray switch) and `--e2e-lab 0|1` (sets the Lab switch at start, as a click in Settings would,
+and keeps it) work only in an app started in test mode; otherwise none of these options does anything. The test:
 
 1. installs `Send-to-Daylight-windows-setup.exe` silently and checks the Send to shortcut and the link scheme;
 2. starts the app the way a clicked link does when it isn't running, `send-to-daylight.exe "daylightshare://pair?…"`:
-   it must ask in the protocol's words, pair nothing before the answer, and stay unpaired on Cancel;
+   it must ask in the protocol's words, pair nothing before the answer, and stay unpaired on Cancel; Lab is on at this
+   first start, and saved (F00.1);
 3. hands it the same link again while it runs (a second launch, as a browser does) and answers Pair;
 4. starts the app again with files as arguments, as Send to does: a PDF, a text file and a 5 MB file arrive intact (the
    last in three pieces, each under the relay's 2 MB limit), and a file over 9 MB is refused with the library's
    sentence;
 5. puts a link on the clipboard and starts the app with `--e2e-hotkey`;
-6. waits until the status file shows all four **Delivered**, in the library's words;
+6. waits until the status file shows all four **Delivered**, in the library's words; this Daylight is a plain v1.1
+   one, so the app has heard no Lab from it and What's in Lab's header says *Needs Lab on your Daylight* (F17.2);
 7. opens another Daylight's link with the same name: the question shows the other code and **Switch**; Cancel keeps
    everything;
 8. opens the paired Daylight's link with a new relay and name: no question, *Pairing updated…*, the history kept, and
-   the next file goes through the new relay and is acked there;
+   the next file goes through the new relay and is acked there; the Daylight there is a Lab one (`daylight-lab.js`'s
+   `LabInbox`), whose hello and the file's state (`handed`) reach the app's ledger (F17), while the rows keep their
+   v1.1 words (the timeline is Wave 1);
 9. turns on start at login with `--e2e-autostart` and checks this user's Run entry;
-10. restarts the app: pairing, history and start at login come back;
-11. zero-fills `outbox.json` and deletes the Run entry, restarts: the app sets the file aside and says so, puts the Run
-    entry back, and Send To still works;
-12. updates the default way (the old uninstaller, then the installer): the Run entry, pairing and history survive;
+10. restarts the app: pairing, history, start at login and what the ledger learnt come back; then restarts it with
+    `--e2e-lab 0`: Lab is off and saved, the ledger is kept, and the status file equals the Lab-on one but for Lab's
+    own fields (a Lab-off status snapshot);
+11. zero-fills `outbox.json` and deletes the Run entry, restarts (with `--e2e-lab 1`, which turns Lab back on): the
+    app sets the file aside and says so, puts the Run entry back, and Send To still works;
+12. updates the default way (the old uninstaller, then the installer), from settings as a build without Lab left them:
+    the Run entry, pairing and history survive, and Lab is on (F00.1);
 13. opens the window (screenshot), quits and uninstalls, and checks that the shortcut, the link scheme and the
     start-at-login entry are gone.
 
@@ -241,6 +309,27 @@ links' real path.
 
 Screenshots of every view go to `test-results/a11y/` (a CI artifact, for review; not compared).
 
+### Lab checks (LAB-PLAN F00 and F17)
+
+`test/unit/lab.test.mjs` runs `src/lab.js` and `core.js` in node against the mock relay, a Lab Daylight (`LabInbox`)
+and a stand-in Daylight server (`test/helpers/fake-worker.mjs`): Lab on by default and kept across pairing changes;
+no server call with Lab off; What's in Lab's rows and short states; the gate's states (`needs-pairing`, `needs-server`
+with the Server code, `OFFLINE` at once for a refused connection and at 5 s for a relay that never answers, a server's
+own states, `later`); the server section for the vector pairing (its Server code and fingerprint, F00.5), a server
+found on the relay, a move, Set up with a link and a typed address; F17 (every ack-topic frame reaches the ledger, Lab
+on or off; a later Lab level, junk and a `lab: 0` frame are read safely; no Lab frame delays an ack); an item queued
+offline goes once back online with Lab off (F00.4); the lock before a re-pairing and its follow-up; the build's copies,
+the CSP, that the window's words are `LAB_TEXT`'s, and that the code is Wave 0 (the release gate).
+
+`test/ui/lab.test.mjs` opens the window's page as the accessibility checks do: Lab first in Settings and on by default,
+with no one-time note in this build (F00.1); a switch that can't be saved is put back; What's in Lab with short states
+only, and a click that shows exactly the feature's sentence under it, in a polite live region, with **Copy Server
+code** (F00.3); *Checking your Daylight server…*, then `OFFLINE` at 5 s (F00.6); the server section and **Copy**
+(F00.5), Set up with a link and its question, a typed address that answers Ready; no secret name or needs-setup
+sentence on any screen reached without clicking a Lab feature or opening the server section (F00.7); the re-pairing
+follow-up. axe-core finds nothing on each of them, light and dark, and with Comfort at 100%, 200% and 225% text
+nothing is clipped at the narrowest window. `test/ui/lab-off-parity.test.mjs` (above) runs axe-core with Lab off.
+
 ### Lab-off parity baselines (LAB-PLAN 1.7)
 
 `test/lab-off-baseline/*.yml` hold what the window says, as Playwright's `locator('body').ariaSnapshot()` (roles,
@@ -249,8 +338,10 @@ with a history row in every state (`main-send`, `settings`). They were recorded 
 1.1 plus the accessibility baseline with Comfort. `test/ui/lab-off-parity.test.mjs` seeds `settings.lab = false`, a
 fixed pairing and rows at fixed ages under a fixed clock, and compares; Comfort on must give the same trees (only the
 switch reads checked). With Lab off, every Lab build must still match them: only the Lab switch row in Settings and its
-footer, which stay with Lab off, may be left out (`expectBaseline(page, name, {omit})`). Re-record them only together
-with a matching non-Lab change:
+footer, which stay with Lab off, may be left out (`expectBaseline(page, name, {omit})`). Lab off is reached three ways
+(stored, the switch clicked off, `--e2e-lab 0`), and axe-core checks each Lab-off screen, light and dark, Comfort off
+and on. With Lab on, the pairing screen and the main window still equal the baselines: Wave 0's Lab lives in Settings.
+Re-record them only together with a matching non-Lab change:
 
 ```sh
 UPDATE_LAB_OFF_BASELINE=1 node --test test/ui/lab-off-parity.test.mjs

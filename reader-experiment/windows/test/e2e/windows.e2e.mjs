@@ -29,6 +29,15 @@
 //  13. starts it once more without arguments (the window opens; screenshot), quits it, uninstalls silently and checks
 //      that the shortcut, the link scheme and the start-at-login entry are gone.
 //
+// Lab (LAB-PLAN F00 and F17, Windows parts; the status file's lab, inboxLab, caps, labHeader and labStates, 1.7):
+//   - the first start has Lab on and writes it (F00.1); the Daylight on the first relay is a v1.1 Receiver, so the rows
+//     say Delivered ✓ and What's in Lab's header needs Lab on the Daylight (F17.2);
+//   - the Daylight on the second relay is a Lab Daylight (daylight-lab.js LabInbox): its hello and the moved file's
+//     state reach the app's ledger through the Sender's onAckHeader (F17), and the ledger survives a restart;
+//   - --e2e-lab 0 turns Lab off: the status file is the Lab-on one but for Lab's own fields (a Lab-off status
+//     snapshot), and the ledger is kept (1.3); --e2e-lab 1 turns it back on;
+//   - the update starts from a non-Lab build's settings (no lab key): Lab is on after it, with the pairing and history.
+//
 //   node test/e2e/windows.e2e.mjs --installer out/Send-to-Daylight-windows-setup.exe
 //   node test/e2e/windows.e2e.mjs --exe src-tauri/target/release/send-to-daylight.exe     (no install, update, uninstall)
 
@@ -43,6 +52,7 @@ import { startMockRelay } from '../../../share/js/mock-relay.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..', '..');
 const ds = await import(pathToFileURL(path.join(root, '..', 'share', 'js', 'daylight-share.js')).href);
+const L = await import(pathToFileURL(path.join(root, '..', 'share', 'js', 'daylight-lab.js')).href);
 
 const arg = (name) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : null; };
 const installer = arg('installer') && path.resolve(arg('installer'));
@@ -138,6 +148,14 @@ async function restartApp(what, extra = []) {
 
 const confirmOf = (c) => ({ title: c.title, lines: c.lines, button: c.button });
 const allDelivered = (s, n) => s.rows?.length === n && s.rows.every((r) => r.status === 'delivered');
+/** What the status file says outside Lab's own fields: a Lab-off status snapshot must equal the Lab-on one here. */
+const plainStatus = (s) => ({
+  view: s.view, paired: s.paired, name: s.name, relay: s.relay, defaultRelay: s.defaultRelay, codeStart: s.codeStart,
+  autostart: s.autostart, comfort: s.comfort, hotkey: s.hotkey, confirm: s.confirm, waiting: s.waiting,
+  rows: (s.rows ?? []).map((r) => ({ id: r.id, kind: r.kind, status: r.status, label: r.label, sentence: r.sentence, action: r.action })),
+});
+const LAB_CAPS = ['reader-link', 'st', 'tap'];
+const readSettings = () => { try { return JSON.parse(fs.readFileSync(path.join(STORE, 'settings.json'), 'utf8')); } catch { return null; } };
 const runEntry = () => (regValue(RUN_KEY, 'Send to Daylight') ?? '').trim().split('\n').pop().trim();
 const runEntryOk = (line) => line.toLowerCase().endsWith(`"${EXE}" --autostart`.toLowerCase());
 
@@ -217,7 +235,29 @@ async function main() {
   const secret = ds.generateSecret();
   const code = await ds.formatCode(secret);
   const link = await ds.pairingLink({ secret, relay: relay.url, name: 'Test Daylight' });
-  const receivers = [relay, relay2].map((r) => new ds.Receiver({ pairing: { secret, relay: r.url }, storage: new ds.MemoryStorage(), from: 'Test Daylight' }));
+  // The Daylight on relay 2 is a Lab Daylight (LAB-PLAN 2.2.4): it says hello now, and reports each item's state before
+  // it acks it (Receiver's accept runs first), so whenever the app reads an ack there, the state is already there too.
+  const labInbox = new L.LabInbox({
+    storage: new ds.MemoryStorage(), relay: new ds.RelayClient({ relay: relay2.url }), keys: await ds.deriveKeys(secret),
+    info: () => ({ lab: 1, app: 'android/1.5.0-e2e', caps: LAB_CAPS, live: false }), from: 'Test Daylight', autoFlushMs: null,
+  });
+  const hello = await labInbox.labTurnedOn();
+  check(hello.kind === 'hello' && hello.published === 1, 'the Lab Daylight on relay 2 says hello', JSON.stringify(hello));
+  // The state goes out before the ack: once nothing waits for an ack, the app stops reading the ack topic. Within 30 s
+  // of the hello, the Lab Daylight waits out the spacing between Lab frames (2.2.4), as a real one does, and so holds
+  // its ack back until then.
+  const labAccept = async ({ header }) => {
+    await labInbox.record(header.id, header.kind === 'file' ? 'handed' : 'reader', Math.floor(Date.now() / 1000));
+    let f = await labInbox.flush();
+    for (let i = 0; i < 3 && f.reason === 'spacing'; i++) {
+      await sleep(f.waitMs + 100);
+      f = await labInbox.flush();
+    }
+    console.log(`Lab Daylight: ${header.kind} ${header.id} -> ${f.kind ?? f.reason}`);
+  };
+  const receivers = [relay, relay2].map((r, i) => new ds.Receiver({
+    pairing: { secret, relay: r.url }, storage: new ds.MemoryStorage(), from: 'Test Daylight', ...(i === 1 ? { accept: labAccept } : {}),
+  }));
   const received = [];
   let polling = true;
   const pollLoop = (async () => {
@@ -236,6 +276,10 @@ async function main() {
   check(asked.confirm?.lines?.[0] === `Code starts ${code.slice(0, 4)}. Check it matches the code on your Daylight.`, 'the question shows the code’s first group');
   check(asked.confirm?.lines?.includes(`Sends through ${ds.relayHost(relay.url)}.`), 'and the relay, which isn’t ntfy.sh');
   check(asked.confirm?.button === 'Pair', 'its button reads Pair', asked.confirm?.button);
+  // F00.1: a fresh install starts with Lab on, and writes it.
+  check(asked.lab === true, 'Lab is on at the first start (F00.1)', String(asked.lab));
+  await waitFor('settings.json with the Lab switch', () => readSettings()?.lab === true, { timeout: 15000 }).catch(() => {});
+  check(readSettings()?.lab === true, 'and the first start writes it to the settings', JSON.stringify(readSettings()));
   await sleep(1500);
   check(readStatus()?.paired === false, 'nothing is paired before the answer');
   check(asked.version && asked.version !== '0', 'reports its version', asked.version);
@@ -324,6 +368,9 @@ async function main() {
   check(done.rows.length === 4, 'exactly four items in the history (the refused one isn’t)', String(done.rows.length));
   check(received.length === 4, 'the Daylight got each item once', String(received.length));
   const ids = done.rows.map((r) => r.id);
+  // F17.2: a v1.1 Daylight never says hello: Delivered ✓ rows (above), and What's in Lab's header needs Lab on it.
+  check(done.inboxLab === false && isDeepStrictEqual(done.caps, []), 'no Lab heard from a v1.1 Daylight', `${done.inboxLab} ${JSON.stringify(done.caps)}`);
+  check(/^Needs Lab on your Daylight · checked in /.test(done.labHeader ?? ''), 'What’s in Lab’s header needs Lab on the Daylight, with the check-in time (F17.2)', done.labHeader);
 
   // --- 7. another Daylight's link: asks, Cancel keeps everything ------------------------------------------------------
   step('Another Daylight’s link, with the same name: it asks and says it replaces this one; Cancel keeps everything');
@@ -361,6 +408,14 @@ async function main() {
   check(after.via === 2 && Buffer.from(after.content).equals(afterBytes), 'a file sent next goes through the new relay, intact', `via relay ${after.via}`);
   const five = await waitStatus('Delivered through the new relay', (s) => allDelivered(s, 5), { timeout: 120000, every: 1000 }).catch(() => readStatus());
   check(allDelivered(five, 5), 'and is acked there: five Delivered', JSON.stringify(five?.rows?.map((r) => r.status)));
+  // F17: the Lab Daylight's hello and the file's state reached the ledger through the Sender's onAckHeader.
+  const afterRow = (five?.rows ?? []).find((r) => r.name === 'After the move.txt');
+  const learnt = await waitStatus('the Lab Daylight in the ledger', (s) => s.inboxLab === true && s.labStates?.[afterRow?.id]?.s === 'handed', { timeout: 30000 })
+    .catch(() => readStatus() ?? {});
+  check(learnt.inboxLab === true && isDeepStrictEqual(learnt.caps, LAB_CAPS), 'the Lab Daylight’s hello is in the ledger, with its caps (F17)', `${learnt.inboxLab} ${JSON.stringify(learnt.caps)}`);
+  check(/^Your Daylight: Lab on · checked in /.test(learnt.labHeader ?? ''), 'What’s in Lab’s header says Lab is on the Daylight', learnt.labHeader);
+  check(learnt.labStates?.[afterRow?.id]?.s === 'handed', 'the file’s state from the Daylight is in the ledger: handed', JSON.stringify(learnt.labStates));
+  check((learnt.rows ?? []).every((r) => r.label === words.label), 'Wave 0 keeps the rows’ v1.1 words (the timeline is Wave 1)', JSON.stringify(learnt.rows?.map((r) => r.label)));
 
   // --- 9. start at login ------------------------------------------------------------------------------------------
   step('Start at login: the tray menu’s switch (test hook --e2e-autostart)');
@@ -381,6 +436,17 @@ async function main() {
   check(back.view === 'view-send', 'it shows the send view', back.view);
   check(allDelivered(back, 5), 'the five rows are kept, Delivered', JSON.stringify(back.rows?.map((r) => r.status)));
   check(back.autostart === true, 'start at login is still on');
+  check(back.lab === true && back.inboxLab === true && back.labStates?.[afterRow?.id]?.s === 'handed', 'Lab is on and the ledger is kept across the restart',
+    `${back.lab} ${back.inboxLab}`);
+
+  // --- 10b. Lab off ----------------------------------------------------------------------------------------------------
+  step('Lab off (--e2e-lab 0): the status is the Lab-on one but for Lab’s own fields; the ledger is kept');
+  const off = await restartApp('the app to start with Lab off', ['--e2e-lab', '0']);
+  check(off.lab === false, 'the status file says Lab is off', String(off.lab));
+  check(readSettings()?.lab === false, 'and the switch is saved off, as a click would', JSON.stringify(readSettings()));
+  check(isDeepStrictEqual(plainStatus(off), plainStatus(back)), 'everything else equals the Lab-on status (a Lab-off status snapshot)',
+    JSON.stringify(plainStatus(off)));
+  check(fs.existsSync(path.join(STORE, 'lab~inbox.json')) && off.inboxLab === true, 'Lab off deletes nothing: the ledger is kept (LAB-PLAN 1.3)');
 
   // --- 11. a damaged outbox and a missing Run entry ----------------------------------------------------------------------
   step('A zero-filled outbox.json (as a power cut can leave it) and no Run entry: the app starts and carries on');
@@ -389,7 +455,8 @@ async function main() {
   fs.writeFileSync(path.join(STORE, 'outbox.json'), Buffer.alloc(4096));
   spawnSync('reg', ['delete', RUN_KEY, '/v', 'Send to Daylight', '/f'], { stdio: 'ignore' });
   check(!regValue(RUN_KEY, 'Send to Daylight'), 'the Run entry is gone (what an update’s uninstall step does)');
-  const damaged = await restartApp('the app to start over the damage');
+  const damaged = await restartApp('the app to start over the damage', ['--e2e-lab', '1']);
+  check(damaged.lab === true && readSettings()?.lab === true, '--e2e-lab 1 turns Lab back on', String(damaged.lab));
   await waitStatus('it to say so', (s) => /history couldn’t be read/.test(s.statusText ?? ''), { timeout: 10000 }).catch(() => {});
   const d = readStatus() ?? damaged;
   check(d.view === 'view-send' && d.paired, 'it starts and shows the send view, still paired', d.view);
@@ -419,6 +486,9 @@ async function main() {
     await waitFor('the uninstall to finish', () => !fs.existsSync(EXE) && !fs.existsSync(SENDTO), { timeout: 90000 }).catch(() => {});
     check(!regValue(RUN_KEY, 'Send to Daylight'), 'it removes the Run entry (as it always has)');
     check(fs.existsSync(AUTOSTART_MARKER) && fs.existsSync(path.join(STORE, 'pairing.json')), 'and keeps the data folder');
+    // Settings as the last non-Lab build left them: no lab key (F00.1, an upgrade).
+    const { lab: _lab, ...nonLab } = readSettings() ?? {};
+    fs.writeFileSync(path.join(STORE, 'settings.json'), JSON.stringify(nonLab));
     const re = spawnSync(installer, ['/S'], { timeout: 240000, stdio: 'inherit' });
     must(re.status === 0, 'the new installer finishes', re.error ? String(re.error) : `exit ${re.status}`);
     await waitFor('the installed app', () => fs.existsSync(EXE), { timeout: 60000 });
@@ -427,6 +497,7 @@ async function main() {
     const updated = await restartApp('the updated app to start');
     check(updated.paired && updated.name === 'Desk Daylight' && allDelivered(updated, 1), 'the pairing and the history are kept', `${updated.name}, ${updated.rows?.length} rows`);
     check(updated.autostart === true, 'start at login is on');
+    check(updated.lab === true && readSettings()?.lab === true, 'an upgrade from a non-Lab build has Lab on, and writes it (F00.1)', JSON.stringify(readSettings()));
   }
 
   // --- 13. window, quit, uninstall ---------------------------------------------------------------------------------

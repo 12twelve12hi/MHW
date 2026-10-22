@@ -67,6 +67,8 @@ enum Action {
 struct E2e {
     pair: Option<String>,
     status: Option<PathBuf>,
+    /// `--e2e-lab 0|1` (LAB-PLAN 1.7): kept only when the app was started in test mode.
+    lab: Option<bool>,
 }
 
 #[derive(Default)]
@@ -161,6 +163,7 @@ fn handle_launch(app: &AppHandle, launch: args::Launch, forwarded: bool) {
 struct E2eInfo {
     pair: Option<String>,
     status: bool,
+    lab: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -178,7 +181,7 @@ fn app_info(app: AppHandle) -> Info {
     let send_to = st.send_to.lock().unwrap().clone();
     Info {
         version: app.package_info().version.to_string(),
-        e2e: E2eInfo { pair: st.e2e.pair.clone(), status: st.e2e.status.is_some() },
+        e2e: E2eInfo { pair: st.e2e.pair.clone(), status: st.e2e.status.is_some(), lab: st.e2e.lab },
         send_to,
         autostart: app.autolaunch().is_enabled().unwrap_or(false),
     }
@@ -224,6 +227,12 @@ async fn read_file(app: AppHandle, path: String, max: Option<u64>) -> Result<tau
 #[tauri::command]
 fn read_clipboard(app: AppHandle) -> Result<String, String> {
     app.clipboard().read_text().map_err(|e| e.to_string())
+}
+
+/// Lab's Copy (the Server code, LAB-PLAN 2.6): the clipboard from Rust, which needs no focus or permission in WebView2.
+#[tauri::command]
+fn write_clipboard(app: AppHandle, text: String) -> Result<(), String> {
+    app.clipboard().write_text(text).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -423,7 +432,11 @@ fn main() {
     let argv: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
     let cwd = std::env::current_dir().unwrap_or_default();
     let launch = args::parse(&argv, &cwd);
-    let e2e = E2e { pair: launch.e2e_pair.clone(), status: launch.e2e_status.clone() };
+    let e2e = E2e {
+        pair: launch.e2e_pair.clone(),
+        status: launch.e2e_status.clone(),
+        lab: if launch.is_e2e() { launch.e2e_lab } else { None },
+    };
 
     let app = tauri::Builder::default()
         // First: a second launch hands its arguments to this one and exits.
@@ -450,6 +463,7 @@ fn main() {
             take_actions,
             read_file,
             read_clipboard,
+            write_clipboard,
             notify,
             show_window,
             hide_window,

@@ -28,6 +28,9 @@ pub struct Launch {
     /// Test hooks: press the pairing question's button, or Cancel (only a running app in test mode honours them).
     pub e2e_confirm: bool,
     pub e2e_cancel: bool,
+    /// Test mode: `--e2e-lab 0|1` sets the Lab switch (LAB-PLAN 1.7) before the window draws, as the user would in
+    /// Settings, and keeps it. Read at start, and only by an app started in test mode; any other value is ignored.
+    pub e2e_lab: Option<bool>,
 }
 
 impl Launch {
@@ -86,6 +89,13 @@ pub fn parse<S: AsRef<str>>(args: &[S], cwd: &Path) -> Launch {
                 "e2e-autostart" => out.e2e_autostart = true,
                 "e2e-confirm" => out.e2e_confirm = true,
                 "e2e-cancel" => out.e2e_cancel = true,
+                "e2e-lab" => {
+                    out.e2e_lab = match value().as_deref().map(str::trim) {
+                        Some("1") => Some(true),
+                        Some("0") => Some(false),
+                        _ => None,
+                    }
+                }
                 _ => {}
             }
             continue;
@@ -167,6 +177,22 @@ mod tests {
         assert_eq!(l.links, vec![link.to_string()]);
         assert_eq!(l.e2e_status, Some(cwd().join("s.json")));
         assert_eq!(l.e2e_pair, None, "a link is never paired headlessly");
+    }
+
+    /// LAB-PLAN 1.7: `--e2e-lab 0|1` in test mode; nothing else sets it, and it pairs or sends nothing.
+    #[test]
+    fn lab_switch_for_tests() {
+        let on = parse(&["--e2e-status", "s.json", "--e2e-lab", "1"], &cwd());
+        assert_eq!(on.e2e_lab, Some(true));
+        assert!(on.is_e2e() && on.is_plain() && on.paths.is_empty());
+        assert_eq!(parse(&["--e2e-lab=0", "--e2e-status=s.json"], &cwd()).e2e_lab, Some(false));
+        assert_eq!(parse(&["--e2e-lab", "yes"], &cwd()).e2e_lab, None);
+        assert_eq!(parse(&["--e2e-lab"], &cwd()).e2e_lab, None);
+        assert_eq!(parse(&["file.pdf"], &cwd()).e2e_lab, None);
+        // Its value is taken as the option's, never as a file to send.
+        let l = parse(&["--e2e-lab", "0", "notes.txt"], &cwd());
+        assert_eq!(l.e2e_lab, Some(false));
+        assert_eq!(l.paths, vec![cwd().join("notes.txt")]);
     }
 
     #[test]

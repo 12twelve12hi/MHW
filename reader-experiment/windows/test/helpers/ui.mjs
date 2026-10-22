@@ -48,7 +48,7 @@ export const OTHER_SECRET = Uint8Array.from({ length: 16 }, (_, i) => (i * 53 + 
 export function appInfo(over = {}) {
   return {
     version: '1.1.0',
-    e2e: { pair: null, status: false },
+    e2e: { pair: null, status: false, lab: null },
     sendTo: { path: 'C:\\Users\\you\\AppData\\Roaming\\Microsoft\\Windows\\SendTo\\Daylight.lnk', exists: true, error: '' },
     autostart: false,
     ...over,
@@ -60,7 +60,7 @@ function fakeTauri(seed) {
   const kv = new Map(Object.entries(seed.kv ?? {}));
   const listeners = {};
   const fake = {
-    kv, listeners, calls: [], actions: [], notes: [], info: seed.info,
+    kv, listeners, calls: [], actions: [], notes: [], clipboard: [], info: seed.info,
     emit(name, payload = null) { for (const fn of listeners[name] ?? []) fn({ event: name, payload }); },
     /** An action from outside the window (Send To, the hotkey…): queued as Rust does, then the window is woken. */
     queue(a) { fake.actions.push(a); fake.emit('dls://wake'); },
@@ -79,6 +79,11 @@ function fakeTauri(seed) {
     kv_set_aside: ({ key }) => { kv.delete(key); return null; },
     read_file: () => { throw 'Couldn’t open it (not found).'; },
     read_clipboard: () => seed.clipboard ?? '',
+    write_clipboard: ({ text }) => {
+      if (seed.failClipboard) throw 'The clipboard is in use by another app.';
+      fake.clipboard.push(text);
+      return null;
+    },
     notify: ({ title, body }) => { fake.notes.push({ title, body }); return null; },
     show_window: () => null,
     hide_window: () => null,
@@ -137,12 +142,14 @@ export async function startUi() {
   const browser = await chromium.launch({ channel: process.env.DLS_UI_CHANNEL || undefined, headless: !process.env.HEADED });
 
   /**
-   * A window on the page. seed: {kv: {key: JSON text}, info, clipboard, failWrites: [keys]}; width (default the
+   * A window on the page. seed: {kv: {key: JSON text}, info, clipboard, failWrites: [keys], failClipboard}; width (default the
    * narrowest), height, colorScheme, now (a fixed Date.now(), for times that read the same every run).
    * -> the page, once the app has drawn its first view (body[data-ready="1"]); page.errors collects page errors.
    */
   async function open({ width = NARROWEST, height = 640, colorScheme = 'light', now = null, ...seed } = {}) {
     const context = await browser.newContext({ viewport: { width, height }, colorScheme, reducedMotion: 'no-preference' });
+    // The tests never reach the real relay (a pairing on ntfy.sh, such as the vectors', finds it offline).
+    await context.route('https://ntfy.sh/**', (r) => r.abort('internetdisconnected'));
     const page = await context.newPage();
     page.errors = [];
     page.on('pageerror', (e) => page.errors.push(String(e?.message ?? e)));
