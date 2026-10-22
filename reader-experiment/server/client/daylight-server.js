@@ -55,7 +55,7 @@ export const STATE_MESSAGES = {
   'needs-key': 'Needs a Claude API key. Add ANTHROPIC_API_KEY to the Daylight server (GitHub › Settings › Secrets), then re-run the deploy, to turn this on.',
   'needs-domain': 'Needs an email domain. Add DAYLIGHT_EMAIL_DOMAIN (a domain on your Cloudflare account) in GitHub › Settings › Secrets, then re-run the deploy.',
   'needs-r2': 'Needs R2 storage on your Cloudflare account. Turn on R2 in the Cloudflare dashboard (it asks for a card; the free tier isn’t charged), then re-run the deploy.',
-  'needs-lab-inbox': 'Needs Lab on your Daylight. Turn on Lab in Daylight Share on the Daylight to receive this.',
+  'needs-lab-inbox': 'Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on.',
   'needs-paid': 'Email-in needs Cloudflare’s Workers Paid plan. Subscribe in the Cloudflare dashboard, set the variable DAYLIGHT_WORKERS_PLAN to paid in GitHub › Settings, then re-run the deploy.',
   OFFLINE: 'Couldn’t reach the Daylight server. Check your connection and try again.',
 };

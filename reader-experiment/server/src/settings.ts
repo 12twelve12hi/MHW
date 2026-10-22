@@ -5,7 +5,12 @@ import { HOUR } from './env.ts';
 
 export interface DigestSettings { hour: number; tz: string }
 export interface Lock { fingerprint: string; at: number }
-export interface InboxSeen { lastSeen: number; app?: string }
+/**
+ * The Lab Inbox's presence on the delivery mode's ack topic (5.5). `lastSeen`: the last valid frame there. `pubs`: per
+ * publisher (the part of x-inbox.app before the first '/': android, reader-lab, other; LAB-PLAN 2.2.6), the last
+ * frame with x-inbox, and whether it said `lab: 0` (Lab turned off). Older rows have no `pubs`.
+ */
+export interface InboxSeen { lastSeen: number; app?: string; pubs?: Record<string, { at: number; off?: true }> }
 export interface ConfigState { slot: number; origin: string; delivery: string; at: number; status: number; id?: string }
 export interface RelayState { lastStatus: number; lastPublish: number; fails: number; retryAt: number }
 export interface AiError { code: string; keyFp: string; at: number }
@@ -17,7 +22,7 @@ export interface Settings {
   ai?: { dailyUsd: number };
   ackSince?: string;
   ackAt?: number;
-  inbox?: InboxSeen;
+  inbox?: InboxSeen | null;
   config?: ConfigState | null;
   relay?: RelayState;
   cleanupAt?: number;
@@ -98,6 +103,42 @@ export async function saveSettings(ctx: Ctx, values: Partial<Settings>): Promise
 /** Past 400 MB of D1 (80 % of 500 MB) optional writes pause: new feed entries, text sources and mail rows (11.1). */
 export function d1Paused(ctx: Ctx, s: Pick<Settings, 'd1Bytes'>): boolean {
   return (Number(s.d1Bytes) || 0) > ctx.limits.d1PauseBytes;
+}
+
+/**
+ * Whether the Lab Inbox is present (5.5): a valid frame was seen and, once any frame carried x-inbox, some publisher's
+ * latest x-inbox is not `lab: 0`. Delivering features answer needs-lab-inbox without it (Lab delivery only).
+ */
+export function inboxPresent(s: Pick<Settings, 'inbox'>): boolean {
+  const i = s.inbox;
+  if (!i || !i.lastSeen) return false;
+  const pubs = i.pubs && typeof i.pubs === 'object' ? Object.values(i.pubs) : [];
+  return !pubs.length || pubs.some((p) => !p?.off);
+}
+
+const PUBLISHERS = ['android', 'reader-lab'];
+
+/** x-inbox.app as LAB-PLAN 2.2.5 reads it: printable ASCII, its first 60 characters; anything else is "". */
+export function inboxApp(app: unknown): string {
+  return typeof app === 'string' && /^[\x20-\x7e]*$/.test(app) ? app.slice(0, 60) : '';
+}
+
+/**
+ * The presence after one valid frame on the ack topic at `now`. `xi` is the frame's x-inbox object, or null. With
+ * x-inbox, the frame replaces its publisher's entry; `lab` exactly 0 (a JSON number, -0 included) marks it off. A frame
+ * without x-inbox (a plain ack) only refreshes `lastSeen`.
+ */
+export function inboxAfter(prev: InboxSeen | null | undefined, now: number, xi: Record<string, unknown> | null): InboxSeen {
+  const out: InboxSeen = { lastSeen: now };
+  const app = xi ? inboxApp(xi.app) : prev?.app;
+  if (app !== undefined) out.app = app;
+  const pubs = { ...(prev?.pubs && typeof prev.pubs === 'object' ? prev.pubs : {}) };
+  if (xi) {
+    const head = (app ?? '').split('/')[0];
+    pubs[PUBLISHERS.includes(head) ? head : 'other'] = xi.lab === 0 ? { at: now, off: true } : { at: now };
+  }
+  if (Object.keys(pubs).length) out.pubs = pubs;
+  return out;
 }
 
 export function isLocked(s: Settings, fingerprint: string): boolean {

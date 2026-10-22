@@ -60,7 +60,7 @@ Every server feature is a normal, enabled control in Lab. Tapping one that is no
 | needs-key | Needs a Claude API key. Add ANTHROPIC_API_KEY to the Daylight server (GitHub › Settings › Secrets), then re-run the deploy, to turn this on. |
 | needs-r2 | Needs R2 storage on your Cloudflare account. Turn on R2 in the Cloudflare dashboard (it asks for a card; the free tier isn't charged), then re-run the deploy. |
 | needs-domain | Needs an email domain. Add DAYLIGHT_EMAIL_DOMAIN (a domain on your Cloudflare account) in GitHub › Settings › Secrets, then re-run the deploy. |
-| needs-lab-inbox | Needs Lab on your Daylight. Turn on Lab in Daylight Share on the Daylight to receive this. |
+| needs-lab-inbox | Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on. |
 | needs-paid | Email-in needs Cloudflare's Workers Paid plan. Subscribe in the Cloudflare dashboard, set the variable DAYLIGHT_WORKERS_PLAN to paid in GitHub › Settings, then re-run the deploy. |
 | pairing-mismatch | The Daylight server still has your previous pairing. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy. |
 | locked | The Daylight server was locked when this device was re-paired. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy. |
@@ -84,8 +84,9 @@ text for them. The full table is DESIGN.md section 14 and `ERROR_MESSAGES` in th
 - Swift and Kotlin port this W0 subset under the same names and pass `vectors/server-vectors.json`, including its
   `serverState` section (status JSON or the server's answer in, `{state, message}` and the cache effect out, with
   `NOT_CONFIGURED`'s order: `DAYLIGHT_SERVER_CODE`, `DAYLIGHT_EMAIL_DOMAIN`, `R2`).
-- Lab frames (`ids: []` with `x-inbox`, maybe `x-st`) on the pairing ack topic deliver nothing on the server or in
-  the hosted outbox (`files.tick`); under v1 delivery they count as the Lab Inbox's presence, which nothing gates on.
+- Lab frames (`ids: []` with `x-inbox`, maybe `x-st`) deliver nothing on the server (on either ack topic) or in the
+  hosted outbox (`files.tick`). They are the Lab Inbox's presence; `x-inbox.lab: 0` ends it for its publisher
+  (DESIGN 5.5). Lab delivery's features answer `needs-lab-inbox` without it; v1 delivery never gates on it.
 
 ## HTTP API (summary)
 

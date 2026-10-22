@@ -6,7 +6,7 @@ import { iso, nextUtcMidnight, utcDay } from './env.ts';
 import type { Identity } from './keys.ts';
 import { ServerError, json } from './errors.ts';
 import type { Settings } from './settings.ts';
-import { DEFAULT_AI_USD, d1Paused, digestSettings, saveStmt, validTz } from './settings.ts';
+import { DEFAULT_AI_USD, d1Paused, digestSettings, inboxPresent, saveStmt, validTz } from './settings.ts';
 import { mailCounts, mailCountsSql } from './email.ts';
 
 export interface FeatureState { state: string; message?: string }
@@ -27,7 +27,7 @@ const st = (state: string): FeatureState => (state === 'ready' ? { state } : { s
 
 /** A feature's state as the server decides it. `aiKeyFp` is the fingerprint of the current key (to ignore stale errors). */
 export function featureState(ctx: Ctx, id: Identity, s: Settings, feature: string, aiKeyFp = ''): FeatureState {
-  const labNoInbox = id.delivery.mode === 'lab' && !s.inbox?.lastSeen;
+  const labNoInbox = id.delivery.mode === 'lab' && !inboxPresent(s);
   const aiErr = s.aiError && (!aiKeyFp || s.aiError.keyFp === aiKeyFp) ? s.aiError : null;
   switch (feature) {
     case 'ai':
@@ -84,7 +84,7 @@ export async function status(ctx: Ctx, id: Identity, s: Settings): Promise<Respo
   return json(ctx.rid, 200, {
     server: id.serverUrl, api: SERVER_API, fingerprint: id.values.fingerprint, delivery: id.delivery.mode,
     version: ctx.env.GIT_SHA || 'dev', plan: ctx.plan,
-    inbox: { lab: !!s.inbox?.lastSeen, lastSeen: s.inbox?.lastSeen ? iso(s.inbox.lastSeen) : null },
+    inbox: { lab: inboxPresent(s), lastSeen: s.inbox?.lastSeen ? iso(s.inbox.lastSeen) : null },
     features,
     usage: {
       ai: {

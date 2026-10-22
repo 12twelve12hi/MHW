@@ -447,7 +447,7 @@
         },
         "expect": {
           "state": "needs-lab-inbox",
-          "message": "Needs Lab on your Daylight. Turn on Lab in Daylight Share on the Daylight to receive this."
+          "message": "Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on."
         }
       },
       {
@@ -816,7 +816,7 @@
         },
         "expect": {
           "state": "needs-lab-inbox",
-          "message": "Needs Lab on your Daylight. Turn on Lab in Daylight Share on the Daylight to receive this."
+          "message": "Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on."
         }
       },
       {
@@ -1756,7 +1756,7 @@
         "feature": "ai",
         "response": {
           "status": 409,
-          "body": "{\"error\":{\"code\":\"NEEDS_LAB_INBOX\",\"message\":\"Needs Lab on your Daylight. Turn on Lab in Daylight Share on the Daylight to receive this.\",\"feature\":\"deliver\"}}"
+          "body": "{\"error\":{\"code\":\"NEEDS_LAB_INBOX\",\"message\":\"Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on.\",\"feature\":\"deliver\"}}"
         },
         "error": {
           "code": "NEEDS_LAB_INBOX",
@@ -1765,7 +1765,7 @@
         },
         "expect": {
           "state": "needs-lab-inbox",
-          "message": "Needs Lab on your Daylight. Turn on Lab in Daylight Share on the Daylight to receive this."
+          "message": "Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on."
         },
         "noteError": {
           "cache": "updated",
@@ -1786,7 +1786,7 @@
         },
         "expect": {
           "state": "needs-lab-inbox",
-          "message": "Needs Lab on your Daylight. Turn on Lab in Daylight Share on the Daylight to receive this."
+          "message": "Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on."
         },
         "noteError": {
           "cache": "updated",

@@ -7,7 +7,7 @@ import { randomHex, utcDay, logCode } from './env.ts';
 import type { Identity } from './keys.ts';
 import { publishAttach, publishSmall, poll } from './relay.ts';
 import type { Settings } from './settings.ts';
-import { relayAfter, saveStmt } from './settings.ts';
+import { inboxAfter, relayAfter, saveStmt } from './settings.ts';
 import { ServerError } from './errors.ts';
 
 export const SMALL_B64 = 3800;
@@ -238,10 +238,13 @@ export async function pollAcks(ctx: Ctx, id: Identity, s: Settings): Promise<{ d
     junk = 0;
     if (header.kind !== 'ack' || !Array.isArray(header.ids)) continue;
     for (const x of (header.ids as unknown[]).slice(0, 280)) if (typeof x === 'string' && ID32.test(x)) ids.add(x);
-    const xi = header['x-inbox'] as { app?: unknown } | undefined;
+    // Presence (5.5): in Lab mode any frame that opens; in v1 mode only Lab frames (with x-inbox). x-inbox.lab === 0
+    // (Lab turned off on the Daylight) ends its publisher's presence; `app` keeps the 60-character clamp.
+    const raw = header['x-inbox'];
+    const xi = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
     if (xi || id.delivery.mode === 'lab') {
       hello = hello || !!xi;
-      inbox = { lastSeen: ctx.now, app: typeof xi?.app === 'string' ? xi.app.slice(0, 60) : inbox?.app };
+      inbox = inboxAfter(inbox, ctx.now, xi);
     }
   }
   const list = JSON.stringify([...ids]);

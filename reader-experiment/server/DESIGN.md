@@ -383,7 +383,7 @@ Encoding: `deflate-raw` only for pages of at most 1 MiB (cheap enough on Free); 
 | Topic | `itemTopic` | the pairing's inbox topic |
 | Acks read from | `ackTopic` (`boxKey`, `dlshare/v1/server-ack`) | the pairing's ack topic (pairing key, `dlshare/v1/ack`) |
 | Who receives | The DC-1 Lab Inbox's server lane (5.5) | Any Inbox |
-| Before a Lab Inbox has said hello | Delivering features answer `needs-lab-inbox` (14.1); AI results still go to the app | Not applicable |
+| Without the Lab Inbox's presence (5.5) | Delivering features answer `needs-lab-inbox` (14.1); AI results still go to the app | Not applicable |
 
 Everything else is identical: building, storage, publishing, re-sending and ack handling. One function returns the
 mode's `{seal, topic, ackTopic, openAck}`, and the integration tests run every delivery test in both modes.
@@ -448,17 +448,33 @@ The Lab Inbox derives `seed` from its pairing (3.2) and then:
 
 The server records `inbox.lastSeen` from any valid frame on `ackTopic`. Presence is an explicit event from the
 Inbox's own code path. It is never inferred from API calls, and delivery never depends on it: items are published to
-`itemTopic` either way. It only decides whether delivering features show `needs-lab-inbox` before the first hello.
-Forging a hello or an ack needs `boxKey`, which only the server and paired devices can derive. The worst a forged ack
-does is stop re-sends of an item early.
+`itemTopic` either way. It only decides whether delivering features show `needs-lab-inbox`. Forging a hello or an ack
+needs `boxKey`, which only the server and paired devices can derive. The worst a forged ack does is stop re-sends of
+an item early.
 
-**Lab frames on the pairing ack topic (v1 delivery).** Under v1 delivery the server reads its acks from the pairing's
-ack topic, where a Lab Inbox also publishes its Lab frames (LAB-PLAN 2.2.1): ack frames with `ids: []` and `x-inbox`
-(the hello, and the frame with `lab: 0` sent when Lab is turned off), some with `x-st` item states. `pollAcks` reads
-only `ids`, so these frames deliver nothing and change no outbox row, even when `x-st` names the server's own items.
-Like any frame with `x-inbox` they count as presence (`inbox.lastSeen`, and `app` clamped to 60 characters). That is
-harmless: v1 delivery never gates on presence, and every Inbox receives its items. `test/worker-outbox.test.mjs` pins
-this. Wave S (LAB-PLAN 4.2, S0) adds the server ack topic in Lab mode, where `x-inbox.lab === 0` ends presence.
+**Lab frames and the end of presence (S0, LAB-PLAN 4.2).** The Lab Inbox's server lane publishes on `ackTopic` the
+same Lab frames it publishes on the pairing ack topic (LAB-PLAN 2.2.1): ack frames with `ids: []` and `x-inbox`
+exactly as `buildInboxInfo` makes it (the hello, and the frame with `lab: 0` sent when Lab is turned off), some with
+`x-st` item states. `pollAcks` reads only `ids` for delivery, so these frames deliver nothing and change no outbox row,
+even when `x-st` names the server's own items. For presence it keeps, per publisher (the part of `x-inbox.app` before
+the first `/`: `android`, `reader-lab`, anything else `other`, as LAB-PLAN 2.2.6 counts them), the last frame with
+`x-inbox`:
+
+- `x-inbox.lab` exactly `0` (a JSON number) marks that publisher off; any other `x-inbox` marks it on. So during a
+  handover (LAB-PLAN 5.3.4), the Lab Reader's hello keeps the presence when Daylight Share turns Lab off.
+- The Inbox is present when a valid frame was seen and, once any frame carried `x-inbox`, some publisher is on. A
+  frame without `x-inbox` (a plain ack) refreshes `inbox.lastSeen` but does not undo a `lab: 0`; before any hello it
+  counts as presence, as it always did.
+- `app` is clamped as LAB-PLAN 2.2.5 reads it: printable ASCII, its first 60 characters; anything else is `""`.
+- `GET /v1/status` reports `inbox.lab` (present) and `inbox.lastSeen` (the last valid frame, also after `lab: 0`).
+- The ack topic is polled every 30 minutes while an item awaits its ack or the Inbox is not present, and every 6 hours
+  otherwise, so a `lab: 0` is noticed within 6 hours. The Inbox repeats it for 48 hours (LAB-PLAN 2.2.4).
+- A new Server code (3.4) clears the presence: the new pairing's Inbox says hello on the new `ackTopic`.
+
+**Under v1 delivery** the server reads its acks from the pairing's ack topic, where a Lab Inbox publishes the same Lab
+frames. The same rules apply: they deliver nothing, only frames with `x-inbox` count as presence, and `lab: 0` ends
+it. That is harmless: v1 delivery never gates on presence, and every Inbox receives its items.
+`test/worker-outbox.test.mjs` pins both modes.
 
 ---
 
@@ -2000,7 +2016,7 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
 | `needs-key` | server | Needs a Claude API key. Add ANTHROPIC_API_KEY to the Daylight server (GitHub › Settings › Secrets), then re-run the deploy, to turn this on. |
 | `needs-domain` | server | Needs an email domain. Add DAYLIGHT_EMAIL_DOMAIN (a domain on your Cloudflare account) in GitHub › Settings › Secrets, then re-run the deploy. |
 | `needs-r2` | server | Needs R2 storage on your Cloudflare account. Turn on R2 in the Cloudflare dashboard (it asks for a card; the free tier isn't charged), then re-run the deploy. |
-| `needs-lab-inbox` | server | Needs Lab on your Daylight. Turn on Lab in Daylight Share on the Daylight to receive this. |
+| `needs-lab-inbox` | server | Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on. (LAB-PLAN 1.6's text, since S0.) |
 | `needs-paid` | server | Email-in needs Cloudflare's Workers Paid plan. Subscribe in the Cloudflare dashboard, set the variable DAYLIGHT_WORKERS_PLAN to paid in GitHub › Settings, then re-run the deploy. |
 | `error` | server | The server's `message` for the recorded code (e.g. `AI_KEY_INVALID`). A state in `GET /v1/status` that is not in this table's server rows (a newer server's, or one the app decides) is shown as `error` too. |
 | `OFFLINE` (network) | app | Couldn't reach the Daylight server. Check your connection and try again. |
@@ -2123,9 +2139,12 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
     - OPML import.
   - **Outbox**: inline and hosted frames, re-send at 11 h, ack handling, both delivery modes, and the ntfy budget.
     Junk on the ack topic (attachments, 1,000 messages, 300 KiB) is ignored within the caps. The Lab Inbox's hello
-    sets `inbox.lastSeen`. Under v1 delivery, Lab frames on the pairing ack topic (a hello, `x-st` naming the
-    server's own items, 24 states, `lab: 0`) deliver nothing and change no row, and the Inbox's own acks after them
-    still deliver (5.5). The client's `noteError` against the Worker's `NEEDS_LAB_INBOX`.
+    sets `inbox.lastSeen`. In Lab mode (S0), Lab frames on the server ack topic (a hello, `x-st` naming the server's
+    own items, 24 states) deliver nothing and change no row; `lab: 0` ends the presence (`needs-lab-inbox` again,
+    `NEEDS_LAB_INBOX` for AI delivery) while items still go out and the lane's acks still deliver them; a later
+    hello brings it back, and during a handover one publisher's `lab: 0` leaves the other's presence. Under v1
+    delivery, the same frames on the pairing ack topic deliver nothing, `lab: 0` ends the presence, nothing gates on
+    it, and the Inbox's own acks after them still deliver (5.5). The client's `noteError` against the Worker's `NEEDS_LAB_INBOX`.
   - **AI**:
     - **the exact request**: model `claude-opus-5-5`, beta `server-side-fallback-2026-07-01`, `fallbacks:
       "default"`, `output_config.effort` set, `format` for summaries, no `thinking`, the document block before the

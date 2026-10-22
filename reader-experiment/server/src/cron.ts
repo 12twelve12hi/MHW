@@ -13,7 +13,7 @@ import { jobsCleanup, processOneJob } from './ai.ts';
 import { filesCleanup } from './files.ts';
 import { sourcesCleanup } from './sources.ts';
 import type { Settings } from './settings.ts';
-import { isLocked, loadCronSettings, saveStmt } from './settings.ts';
+import { inboxPresent, isLocked, loadCronSettings, saveStmt } from './settings.ts';
 
 export interface CronReport { steps: Record<string, string>; d1: number; sub: number; rowsRead: number }
 
@@ -39,18 +39,19 @@ async function rekey(ctx: Ctx, fp: string, s: Settings) {
     ctx.db.stmt(`DELETE FROM frames WHERE item_id IN (SELECT id FROM outbox WHERE fp != ?)`, fp),
     ctx.db.stmt(`UPDATE files SET expires = 0 WHERE fp != ?`, fp),
     ctx.db.stmt(`UPDATE sources SET expires = 0 WHERE fp != ?`, fp),
-    // The config frame went to the old pairing's topic: this run publishes it for the new one (4.2).
-    saveStmt(ctx, { fp, ackSince: 'all', config: null }),
+    // The config frame went to the old pairing's topic: this run publishes it for the new one (4.2). The Lab Inbox's
+    // presence was on the old pairing's ack topic: the new one says hello again (5.5).
+    saveStmt(ctx, { fp, ackSince: 'all', config: null, inbox: null }),
   ];
   await ctx.db.batch(stmts);
-  s.fp = fp; s.ackSince = 'all'; delete s.config;
+  s.fp = fp; s.ackSince = 'all'; delete s.config; delete s.inbox;
 }
 
 function ackDue(id: Identity, s: Settings, now: number): boolean {
   const since = now - (s.ackAt ?? 0);
   if (since >= 6 * HOUR) return true;
   if (since < 30 * MIN) return false;
-  return (s._awaiting ?? 0) > 0 || (id.delivery.mode === 'lab' && !s.inbox?.lastSeen);
+  return (s._awaiting ?? 0) > 0 || (id.delivery.mode === 'lab' && !inboxPresent(s));
 }
 
 async function cleanup(ctx: Ctx, id: Identity, s: Settings) {

@@ -13,7 +13,7 @@ import type { ResolvedSource } from './sources.ts';
 import { checkFetchUrl, checkText, fetchUrlSource, loadSource, newPlaceholder, splicingFetch, storeTextSource } from './sources.ts';
 import { buildItem, storeManyStatements } from './outbox.ts';
 import type { Settings } from './settings.ts';
-import { d1Paused, saveStmt } from './settings.ts';
+import { d1Paused, inboxPresent, saveStmt } from './settings.ts';
 import { aiLimits, currentKeyFp } from './status.ts';
 import { esc, hostOf, localParts, renderMarkdown, wrapPage } from './html.ts';
 
@@ -117,7 +117,7 @@ export function validateAi(body: Record<string, unknown>): AiRequest {
 
 /** Checks that need no network: the key, R2 for PDFs, the Lab Inbox for deliveries, URL shape, the source id. */
 export async function precheck(ctx: Ctx, id: Identity, s: Settings, r: AiRequest): Promise<ResolvedSource | null> {
-  if (r.deliver !== 'app' && id.delivery.mode === 'lab' && !s.inbox?.lastSeen) throw new ServerError(409, 'NEEDS_LAB_INBOX', { feature: 'deliver' });
+  if (r.deliver !== 'app' && id.delivery.mode === 'lab' && !inboxPresent(s)) throw new ServerError(409, 'NEEDS_LAB_INBOX', { feature: 'deliver' });
   if (r.source?.kind === 'url') checkFetchUrl(r.source.url);
   if (r.source?.kind === 'id') return loadSource(ctx, id, r.source.sourceId);
   return null;
@@ -381,7 +381,7 @@ function jobJson(j: JobRow) {
 export async function aiJobCreate(ctx: Ctx, id: Identity, s: Settings, req: Request): Promise<Response> {
   if (!ctx.env.ANTHROPIC_API_KEY) throw new ServerError(409, 'NEEDS_KEY', { feature: 'ai', missing: ['ANTHROPIC_API_KEY'] });
   const r = validateAi(await readJson(ctx, req, ctx.limits.aiBody));
-  if (id.delivery.mode === 'lab' && !s.inbox?.lastSeen) throw new ServerError(409, 'NEEDS_LAB_INBOX', { feature: 'deliver' });
+  if (id.delivery.mode === 'lab' && !inboxPresent(s)) throw new ServerError(409, 'NEEDS_LAB_INBOX', { feature: 'deliver' });
   const queued = await ctx.db.first<{ n: number }>("SELECT COUNT(*) AS n FROM jobs WHERE state IN ('queued', 'running')");
   if ((queued?.n ?? 0) >= ctx.limits.aiQueue) throw new ServerError(429, 'AI_QUEUE_FULL', { retryAfter: 300 });
   const pre = await precheck(ctx, id, s, { ...r, deliver: 'app' });

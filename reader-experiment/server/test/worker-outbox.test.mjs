@@ -5,9 +5,11 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as ds from '../../share/js/daylight-share.js';
 import * as srv from '../client/daylight-server.js';
+import { buildInboxInfo } from '../../share/js/daylight-lab.js';
 import { setup, SERVER, RELAY_ORIGIN } from './helpers.mjs';
 
 const HOUR = 3600_000;
+const MINUTE = 60_000;
 let t;
 let failNext = null; // status for the next publish to the item topic
 before(async () => {
@@ -41,7 +43,7 @@ test('config: the first Cron run publishes it; the client discovers, checks and 
 test('the client applies the Lab feature states and their messages', async () => {
   const st = await t.client.state('deliver');
   assert.equal(st.state, 'needs-lab-inbox');
-  assert.match(st.message, /Turn on Lab/);
+  assert.equal(st.message, 'Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on.');
   assert.deepEqual(await t.client.state('ai'), { state: 'ready', message: null });
 });
 
@@ -201,7 +203,7 @@ test('v1 delivery: server items reach any Inbox under the pairing key, acks come
   } finally { await v1.close(); }
 });
 
-test('v1 delivery: Lab frames on the pairing ack topic deliver nothing and change no row; they count as presence (DESIGN 5.5)', async () => {
+test('v1 delivery: Lab frames on the pairing ack topic deliver nothing and change no row; presence only, which lab: 0 ends (DESIGN 5.5)', async () => {
   // LAB-PLAN 2.2.1: a Lab frame is sealed like an ack, with ids [] and x-inbox, and maybe x-st (item states). In v1
   // mode the server reads this topic for its acks; the Lab Inbox's frames there must not deliver anything.
   const v1 = await setup({ delivery: 'v1' });
@@ -237,8 +239,9 @@ test('v1 delivery: Lab frames on the pairing ack topic deliver nothing and chang
     assert.deepEqual(await rowsOf(), before, 'no row changed');
     assert.equal(await frameCount(), framesBefore, 'no frame deleted');
     const st = (await v1.api('GET', '/v1/status', { now: T0 + HOUR })).json;
-    assert.equal(st.inbox.lab, true, 'presence, which v1 delivery never gates on');
-    assert.ok(Object.values(st.features).every((f) => f.state === 'ready'), JSON.stringify(st.features));
+    assert.equal(st.inbox.lab, false, 'the lab: 0 frame ended the presence (S0)');
+    assert.ok(st.inbox.lastSeen, 'last seen stays known');
+    assert.ok(Object.values(st.features).every((f) => f.state === 'ready'), `v1 delivery never gates on presence: ${JSON.stringify(st.features)}`);
     const inbox = JSON.parse((await v1.rows("SELECT v FROM settings WHERE k = 'inbox'"))[0].v);
     assert.equal(inbox.app.length, 60, 'the 60-character app clamp');
     const since = JSON.parse((await v1.rows("SELECT v FROM settings WHERE k = 'ackSince'"))[0].v);
@@ -250,6 +253,93 @@ test('v1 delivery: Lab frames on the pairing ack topic deliver nothing and chang
     assert.equal((await v1.cron(T0 + 2 * HOUR)).steps.acks, '2');
     assert.deepEqual((await rowsOf()).map((x) => x.state), ['delivered', 'delivered']);
   } finally { await v1.close(); }
+});
+
+test('Lab delivery (S0): Lab frames on the server ack topic; lab: 0 ends a publisher’s presence, x-st delivers nothing', async () => {
+  // LAB-PLAN 4.2 S0: the Lab Inbox's server lane acks on the server ack topic (box key, AAD server-ack) and says hello
+  // there with x-inbox exactly as buildInboxInfo makes it for the pairing lane, lab: 0 included.
+  const lab = await setup();
+  try {
+    const status = async (now) => (await lab.api('GET', '/v1/status', { now })).json;
+    const sent = new Date(T0).toISOString();
+    const post = async (extra) => {
+      const header = { v: 1, kind: 'ack', ids: [], sent, from: 'Anjan’s Daylight', ...extra };
+      const frame = await srv.sealBox(lab.values, 'ack', header);
+      assert.ok(ds.toBase64(frame).length <= 3800, 'a Lab frame is a small frame');
+      assert.equal((await lab.relay.handle(`${RELAY_ORIGIN}/${lab.values.ackTopic}`, { method: 'POST', body: ds.toBase64(frame) })).status, 200);
+    };
+    const hello = (l, app = 'android/1.6.0', caps = ['st', 'tap', 'reader-link']) => ({ 'x-inbox': buildInboxInfo({ lab: l, app, caps: l ? caps : [], poll: sent, live: true }) });
+    const ids = [
+      (await enqueue(lab, { origin: 's0:url', kind: 'url', url: 'https://example.com/s0', title: 'S0 link' }, T0)).id,
+      (await enqueue(lab, { origin: 's0:page', kind: 'page', title: 'S0 page', text: '<p>S0 page</p>' }, T0)).id,
+    ];
+    await lab.cron(T0);
+    const rowsOf = () => lab.rows('SELECT id, state, publishes, next_part, last_publish FROM outbox ORDER BY id');
+    const before = await rowsOf();
+    assert.deepEqual(before.map((r) => r.state), ['sent', 'sent'], 'published before any hello: delivery never waits for presence');
+    let st = await status(T0);
+    assert.equal(st.delivery, 'lab');
+    assert.equal(st.inbox.lab, false);
+    assert.equal(st.features.deliver.state, 'needs-lab-inbox');
+    assert.equal(st.features.deliver.message, 'Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on.');
+
+    // Hello, then item states naming the server's own items, then a full x-st frame: presence, nothing delivered.
+    const t1 = Math.floor(T0 / 1000);
+    await post(hello(1));
+    await post({ ...hello(1), 'x-st': [{ i: ids[0], s: 'reader', t: t1 }, { i: ids[1], s: 'handed', t: t1 }] });
+    await post({ ...hello(1), 'x-st': Array.from({ length: 24 }, (_, n) => ({ i: n.toString(16).padStart(32, '0'), s: 'waiting', t: t1 })) });
+    let r = await lab.cron(T0 + HOUR);
+    assert.equal(r.steps.acks, '0', 'x-st delivers nothing');
+    assert.deepEqual(await rowsOf(), before, 'no row changed');
+    st = await status(T0 + HOUR);
+    assert.equal(st.inbox.lab, true);
+    for (const f of ['deliver', 'feeds', 'email']) assert.equal(st.features[f].state, 'ready', f);
+    assert.deepEqual(await lab.client.state('deliver'), { state: 'ready', message: null });
+
+    // Lab turned off on the Daylight: one lab: 0 frame (caps [], an over-long app) ends the presence.
+    await post(hello(0, 'android/1.6.0-' + 'x'.repeat(80)));
+    r = await lab.cron(T0 + 2 * HOUR);
+    assert.equal(r.steps.acks, '0');
+    st = await status(T0 + 2 * HOUR);
+    assert.equal(st.inbox.lab, false, 'lab: 0 ends presence');
+    assert.equal(st.inbox.lastSeen, new Date(T0 + 2 * HOUR).toISOString(), 'and is the last frame seen');
+    for (const f of ['deliver', 'feeds', 'email']) assert.equal(st.features[f].state, 'needs-lab-inbox', f);
+    const inbox = JSON.parse((await lab.rows("SELECT v FROM settings WHERE k = 'inbox'"))[0].v);
+    assert.equal(inbox.app.length, 60, 'the 60-character app clamp');
+    assert.deepEqual(Object.keys(inbox.pubs), ['android']);
+    const ai = await lab.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'Deliver me.' }, deliver: 'both' }, now: T0 + 2 * HOUR });
+    assert.equal(ai.status, 409);
+    assert.equal(ai.json.error.code, 'NEEDS_LAB_INBOX');
+    assert.equal(lab.claude.requests.length, 0, 'refused before Claude is called');
+
+    // Items still go out and the lane's acks still deliver them; a plain ack does not bring the presence back.
+    const third = (await enqueue(lab, { origin: 's0:after', kind: 'url', url: 'https://example.com/after' }, T0 + 2 * HOUR)).id;
+    await lab.cron(T0 + 2 * HOUR + MINUTE);
+    const got = await lab.lane.poll();
+    assert.deepEqual(got.map((i) => i.header.id).sort(), [...ids, third].sort());
+    r = await lab.cron(T0 + 3 * HOUR);
+    assert.equal(r.steps.acks, '3');
+    assert.deepEqual((await rowsOf()).map((x) => x.state), ['delivered', 'delivered', 'delivered']);
+    assert.equal((await status(T0 + 3 * HOUR)).inbox.lab, false, 'acks alone do not undo lab: 0');
+
+    // Lab on again: its hello brings the presence back (the ack topic is polled every 30 minutes without presence).
+    await post(hello(1));
+    assert.equal((await lab.cron(T0 + 3 * HOUR + 30 * MINUTE)).steps.acks, '0');
+    assert.equal((await status(T0 + 4 * HOUR)).inbox.lab, true);
+    // Two publishers (a handover, LAB-PLAN 5.3.4): the Lab Reader's hello keeps the presence when Daylight Share
+    // turns Lab off. With presence and nothing awaiting an ack, the topic is read every 6 hours.
+    await post(hello(1, 'reader-lab/0.3.0', ['st', 'reader-doc', 'quiet']));
+    await post(hello(0));
+    assert.equal((await lab.cron(T0 + 5 * HOUR)).steps.acks, undefined, 'not due yet');
+    assert.equal((await lab.cron(T0 + 9 * HOUR + 30 * MINUTE)).steps.acks, '0');
+    st = await status(T0 + 10 * HOUR);
+    assert.equal(st.inbox.lab, true, 'reader-lab is still on');
+    assert.equal(st.features.deliver.state, 'ready');
+    assert.deepEqual(Object.keys(JSON.parse((await lab.rows("SELECT v FROM settings WHERE k = 'inbox'"))[0].v).pubs).sort(), ['android', 'reader-lab']);
+    await post(hello(0, 'reader-lab/0.3.0'));
+    assert.equal((await lab.cron(T0 + 15 * HOUR + 30 * MINUTE)).steps.acks, '0');
+    assert.equal((await status(T0 + 16 * HOUR)).inbox.lab, false, 'both publishers off');
+  } finally { await lab.close(); }
 });
 
 test('v1 safety: a Lab server item on the inbox topic is ignored by a v1 Receiver (no item, no ack, no exception)', async () => {

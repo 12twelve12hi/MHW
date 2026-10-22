@@ -91,7 +91,7 @@ test('status reports the config fields, feature states and usage', async () => {
   assert.equal(s.features.ai.state, 'ready');
   assert.equal(s.features.files.state, 'ready');
   assert.equal(s.features.deliver.state, 'needs-lab-inbox', 'Lab delivery before the Lab Inbox said hello');
-  assert.match(s.features.deliver.message, /Turn on Lab in Daylight Share/);
+  assert.match(s.features.deliver.message, /hasn’t heard from your Daylight yet/);
   assert.equal(s.usage.ai.limitUsd, 7.5);
   assert.ok(s.usage.ai.resetAt.endsWith('T00:00:00.000Z'));
   assert.equal(s.storage.limit, 8 * 1024 * 1024 * 1024);

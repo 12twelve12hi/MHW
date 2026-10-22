@@ -186,7 +186,7 @@ async function announce(url) {
   const next = f.ai?.state === 'needs-key' ? 'add ANTHROPIC_API_KEY for AI (optional).'
     : f.files?.state === 'needs-r2' ? 'turn on R2 in the Cloudflare dashboard for large files, email-in and PDF AI (optional), then Re-run all jobs.'
       : f.email?.state === 'needs-domain' ? 'add DAYLIGHT_EMAIL_DOMAIN for email-in (optional).'
-        : f.deliver?.state === 'needs-lab-inbox' ? 'turn on Lab in Daylight Share on the Daylight.'
+        : f.deliver?.state === 'needs-lab-inbox' ? 'open Daylight Share on the Daylight with Lab on, so the server hears from it.'
           : f.email?.state === 'needs-paid' ? 'Workers Paid makes email-in reliable (optional).' : 'nothing; everything is set up.';
   lines.push(`### Daylight server is live`, '',
     `Server code fingerprint ${srv.showFingerprint(r.values.fingerprint)}. Delivery: ${r.delivery === 'v1' ? 'v1 (the server holds your pairing code)' : 'Lab'}.`,
