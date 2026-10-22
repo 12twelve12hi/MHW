@@ -31,7 +31,19 @@ in `FramePurpose`.
   `footer: LabText.adHocMac`; `useSwitch` is for W1's Use switches.
 - `ServerSettingsView(lab:)`: the server section, where setup happens.
 - `LabGateButton`, `LabNote`, `LabFirstRunNote` (shows only when `LabModel.noteEnabled`: false in W0), `TimelineRow`
-  (W0: label and sentence).
+  (W0: label and sentence). A tap shows a local or cached answer's note at once; "Checking your Daylight server…"
+  shows (and is said) only for a server feature whose gate is still waiting after 150 ms, as in the JS ports
+  (`GateTap`). Each tap's note is a new view, so it is said again.
+- **The ad-hoc Mac's Share menu card has its own Lab switch, in the kit** (1.1, F00's Mac edge case): A2 needs no kit
+  change for it. `ShareExtensionModel.showsCardLabSwitch` is true on the Mac whenever the card shows its own settings
+  (no App Group: the released ad-hoc zip), and the card's settings then start with a `Toggle` named `LabText.lab`
+  (identifier `lab-switch`, nothing else carries it), `LabText.switchFooter` under it, then Comfort. It is on by
+  default: the card's first start writes `dls.lab = true` in its own storage when the key is missing, and
+  `setLab(_:)` saves it there through `LabSettings`. With the App Group the card reads the app's switch (`model.lab`)
+  and shows none; the iPhone's card never shows one. `ShareCardSample` cards take Lab from `-DLSLab` (on when not
+  given), so the Mac's `needs-pairing` walk sees the switch off. Anything the Mac lane wants under the card's switch
+  while it is on goes in `ShareExtensionView(model:labRows:)` (an `AnyView`, nil by default). Note: the apps' README
+  (`../README.md`, "The Lab switch") still tells A2 to put the switch into `cardSettings` itself; it is there now.
 - Apps call `lab.center.lockBeforeRepair()` before they re-pair.
 
 ## Tests

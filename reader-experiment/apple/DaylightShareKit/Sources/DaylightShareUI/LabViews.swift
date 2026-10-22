@@ -118,8 +118,9 @@ extension LabSettingsSection where WhatsIn == WhatsInLabView, Server == ServerSe
 
 /// The inline note directly under a tapped control that is not ready (1.5): exactly one sentence, said to VoiceOver,
 /// with OK and at most one button that fixes it from here ("Open Settings", "Open setting", "Copy Server code"). It
-/// stays until OK, another control is tapped or the screen is left; it never dismisses itself. While a server answer is
-/// awaited it says "Checking your Daylight server…" (at most 5 s: `LabGate`).
+/// stays until OK, another control is tapped or the screen is left; it never dismisses itself. While a server feature's
+/// gate waits on the server it says "Checking your Daylight server…" (after 150 ms, for at most 5 s: `GateTap`,
+/// `LabGate`).
 public struct LabNote: View {
     let message: String
     let button: String?
@@ -181,6 +182,32 @@ enum NoteState: Equatable {
     case note(LabGate.Result)
 }
 
+/// A tap on a gated control (1.5). A local or cached answer shows its note at once, with nothing said before it;
+/// "Checking your Daylight server…" covers only a server wait: it shows for a server feature (`Lab.isServerFeature`)
+/// whose gate has not answered within 150 ms, as in the JS and Windows ports. A local gate (`needs-pairing`,
+/// `needs-inbox`, W1's `needs-notifications`) never says server words.
+enum GateTap {
+    /// How long a server feature's gate may take before its note says "Checking your Daylight server…".
+    static let checkingAfterNs: UInt64 = 150_000_000
+
+    /// Runs the gate; calls `checking` (once, on the main actor) when `feature` is a server feature and its gate is
+    /// still waiting after `delayNs` (`checkingAfterNs`).
+    @MainActor
+    static func run(_ feature: String, after delayNs: UInt64 = GateTap.checkingAfterNs,
+                    gate: () async -> LabGate.Result, checking: @escaping @MainActor () -> Void) async -> LabGate.Result {
+        var timer: Task<Void, Never>?
+        if Lab.isServerFeature(feature) {
+            timer = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: delayNs)
+                if !Task.isCancelled { checking() }
+            }
+        }
+        let r = await gate()
+        timer?.cancel()
+        return r
+    }
+}
+
 /// Runs a feature's gate when tapped and shows its note under the control (1.5): never greyed out, never locked. When
 /// the gate says ready, `onReady` runs (the feature opens). The note's button copies the Server code (needs-server),
 /// opens Settings (an OS permission) or calls `onOpenSetting` (a setting in this app).
@@ -232,6 +259,8 @@ public struct LabGateButton<Content: View>: View {
     let onOpenSetting: (() -> Void)?
     let label: () -> Content
     @State private var note: NoteState = .hidden
+    /// Counts taps: an answer for an earlier tap is dropped, and each tap's note is a new view (said again).
+    @State private var taps = 0
 
     public init(lab: LabModel, feature: String, onOpenSetting: (() -> Void)? = nil, action: @escaping () -> Void,
                 @ViewBuilder label: @escaping () -> Content) {
@@ -250,13 +279,21 @@ public struct LabGateButton<Content: View>: View {
                 label()
             }
             GatedNote(lab: lab, state: note, onOpenSetting: onOpenSetting) { note = .hidden }
+                .id(taps)
         }
         .onDisappear { note = .hidden }
     }
 
     @MainActor private func tap() async {
-        note = .checking
-        let r = await lab.gate(feature)
+        taps += 1
+        let tap = taps
+        note = .hidden
+        let feature = self.feature
+        let lab = self.lab
+        let r = await GateTap.run(feature, gate: { await lab.gate(feature) }) {
+            if taps == tap { note = .checking }
+        }
+        guard taps == tap else { return } // tapped again meanwhile
         if r.ready {
             note = .hidden
             action()
@@ -286,6 +323,8 @@ public struct WhatsInLabView: View {
     let onOpenSetting: (() -> Void)?
     @State private var tapped: String?
     @State private var note: NoteState = .hidden
+    /// Counts taps: an answer for an earlier tap is dropped, and each tap's note is a new view (said again).
+    @State private var taps = 0
 
     public init(lab: LabModel, footer: String? = nil, useSwitch: ((String) -> Binding<Bool>?)? = nil,
                 onOpen: ((String) -> Void)? = nil, onOpenSetting: (() -> Void)? = nil) {
@@ -371,15 +410,21 @@ public struct WhatsInLabView: View {
                     tapped = nil
                     note = .hidden
                 }
+                .id(taps)
             }
         }
     }
 
     @MainActor private func tap(_ feature: String) async {
+        taps += 1
+        let tap = taps
         tapped = feature
-        note = .checking
-        let r = await lab.gate(feature)
-        guard tapped == feature else { return } // another row was tapped meanwhile
+        note = .hidden
+        let lab = self.lab
+        let r = await GateTap.run(feature, gate: { await lab.gate(feature) }) {
+            if taps == tap { note = .checking }
+        }
+        guard taps == tap, tapped == feature else { return } // another row (or this one again) was tapped meanwhile
         if r.ready {
             tapped = nil
             note = .hidden

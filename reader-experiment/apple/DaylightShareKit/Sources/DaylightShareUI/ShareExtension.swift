@@ -251,6 +251,10 @@ public final class ShareExtensionModel: ObservableObject {
     @Published public private(set) var summary = ""
     /// Comfort (F27): the app's when they share storage; else the card's own switch (`showsCardSettings`).
     @Published public private(set) var comfort = false
+    /// Lab (LAB-PLAN 1.1, 1.2), read through `LabSettings`: the app's switch when they share storage; else the card's
+    /// own (`showsCardLabSwitch`: the ad-hoc Mac build's Share menu item counts as an app of its own). On when never
+    /// set, and while storage is still resolving.
+    @Published public private(set) var lab = true
     /// A line about how something went, shown under the result: "The page is larger than 8 MB, so its link was
     /// sent." (CHANGES-v1.1 2.5) when a page went as its link.
     @Published public private(set) var note: String?
@@ -277,7 +281,7 @@ public final class ShareExtensionModel: ObservableObject {
 
     /// A card that shows `phase` and never reads its input or sends (`ShareCardSample`).
     init(sample phase: Phase, store: SharedStore, summary: String, note: String?, daylightName: String,
-         sharesPairingWithApp: Bool, comfort: Bool) {
+         sharesPairingWithApp: Bool, comfort: Bool, lab: Bool = true) {
         self.store = store
         self.phase = phase
         self.summary = summary
@@ -285,6 +289,7 @@ public final class ShareExtensionModel: ObservableObject {
         self.daylightName = daylightName
         self.sharesPairingWithApp = sharesPairingWithApp
         self.comfort = comfort
+        self.lab = lab
         started = true
     }
 
@@ -301,6 +306,17 @@ public final class ShareExtensionModel: ObservableObject {
         }
     }
 
+    /// Whether the card's own settings hold its own Lab switch (LAB-PLAN 1.1, F00's Mac edge case): on the Mac, where
+    /// a build without an App Group (the released ad-hoc zip) makes the Share menu item an app of its own, with its own
+    /// Lab switch, on by default. Never on the iPhone: its share sheet follows the app's switch and has none of its own.
+    public var showsCardLabSwitch: Bool {
+        #if os(macOS)
+        return showsCardSettings
+        #else
+        return false
+        #endif
+    }
+
     /// The card's own Comfort switch (`showsCardSettings`): the card follows at once; it is saved, off the main thread,
     /// in the storage this extension keeps, and read at the next share.
     public func setComfort(_ on: Bool) {
@@ -309,6 +325,17 @@ public final class ShareExtensionModel: ObservableObject {
         Task {
             await store.ready()
             await AppModel.onStorage { store.comfort = on }
+        }
+    }
+
+    /// The card's own Lab switch (`showsCardLabSwitch`): the card follows at once; it is saved through `LabSettings`,
+    /// off the main thread, in the storage this extension keeps, and read at the next share. Nothing is deleted (1.3).
+    public func setLab(_ on: Bool) {
+        lab = on
+        let store = self.store
+        Task {
+            await store.ready()
+            await AppModel.onStorage { LabSettings.setOn(on, store: store) }
         }
     }
 
@@ -323,6 +350,13 @@ public final class ShareExtensionModel: ObservableObject {
             await store.ready()
             sharesPairingWithApp = store.isShared
             comfort = await AppModel.onStorage { store.comfort }
+            // A card with storage of its own is an app of its own (1.1): its first start writes lab = true when the key
+            // is missing (1.2). With the App Group it reads the app's switch.
+            let ownStorage = !store.isShared
+            lab = await AppModel.onStorage { () -> Bool in
+                if ownStorage { LabSettings.ensureDefault(store: store) }
+                return LabSettings.isOn(store: store)
+            }
             let current = await AppModel.onStorage { store.pairing }
             daylightName = current?.displayName ?? "your Daylight"
             if case let .pairing(link)? = payloads.first {
@@ -527,9 +561,13 @@ public final class ShareExtensionModel: ObservableObject {
 /// question before a pairing takes effect.
 public struct ShareExtensionView: View {
     @ObservedObject var model: ShareExtensionModel
+    let labRows: AnyView?
 
-    public init(model: ShareExtensionModel) {
+    /// `labRows`: what the app puts under the card's own Lab switch while it is on (`showsCardLabSwitch`, the ad-hoc
+    /// Mac build's Share menu item), or nil for nothing: the Mac lane adds Lab rows there without changing the kit.
+    public init(model: ShareExtensionModel, labRows: AnyView? = nil) {
         self.model = model
+        self.labRows = labRows
     }
 
     public var body: some View {
@@ -612,13 +650,30 @@ public struct ShareExtensionView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// The card's own settings, where it keeps its own storage (`ShareExtensionModel.showsCardSettings`): Comfort,
-    /// with LAB_TEXT's words. The ad-hoc Mac build's own Lab switch joins it here (LAB-PLAN 1.1, card A2), inside
-    /// `#if os(macOS)`: iOS compiles this view too, and the iPhone's share sheet has no Lab switch of its own (it follows
-    /// the app's). The UI tests' parity walk allows a Lab switch only on the Mac's `needs-pairing` card.
+    /// The card's own settings, where it keeps its own storage (`ShareExtensionModel.showsCardSettings`), with
+    /// LAB_TEXT's words: first, on the Mac only (`showsCardLabSwitch`), the card's own Lab switch (LAB-PLAN 1.1: the
+    /// ad-hoc build's Share menu item is an app of its own; on by default), its footer and, while it is on, `labRows`;
+    /// then Comfort. The switch alone carries the identifier `lab-switch` (`LabIDs.labSwitch`), as in Settings: the UI
+    /// tests' parity walk allows it only on the Mac's `needs-pairing` card, off and with nothing else inside. The
+    /// iPhone's share sheet has no Lab switch of its own (it follows the app's).
     @ViewBuilder private var cardSettings: some View {
         if model.showsCardSettings {
             Divider()
+            if model.showsCardLabSwitch {
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle(isOn: Binding(get: { model.lab }, set: { model.setLab($0) })) {
+                        Text(LabText.lab).wrapping(LabText.lab)
+                    }
+                    .toggleStyle(.switch)
+                    .accessibilityIdentifier(LabIDs.labSwitch)
+                    .accessibilityLabel(LabText.lab)
+                    Text(LabText.switchFooter).dlsFont(.footnote).dlsSecondary().wrapping(LabText.switchFooter)
+                    if model.lab, let labRows {
+                        labRows
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
             VStack(alignment: .leading, spacing: 6) {
                 Toggle(isOn: Binding(get: { model.comfort }, set: { model.setComfort($0) })) {
                     Text(Comfort.title).wrapping(Comfort.title)
@@ -692,19 +747,21 @@ public enum ShareCardSample: String, CaseIterable {
 
     @MainActor private static var launched: ShareExtensionModel?? = nil
 
-    /// The card `-DLSShareCard <name>` asks for, made once, with Comfort as `-DLSComfort` says: the apps' Debug builds
-    /// show it in place of their window. nil without the argument.
+    /// The card `-DLSShareCard <name>` asks for, made once, with Comfort as `-DLSComfort` says and Lab as `-DLSLab` says:
+    /// the apps' Debug builds show it in place of their window. nil without the argument.
     @MainActor
     public static var launchModel: ShareExtensionModel? {
         if let launched { return launched }
-        let model = launchValue()?.model(comfort: Comfort.launchValue() ?? false)
+        let model = launchValue()?.model(comfort: Comfort.launchValue() ?? false, lab: LabSettings.launchValue() ?? true)
         launched = .some(model)
         return model
     }
 
-    /// A model that shows this sample, with Comfort on or off.
+    /// A model that shows this sample, with Comfort on or off and Lab on or off (`launchModel`: as `-DLSLab` says, on
+    /// when not given). On the Mac, the card that keeps its own storage shows its own Lab switch in that state (the
+    /// parity walk runs with Lab off).
     @MainActor
-    public func model(comfort: Bool = false) -> ShareExtensionModel {
+    public func model(comfort: Bool = false, lab: Bool = true) -> ShareExtensionModel {
         let id = UUID().uuidString
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dls-card-\(id)", isDirectory: true)
         let store = SharedStore(defaults: UserDefaults(suiteName: "dls-card-\(id)") ?? UserDefaults(), directory: directory)
@@ -740,6 +797,6 @@ public enum ShareCardSample: String, CaseIterable {
         }
         return ShareExtensionModel(sample: phase, store: store, summary: self == .needsPairing ? "" : Self.summary,
                                    note: note, daylightName: Self.daylightName, sharesPairingWithApp: shares,
-                                   comfort: comfort)
+                                   comfort: comfort, lab: lab)
     }
 }
