@@ -153,6 +153,12 @@
             android:name=".inbox.NoticeDismissedReceiver"
             android:exported="false" />
 
+        <!-- Lab: K5 (F15): Keep for later on a waiting item's notice, Dismiss on "Saved to the Reader", and Turn on on
+             "Instant delivery stopped". -->
+        <receiver
+            android:name=".inbox.ArrivalActionReceiver"
+            android:exported="false" />
+
         <receiver
             android:name=".inbox.BootReceiver"
             android:exported="false">

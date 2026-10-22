@@ -25,9 +25,10 @@ import java.io.File
 
 /**
  * The one-time Lab note (LAB-PLAN 1.2) shows only in builds where the app has F01 or F04: from the first W1 build
- * (K4, K5). A W0 build shows none. This is the Inbox's (K5 turns it on); the phone's is `LAB_NOTE_ENABLED_PHONE` (K4).
+ * (K4, K5). A W0 build shows none. This is the Inbox's, on from its W1 build (K5: it records the states its senders'
+ * delivery timeline shows, F01); the phone's is `LAB_NOTE_ENABLED_PHONE` (K4).
  */
-const val LAB_NOTE_ENABLED = false
+const val LAB_NOTE_ENABLED = true
 
 /**
  * Lab on this device, both roles (LAB-PLAN 1, 2.6; card K1): the gates (1.5), What's in Lab (1.4) and the Daylight
@@ -241,8 +242,8 @@ class LabRepo(private val app: App) {
                 lab = app.prefs.lab,
                 paired = pairing() != null,
                 hasCap = { heard?.hasCap(it) == true },
-                // The phone's own checks (K4): F04's notices need notifications.
-                local = { com.daylight.share.sender.PhoneLab.localCheck(app, it) },
+                // The phone's own checks (K4): F04's notices need notifications; the Inbox's (K5): so do F15's.
+                local = { com.daylight.share.sender.PhoneLab.localCheck(app, it) ?: com.daylight.share.inbox.InboxLab.localCheck(app, it) },
                 server = if (inbox) null else ServerStateSource { key -> featureState(p ?: probe(), key) },
                 serverMessage = ServerMessages::localMessage,
                 built = { it in BUILT },
@@ -413,8 +414,8 @@ class LabRepo(private val app: App) {
         /** What's in Lab's features on the phone (W1, K4): `PhoneLab.FEATURES`. */
         val PHONE_FEATURES: List<String> = com.daylight.share.sender.PhoneLab.FEATURES
 
-        /** … and on the DC-1 Inbox, W0: none yet (K5 adds F15 and F26). */
-        val INBOX_FEATURES: List<String> = emptyList()
+        /** … and on the DC-1 Inbox (W1, K5): arrival notices and Setup check, `InboxLab.FEATURES`. */
+        val INBOX_FEATURES: List<String> = com.daylight.share.inbox.InboxLab.FEATURES
 
         /** The Lab features this build runs (the gate's `built`): a server feature that is ready but not built is `later`. */
         val BUILT: Set<String> get() = (PHONE_FEATURES + INBOX_FEATURES).toSet()

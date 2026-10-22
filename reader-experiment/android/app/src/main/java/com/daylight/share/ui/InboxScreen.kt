@@ -3,6 +3,7 @@ package com.daylight.share.ui
 import android.Manifest
 import android.app.NotificationManager
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -10,9 +11,11 @@ import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.items
@@ -29,23 +32,36 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.daylight.share.App
+import com.daylight.share.BuildConfig
 import com.daylight.share.core.Kind
 import com.daylight.share.core.Limits
 import com.daylight.share.core.Relay
+import com.daylight.share.core.lab.LabText
+import com.daylight.share.core.lab.SetupCheck
+import com.daylight.share.inbox.Arrivals
 import com.daylight.share.inbox.DocumentMode
 import com.daylight.share.inbox.Handoff
+import com.daylight.share.inbox.InboxHealth
 import com.daylight.share.inbox.InboxItem
+import com.daylight.share.inbox.InboxLab
 import com.daylight.share.inbox.InboxText
 import com.daylight.share.inbox.InstantDeliveryService
 import com.daylight.share.inbox.Live
 import com.daylight.share.inbox.Path
 import com.daylight.share.inbox.ReaderApps
 import com.daylight.share.inbox.Routes
+import com.daylight.share.sender.ActivityLog
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.compose.ui.semantics.Role as A11yRole
 
 /** The Daylight Inbox: the pairing code, how items reach the Reader, and what arrived. */
 @Composable
@@ -92,6 +108,8 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
     // Lab (LAB-PLAN 1.2): the one-time note, from the first W1 build, while Lab is on.
     val lab by app.labOn.collectAsStateWithLifecycle()
     val labNote = lab && app.prefs.labNoteDue()
+    // Lab (F15): the health card's line and its one warning (Instant delivery stopped, notifications off, the poll's error).
+    val stopped = remember(resumes, live, instant) { InboxHealth.stopped(app) }
 
     ScreenList {
         item {
@@ -112,6 +130,20 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
             }) {
                 SecondaryButton("Settings") { onSettings() }
             }
+        }
+        // Lab (F15): the Inbox's health, at the top.
+        if (lab) item {
+            InboxHealthCard(
+                activity,
+                line = InboxHealth.line(sync.lastCheck, live == Live.State.LIVE, instant, System.currentTimeMillis()),
+                warning = InboxHealth.warning(stopped, notifOk, sync.error),
+                pollError = sync.error,
+                onTurnOn = {
+                    instant = true
+                    InboxHealth.turnOn(activity)
+                    activity.resumes.intValue++
+                },
+            )
         }
         if (notice != null) item {
             Section {
@@ -232,6 +264,11 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
                         )
                     }
                 }
+                // Lab (F15): "Arrival notices" and "Quiet hours", with the Inbox's other ways of getting items to the Reader.
+                if (lab) {
+                    HorizontalDivider(color = Ink)
+                    ArrivalSettings(app)
+                }
             }
         }
 
@@ -245,7 +282,7 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
         if (received.isEmpty()) item {
             Text("Nothing yet. Share a link or a file from a paired phone with “Send to Daylight”.", style = MaterialTheme.typography.bodyMedium)
         }
-        items(received, key = { it.id }) { item -> ItemRow(activity, item, targets.isNotEmpty()) }
+        items(received, key = { it.id }) { item -> ItemRow(activity, item, targets.isNotEmpty(), lab) }
     }
 
     if (confirmReset) {
@@ -269,11 +306,33 @@ private fun documentModeDetail(m: DocumentMode): String = when (m) {
     DocumentMode.OPEN -> "The Reader imports each document and opens it, even while you read something else."
 }
 
+/** Lab (F01): the test tag of an Inbox item's details (opened by a tap on its title). */
+const val INBOX_DETAILS_TAG = "inbox-details"
+
+/**
+ * One received item. With Lab on (K5): a tap on the title shows its details (when it arrived and its size, "Cleaned
+ * from {host}" for a link its sender cleaned, and F01's "Sender sees: {label}"); the line under the title is its kind
+ * from its extras (F03, F11: "Page as you saw it", "Excerpt", "Link (the Reader downloads it)", … · from {from}); an
+ * item kept for later says so ("Kept for later", F15). With Lab off it is v1.1's row.
+ */
 @Composable
-private fun ItemRow(activity: MainActivity, item: InboxItem, readerInstalled: Boolean) {
+private fun ItemRow(activity: MainActivity, item: InboxItem, readerInstalled: Boolean, lab: Boolean = false) {
     val app = App.of(activity)
+    var open by remember(item.id) { mutableStateOf(false) }
     Section {
-        Text(item.displayTitle, style = MaterialTheme.typography.titleMedium, maxLines = titleLines(3), overflow = TextOverflow.Ellipsis)
+        if (lab) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = target())
+                    .clickable(role = A11yRole.Button) { open = !open },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(item.displayTitle, style = MaterialTheme.typography.titleMedium, maxLines = titleLines(3), overflow = TextOverflow.Ellipsis)
+            }
+        } else {
+            Text(item.displayTitle, style = MaterialTheme.typography.titleMedium, maxLines = titleLines(3), overflow = TextOverflow.Ellipsis)
+        }
         val kind = when (item.kind) {
             Kind.URL -> "Link"
             Kind.PAGE -> "Web page"
@@ -285,7 +344,8 @@ private fun ItemRow(activity: MainActivity, item: InboxItem, readerInstalled: Bo
             ago(item.received),
             sizeText(item.size).ifEmpty { null },
         ).joinToString(" · ")
-        Text(meta, style = MaterialTheme.typography.bodySmall)
+        // Lab (F03, F11): the kind line from the item's extras; v1.1: kind, sender, when and size.
+        Text(if (lab) InboxLab.kindLine(item) else meta, style = MaterialTheme.typography.bodySmall)
         if (item.kind != Kind.FILE && item.url != null && item.title != null) {
             Text(item.url, style = MaterialTheme.typography.bodySmall, maxLines = titleLines(1), overflow = TextOverflow.Ellipsis)
         }
@@ -308,10 +368,19 @@ private fun ItemRow(activity: MainActivity, item: InboxItem, readerInstalled: Bo
                 item.readerLabel + listOfNotNull(how, via).joinToString(", ").let { if (it.isEmpty()) "" else " ($it)" } +
                     (item.deliveredTo?.let { " · " + ReaderApps.label(activity, it) } ?: "")
             }
-            else -> item.readerLabel
+            // Lab (F15): kept for later on purpose; it waits for Add to Reader.
+            else -> if (InboxLab.keptForLater(item, lab)) LabText["arrivals.keptForLater"] else item.readerLabel
         }
         // Announced when it changes ("In your Reader ✓"); it wraps, never truncates (F27).
         Text(status, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.announced())
+        // Lab (F01, 2.3): the item's details, under its status, while open.
+        if (lab && open) {
+            Column(Modifier.fillMaxWidth().testTag(INBOX_DETAILS_TAG)) {
+                Text(listOfNotNull(ago(item.received).ifEmpty { null }, sizeText(item.size).ifEmpty { null }).joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                InboxLab.cleanedFrom(item)?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                InboxLab.senderSees(item)?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+            }
+        }
         // Handed over without the Reader's confirmation (a document, a shared link, or no answer yet): the Reader may
         // have dropped it (DEVICE-CHECKS.md, round 2), so it can be handed over again.
         val unconfirmed = item.state == InboxItem.IN_READER && !item.confirmedInReader
@@ -345,4 +414,194 @@ private fun ItemRow(activity: MainActivity, item: InboxItem, readerInstalled: Bo
             TextAction("Remove") { app.inbox.remove(item.id) }
         }
     }
+}
+
+// ------------------------------------------------------------------------------------------- Lab on the Inbox (K5)
+
+/** The test tag of the Inbox's health card (F15). */
+const val INBOX_HEALTH_TAG = "inbox-health"
+
+/** The test tag of Setup check's Reader hand-off result (F26). */
+const val INBOX_READER_TEST_TAG = "inbox-reader-test"
+
+/**
+ * The Inbox's health (F15), at the top of the Inbox with Lab on: "Last checked {rel} · Instant delivery on" (or
+ * "off"), and one warning at a time: "Instant delivery stopped. …" with **Turn on**; notifications off ("Needs
+ * notifications", with **Open Settings**); or the last poll's error, in the Inbox's own sentence. Every state is in
+ * words, and nothing moves.
+ */
+@Composable
+private fun InboxHealthCard(activity: MainActivity, line: String?, warning: InboxHealth.Warning?, pollError: String?, onTurnOn: () -> Unit) {
+    if (line == null && warning == null) return
+    Section(modifier = Modifier.testTag(INBOX_HEALTH_TAG)) {
+        line?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+        when (warning) {
+            InboxHealth.Warning.STOPPED -> {
+                Text(LabText["arrivals.stopped"], style = MaterialTheme.typography.bodyLarge, modifier = Modifier.announced())
+                SecondaryButton(LabText["arrivals.turnOn"]) { onTurnOn() }
+            }
+            InboxHealth.Warning.NOTIFICATIONS -> {
+                // The short state: the full sentence is the gate's, under F15's row when tapped (1.5, F00.7).
+                Text(LabText.short("needs-notifications") ?: "", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.announced())
+                SecondaryButton(LabText.button("needs-notifications") ?: "") { openNotificationSettings(activity) }
+            }
+            InboxHealth.Warning.POLL -> Text(pollError ?: "", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.announced())
+            null -> Unit
+        }
+    }
+}
+
+/** F15's settings on the Inbox screen: "Arrival notices" (Off, Quiet, Alert) and "Quiet hours". */
+@Composable
+private fun ArrivalSettings(app: App) {
+    var mode by remember { mutableStateOf(InboxLab.arrivals(app)) }
+    var quiet by remember { mutableStateOf(app.prefs.labQuietHours) }
+    Text(LabText["arrivals.setting"], style = MaterialTheme.typography.bodyLarge)
+    Column(Modifier.selectableGroup()) {
+        for (m in Arrivals.entries) {
+            Choice(m.label, mode == m) {
+                mode = m
+                app.prefs.labArrivals = m.key
+            }
+        }
+    }
+    SwitchRow(LabText["arrivals.quietHours"], quiet) {
+        quiet = it
+        app.prefs.labQuietHours = it
+    }
+}
+
+/**
+ * Setup check on the DC-1 Inbox (F26): one line per check, "✓ {check}" or "! {check}", each unmet one with the button
+ * that opens the right settings ("Open Settings": Android's notification, channel, overlay and battery settings;
+ * "Open setting": Instant delivery on the Inbox screen, "Deliver to" in Settings); **Test the Reader hand-off**,
+ * which hands the bundled test article to the Reader through the normal hand-off and shows the result ("✓ In your
+ * Reader", or the item's own words until then); the activity log and Copy diagnostics, redacted.
+ */
+@Composable
+fun InboxSetupCheck(activity: MainActivity, onBack: () -> Unit, onHome: () -> Unit, onSettings: () -> Unit) {
+    val app = App.of(activity)
+    val received by app.inbox.items.collectAsStateWithLifecycle()
+    val sync by app.inbox.sync.collectAsStateWithLifecycle()
+    val resumes = activity.resumes.intValue
+    val scope = rememberCoroutineScope()
+    var testId by remember { mutableStateOf(app.prefs.labReaderTestId) }
+    var testError by remember { mutableStateOf<String?>(null) }
+    var showLog by remember { mutableStateOf(false) }
+    var copied by remember { mutableStateOf(false) }
+    val checks = remember(resumes) { InboxLab.checks(activity, batteryExempt(activity)) }
+    val S = "setup"
+
+    fun fix(id: String) {
+        when (id) {
+            "notifications" -> openNotificationSettings(activity)
+            "newItemsChannel" -> openSystem(activity, Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName).putExtra(Settings.EXTRA_CHANNEL_ID, App.CH_ITEMS))
+            "overlay" -> openSystem(activity, Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${activity.packageName}")))
+            "batteryOptimisation" -> openBatterySettings(activity)
+            "instantDelivery" -> onHome()
+            "reader" -> onSettings()
+        }
+    }
+
+    ScreenColumn(padding = 16.dp) {
+        HeaderRow(title = {
+            Text(LabText["$S.title"], style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
+        }) {
+            SecondaryButton("Done") { onBack() }
+        }
+        Section {
+            checks.forEachIndexed { i, c ->
+                if (i > 0) HorizontalDivider(color = Ink)
+                InboxCheckLine(LabText["$S.checks.${c.id}"], c.ok, checkButton(c.id)) { fix(c.id) }
+            }
+        }
+
+        Section {
+            PrimaryButton(LabText["$S.readerTest"]) {
+                testError = null
+                val item = InboxLab.startReaderTest(activity)
+                if (item == null) testError = InboxText.OUT_OF_SPACE else testId = item.id
+            }
+            testError?.let { Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced()) }
+            val test = received.firstOrNull { it.id == testId }
+            if (test != null) {
+                val inReader = test.confirmedInReader
+                Column(Modifier.fillMaxWidth().testTag(INBOX_READER_TEST_TAG)) {
+                    Text(
+                        if (inReader) LabText.fill(LabText["$S.ok"], mapOf("check" to LabText["$S.inReader"])) else LabText["$S.inReader"],
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    // Until the Reader confirms it: the item's own words ("Waiting", "Handed to the Reader", …).
+                    if (!inReader) Text(test.readerLabel, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced())
+                }
+            }
+        }
+
+        Section {
+            SecondaryButton(LabText["$S.activity"]) { showLog = !showLog }
+            if (showLog) {
+                val lines = remember(showLog, received) { ActivityLog.read(activity).map(SetupCheck::activityLine) }
+                Text(lines.joinToString("\n").ifEmpty { LabText["diagnostics.noEvents"] }, style = MaterialTheme.typography.bodySmall)
+            }
+            SecondaryButton(LabText["$S.copyDiagnostics"]) {
+                scope.launch {
+                    val report = inboxDiagnostics(app, sync.lastCheck)
+                    copyText(activity, LabText["$S.copyDiagnostics"], report)
+                    copied = true
+                }
+            }
+            if (copied) Text(LabText["$S.copied"], style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced())
+        }
+    }
+}
+
+/**
+ * The button of an unmet check (F26.3): "Open Settings" for Android's settings, "Open setting" for this app's own
+ * (Instant delivery, Deliver to). The Reader's read-later is the Reader's own setting: no button here.
+ */
+private fun checkButton(id: String): String? = when (id) {
+    "notifications", "newItemsChannel", "overlay", "batteryOptimisation" -> LabText.button("needs-notifications")
+    "instantDelivery", "reader" -> LabText.button("needs-quick-sends")
+    else -> null
+}
+
+/** Opens one of Android's settings screens; when the device has none for it, the app's details. */
+private fun openSystem(context: Context, intent: Intent) {
+    try {
+        context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    } catch (e: ActivityNotFoundException) {
+        runCatching {
+            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
+}
+
+/** One check: "✓ {check}" or "! {check}", and for an unmet one its [button]. */
+@Composable
+private fun InboxCheckLine(check: String, ok: Boolean, button: String?, onFix: () -> Unit) {
+    Column(Modifier.fillMaxWidth()) {
+        Text(LabText.fill(LabText[if (ok) "setup.ok" else "setup.notOk"], mapOf("check" to check)), style = MaterialTheme.typography.bodyLarge)
+        if (!ok && button != null) SecondaryButton(button) { onFix() }
+    }
+}
+
+/**
+ * Copy diagnostics on the Inbox (F26): the app, version and platform ("inbox"), Lab on or off, the caps this Daylight
+ * says it has, its last check, no outbox (it sends none), the relay as "ntfy.sh" or "custom relay", and the last 50
+ * events, all through `SetupCheck.diagnosticsReport` (redacted).
+ */
+private suspend fun inboxDiagnostics(app: App, lastCheck: Long): String = withContext(Dispatchers.IO) {
+    SetupCheck.diagnosticsReport(
+        app = LabText.appName(InboxLab.PLATFORM),
+        version = BuildConfig.VERSION_NAME,
+        platform = InboxLab.PLATFORM,
+        lab = app.prefs.lab,
+        caps = runCatching { app.labReporter.caps() }.getOrDefault(emptyList()),
+        checkedIn = lastCheck.takeIf { it > 0 },
+        statuses = emptyList(),
+        relay = app.prefs.inboxRelay,
+        log = ActivityLog.read(app),
+        now = System.currentTimeMillis(),
+    )
 }

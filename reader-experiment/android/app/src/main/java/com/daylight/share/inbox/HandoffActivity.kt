@@ -45,8 +45,11 @@ import kotlinx.coroutines.launch
  * brings it back, so it ends and announces what still waits rather than block every later hand-off.
  */
 class HandoffActivity : ComponentActivity() {
-    /** What a running hand-off takes: [mode], the [picked] items, and "Documents" ([docs]) as it started. */
-    data class Claim(val mode: String, val picked: Set<String>, val docs: DocumentMode)
+    /**
+     * What a running hand-off takes: [mode], the [picked] items, and "Documents" ([docs]) as it started; [lab]: Lab was
+     * on, so items kept for later are left out unless picked (F15).
+     */
+    data class Claim(val mode: String, val picked: Set<String>, val docs: DocumentMode, val lab: Boolean = false)
 
     private var mode = MODE_ALL
     /** Items a notification's or the card's tap asked for ([MODE_ONE], or added to a hand-off already running). */
@@ -54,6 +57,8 @@ class HandoffActivity : ComponentActivity() {
     /** Those of [picked] that came from the card over the Reader (logged `by=card`). */
     private val fromCard = HashSet<String>()
     private var docs = DocumentMode.DEFAULT
+    /** Lab was on when this hand-off started (F15: items kept for later wait unless picked). */
+    private var lab = false
     private var myClaim: Claim? = null
     private var pending: CompletableDeferred<ActivityResult>? = null
     private val launcher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
@@ -75,6 +80,7 @@ class HandoffActivity : ComponentActivity() {
         mode = intent?.getStringExtra(EXTRA_MODE) ?: MODE_ALL
         intent?.let { pick(it) }
         docs = App.of(this).prefs.documentMode
+        lab = App.of(this).prefs.lab
         claimNow()
         // Our card shows only until the Reader's own card is up (two stacked cards look messy on e-paper).
         setContent { DaylightTheme { if (message.value.isNotEmpty()) StatusCard(message.value) } }
@@ -99,7 +105,7 @@ class HandoffActivity : ComponentActivity() {
                 val left = app.inbox.waiting()
                 if (left.isEmpty()) Handoff.cancelNotification(this@HandoffActivity) else Handoff.notifyWaiting(this@HandoffActivity, left)
                 // The Reader is importing: what this hand-off wanted and could not take yet is offered again after the gap.
-                if (importStarted && left.any { wanted(mode, picked, it, docs) }) {
+                if (importStarted && left.any { wanted(mode, picked, it, docs, lab) }) {
                     logi("hand-off: ${left.size} still waiting; offered again in ${IMPORT_GAP_MS / 1000} s")
                     Handler(Looper.getMainLooper()).postDelayed({ Handoff.dispatch(app) }, IMPORT_GAP_MS + 1_000)
                 }
@@ -176,7 +182,7 @@ class HandoffActivity : ComponentActivity() {
 
     /** Tells [Handoff.notifyWaiting] which items this hand-off is taking, so they are not announced meanwhile. */
     private fun claimNow() {
-        val c = Claim(mode, picked.toSet(), docs)
+        val c = Claim(mode, picked.toSet(), docs, lab)
         myClaim = c
         claim = c
     }
@@ -193,7 +199,7 @@ class HandoffActivity : ComponentActivity() {
         val attempted = HashSet<String>()
         var handed = 0
         while (true) {
-            val waiting = repo.waiting().filter { it.id !in attempted && wanted(mode, picked, it, docs) }
+            val waiting = repo.waiting().filter { it.id !in attempted && wanted(mode, picked, it, docs, lab) }
             if (waiting.isEmpty()) break
             val link = waiting.firstOrNull { it.kind != Kind.FILE }
             if (link != null) {
@@ -214,7 +220,7 @@ class HandoffActivity : ComponentActivity() {
                 message.value = if (waiting.size > 1) "Adding ${waiting.size} documents to Daylight Reader in a moment…"
                 else "Adding “${waiting[0].displayTitle.take(60)}” to Daylight Reader in a moment…"
                 delay(wait)
-                batch = repo.waiting().filter { it.kind == Kind.FILE && wanted(mode, picked, it, docs) }
+                batch = repo.waiting().filter { it.kind == Kind.FILE && wanted(mode, picked, it, docs, lab) }
                 attempted += batch.map { it.id }
                 if (batch.isEmpty()) break
                 if (batch.size != waiting.size) logi("documents: handing over ${batch.size} together")
@@ -238,6 +244,8 @@ class HandoffActivity : ComponentActivity() {
             if (!route.path.expectsResult && !importGap(item)) return false
             withResumed { }
             val status = start(route, item) ?: continue
+            // Lab (F26): Setup check's "The Reader’s read-later" remembers a refusal until the Reader takes one again.
+            if (route.path == Path.SAVE_PAGE) InboxLab.noteSavePage(App.of(this), status)
             if (status == "refused" && route.path == Path.SAVE_PAGE) {
                 logi("received ${item.id} kind=${item.kind} -> handed to ${route.pkg} via ${route.path.key} status=refused")
                 val retry = Routes.sendLink(this, route.pkg, item.id, item.url ?: continue, item.title) ?: continue
@@ -327,7 +335,8 @@ class HandoffActivity : ComponentActivity() {
 
     private fun mark(item: InboxItem, route: Route, status: String) {
         App.of(this).inbox.setItem(item.id) {
-            it.copy(state = InboxItem.IN_READER, deliveredTo = route.pkg, via = route.path.key, readerStatus = status, handedAt = System.currentTimeMillis())
+            // Handed over: no longer kept for later (F15).
+            it.copy(state = InboxItem.IN_READER, deliveredTo = route.pkg, via = route.path.key, readerStatus = status, handedAt = System.currentTimeMillis(), held = false)
         }
     }
 
@@ -343,6 +352,10 @@ class HandoffActivity : ComponentActivity() {
             else -> "front"
         }
         logi("received ${item.id} kind=${item.kind} -> handed to ${route.pkg} via ${route.path.key} status=$status" + (if (docs != null) " docs=${docs.key}" else "") + " by=$by")
+        val app = App.of(this)
+        com.daylight.share.sender.ActivityLog.add(app, "handoff", item.id, item.kind, status)
+        // Lab (F15): handed over by itself (no tap): "Saved to the Reader", once, unless it had a notice before.
+        if (by == "auto" || by == "front") ArrivalNotices.saved(app, app.inbox.get(item.id) ?: item, status)
     }
 
     /** How long to wait before the next import hand-off may start (0 = now). */
@@ -411,7 +424,7 @@ class HandoffActivity : ComponentActivity() {
         /** Whether a running hand-off is taking [item] (it is not announced meanwhile). */
         fun claims(item: InboxItem): Boolean {
             val c = claim ?: return false
-            return running && wanted(c.mode, c.picked, item, c.docs)
+            return running && wanted(c.mode, c.picked, item, c.docs, c.lab)
         }
 
         fun intent(context: Context, mode: String): Intent =
@@ -428,11 +441,15 @@ class HandoffActivity : ComponentActivity() {
         fun itemsOf(intent: Intent): List<String> =
             (listOfNotNull(intent.getStringExtra(EXTRA_ITEM)) + intent.getStringArrayExtra(EXTRA_ITEMS).orEmpty()).distinct()
 
-        /** Whether a hand-off in [mode] takes [item]: everything ([MODE_ALL]), the tapped items, and in [MODE_AUTO] what goes without a tap. */
-        fun wanted(mode: String, picked: Set<String>, item: InboxItem, docs: DocumentMode): Boolean = when (mode) {
-            MODE_ALL -> true
+        /**
+         * Whether a hand-off in [mode] takes [item]: everything ([MODE_ALL]), the tapped items, and in [MODE_AUTO] what
+         * goes without a tap. With [lab], an item kept for later goes only when it was tapped (F15: it waits for Add to
+         * Reader).
+         */
+        fun wanted(mode: String, picked: Set<String>, item: InboxItem, docs: DocumentMode, lab: Boolean = false): Boolean = when (mode) {
+            MODE_ALL -> item.id in picked || !InboxLab.keptForLater(item, lab)
             MODE_ONE -> item.id in picked
-            else -> item.id in picked || Handoff.takesWithoutTap(item, docs)
+            else -> item.id in picked || (!InboxLab.keptForLater(item, lab) && Handoff.takesWithoutTap(item, docs))
         }
     }
 }

@@ -51,10 +51,24 @@ data class InboxItem(
     val readerStatus: String? = null,
     val handedAt: Long = 0,
     /**
-     * Where it came from: [LANE_PAIRING], the pairing's inbox topic (every item today), or [LANE_SERVER], the Daylight
-     * server's lane (Wave S, S0). Server-lane items get no Lab states (LAB-PROTOCOL 2.2.4): no sender holds their ids.
+     * Where it came from: [LANE_PAIRING], the pairing's inbox topic (every item today), [LANE_SERVER], the Daylight
+     * server's lane (Wave S, S0), or [LANE_LOCAL], made on this Daylight (Setup check's Reader hand-off test, F26).
+     * Only pairing-lane items get Lab states (LAB-PROTOCOL 2.2.4): no sender holds the others' ids.
      */
     val lane: String = LANE_PAIRING,
+    /**
+     * Lab (K5): the item header's checked extras (LAB-PROTOCOL 2.3): `x-cap` when it is one of its four values and
+     * `x-orig` when it passes the web URL rule, from part 0. Stored whatever the Lab switch says (Lab off never
+     * deletes them); the Lab Inbox shows them (the row's kind line, "Cleaned from {host}").
+     */
+    val extras: Map<String, String> = emptyMap(),
+    /**
+     * Lab (F15): kept for later on purpose (Keep for later on its notice or card, or its notice swiped away, with Lab
+     * on). While Lab is on nothing hands it over by itself: it waits, marked "Kept for later", until Add to Reader.
+     */
+    val held: Boolean = false,
+    /** Lab (F01): the last state this Inbox recorded for its senders (2.2.3), for "Sender sees: {label}"; null: none. */
+    val labState: String? = null,
 ) {
     val displayTitle: String
         get() = title?.takeIf { it.isNotBlank() } ?: name?.takeIf { it.isNotBlank() } ?: url ?: "Untitled"
@@ -77,7 +91,13 @@ data class InboxItem(
         "id" to id, "kind" to kind, "url" to url, "title" to title, "name" to name, "mime" to mime, "size" to size,
         "from" to from, "app" to app, "sent" to sent, "received" to received, "file" to file, "state" to state,
         "deliveredTo" to deliveredTo, "via" to via, "readerStatus" to readerStatus, "handedAt" to handedAt,
-    ).also { if (lane != LANE_PAIRING) it["lane"] = lane }
+    ).also {
+        // Lab's fields only when set: an item without them is stored exactly as v1.1 stores it.
+        if (lane != LANE_PAIRING) it["lane"] = lane
+        if (extras.isNotEmpty()) it["extras"] = LinkedHashMap(extras)
+        if (held) it["held"] = true
+        if (labState != null) it["labState"] = labState
+    }
 
     companion object {
         /** Waiting for the hand-off to the Reader. */
@@ -96,6 +116,8 @@ data class InboxItem(
         const val LANE_PAIRING = "pairing"
         /** [lane]: the Daylight server's lane (Wave S). */
         const val LANE_SERVER = "server"
+        /** [lane]: made on this Daylight (Setup check's Reader hand-off test, F26): no sender, no Lab states. */
+        const val LANE_LOCAL = "local"
 
         fun fromJson(m: Map<String, Any?>): InboxItem? {
             val id = m["id"] as? String ?: return null
@@ -107,8 +129,16 @@ data class InboxItem(
                 size = l("size"), from = s("from"), app = s("app"), sent = s("sent") ?: "", received = l("received"),
                 file = s("file"), state = s("state") ?: WAITING, deliveredTo = s("deliveredTo"), via = s("via"),
                 readerStatus = s("readerStatus"), handedAt = l("handedAt"), lane = s("lane") ?: LANE_PAIRING,
+                // Lab (K5): the extras as stored (accept() kept only the checked ones), the held mark, the last state.
+                extras = (m["extras"] as? Map<*, *>)?.entries
+                    ?.mapNotNull { (k, v) -> if (k is String && v is String && k in EXTRA_KEYS) k to v else null }?.toMap() ?: emptyMap(),
+                held = m["held"] == true,
+                labState = s("labState"),
             )
         }
+
+        /** The extras an item keeps (LAB-PROTOCOL 2.3): `x-cap` and `x-orig`. */
+        private val EXTRA_KEYS = setOf(ItemHeader.X_CAP, ItemHeader.X_ORIG)
     }
 }
 
@@ -369,10 +399,14 @@ class InboxRepo(private val app: App) {
         val item = InboxItem(
             id = h.id, kind = h.kind, url = h.url, title = h.title, name = h.name, mime = h.mime, size = h.size ?: 0,
             from = h.from, app = h.app, sent = h.sent, received = System.currentTimeMillis(), file = rel,
+            // Lab (K5): the header's checked extras (x-cap, x-orig), kept with Lab on or off (LAB-PROTOCOL 2.3).
+            extras = h.extras,
         )
         update { list -> listOf(item) + list.filter { it.id != item.id } }
         if (sync.value.storeFull) sync.value = sync.value.copy(storeFull = false)
         logi("received ${h.id} kind=${h.kind} from=${h.from ?: "?"} size=${h.size ?: 0} stored")
+        // Lab (F26): the activity log (type, id8, kind, status; nothing else).
+        com.daylight.share.sender.ActivityLog.add(app, "received", h.id, h.kind, "stored")
     }
 
     /** Moves [src] to [dest] (tests replace it to make the file system refuse a name). */
@@ -423,8 +457,37 @@ class InboxRepo(private val app: App) {
         File(filesRoot, id).deleteRecursively()
     }
 
-    /** Puts items back in the queue for the Reader ("Add to Reader" again). */
-    fun requeue(id: String) = setItem(id) { it.copy(state = InboxItem.WAITING) }
+    /** Puts items back in the queue for the Reader ("Add to Reader" again; a kept item is no longer kept). */
+    fun requeue(id: String) = setItem(id) { it.copy(state = InboxItem.WAITING, held = false) }
+
+    /** Lab (F15): marks waiting items [ids] kept for later. -> the ids marked. */
+    fun markHeld(ids: Collection<String>): List<String> {
+        val want = ids.toSet()
+        val marked = _items.value.filter { it.id in want && it.state == InboxItem.WAITING && !it.held }.map { it.id }
+        if (marked.isNotEmpty()) update { list -> list.map { if (it.id in marked) it.copy(held = true) else it } }
+        return marked
+    }
+
+    /**
+     * Lab (F26): Setup check's "Test the Reader hand-off": the bundled test article (`SetupCheck.testArticle`, about
+     * 400 words, `x-cap: "test"`) stored as a page made on this Daylight ([InboxItem.LANE_LOCAL]: no sender, no Lab
+     * state), waiting for its hand-off. The caller hands it over through the normal hand-off. -> the item.
+     */
+    fun addReaderTest(): InboxItem {
+        val t = com.daylight.share.core.lab.SetupCheck.testArticle(device = app.prefs.deviceName)
+        val folder = File(filesRoot, t.id)
+        if (!folder.isDirectory && !folder.mkdirs()) throw IOException("could not create the item's folder")
+        val bytes = withUtf8Meta(t.content.toByteArray(Charsets.UTF_8))
+        File(folder, "page.html").writeBytes(bytes)
+        val item = InboxItem(
+            id = t.id, kind = t.kind, url = t.url, title = t.title, mime = "text/html", size = bytes.size.toLong(),
+            sent = "", received = System.currentTimeMillis(), file = "${t.id}/page.html",
+            lane = InboxItem.LANE_LOCAL, extras = t.extras,
+        )
+        update { list -> listOf(item) + list.filter { it.id != item.id } }
+        logi("lab: reader hand-off test ${t.id} stored")
+        return item
+    }
 
     @Synchronized
     private fun update(transform: (List<InboxItem>) -> List<InboxItem>) {

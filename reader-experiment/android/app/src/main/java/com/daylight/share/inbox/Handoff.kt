@@ -24,6 +24,7 @@ import com.daylight.share.Prefs
 import com.daylight.share.R
 import com.daylight.share.core.Kind
 import com.daylight.share.core.Limits
+import com.daylight.share.core.lab.LabText
 import com.daylight.share.logi
 import com.daylight.share.logw
 import com.daylight.share.ui.MainActivity
@@ -367,7 +368,12 @@ object Handoff {
     private fun dispatchNow(context: Context) {
         val app = App.of(context)
         if (app.prefs.role != com.daylight.share.Role.INBOX) return
-        val waiting = app.inbox.waiting()
+        val all = app.inbox.waiting()
+        // Lab (F15): an item kept for later waits for Add to Reader: nothing hands it over by itself, and its notice
+        // (if it still has one) stays as it is.
+        val lab = app.prefs.lab
+        val kept = all.filter { InboxLab.keptForLater(it, lab) }
+        val waiting = if (kept.isEmpty()) all else all.filterNot { InboxLab.keptForLater(it, lab) }
         val front = app.front
         val docs = app.prefs.documentMode
         // "Deliver to" may take only links or only documents; the rest goes to Automatic (ReaderApps.targetsFor).
@@ -381,12 +387,12 @@ object Handoff {
         }
         val start = plan.start
         if (start == null) {
-            notifyWaiting(context, plan.notify, docs)
+            notifyWaiting(context, plan.notify + kept, docs)
             return
         }
         // One hand-off at a time: it picks up whatever arrives while it runs. Documents that wait are announced now.
         if (HandoffActivity.running || System.currentTimeMillis() - HandoffActivity.requestedAt < 5_000) {
-            if (start == HandoffActivity.MODE_AUTO) notifyWaiting(context, plan.notify, docs)
+            if (start == HandoffActivity.MODE_AUTO) notifyWaiting(context, plan.notify + kept, docs)
             return
         }
         HandoffActivity.requestedAt = System.currentTimeMillis()
@@ -399,7 +405,7 @@ object Handoff {
             notifyWaiting(context, app.inbox.waiting(), docs)
             return
         }
-        notifyWaiting(context, plan.notify, docs)
+        notifyWaiting(context, plan.notify + kept, docs)
     }
 
     // ---------------------------------------------------------------------------------------------- notifications
@@ -467,6 +473,9 @@ object Handoff {
         prefs?.addNoticeIds(Prefs.NOTICE_ANNOUNCED, fresh.map { it.id })
         // Lab (F17): an item announced for the first time waits for a tap; its senders see "Waiting for a tap".
         app?.labReporter?.announced(fresh)
+        // Lab (F15): these had a notice, so no "Saved to the Reader" follows when they are handed over.
+        if (app != null) ArrivalNotices.noted(app, fresh.map { it.id })
+        val lab = prefs?.lab == true
 
         // The card stays over the Reader until answered: an e-paper reader can miss a pop-up that shows for a few seconds.
         val card = WaitingCard.update(context, due.filter { it.id !in later }, pop = fresh.isNotEmpty())
@@ -481,7 +490,9 @@ object Handoff {
             return
         }
 
-        val plan = Notices.plan(due, seen = announced, quiet = card)
+        // Lab (F15): during "Quiet hours" nothing alerts.
+        val hush = lab && app != null && InboxLab.quietHoursNow(app)
+        val plan = Notices.plan(due, seen = announced, quiet = card || hush, lab = lab)
         val compat = NotificationManagerCompat.from(context)
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         val open = PendingIntent.getActivity(context, 2, Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), flags)
@@ -493,6 +504,10 @@ object Handoff {
             )
             val swiped = PendingIntent.getBroadcast(
                 context, n.id.hashCode(), Intent(context, NoticeDismissedReceiver::class.java).setAction(ACTION_DISMISSED).setData(itemUri(n.id)), flags,
+            )
+            // Lab (F15): Keep for later, next to Add to Reader (the tap), on the notice itself.
+            val keep = if (!lab) null else PendingIntent.getBroadcast(
+                context, n.id.hashCode(), Intent(context, ArrivalActionReceiver::class.java).setAction(ArrivalActionReceiver.ACTION_KEEP).setData(itemUri(n.id)), flags,
             )
             val b = NotificationCompat.Builder(context, App.CH_ITEMS)
                 .setSmallIcon(R.drawable.ic_notify)
@@ -509,7 +524,13 @@ object Handoff {
                 .setAutoCancel(true)
                 .setContentIntent(tap)
                 .setDeleteIntent(swiped)
-                .addAction(0, "Open Inbox", open)
+            // Lab (F15): the notice's two actions, Add to Reader and Keep for later; v1.1: Open Inbox.
+            if (keep != null) {
+                b.addAction(0, LabText["arrivals.addToReader"], tap)
+                b.addAction(0, LabText["arrivals.keepForLater"], keep)
+            } else {
+                b.addAction(0, "Open Inbox", open)
+            }
             if (!n.alert) b.setSilent(true)
             runCatching { compat.notify(n.id, ITEM_NOTIFICATION, b.build()) }.onFailure { logw("notification not shown", it) }
         }
@@ -550,9 +571,32 @@ object Handoff {
         val app = context.applicationContext as? App ?: return
         app.prefs.addNoticeIds(Prefs.NOTICE_DISMISSED, listOf(id))
         logi("received $id -> notification dismissed: waits in the Inbox")
-        // Lab (F17): kept for later on purpose ("Kept for later on your Daylight").
+        // Lab (F15): kept for later on purpose, marked so (it waits for Add to Reader), and its senders see "Kept for
+        // later on your Daylight" (F17).
+        if (app.prefs.lab) app.inbox.markHeld(listOf(id))
         app.labReporter.held(listOf(id))
+        app.inbox.get(id)?.let { com.daylight.share.sender.ActivityLog.add(app, "held", id, it.kind, "swiped") }
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
+        val up = shownIds(nm) + WaitingCard.ids
+        notifyWaiting(context, app.inbox.waiting().filter { it.id in up })
+    }
+
+    /**
+     * Lab (F15): **Keep for later** on [id]'s notice: the notice goes and is not posted again, the card does not show it
+     * again, and the item waits in the Inbox, marked "Kept for later", until Add to Reader (nothing hands it over by
+     * itself); its senders see "Kept for later on your Daylight" (`held`).
+     */
+    fun keepForLater(context: Context, id: String) {
+        val app = context.applicationContext as? App ?: return
+        val nm = context.getSystemService(NotificationManager::class.java)
+        nm?.cancel(id, ITEM_NOTIFICATION)
+        app.prefs.addNoticeIds(Prefs.NOTICE_DISMISSED, listOf(id))
+        app.prefs.addNoticeIds(Prefs.NOTICE_LATER, listOf(id))
+        if (app.prefs.lab) app.inbox.markHeld(listOf(id))
+        app.labReporter.held(listOf(id))
+        logi("received $id -> kept for later: waits in the Inbox")
+        app.inbox.get(id)?.let { com.daylight.share.sender.ActivityLog.add(app, "held", id, it.kind, "notice") }
+        if (nm == null) return
         val up = shownIds(nm) + WaitingCard.ids
         notifyWaiting(context, app.inbox.waiting().filter { it.id in up })
     }
@@ -576,8 +620,14 @@ object Notices {
     data class Item(val id: String, val title: String, val heading: String, val text: String, val alert: Boolean)
     data class Summary(val title: String, val text: String, val lines: List<String>)
     data class Plan(val items: List<Item>, val summary: Summary?)
-    /** The card over the Reader: [heading] ("New PDF from iPhone"), [body] (the title, or a line per item), [add] (its button). */
-    data class Card(val heading: String, val body: String, val add: String)
+    /**
+     * The card over the Reader: [heading] ("New PDF from iPhone"), [body] (the title, or a line per item), [add] (its
+     * button) and [later] (the other one: "Later", or with Lab on "Keep for later", F15).
+     */
+    data class Card(val heading: String, val body: String, val add: String, val later: String = LATER)
+
+    /** The card's v1.1 "Later". */
+    const val LATER = "Later"
 
     /** "PDF", "EPUB", "Word document", …, "link", "web page". */
     fun kind(item: InboxItem): String {
@@ -603,28 +653,38 @@ object Notices {
 
     fun title(item: InboxItem): String = "${heading(item)}: ${item.displayTitle}"
 
-    private fun several(sorted: List<InboxItem>): String {
+    private fun several(sorted: List<InboxItem>, lab: Boolean = false): String {
         val senders = sorted.map(::sender).distinct()
+        // Lab (F15): waiting excerpts from one sender share one notice, "3 excerpts from iPhone".
+        if (lab && senders.size == 1 && sorted.all(InboxLab::isExcerpt)) {
+            return LabText.fill(LabText["arrivals.excerptsGroup"], mapOf("n" to sorted.size, "from" to senders[0]))
+        }
         return if (senders.size == 1) "${sorted.size} new from ${senders[0]}" else "${sorted.size} new items"
     }
 
     /**
      * One notice per item, oldest first, and a summary when there are several. Only the newest item not in [seen] (never
-     * announced before) alerts, and none when [quiet] (the card shows them instead).
+     * announced before) alerts, and none when [quiet] (the card shows them instead, or Quiet hours). With [lab], the
+     * summary of excerpts from one sender reads "3 excerpts from iPhone" (F15).
      */
-    fun plan(items: List<InboxItem>, seen: Set<String>, quiet: Boolean = false): Plan {
+    fun plan(items: List<InboxItem>, seen: Set<String>, quiet: Boolean = false, lab: Boolean = false): Plan {
         val sorted = items.sortedBy { it.received }
         val newest = if (quiet) null else sorted.lastOrNull { it.id !in seen }?.id
         val notices = sorted.map { Item(it.id, title(it), heading(it), TAP, alert = it.id == newest) }
         if (sorted.size < 2) return Plan(notices, null)
-        return Plan(notices, Summary(several(sorted), "Tap to add them to the Reader", sorted.map { "${kind(it)}: ${it.displayTitle}" }))
+        return Plan(notices, Summary(several(sorted, lab), "Tap to add them to the Reader", sorted.map { "${kind(it)}: ${it.displayTitle}" }))
     }
 
-    /** The card for [items]: one item by its kind, sender and title; several as "3 new from iPhone" and a line each (up to three). */
-    fun card(items: List<InboxItem>): Card {
+    /**
+     * The card for [items]: one item by its kind, sender and title; several as "3 new from iPhone" and a line each (up
+     * to three). With [lab] (F15): its other button is "Keep for later", and excerpts from one sender are "3 excerpts
+     * from iPhone".
+     */
+    fun card(items: List<InboxItem>, lab: Boolean = false): Card {
         val sorted = items.sortedBy { it.received }
-        if (sorted.size == 1) return Card(heading(sorted[0]), sorted[0].displayTitle, "Add to Reader")
+        val later = if (lab) LabText["arrivals.keepForLater"] else LATER
+        if (sorted.size == 1) return Card(heading(sorted[0]), sorted[0].displayTitle, "Add to Reader", later)
         val lines = sorted.take(3).map { "${kind(it)}: ${it.displayTitle}" } + if (sorted.size > 3) listOf("and ${sorted.size - 3} more") else emptyList()
-        return Card(several(sorted), lines.joinToString("\n"), "Add all to Reader")
+        return Card(several(sorted, lab), lines.joinToString("\n"), "Add all to Reader", later)
     }
 }

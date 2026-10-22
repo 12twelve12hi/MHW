@@ -398,6 +398,46 @@ class Prefs(private val context: Context) {
         sp.edit().putStringSet("labInPlace", HashSet(ids)).apply()
     }
 
+    // Lab: K5 (the DC-1 Inbox's Wave 1 features, LAB-PLAN 3.3). Like the switch, these belong to the device: never
+    // synced, never in a pairing link, and Lab off leaves them as they are (1.3).
+
+    /** F15: "Arrival notices": "off", "quiet" (default) or "alert" (`inbox.Arrivals`). */
+    var labArrivals: String
+        get() = sp.getString("labArrivals", null) ?: "quiet"
+        set(v) = sp.edit().putString("labArrivals", v).apply()
+
+    /** F15: "Quiet hours" (off by default): arrival notices go silently from 22:00 to 07:00. */
+    var labQuietHours: Boolean
+        get() = sp.getBoolean("labQuietHours", false)
+        set(v) = sp.edit().putBoolean("labQuietHours", v).apply()
+
+    /** F15: Instant delivery's last heartbeat (ms), written every minute while its service runs with Lab on. */
+    var labInstantBeat: Long
+        get() = sp.getLong("labInstantBeat", 0L)
+        set(v) = sp.edit().putLong("labInstantBeat", v).apply()
+
+    /** F15: when the "Instant delivery stopped" notice was last posted (ms); at most once every 12 hours. */
+    var labHealthNoticeAt: Long
+        get() = sp.getLong("labHealthNoticeAt", 0L)
+        set(v) = sp.edit().putLong("labHealthNoticeAt", v).apply()
+
+    /** F15: the Inbox's items that already had a notice (a waiting item's, or "Saved to the Reader"): never another. */
+    fun labNoticedIds(): Set<String> = sp.getStringSet("labNoticed", null)?.toSet() ?: emptySet()
+
+    fun setLabNoticedIds(ids: Set<String>) {
+        sp.edit().putStringSet("labNoticed", HashSet(ids)).apply()
+    }
+
+    /** F26: when the Reader last refused SAVE_PAGE (its read-later turned off), ms; 0 after it took one again. */
+    var labReadLaterRefusedAt: Long
+        get() = sp.getLong("labReadLaterRefusedAt", 0L)
+        set(v) = sp.edit().putLong("labReadLaterRefusedAt", v).apply()
+
+    /** F26: the id of the last "Test the Reader hand-off" item, whose result Setup check shows. */
+    var labReaderTestId: String?
+        get() = sp.getString("labReaderTestId", null)
+        set(v) = sp.edit().putString("labReaderTestId", v).apply()
+
     fun senderPairing(): Pairing? = senderLink?.let { runCatching { Pairing.parse(it) }.getOrNull() }
 
     private fun defaultDeviceName(): String {

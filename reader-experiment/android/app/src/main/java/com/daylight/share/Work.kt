@@ -15,11 +15,13 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.daylight.share.inbox.Handoff
+import com.daylight.share.inbox.InboxHealth
 import java.util.concurrent.TimeUnit
 
 /**
  * Background work for both roles: the Inbox polls its topic and hands new items on; a sender publishes what is due,
- * reads acks and re-sends (PROTOCOL 3.3 and 3.4). Every 15 minutes, plus on demand.
+ * reads acks and re-sends (PROTOCOL 3.3 and 3.4). Every 15 minutes, plus on demand. Lab (F15, K5): on the Inbox the
+ * job also checks that Instant delivery, when on, is still running, and says so in "Inbox health" when it stopped.
  */
 object Work {
     private const val PERIODIC = "dls-periodic"
@@ -65,6 +67,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             Role.INBOX -> {
                 app.inbox.pollOnce()
                 Handoff.dispatch(app)
+                // Lab (F15): "Instant delivery stopped", at most once every 12 hours (Lab on only).
+                runCatching { InboxHealth.checkInBackground(app) }.onFailure { logw("lab: health check failed: ${it.message}") }
             }
             Role.SENDER -> app.sender.tick()
             null -> Unit

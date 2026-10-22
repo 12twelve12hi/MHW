@@ -53,7 +53,9 @@ import java.time.Duration
 /**
  * What the Inbox does with an item that arrives while it is not in front: hand it over now, or announce it (a
  * notification whose tap hands it over, and the card over the Reader); how "Documents" (ask / quiet / open) and
- * "Deliver to" route it; and what the hand-off activity then starts, records and logs.
+ * "Deliver to" route it; and what the hand-off activity then starts, records and logs. These are v1.1's decisions, so
+ * they run with Lab off (LAB-PLAN 1.3: with Lab off every flow is the last non-Lab build's); what Lab changes on the
+ * Inbox (F15: Keep for later, the notices' actions, "Saved to the Reader") is [ArrivalNoticesTest]'s.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -74,6 +76,7 @@ class HandoffDecisionsTest {
         HandoffActivity.claim = null
         HandoffActivity.lastImportHandoff = 0L
         WaitingCard.forget()
+        app.setLab(false)
         // FileProvider caches its roots in a static map; every Robolectric test has a new files folder.
         FileProvider::class.java.declaredFields
             .filter { java.lang.reflect.Modifier.isStatic(it.modifiers) && Map::class.java.isAssignableFrom(it.type) }

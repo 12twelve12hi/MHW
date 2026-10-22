@@ -118,7 +118,13 @@ fun LabScreen(activity: MainActivity, page: LabPage, onBack: () -> Unit, onOpen:
     when (page) {
         LabPage.WHATS_IN_LAB -> WhatsInLab(activity, onBack, onOpen, focus)
         LabPage.SERVER -> ServerSection(activity, onBack)
-        LabPage.SETUP -> PhoneSetupCheck(activity, onBack = { onOpen(LabPage.WHATS_IN_LAB) }, onExit = onExit)
+        // The Inbox's Setup check (K5) has its own checks and the Reader hand-off test; "Open setting" goes to the
+        // Inbox screen (Instant delivery) or Settings (Deliver to).
+        LabPage.SETUP -> if (app.prefs.role == com.daylight.share.Role.INBOX) {
+            InboxSetupCheck(activity, onBack = { onOpen(LabPage.WHATS_IN_LAB) }, onHome = onExit, onSettings = onBack)
+        } else {
+            PhoneSetupCheck(activity, onBack = { onOpen(LabPage.WHATS_IN_LAB) }, onExit = onExit)
+        }
     }
 }
 
@@ -168,10 +174,11 @@ private fun WhatsInLab(activity: MainActivity, onBack: () -> Unit, onOpen: (LabP
             if (quick == null && tapped == n) note = Note(row.id, LabText.CHECKING, checking = true)
             val r = quick ?: gate.await()
             if (tapped != n) return@launch
-            // Ready: Setup check opens (F26, the phone); the other features have nothing more to open here (the server
-            // features are `later` once the server is ready).
+            // Ready: Setup check opens (F26, the phone and the Inbox); the other features have nothing more to open here
+            // (the server features are `later` once the server is ready; the Inbox's arrival notices have their
+            // settings on the Inbox screen).
             note = if (r.ready) null else Note(row.id, r.message ?: "", r.button)
-            if (r.ready && row.id == "F26" && app.prefs.role == com.daylight.share.Role.SENDER) onOpen(LabPage.SETUP)
+            if (r.ready && row.id == "F26") onOpen(LabPage.SETUP)
         }
     }
 

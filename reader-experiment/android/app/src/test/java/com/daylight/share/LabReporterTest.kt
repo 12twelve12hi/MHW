@@ -256,20 +256,21 @@ class LabReporterTest {
         val x = inboxOf(h)
         assertEquals(1.0, x["lab"])
         assertEquals("android/${BuildConfig.VERSION_NAME}", x["app"])
-        assertEquals(listOf("st", "tap"), x["caps"])
+        // cap-kind (W1, K5): the Inbox's rows show each item's x-cap kind (F03).
+        assertEquals(listOf("st", "tap", "cap-kind"), x["caps"])
         assertEquals(false, x["live"])
         val parsed = LabFrame.parse(h)
         assertNotNull(parsed.inbox)
         assertTrue(parsed.states.isEmpty())
         assertTrue("a small frame", relay.messages(keys.ackTopic).all { it.text.length <= 3_800 })
-        assertLogged("lab: hello caps=st,tap")
+        assertLogged("lab: hello caps=st,tap,cap-kind")
 
         // A Reader that confirms links and pages (SAVE_PAGE): the caps change, and the next flush says so.
         ScreenKit.installReader(app)
-        assertEquals(listOf("st", "tap", "reader-link"), reporter.caps())
+        assertEquals(listOf("st", "tap", "reader-link", "cap-kind"), reporter.caps())
         now += 31_000
         assertEquals("hello", reporter.flushNow()!!.kind)
-        assertEquals(listOf("st", "tap", "reader-link"), inboxOf(hellos().last())["caps"])
+        assertEquals(listOf("st", "tap", "reader-link", "cap-kind"), inboxOf(hellos().last())["caps"])
         // Nothing changed: nothing goes.
         now += 31_000
         assertEquals("idle", reporter.flushNow()!!.reason)

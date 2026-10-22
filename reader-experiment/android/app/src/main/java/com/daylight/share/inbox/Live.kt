@@ -21,6 +21,7 @@ import com.daylight.share.ui.MainActivity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -114,6 +115,9 @@ object Live {
 
 /** "Instant delivery": a foreground service that holds the live connection while the Inbox is not on screen. */
 class InstantDeliveryService : Service() {
+    /** Lab (F15): the heartbeat, every minute while the service runs ([InboxHealth.beat]). */
+    private var beat: Job? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -135,10 +139,22 @@ class InstantDeliveryService : Service() {
             return START_NOT_STICKY
         }
         Live.acquire(HOLDER)
+        // Lab (F15): running, with a heartbeat the Inbox's health card and the 15-minute job read.
+        running = true
+        beat?.cancel()
+        beat = app.scope.launch {
+            while (true) {
+                InboxHealth.beat(app)
+                delay(InboxHealth.BEAT_MS)
+            }
+        }
         return START_STICKY
     }
 
     override fun onDestroy() {
+        running = false
+        beat?.cancel()
+        beat = null
         Live.release(HOLDER)
         super.onDestroy()
     }
@@ -164,9 +180,18 @@ class InstantDeliveryService : Service() {
         private const val NOTIFICATION_ID = 8
         private const val HOLDER = "instant"
 
+        /** Lab (F15): whether the service runs in this process (set while it holds the live connection). */
+        @Volatile
+        var running = false
+
+        /** Lab (F15): when this process last asked Android to start the service (ms; 0 = not yet): it is starting. */
+        @Volatile
+        var startedAt = 0L
+
         fun start(context: Context) {
             try {
                 ContextCompat.startForegroundService(context, Intent(context, InstantDeliveryService::class.java))
+                startedAt = System.currentTimeMillis()
             } catch (e: Exception) {
                 // Android 12+ refuses to start it from the background; the next app start or boot does it.
                 logw("instant delivery not started: ${e.message}")

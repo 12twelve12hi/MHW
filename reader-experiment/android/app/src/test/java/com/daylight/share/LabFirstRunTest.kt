@@ -63,13 +63,14 @@ class LabFirstRunTest {
         assertTrue(app.prefs.lab)
         assertTrue(app.getSharedPreferences("daylight-share", Context.MODE_PRIVATE).contains("lab"))
         assertFalse(app.prefs.labNoteShown)
-        // The phone's W1 build has F01 and F04 (K4): the note shows; the Inbox's W1 (K5) is not built yet.
+        // The phone's W1 build has F01 and F04 (K4), and so does the Inbox's (K5, which records what its senders'
+        // timeline shows): the note shows in both roles until it is dismissed.
         MainScreen.SENDER.prepare(app)
         MainScreen.SENDER.open(compose)
         compose.onNodeWithText(LabText.NOTE).assertIsDisplayed()
         MainScreen.INBOX.prepare(app)
         MainScreen.INBOX.open(compose)
-        assertTrue("inbox: no one-time note before its W1 build", compose.onAllNodes(hasText(LabText.NOTE)).fetchSemanticsNodes().isEmpty())
+        compose.onNodeWithText(LabText.NOTE).assertIsDisplayed()
         openSettings()
         compose.onNode(isToggleable() and hasText(LabText.SWITCH_FOOTER)).assertIsOn()
         compose.onNodeWithText("${LabText.WHATS_IN_LAB} ›").assertIsDisplayed()
@@ -88,7 +89,8 @@ class LabFirstRunTest {
         val prefs = Prefs(app)
         assertTrue(prefs.ensureLabDefault())
         assertTrue(prefs.lab)
-        assertFalse("a W0 build shows no note", prefs.labNoteDue())
+        assertTrue("a W1 build shows the note after an upgrade too", prefs.labNoteDue())
+        assertFalse("a W0 build shows none", prefs.labNoteDue(enabled = false))
         assertTrue(prefs.senderPairing()!!.sameSecret(ScreenKit.senderPairing))
         runBlocking { app.sender.refresh() }
         assertEquals(rows, app.sender.rows.value.map { it.id })

@@ -55,8 +55,10 @@ class PrefsLabTest {
 
     @Test
     fun theOneTimeNoteNeedsABuildWithF01OrF04AndShowsOnce() {
-        assertFalse("a W0 build shows no one-time note", LAB_NOTE_ENABLED)
-        assertFalse(app.prefs.labNoteDue())
+        // The Inbox's W1 build (K5) has it, as the phone's (K4) does.
+        assertTrue("a W1 build shows the one-time note", LAB_NOTE_ENABLED)
+        assertTrue(app.prefs.labNoteDue())
+        assertFalse("a W0 build shows none", app.prefs.labNoteDue(enabled = false))
         assertTrue("a build with F01 or F04 shows it", app.prefs.labNoteDue(enabled = true))
         app.setLab(false)
         assertFalse("not with Lab off", app.prefs.labNoteDue(enabled = true))

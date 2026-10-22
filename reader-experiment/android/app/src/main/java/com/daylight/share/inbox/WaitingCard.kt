@@ -32,7 +32,8 @@ import com.daylight.share.logw
  *
  * - **Add to Reader** hands the card's items over ([HandoffActivity.forItems], logged `by=card`).
  * - **Later** takes the card down; the items wait in the Inbox and in the notification shade, and the card does not
- *   come back for them ([Prefs.NOTICE_LATER]).
+ *   come back for them ([Prefs.NOTICE_LATER]). With Lab on it reads **Keep for later** (F15): the items are also marked
+ *   kept for later, so nothing hands them over until Add to Reader, and their senders see "Kept for later".
  *
  * Shown and updated by [Handoff.notifyWaiting], on the main thread.
  */
@@ -129,10 +130,14 @@ object WaitingCard {
     }
 
     private fun later(context: Context, ids: List<String>) {
-        (context.applicationContext as? App)?.prefs?.addNoticeIds(Prefs.NOTICE_LATER, ids)
+        val app = context.applicationContext as? App
+        app?.prefs?.addNoticeIds(Prefs.NOTICE_LATER, ids)
+        // Lab (F15): Keep for later: marked kept, so it waits for Add to Reader.
+        if (app != null && app.prefs.lab) app.inbox.markHeld(ids)
         // Lab (F17): kept for later on purpose ("Kept for later on your Daylight").
-        (context.applicationContext as? App)?.labReporter?.held(ids)
+        app?.labReporter?.held(ids)
         logi("card: later for ${ids.joinToString(",")}: waits in the Inbox")
+        if (app != null) for (id in ids) app.inbox.get(id)?.let { com.daylight.share.sender.ActivityLog.add(app, "held", id, it.kind, "card") }
         hide(context)
     }
 
@@ -163,7 +168,8 @@ object WaitingCard {
         fun dp(v: Int) = (v * d).toInt()
         val comfort = (context.applicationContext as? App)?.prefs?.comfort == true
         val scale = if (comfort) com.daylight.share.ui.COMFORT_TEXT_SCALE else 1f
-        val words = Notices.card(items)
+        // Lab (F15): "Keep for later" for "Later", and excerpts from one sender grouped.
+        val words = Notices.card(items, lab = (context.applicationContext as? App)?.prefs?.lab == true)
         val ids = items.map { it.id }
         val box = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -201,9 +207,9 @@ object WaitingCard {
             // Stacked, full width: Add to Reader first.
             val full = { top: Int -> LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = top } }
             row.addView(button(context, words.add, TAG_ADD, filled = true, comfort = true) { add(context, ids) }, full(0))
-            row.addView(button(context, "Later", TAG_LATER, filled = false, comfort = true) { later(context, ids) }, full(dp(10)))
+            row.addView(button(context, words.later, TAG_LATER, filled = false, comfort = true) { later(context, ids) }, full(dp(10)))
         } else {
-            row.addView(button(context, "Later", TAG_LATER, filled = false) { later(context, ids) })
+            row.addView(button(context, words.later, TAG_LATER, filled = false) { later(context, ids) })
             row.addView(
                 button(context, words.add, TAG_ADD, filled = true) { add(context, ids) },
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(12) },

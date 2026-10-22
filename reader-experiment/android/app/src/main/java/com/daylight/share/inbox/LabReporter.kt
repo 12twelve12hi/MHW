@@ -115,14 +115,15 @@ class LabReporter(private val app: App) {
     )
 
     /**
-     * The hello's caps (2.2.2): `st` and `tap`, and `reader-link` when the app links go to first takes SAVE_PAGE (the
-     * Reader then confirms links and pages). Choosing another "Deliver to" app or installing a Reader changes them,
-     * and the next flush sends a hello.
+     * The hello's caps (2.2.2): `st` and `tap`, `reader-link` when the app links go to first takes SAVE_PAGE (the
+     * Reader then confirms links and pages), and `cap-kind` (W1, K5: its rows show each item's `x-cap` kind, F03).
+     * Choosing another "Deliver to" app or installing a Reader changes them, and the next flush sends a hello.
      */
     fun caps(): List<String> {
         val out = arrayListOf(Lab.Caps.ST, Lab.Caps.TAP)
         val linkTarget = runCatching { ReaderApps.targetsFor(app, Kind.URL).firstOrNull() }.getOrNull()
         if (linkTarget != null && runCatching { ReaderApps.takesSavePage(app, linkTarget) }.getOrDefault(false)) out += Lab.Caps.READER_LINK
+        out += Lab.Caps.CAP_KIND
         return out
     }
 
@@ -138,7 +139,7 @@ class LabReporter(private val app: App) {
         for (item in fresh) {
             if (item.id in done) continue
             added += item.id
-            li.record(item.id, STATE_WAITING, seconds())
+            if (li.record(item.id, STATE_WAITING, seconds())) remember(item.id, STATE_WAITING)
         }
         if (added.isEmpty()) return
         // Kept for the items the Inbox still lists (at most 300).
@@ -160,7 +161,12 @@ class LabReporter(private val app: App) {
     private fun record(item: InboxItem, s: String) {
         if (item.lane != InboxItem.LANE_PAIRING) return
         val li = inbox() ?: return
-        li.record(item.id, s, seconds())
+        if (li.record(item.id, s, seconds())) remember(item.id, s)
+    }
+
+    /** The item's last recorded state, for its details' "Sender sees: {label}" (F01, K5). */
+    private fun remember(id: String, s: String) {
+        app.inbox.setItem(id) { if (it.labState == s) it else it.copy(labState = s) }
     }
 
     private fun seconds(): Long = clock() / 1000
