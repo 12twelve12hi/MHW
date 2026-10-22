@@ -186,7 +186,7 @@ test('Lab’s screens: What’s in Lab with a note open, the Daylight server (no
       worker.state.token = (await S.deriveServerValues(await S.deriveServerSeed(secret))).authToken;
       worker.state.status = statusJson({ features: { ai: 'needs-key' }, lastSeen: new Date(Date.now() - 300000).toISOString(), usd: 0.5, limitUsd: 3 });
       await page.getByLabel(LAB_TEXT.serverSection.serverAddress).fill(front.url);
-      await page.getByRole('button', { name: 'Save', exact: true }).click();
+      await page.getByRole('button', { name: LAB_TEXT.serverSection.addressSave, exact: true }).click();
       await page.waitForFunction(() => document.querySelector('.lab-server-ready')?.textContent === 'Ready', null, { timeout: 15000 });
       await check(page, 'web: Daylight server, ready', 'a11y-server-ready', comfort);
       await scaleText(page, 2);

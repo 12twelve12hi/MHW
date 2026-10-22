@@ -319,6 +319,22 @@ test('a server feature’s tap shows exactly its sentence under it, announced an
     assert.equal(await page.textContent('.lab-server-code'), expected);
     assert.equal(await page.textContent('.lab-server-state .lab-note-text'), S.STATE_MESSAGES['needs-server']);
     assert.equal(await page.textContent('.lab-server-where'), S.showFingerprint(VEC.derived.fingerprint));
+    // The rest of the section in LAB_TEXT.serverSection's words (2.6, "The rest of the server section's copy"): while
+    // the server is not set up, "Turn it on" with the five steps, numbered, step 2 the module's re-run help word for
+    // word; "Your server"; no Delivery line before a server is found; the Server address field's placeholder, Save
+    // and footer.
+    const SS = LAB_TEXT.serverSection;
+    const steps = page.locator('#view-server .lab-server-steps');
+    assert.equal(await steps.getByRole('heading', { level: 3 }).textContent(), SS.stepsHeading);
+    assert.deepEqual(await steps.locator('ol > li').allTextContents(), SS.steps);
+    assert.equal(SS.steps[1], S.RERUN_HELP);
+    assert.equal(await steps.locator('.lab-server-steps-more').textContent(), SS.stepsMore);
+    assert.deepEqual(await page.locator('#view-server h3.lab-server-h').allTextContents(), [SS.stepsHeading, SS.hostLabel, SS.serverCode]);
+    assert.equal(await page.locator('#view-server .lab-server-delivery').count(), 0);
+    const address = page.getByLabel(SS.serverAddress);
+    assert.equal(await address.getAttribute('placeholder'), SS.addressPlaceholder);
+    assert.equal(await page.locator('#view-server .lab-server-address-footer').textContent(), SS.addressFooter);
+    assert.equal(await page.locator('#view-server form.lab-server-address button[type=submit]').textContent(), SS.addressSave);
     await page.evaluate(() => navigator.clipboard.writeText(''));
     await page.locator('#view-server').getByRole('button', { name: LAB_TEXT.serverSection.copy, exact: true }).click();
     await page.locator('#view-server').getByText(LAB_TEXT.setup.copied).waitFor();
@@ -335,10 +351,14 @@ test('with a server: the typed Server address, then Ready, the rows’ own state
     await serveFor(secret, statusJson({ features: { ai: 'needs-key', email: 'needs-domain' }, lastSeen: new Date(Date.now() - 5 * MIN).toISOString(), usd: 0.227, limitUsd: 3 }));
     await openLabView(page, 'server');
     await page.getByLabel(LAB_TEXT.serverSection.serverAddress).fill(front.url);
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await page.getByRole('button', { name: LAB_TEXT.serverSection.addressSave, exact: true }).click();
     await page.waitForFunction(() => document.querySelector('.lab-server-ready')?.textContent === 'Ready', null, { timeout: 15000 });
     assert.ok(front.preflights.includes('/v1/status'), 'the page’s call passed the server’s CORS preflight (DESIGN 10.2)');
-    assert.equal(await page.textContent('.lab-server-where'), `localhost · ${S.showFingerprint((await S.deriveServerValues(await S.deriveServerSeed(secret))).fingerprint)}`);
+    // "Your server": the origin's host with its port (hostLineText, as serverMovedText fills {host}), and the delivery.
+    assert.equal(await page.textContent('.lab-server-where'), L.hostLineText(front.url, S.showFingerprint((await S.deriveServerValues(await S.deriveServerSeed(secret))).fingerprint)));
+    assert.match(await page.textContent('.lab-server-where'), /^localhost:\d+ · /);
+    assert.equal(await page.textContent('.lab-server-delivery'), LAB_TEXT.serverSection.deliveryLab);
+    assert.equal(await page.locator('#view-server .lab-server-steps').count(), 0, 'no steps once the server is set up');
     assert.equal(await page.textContent('.lab-server-inbox'), 'Lab Inbox last seen 5 min ago');
     assert.equal(await page.textContent('.lab-server-ai'), 'AI today: US$0.23 of US$3');
     assert.equal(await page.inputValue('#view-server input[type=url][placeholder="https://"]'), front.url);

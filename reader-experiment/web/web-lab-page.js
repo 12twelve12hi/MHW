@@ -186,7 +186,6 @@ export function createLabPage({ lab, $, show, toSettings, announce = () => {}, c
         return r;
       },
       setupSaid: said ?? undefined,
-      saveLabel: 'Save',
       saveAddress: async (url) => {
         const r = await lab.setServerAddress(url);
         if (!r.error) { changed(); await openServer({ focus: false }); }

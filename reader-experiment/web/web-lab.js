@@ -30,7 +30,6 @@ import {
   DaylightServer, localMessage, stateFromStatus, showFingerprint, noticeText, parseSetupLink, RERUN_HELP,
   SERVER_API, SERVER_API_MIN, STATUS_REFRESH_MS,
 } from './daylight-server.js';
-import { hostOf } from './logic.js';
 
 /** needsMessage's platform and LAB_TEXT.appName's key (1.6: {app} is "Send to Daylight"). */
 export const PLATFORM = 'web';
@@ -335,8 +334,8 @@ export function createWebLab({
 
   /**
    * The Daylight server section (2.6): where setup happens, so it carries the long texts.
-   * -> {lab, paired, state, message, button, host, fingerprint, delivery, v1Notice, moved, serverCode, labInbox,
-   *     aiToday, manualUrl, setupFirst, rerun}
+   * -> {lab, paired, state, message, button, host (the server's origin, '' while none is found), fingerprint,
+   *     delivery ('lab' | 'v1' | null), v1Notice, moved, serverCode, labInbox, aiToday, manualUrl, setupFirst, rerun}
    * moved: "Your Daylight server moved to {host}. Use it?" while the server moved (2.6), also when the old address
    * failed or ran out of time (pendingMove); else null.
    */
@@ -361,7 +360,9 @@ export function createWebLab({
       message: p.state === 'ready' ? LAB_TEXT.ready : (p.message ?? localMessage(p.state)),
       // The section has its own Copy for the Server code, and the web has no site access to allow: no state button.
       button: null,
-      host: config ? hostOf(config.server) || config.server : '',
+      // The server's origin: the section's "Your server" line is hostLineText(host, fingerprint) (2.6, "The rest of the
+      // server section's copy"), which keeps a port, as serverMovedText does.
+      host: config?.server ?? '',
       fingerprint: showFingerprint((await server.values()).fingerprint),
       delivery: config?.delivery ?? null,
       v1Notice: config?.delivery === 'v1' ? noticeText('v1') : null,

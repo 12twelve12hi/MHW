@@ -100,12 +100,13 @@ pairing can't use it, and a typed Server address (the old server's) is forgotten
 address too (it locks nothing: the same Daylight may come back). Afterwards, while Lab is on, the sending screen shows the locked text with the new **Server code**, **Copy** and how to re-run the deploy, under
 *Daylight server*, until **OK** (or until the new server answers).
 
-**Not there yet** (strings the shared copy, `LAB_TEXT`, doesn't have; reported to the share lane, as for the
-extension and Windows): the setup steps in brief (the server README's steps 1–5 and 10, with step 5's **Copy**); the
-delivery mode line (`serverView` has the mode, but only the v1 notice is drawn until there are words for the line); a
-label for the host and fingerprint line; and keys for the Server address field's **Save** button and `https://`
-placeholder, which use the page's own words until then. The
-server-moved question uses the setup confirmation's **Use it** and **Cancel**, which answer it word for word.
+**The section's words** are all `LAB_TEXT.serverSection`'s (LAB-PLAN 2.6, "The rest of the server section's copy"),
+drawn by the extension's `lab-ui.js`: while the server is not set up, **Turn it on** with the five steps, numbered (step
+2 is the server module's re-run help, word for word), and where every step is; **Your server** with
+`hostLineText(origin, fingerprint)` ("daylight-….workers.dev · 3f9a-1c2e", a port kept as the move question keeps it);
+**Delivery** with the Lab or v1 line, then the v1 notice; the Server address field's `https://` placeholder, **Save** and
+footer. The server-moved question uses the setup confirmation's **Use it** and **Cancel**, which answer it word for
+word.
 
 **Test hook** (LAB-PLAN 1.7): `?lab=0` or `?lab=1` in the address sets the switch, only when the page is served from
 `127.0.0.1` (the tests' server, or `node build.mjs --serve`); the page then takes it out of the address.
