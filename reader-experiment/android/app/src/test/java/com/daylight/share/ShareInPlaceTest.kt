@@ -330,13 +330,16 @@ class ShareInPlaceTest {
                 waitMs(ShareInPlace.COUNTDOWN_MS)
                 s.moveToState(Lifecycle.State.DESTROYED)
                 slow2.release()
-                PhoneKit.until(what = "the second item in the outbox") { rows().size == 2 }
+                // Stored, then remembered for its notice and its job asked for (the row is written first).
+                PhoneKit.until(what = "the second item in the outbox, with its job") {
+                    rows().any { it.name == "swiped-away.pdf" && PhoneKit.jobs().contains(SendWorker.name(it.id)) }
+                }
             }
         } finally {
             slow2.release()
         }
-        val gone = rows().single { it.name == "swiped-away.pdf" }
-        assertTrue(PhoneKit.jobs().contains(SendWorker.name(gone.id)))
+        assertEquals(2, rows().size)
+        assertTrue("remembered for its notice", app.prefs.labInPlaceIds().contains(rows().single { it.name == "swiped-away.pdf" }.id))
         PhoneKit.until(what = "the second copy to move into the outbox") { PhoneKit.incoming(app).isEmpty() }
     }
 
