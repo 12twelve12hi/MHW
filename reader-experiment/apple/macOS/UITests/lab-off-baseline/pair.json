@@ -1,0 +1,66 @@
+{
+  "nodes" : [
+    {
+      "label" : "Pair with your Daylight",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Send articles, web pages and PDFs from this Mac to your Daylight: drop them on this window or the Dock icon, use the Share menu in Safari, Finder or Preview, or the Safari extension."
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "On your Daylight, open Daylight Share and choose This is my Daylight. It shows a QR code and a 28-character pairing code."
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Everything you send is end-to-end encrypted with a key from that code. Items travel through the free ntfy.sh relay (or your own), which only sees ciphertext."
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Type or paste the code (or a daylightshare:// link):"
+    },
+    {
+      "label" : "Pairing code, e.g. ABCD-EFGH-…",
+      "type" : "textField",
+      "value" : ""
+    },
+    {
+      "label" : "Pair",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "Paste from the clipboard and pair",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Send to Daylight"
+    }
+  ],
+  "platform" : "macos",
+  "screen" : "pair"
+}
