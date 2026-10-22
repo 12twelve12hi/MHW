@@ -11,7 +11,7 @@
 //   F17.2  What's in Lab's header from the ledger: nothing heard, a v1.1 ack, a Lab hello
 //   2.6    re-pairing with another Daylight while a server is known: the popup's follow-up (the locked text, the new
 //          Server code with Copy, the re-run help) until OK; a fresh What's in Lab answer updates the rows' short
-//          states with a note open
+//          states with a note open; Set up with a link (a bad link, the address confirmation, Cancel, a refused site)
 //
 //   PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node --test test/e2e/lab.e2e.mjs      (HEADED=1 to watch)
 
@@ -494,5 +494,53 @@ test('re-pairing with another Daylight while a server is known: the popup shows 
   await popup.close();
   await page.close();
   await storageSet({ settings: { lab: true } });
+  await unpair();
+});
+
+test('Set up with a link in the server section: first while not set up; a bad link says why; the address is confirmed before anything is sent (2.6)', { timeout: 120000 }, async () => {
+  await storageSet({ settings: { lab: true } });
+  await pair(await ds.pairingLink({ secret: ds.generateSecret(), relay: relay.url, name: 'Setup Daylight' }));
+  const server = await openLab('server');
+  const S2 = LAB_TEXT.serverSection;
+  // Not set up: the setup row comes right after the state, whose message says to paste the link.
+  const order = await server.$$eval('#server > *', (els) => els.map((e) => e.classList[0]));
+  assert.deepEqual(order.slice(0, 2), ['lab-server-state', 'lab-server-setup']);
+  const field = server.getByLabel(S2.setupRow, { exact: true });
+  assert.equal(await field.getAttribute('placeholder'), S2.setupPlaceholder);
+  assert.equal(await server.textContent('.lab-server-setup-footer'), S2.setupFooter);
+  assert.equal(await field.evaluate((i) => document.getElementById(i.getAttribute('aria-describedby')).textContent), S2.setupFooter);
+
+  // The Server code pasted by mistake: the module's message, nothing asked.
+  const code = await server.textContent('.lab-server-code');
+  await field.fill(code);
+  await server.getByRole('button', { name: S2.setupButton, exact: true }).click();
+  await server.waitForFunction(() => document.querySelector('.lab-server-setup-said')?.textContent !== '');
+  const said = await server.textContent('.lab-server-setup-said');
+  await assert.rejects(S.parseSetupLink(code), (e) => e.reason === 'server-code' && e.message === said);
+  assert.equal(await server.isVisible('.lab-server-setup-confirm'), false);
+
+  // A setup link: the confirmation names its address; Cancel sends nothing.
+  const origin = 'https://daylight-0123456789ab.example.workers.dev';
+  const link = await S.formatSetupLink(origin, Uint8Array.from({ length: 16 }, (_, i) => i + 1));
+  await field.fill(link);
+  await server.getByRole('button', { name: S2.setupButton, exact: true }).click();
+  const ask = server.getByRole('group', { name: S2.setupConfirmTitle });
+  await ask.waitFor();
+  assert.equal(await ask.locator('.lab-note-text').textContent(), L.setupConfirmText(origin));
+  assert.equal(await server.evaluate(() => document.activeElement?.textContent), S2.setupConfirm);
+  await axe(server, 'lab.html: Daylight server, the setup link’s confirmation');
+  assert.deepEqual(await unnamed(server), []);
+  await shot(server, 'server-setup-confirm');
+  await ask.getByRole('button', { name: S2.setupCancel, exact: true }).click();
+  await ask.waitFor({ state: 'hidden' });
+  assert.equal(await server.textContent('.lab-server-setup-said'), '');
+
+  // Use it, and the browser refuses the server's site: the needs-site-access sentence, nothing sent.
+  await server.evaluate(() => { chrome.permissions.request = async () => false; });
+  await server.getByRole('button', { name: S2.setupButton, exact: true }).click();
+  await ask.getByRole('button', { name: S2.setupConfirm, exact: true }).click();
+  await server.waitForFunction((t) => document.querySelector('.lab-server-setup-said')?.textContent === t, LAB_TEXT.needs['needs-site-access']);
+  assert.equal(await storageGet('server/pin'), undefined);
+  await server.close();
   await unpair();
 });

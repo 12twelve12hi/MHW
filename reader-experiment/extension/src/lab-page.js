@@ -21,6 +21,7 @@ const CHECKING_AFTER_MS = 150;
 let lab = true;
 let view = 'lab';
 let renderSeq = 0;
+let setupSaid = null; // the setup's done line, said once the section is drawn again
 
 document.documentElement.classList.add('wide');
 
@@ -119,9 +120,20 @@ async function renderServer(seq) {
   let model;
   try { model = await call('labServer'); } catch (e) { box.textContent = e.message; return; }
   if (seq !== renderSeq || !model.lab) return;
+  const said = setupSaid;
+  setupSaid = null;
   renderServerSection(box, model, {
     fix: async () => { if (model.state === 'needs-site-access' && (await askSite(model.origins))) await render(); },
     copy: (code) => copyText(code ?? ''),
+    // Set up with a link (2.6): the host permission for the link's server on Use it, while the click still counts.
+    setupCheck: (link) => call('labSetupCheck', { link }),
+    setup: async (link, checked) => {
+      await askSite(checked.origins);
+      const r = await call('labSetup', { link });
+      if (r.done) { setupSaid = r.done; await render(); }
+      return r;
+    },
+    setupSaid: said ?? undefined,
     saveLabel: 'Save',
     saveAddress: async (url) => {
       // The host permission for a typed server first, while the click still counts.

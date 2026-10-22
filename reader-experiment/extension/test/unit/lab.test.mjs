@@ -33,6 +33,8 @@ function extensionFetch(fb, relayUrl, log, flags) {
     if (flags.relayDown && url.startsWith(relayUrl)) throw new TypeError('Failed to fetch');
     if (u.hostname === 'ntfy.sh') throw new TypeError('Failed to fetch');
     if (!url.startsWith(relayUrl) && !fb.granted.has(`${u.protocol}//${u.hostname}/*`)) throw new TypeError('Failed to fetch');
+    // A workers.dev server (a setup link's) answers from the stand-in: flags.route = {origin: the stand-in's URL}.
+    for (const [from, to] of Object.entries(flags.route ?? {})) if (url.startsWith(from)) return fetch(to + url.slice(from.length), init);
     return fetch(url, init);
   };
 }
@@ -272,6 +274,50 @@ test('the server section with a v1-delivery server found on the relay: its host 
     assert.equal(v.host, 'daylight-0123456789ab.example.workers.dev');
     assert.equal(v.v1Notice, S.noticeText('v1'));
     assert.deepEqual(await s.storage('server/pin'), { origin, fingerprint: values.fingerprint }, 'the module pinned it');
+  } finally { await s.close(); }
+});
+
+test('Set up with a link (2.6, DESIGN 3.5): read here first, sent only on Use it, then the server is pinned and ready', async () => {
+  const s = await setup();
+  const origin = 'https://daylight-0123456789ab.example.workers.dev';
+  try {
+    let v = await s.msg({ type: 'labServer' });
+    assert.deepEqual([v.state, v.setupFirst], ['needs-server', true], 'its message says to paste a setup link');
+    // A link that isn't one: the module's message, and nothing is sent.
+    let r = await s.msg({ type: 'labSetupCheck', link: 'not a link' });
+    await assert.rejects(S.parseSetupLink('not a link'), (e) => e.message === r.error);
+    r = await s.msg({ type: 'labSetupCheck', link: s.link });
+    await assert.rejects(S.parseSetupLink(s.link), (e) => e.message === r.error && e.reason === 'pairing-code');
+    r = await s.msg({ type: 'labSetupCheck', link: 'https://daylight-0123456789ab.evil.example/setup#SETUP-AAAA' });
+    await assert.rejects(S.parseSetupLink('https://daylight-0123456789ab.evil.example/setup#SETUP-AAAA'), (e) => e.message === r.error);
+    const secret = Uint8Array.from({ length: 16 }, (_, i) => i * 7 + 3);
+    const link = await S.formatSetupLink(origin, secret);
+    r = await s.msg({ type: 'labSetupCheck', link });
+    assert.deepEqual(r, { server: origin, confirm: L.setupConfirmText(origin), origins: [`${origin}/*`] });
+    assert.equal(r.confirm, 'daylight-0123456789ab.example.workers.dev will get this pairing’s Server code. Continue only if this address is on your own Cloudflare account.');
+    assert.equal(s.worker.count('POST /v1/setup'), 0, 'nothing sent before Use it');
+
+    // Use it without the server's site: needs-site-access, nothing sent.
+    r = await s.msg({ type: 'labSetup', link });
+    assert.deepEqual(r, { error: L.LAB_TEXT.needs['needs-site-access'], state: 'needs-site-access', origins: [`${origin}/*`] });
+    assert.equal(s.worker.count('POST /v1/setup'), 0);
+
+    // With it: a link the server doesn't take is SETUP_INVALID, in the module's words.
+    s.fb.grant(`${origin}/*`);
+    s.flags.route = { [origin]: s.worker.url };
+    const values = await S.deriveServerValues(await S.deriveServerSeed(s.secret));
+    s.worker.state.setup = { token: 'another link', answer: {} };
+    r = await s.msg({ type: 'labSetup', link });
+    assert.deepEqual(r, { error: S.errorMessage('SETUP_INVALID') });
+
+    // The current link: this pairing's Server code goes with its token, the server is pinned, then Ready.
+    s.worker.state.setup = { token: await S.deriveSetupToken(secret), answer: { server: origin, api: 1, fingerprint: values.fingerprint, delivery: 'lab' } };
+    s.worker.state.token = values.authToken;
+    r = await s.msg({ type: 'labSetup', link });
+    assert.deepEqual(r, { done: L.LAB_TEXT.serverSection.setupDone });
+    assert.deepEqual(await s.storage('server/pin'), { origin, fingerprint: values.fingerprint });
+    v = await s.msg({ type: 'labServer' });
+    assert.deepEqual([v.state, v.host, v.setupFirst], ['ready', 'daylight-0123456789ab.example.workers.dev', false]);
   } finally { await s.close(); }
 });
 

@@ -254,10 +254,83 @@ export function renderRepaired(box, model, on = {}) {
 }
 
 /**
+ * Set up with a link (2.6 "Setup link", DESIGN 3.5): a field and Set up; the link is read first (a refused one shows the
+ * module's message, and nothing is sent), then a confirmation names the server's address, and only Use it sends this
+ * pairing's Server code ("Setting up…", then the done line or the module's message).
+ * on: {setupCheck(link) -> Promise<{server, confirm, origins} | {error}>, setup(link, checked) -> Promise<{done} |
+ *      {error}>, setupSaid: a line to say once it is drawn (the done line, after the section is drawn again)}.
+ */
+function setupForm(on) {
+  const S = LAB_TEXT.serverSection;
+  const form = el('form', 'lab-server-setup');
+  const label = el('label', null, S.setupRow);
+  const input = el('input');
+  input.id = nextId('lab-setup');
+  label.htmlFor = input.id;
+  Object.assign(input, { type: 'url', autocomplete: 'off', spellcheck: false, placeholder: S.setupPlaceholder });
+  input.setAttribute('inputmode', 'url');
+  const footer = el('p', 'hint small lab-server-setup-footer', S.setupFooter);
+  footer.id = nextId('lab-setup-footer');
+  input.setAttribute('aria-describedby', footer.id);
+  const go = el('button', 'btn secondary', S.setupButton);
+  go.type = 'submit';
+  const row = el('div', 'row');
+  row.append(input, go);
+  // The confirmation (step 3): nothing is sent before Use it.
+  const ask = el('div', 'lab-note-body lab-server-setup-confirm');
+  ask.hidden = true;
+  const askTitle = el('p', 'lab-server-setup-confirm-title', S.setupConfirmTitle);
+  askTitle.id = nextId('lab-setup-confirm');
+  ask.setAttribute('role', 'group');
+  ask.setAttribute('aria-labelledby', askTitle.id);
+  const askBody = el('p', 'lab-note-text');
+  const yes = button(S.setupConfirm, 'btn primary');
+  const no = button(S.setupCancel);
+  const acts = el('div', 'lab-note-acts');
+  acts.append(yes, no);
+  ask.append(askTitle, askBody, acts);
+  const said = el('p', 'lab-server-setup-said');
+  said.setAttribute('role', 'status');
+  form.append(label, row, footer, ask, said);
+
+  let link = '';
+  let checked = null;
+  const say = (text, bad = false) => { said.textContent = text ?? ''; said.classList.toggle('error', bad); };
+  const busy = (b) => { for (const c of [input, go, yes, no]) c.disabled = b; };
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    ask.hidden = true;
+    say('');
+    link = input.value.trim();
+    busy(true);
+    try { checked = await on.setupCheck?.(link); } catch (e) { checked = { error: e.message }; } finally { busy(false); }
+    if (!checked || checked.error) { say(checked?.error, true); input.focus(); return; }
+    askBody.textContent = checked.confirm;
+    ask.hidden = false;
+    yes.focus();
+  });
+  no.addEventListener('click', () => { ask.hidden = true; checked = null; input.focus(); });
+  yes.addEventListener('click', async () => {
+    const c = checked;
+    if (!c) return;
+    ask.hidden = true;
+    say(S.setupWorking);
+    busy(true);
+    let r;
+    try { r = await on.setup?.(link, c); } catch (e) { r = { error: e.message }; } finally { busy(false); }
+    if (!r || r.error) { say(r?.error, true); input.focus(); } else say(r.done);
+  });
+  // A line for after the section was drawn again (the done line): said once it is on screen, so it is announced.
+  if (on.setupSaid) setTimeout(() => say(on.setupSaid), 50);
+  return form;
+}
+
+/**
  * The Daylight server section (2.6) into `box`. model: the background's server view {paired, state, message,
- * button, origins, host, fingerprint, v1Notice, serverCode, labInbox, aiToday, manualUrl, rerun}.
+ * button, origins, host, fingerprint, v1Notice, serverCode, labInbox, aiToday, manualUrl, setupFirst, rerun}.
  * on: {fix(button, note, model) for the state's one button (Allow), copy(code) -> Promise<boolean>,
- *      saveAddress(url) -> Promise<{error?}>}.
+ *      saveAddress(url) -> Promise<{error?}>, and setupForm's setupCheck, setup and setupSaid}. Set up with a link
+ * comes right after the state while the state's message says to paste a setup link (model.setupFirst), else last.
  */
 export function renderServerSection(box, model, on = {}) {
   const S = LAB_TEXT.serverSection;
@@ -277,6 +350,8 @@ export function renderServerSection(box, model, on = {}) {
     box.append(el('p', 'hint small lab-server-rerun', model.rerun ?? ''));
     return;
   }
+  const setup = on.setupCheck ? setupForm(on) : null;
+  if (setup && model.setupFirst) box.append(setup);
   const where = [model.host, model.fingerprint].filter(Boolean).join(' · ');
   if (where) box.append(el('p', 'lab-server-where', where));
   if (model.v1Notice) box.append(el('p', 'note lab-server-v1', model.v1Notice));
@@ -323,5 +398,6 @@ export function renderServerSection(box, model, on = {}) {
     } finally { save.disabled = false; }
   });
   box.append(form);
+  if (setup && !model.setupFirst) box.append(setup);
   box.append(el('p', 'hint small lab-server-rerun', model.rerun ?? ''));
 }

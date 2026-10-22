@@ -229,6 +229,14 @@ input.switch:checked::before { left: calc(100% - 1.23em); background: var(--btn-
 .lab-server-address { margin-top: 6px; }
 .lab-server-address .row .btn { width: auto; margin-top: 0; }
 .lab-server-rerun { margin-top: 14px; overflow-wrap: anywhere; }
+.lab-server-setup { margin: 10px 0 6px; }
+.lab-server-setup .row .btn { width: auto; margin-top: 0; }
+.lab-server-setup-footer { margin: 4px 0 0; overflow-wrap: anywhere; }
+.lab-server-setup-confirm { margin-top: 8px; }
+.lab-server-setup-confirm-title { margin: 0 0 4px; font-weight: 600; overflow-wrap: anywhere; }
+.lab-server-setup-said:empty { display: none; }
+.lab-server-setup-said { margin: 6px 0 0; overflow-wrap: anywhere; }
+.lab-server-setup-said.error { color: var(--bad); }
 /* The popup's re-pairing follow-up (lab-ui.js renderRepaired): a card above the history while it waits for OK. */
 .lab-repaired { margin: 10px 0 4px; padding: 10px 12px; border: 1px solid var(--rule-strong); border-radius: 8px; background: var(--card); }
 .lab-repaired-h { margin: 0 0 4px; font-size: 1em; }

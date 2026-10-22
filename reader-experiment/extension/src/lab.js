@@ -24,11 +24,11 @@
 import * as ds from './daylight-share.js';
 import {
   LAB_TEXT, LabLedger, labHook, labGate, needsMessage, inboxLabText, featureName, serverHeadingShort,
-  serverRowSubtitle, serverFeatureShort, labInboxSeenText, aiTodayText, GATE_DEADLINE_MS, SERVER_FEATURES,
-  SERVER_KEYS,
+  serverRowSubtitle, serverFeatureShort, labInboxSeenText, aiTodayText, setupConfirmText, GATE_DEADLINE_MS,
+  SERVER_FEATURES, SERVER_KEYS,
 } from './daylight-lab.js';
 import {
-  DaylightServer, localMessage, stateFromStatus, showFingerprint, noticeText, RERUN_HELP,
+  DaylightServer, localMessage, stateFromStatus, showFingerprint, noticeText, parseSetupLink, RERUN_HELP,
   SERVER_API, SERVER_API_MIN, STATUS_REFRESH_MS,
 } from './daylight-server.js';
 import { originPattern, hostOf } from './logic.js';
@@ -47,6 +47,9 @@ export const BUILT_FEATURES = [];
 
 /** The storage key of the re-pairing follow-up (2.6): {at}. Under lab/, so the next pairing change removes it. */
 export const REPAIRED_KEY = 'lab/repaired';
+
+/** The server states whose messages say to paste a new setup link: Set up with a link comes first then (2.6). */
+const SETUP_FIRST = ['needs-server', 'pairing-mismatch', 'locked'];
 
 /** The states that belong to the whole server, not to one feature: the What's in Lab heading's line. */
 const SERVER_WIDE = ['needs-pairing', 'needs-server', 'pairing-mismatch', 'server-outdated', 'app-outdated', 'locked',
@@ -305,8 +308,11 @@ export function createLab({
     const p = await probeInTime({ force: true });
     const config = p.config ?? null;
     const status = p.status ?? null;
-    let manualUrl = '';
-    try { manualUrl = (await storage.get('server/manualUrl')) ?? ''; } catch { /* none */ }
+    let manualUrl = '', badAuth = false;
+    try {
+      manualUrl = (await storage.get('server/manualUrl')) ?? '';
+      badAuth = !!(await storage.get('server/badAuthAt'));
+    } catch { /* none */ }
     return {
       lab: true, paired: true, state: p.state,
       message: p.state === 'ready' ? LAB_TEXT.ready : (p.message ?? localMessage(p.state)),
@@ -320,8 +326,51 @@ export function createLab({
       labInbox: status ? labInboxSeenText(status.inbox?.lastSeen ?? null, now()) : null,
       aiToday: status?.usage?.ai ? aiTodayText(status.usage.ai.usd, status.usage.ai.limitUsd) : null,
       manualUrl,
+      // Set up with a link (2.6): first while the state's message says to paste a new setup link (BAD_AUTH's too).
+      setupFirst: SETUP_FIRST.includes(p.state) || (p.state === 'error' && badAuth),
       rerun: RERUN_HELP,
     };
+  }
+
+  /**
+   * Set up with a link (2.6 "Setup link", DESIGN 3.5), step 2: the link is read here, and nothing is sent.
+   * -> {server, confirm, origins} (the confirmation's text, and the host permission the page asks for on Use it)
+   *  | {error} (the module's message for its reason)
+   */
+  async function checkSetupLink(link) {
+    if (!(await getPairing())) return { error: needsMessage('needs-pairing', { platform }) };
+    if (!on(await settings())) return { error: LAB_TEXT.labOff.replace('{app}', app) };
+    try {
+      const { server } = await parseSetupLink(link);
+      return { server, confirm: setupConfirmText(server), origins: [originPattern(server)] };
+    } catch (e) {
+      return { error: e?.message || String(e) };
+    }
+  }
+
+  /**
+   * Step 4, once the user said Use it (and the page asked for the server's host permission):
+   * DaylightServer.setup(link) sends this pairing's Server code with the link's one-time token, then pins the server.
+   * -> {done} (LAB_TEXT's done line) | {error, state?, origins?} (the module's messages; needs-site-access when the
+   * browser refused the server's site)
+   */
+  async function setupServer(link) {
+    const checked = await checkSetupLink(link);
+    if (checked.error) return checked;
+    if (!(await hasOrigin(checked.server))) {
+      const r = siteAccess(checked.server);
+      return { error: r.message, state: r.state, origins: r.origins };
+    }
+    const server = await serverFor(await getPairing());
+    probing = null;
+    try {
+      await server.setup(link);
+      return { done: LAB_TEXT.serverSection.setupDone };
+    } catch (e) {
+      return { error: e?.message || String(e) };
+    } finally {
+      probing = null;
+    }
   }
 
   /**
@@ -409,6 +458,8 @@ export function createLab({
       case 'labGate': return gate(String(msg.feature ?? ''));
       case 'labServer': return serverView();
       case 'labServerAddress': return setServerAddress(msg.url);
+      case 'labSetupCheck': return checkSetupLink(String(msg.link ?? ''));
+      case 'labSetup': return setupServer(String(msg.link ?? ''));
       case 'labRepaired': return repaired();
       case 'labRepairSeen': await storage.remove(REPAIRED_KEY); return {};
       default: return undefined;
@@ -417,6 +468,6 @@ export function createLab({
 
   return {
     ledger, hook, built, ensureDefault, setLab, labOn: async () => built && labOn(storage), state, overview, gate, serverView,
-    setServerAddress, beforeRepair, afterRepair, repaired, prune, probe, onMessage,
+    setServerAddress, checkSetupLink, setupServer, beforeRepair, afterRepair, repaired, prune, probe, onMessage,
   };
 }

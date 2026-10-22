@@ -131,8 +131,14 @@ While Lab is on, two rows under the switch open the page `lab.html` in a tab:
 - **Daylight server ›** (*Optional · Not set up*): where setup happens. It shows the server's state in full (with the
   exact GitHub secret names), the server's address and fingerprint, the **Server code** with **Copy** (the
   `daylightserver://` link form when the pairing's relay isn't ntfy.sh), when the Daylight last said hello to the
-  server, today's AI spend, the optional **Server address** field and how to re-run the deploy. See
-  [`../server/README.md`](../server/README.md) to turn the server on.
+  server, today's AI spend, **Set up with a link**, the optional **Server address** field and how to re-run the
+  deploy. See [`../server/README.md`](../server/README.md) to turn the server on.
+  - **Set up with a link** takes the one-time setup link the deploy makes (`https://daylight-….workers.dev/setup#SETUP-…`;
+    server DESIGN 3.5). It comes right after the state while that state says to paste one (not set up, the previous
+    pairing, locked, or not recognised), else last. The link is read here first: anything else (the Server code, the
+    pairing code, another address) says why and sends nothing. Then *Use this Daylight server?* names the link's
+    address, and only **Use it** asks for that site and sends the server this pairing's Server code (*Setting up…*);
+    the section then reads the server again. Your other devices and your Daylight find it on their own.
 
 Server calls run in the background (the pairing secret and the server's token never reach a web page). The first time a
 server feature or the Server address is used, the browser asks for access to the server's site; saying no shows
@@ -149,8 +155,8 @@ The Safari extension inside the iPhone and Mac apps gets Lab only once the iPhon
 **Not there yet** (strings the shared copy, `LAB_TEXT`, doesn't have; reported to the share and server lanes): the
 sheet for a server that moved (*Your Daylight server moved to {host}. Use it?* exists, its buttons don't), so a server
 redeployed at a new address with the same pairing keeps reading *Couldn’t reach the Daylight server* here until its
-address is typed in *Server address*; **Set up with a link**, which the server's own messages point to (the iPhone and
-Mac apps have it); the setup steps in brief; and labels for the delivery mode and for the host and fingerprint line.
+address is typed in *Server address* or its new setup link is used; the setup steps in brief; and labels for the
+delivery mode and for the host and fingerprint line.
 
 ## Privacy
 
@@ -210,7 +216,8 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   `onAckHeader`, Lab on or off, and pruned to the outbox after each check), the gates (`labGate` with the 5 s deadline;
   the server's site access, then its state), the Daylight server (`DaylightServer`, discovery only with Lab on) and
   the lock before re-pairing (then the follow-up: `lab/repaired` until OK or a ready server). Its messages are
-  `labState`, `setLab`, `labOverview`, `labGate`, `labServer`, `labServerAddress`, `labRepaired` and `labRepairSeen`. `src/lab.html` and `src/lab-page.js` are the page; `src/lab-ui.js` builds its parts (the note,
+  `labState`, `setLab`, `labOverview`, `labGate`, `labServer`, `labServerAddress`, `labSetupCheck` and `labSetup` (Set
+  up with a link: `parseSetupLink`, then `DaylightServer.setup`), `labRepaired` and `labRepairSeen`. `src/lab.html` and `src/lab-page.js` are the page; `src/lab-ui.js` builds its parts (the note,
   What's in Lab, the server section) from data alone, so the web sender's build can copy it (B0). Every word is
   `LAB_TEXT`'s or the server module's. `LAB_FEATURES`, `LAB_SERVER_FEATURES` and `BUILT_FEATURES` in `lab.js` say what
   this build lists and runs; `LAB_NOTE_ENABLED` is `false` until a build has F01 or F04 (X1). A fresh What's in Lab
