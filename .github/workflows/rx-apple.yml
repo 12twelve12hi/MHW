@@ -359,48 +359,10 @@ jobs:
       # thread, then pair, send, and show the item Delivered once the JS receiver acks it. It reports its state through
       # -DLSStatusDump (AppModel.noteRendered): a JSON file in its sandbox container with its storage, its history rows
       # (with the label the history shows), the storage accesses made on its main thread (StorageAudit) and a
-      # once-a-second heartbeat from the main thread. This step gates the release.
+      # once-a-second heartbeat from the main thread. Ad-hoc signed: its own storage, no App Group (and so no privacy
+      # prompt). scripts/mac-smoke-test.sh, which the Developer ID job runs on its build too. This step gates the release.
       - name: Smoke test the Mac app (launch, responsive, pair, send, Delivered)
-        run: |
-          set -o pipefail
-          shot() { screencapture -x "build/$1.png" && sips -Z 720 -s format jpeg -s formatOptions 55 "build/$1.png" --out "build/$1.jpg" >/dev/null && echo "=====BEGIN $1=====" && base64 -i "build/$1.jpg" && echo "=====END $1====="; }
-          hung() { shot mac-hung || true; sample "Send to Daylight" 2 -file build/mac-sample.txt >/dev/null 2>&1 && head -80 build/mac-sample.txt; exit 1; }
-          rm -rf "$RUNNER_TEMP/smoke" && mkdir -p "$RUNNER_TEMP/smoke"
-          ditto -x -k Send-to-Daylight-mac.zip "$RUNNER_TEMP/smoke"
-          APP="$RUNNER_TEMP/smoke/Send to Daylight.app"
-          BUNDLE_ID=$(plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist")
-          STATUS="$HOME/Library/Containers/$BUNDLE_ID/Data/Library/Application Support/DaylightShare/debug-status.json"
-          rm -f "$STATUS"
-          curl -fsS "http://127.0.0.1:$RELAY_PORT/v1/health" >/dev/null 2>&1 || { node ../share/js/mock-relay.mjs --port "$RELAY_PORT" > "$RUNNER_TEMP/mock-relay-2.log" 2>&1 & sleep 2; }
-          LINK=$(node scripts/ci-pairing-link.mjs "http://127.0.0.1:$RELAY_PORT" "CI Mac Daylight")
-          CODE=$(echo "$LINK" | sed -E 's/.*[?&]c=([A-Z2-7]+).*/\1/')
-          SENT_URL="https://example.com/from-the-mac-app"
-          LAUNCHED=$(node -e 'console.log(Date.now())')
-          open -n "$APP" --args -DLSStatusDump -DLSPairLink "$LINK" -DLSSendLink "$SENT_URL"
-          # 1. Window within 10 s of launch, then a main thread that keeps running.
-          node scripts/ci-app-status.mjs render "$STATUS" 10 "$LAUNCHED" || hung
-          # 2. Ad-hoc signed: its own storage, no App Group (and so no privacy prompt); and no storage read on the main
-          #    thread at startup (the app model reads UserDefaults and the outbox on a background queue).
-          node scripts/ci-app-status.mjs storage "$STATUS" private
-          node scripts/ci-app-status.mjs main-thread "$STATUS"
-          pgrep -fl "smoke/Send to Daylight" || { echo "::error::the Mac app is not running"; exit 1; }
-          pluginkit -m -A -D -v 2>/dev/null | grep -i daylight || echo "::warning::pluginkit does not list the extensions"
-          # 3. Paired and sent (the relay has it).
-          node scripts/ci-app-status.mjs row "$STATUS" "$SENT_URL" sent,delivered 30
-          shot mac-sent || true
-          node scripts/e2e-receiver.mjs "http://127.0.0.1:$RELAY_PORT" "$CODE" | tee build/mac-received.json
-          grep -q "\"url\":\"$SENT_URL\"" build/mac-received.json \
-            || { echo "::error::the link sent by the Mac app did not reach the JS receiver"; exit 1; }
-          # 4. The receiver acked it: the history shows "Delivered ✓" (the app checks again ~30 s after sending, and
-          #    every minute while something waits).
-          node scripts/ci-app-status.mjs row "$STATUS" "$SENT_URL" delivered 120
-          shot mac-delivered || true
-          # 5. Pairing, sending and reading the ack never touched storage on the main thread either.
-          node scripts/ci-app-status.mjs main-thread "$STATUS"
-          if [ -e "$HOME/Library/Group Containers/group.com.daylight.share" ]; then
-            echo "::warning::~/Library/Group Containers/group.com.daylight.share exists (not created by this build, which has no App Group)"
-          fi
-          pkill -f "smoke/Send to Daylight" || true
+        run: bash scripts/mac-smoke-test.sh Send-to-Daylight-mac.zip private
 
       # The accessibility baseline (LAB-PLAN F27) and the Lab-off parity baselines (F00.2, 1.7) on the Mac: XCUITest
       # audits of the main window (empty, and with the sample history from its top to its end), Settings and pairing,
@@ -555,3 +517,177 @@ jobs:
           xcodebuild -exportArchive -archivePath build/SendToDaylight.xcarchive -exportOptionsPlist build/ExportOptions.plist \
             -exportPath build/export "${AUTH[@]}"
           rm -f "$KEY"
+
+  # lane: mac
+  # The Mac's Developer ID path (LAB-DECISIONS Q6, reader-experiment/apple/README.md › Signing, LOOSE-ENDS.md): on once
+  # all six signing secrets exist; only their presence is read here. Also lints the signing and smoke-test scripts.
+  check-mac-signing:
+    name: Mac signing (secrets, scripts)
+    runs-on: ubuntu-latest
+    outputs:
+      developer-id: ${{ steps.check.outputs.developer-id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shellcheck the Mac signing and smoke-test scripts
+        run: shellcheck reader-experiment/apple/scripts/sign-mac.sh reader-experiment/apple/scripts/mac-smoke-test.sh
+      - name: Which Mac release (Developer ID with all six secrets, else ad hoc)
+        id: check
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MAC_DEVELOPER_ID_P12: ${{ secrets.MAC_DEVELOPER_ID_P12 }}
+          MAC_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MAC_DEVELOPER_ID_P12_PASSWORD }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          missing=""
+          for name in APPLE_TEAM_ID MAC_DEVELOPER_ID_P12 MAC_DEVELOPER_ID_P12_PASSWORD ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_P8; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -z "$missing" ]; then
+            echo "developer-id=true" >> "$GITHUB_OUTPUT"
+            echo "All six signing secrets exist: the Mac release is signed with the Developer ID, notarized and stapled."
+          else
+            echo "developer-id=false" >> "$GITHUB_OUTPUT"
+            echo "The Mac release stays ad-hoc signed and the Developer ID job runs its dry run. Missing:$missing"
+            if [ -n "$MAC_DEVELOPER_ID_P12$MAC_DEVELOPER_ID_P12_PASSWORD" ]; then
+              echo "::warning::The Mac release stays ad-hoc signed until these secrets exist too:$missing"
+            fi
+          fi
+
+  # lane: mac
+  # The Developer ID build (scripts/sign-mac.sh). With the secrets: a Release build for APPLE_TEAM_ID (every bundle's
+  # App Group <TEAMID>.com.daylight.share, Config/Base.xcconfig), signed with the Developer ID (hardened runtime, secure
+  # timestamp), every bundle and its embedded entitlements checked, notarized, stapled, accepted by Gatekeeper, zipped and
+  # smoke-tested (the app must use the App Group, so the Share menu item and the Safari extension share its pairing, Lab
+  # switch and history); publish-mac-developer-id then puts it on the release in place of the ad-hoc zip. Without the
+  # secrets, a dry run of the same steps: the same build for a stand-in team (DRYRUN0000), a throwaway self-signed
+  # certificate made here, no notarization, and the smoke test, in which the app keeps its own storage (a self-signed
+  # signature carries no Team ID, so SharedStore never opens the group). Either way the ad-hoc release is unaffected.
+  mac-developer-id:
+    name: Mac (Developer ID; a dry run until the secrets exist)
+    needs: [check-mac-signing]
+    runs-on: macos-15
+    timeout-minutes: 75
+    concurrency:
+      group: rx-apple-mac-developer-id
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: reader-experiment/apple
+    env:
+      RELAY_PORT: 8787
+      RELEASE: ${{ needs.check-mac-signing.outputs.developer-id }}
+      TEAM: ${{ needs.check-mac-signing.outputs.developer-id == 'true' && secrets.APPLE_TEAM_ID || 'DRYRUN0000' }}
+      APP: build/dd-mac-developer-id/Build/Products/Release/Send to Daylight.app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Select the newest Xcode that has its iOS platform installed
+        run: bash scripts/select-xcode.sh
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build the Safari web extension (when its build script exists)
+        run: |
+          if [ -f ../extension/build.mjs ]; then
+            (cd ../extension && node build.mjs --target safari --no-zip) || echo "::warning::the web extension build failed; the Safari extension gets the placeholder"
+          fi
+          if [ ! -f ../extension/dist/safari/manifest.json ]; then
+            echo "::warning::no reader-experiment/extension/dist/safari yet; the Safari extension gets the placeholder"
+          fi
+      - name: Generate the Xcode project
+        run: xcodegen generate
+      - name: Build for Mac, for the team (Release, not yet signed)
+        run: |
+          set -o pipefail
+          xcodebuild -project SendToDaylight.xcodeproj -scheme SendToDaylight-macOS -configuration Release \
+            -destination 'generic/platform=macOS' -derivedDataPath build/dd-mac-developer-id \
+            DEVELOPMENT_TEAM="$TEAM" CODE_SIGN_STYLE=Manual CODE_SIGNING_ALLOWED=NO \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} build -quiet
+          VERSION=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")
+          WANT=$(sed -n 's/^MARKETING_VERSION = //p' Config/Base.xcconfig)
+          [ "$VERSION" = "$WANT" ] || { echo "::error::the Mac app is version $VERSION, Config/Base.xcconfig says $WANT"; exit 1; }
+      - name: Sign with the Developer ID, notarize, staple and zip
+        if: env.RELEASE == 'true'
+        env:
+          MAC_DEVELOPER_ID_P12: ${{ secrets.MAC_DEVELOPER_ID_P12 }}
+          MAC_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MAC_DEVELOPER_ID_P12_PASSWORD }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: bash scripts/sign-mac.sh "$APP" "$TEAM" Send-to-Daylight-mac.zip
+      # The certificate is made here and thrown away: a code-signing certificate (extended key usage codeSigning) and its
+      # key as a .p12 that `security import` reads (3DES, SHA-1 MAC), passed to the script as the secrets would be.
+      - name: Dry run - sign with a throwaway self-signed certificate (no notarization)
+        if: env.RELEASE != 'true'
+        run: |
+          CERT="$RUNNER_TEMP/dry-run-certificate"
+          rm -rf "$CERT" && mkdir -p "$CERT"
+          cat > "$CERT/cert.cnf" <<'EOF'
+          [req]
+          distinguished_name = dn
+          x509_extensions = codesign
+          prompt = no
+          [dn]
+          CN = Send to Daylight CI dry run (self-signed)
+          O = Send to Daylight CI
+          [codesign]
+          basicConstraints = critical, CA:FALSE
+          keyUsage = critical, digitalSignature
+          extendedKeyUsage = critical, codeSigning
+          subjectKeyIdentifier = hash
+          EOF
+          echo "$(command -v openssl): $(openssl version)"
+          PASSWORD=$(uuidgen)
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 -config "$CERT/cert.cnf" \
+            -keyout "$CERT/key.pem" -out "$CERT/cert.pem" 2>/dev/null
+          openssl pkcs12 -export -inkey "$CERT/key.pem" -in "$CERT/cert.pem" -name "Send to Daylight CI dry run" \
+            -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 -passout "pass:$PASSWORD" -out "$CERT/cert.p12"
+          MAC_DEVELOPER_ID_P12=$(base64 < "$CERT/cert.p12") MAC_DEVELOPER_ID_P12_PASSWORD="$PASSWORD" \
+            bash scripts/sign-mac.sh --dry-run "$APP" "$TEAM" Send-to-Daylight-mac.zip
+          rm -rf "$CERT"
+      - name: Smoke test the signed app (launch, responsive, pair, send, Delivered)
+        run: |
+          if [ "$RELEASE" = true ]; then
+            bash scripts/mac-smoke-test.sh Send-to-Daylight-mac.zip shared mac-developer-id
+          else
+            bash scripts/mac-smoke-test.sh Send-to-Daylight-mac.zip private mac-dry-run
+          fi
+
+      # Not named send-to-daylight-*: the publish job merges every artifact so named into one folder.
+      - uses: actions/upload-artifact@v4
+        if: env.RELEASE == 'true'
+        with:
+          name: rx-apple-mac-developer-id
+          path: reader-experiment/apple/Send-to-Daylight-mac.zip
+          if-no-files-found: error
+
+  # lane: mac
+  # With the signing secrets, the Developer ID zip replaces the ad-hoc Send-to-Daylight-mac.zip that `publish` has just
+  # put on the release (the same asset name). Without them it is skipped and the release keeps the ad-hoc zip.
+  publish-mac-developer-id:
+    needs: [check-mac-signing, mac-developer-id, publish]
+    if: needs.check-mac-signing.outputs.developer-id == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: rx-apple-publish-mac-developer-id
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: rx-apple-mac-developer-id
+          path: out
+      - name: Put the Developer ID build on the reader-experiment-latest release in place of the ad-hoc one
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          bash .github/scripts/rx-publish.sh out/Send-to-Daylight-mac.zip
+          echo "Send-to-Daylight-mac.zip on the release is the Developer ID build: signed, notarized and stapled." >> "$GITHUB_STEP_SUMMARY"

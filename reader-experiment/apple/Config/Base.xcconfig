@@ -23,8 +23,9 @@ DAYLIGHT_APP_GROUP = group.com.daylight.share
 // (<TEAMID>.com.daylight.share) is authorised by a team signature, with no prompt and nothing to register. So:
 //
 //   DEVELOPMENT_TEAM set    the Mac app and its extensions share <TEAMID>.com.daylight.share (entitlements:
-//                           macOS/*/*-AppGroup.entitlements; Info.plist DaylightAppGroup names it).
-//   DEVELOPMENT_TEAM empty  (CI releases, ad-hoc, "Sign to Run Locally") no App Group at all: entitlements without the
+//                           macOS/*/*-AppGroup.entitlements; Info.plist DaylightAppGroup names it). CI's Developer ID
+//                           release builds this way for APPLE_TEAM_ID (scripts/sign-mac.sh, README.md › Signing).
+//   DEVELOPMENT_TEAM empty  (CI's ad-hoc release, "Sign to Run Locally") no App Group at all: entitlements without the
 //                           key and an empty DaylightAppGroup. The app, its Share extension and its Safari extension
 //                           each keep their own pairing: the Share menu asks for the code once, the Safari extension
 //                           pairs in its popup. Nothing ever triggers the prompt.

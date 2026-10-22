@@ -169,6 +169,120 @@ Share menu and the Safari extension use the app's pairing. Without a team ("Sign
 no App Group, like the released one. To enable the Safari extension on the iPhone: Settings › Apps › Safari ›
 Extensions › Send to Daylight.
 
+## Signing
+
+The released Mac app is ad-hoc signed (LAB-DECISIONS, Q6). The whole Developer ID path is built: a Developer ID
+signature with the hardened runtime and a secure timestamp, notarization, and the team's App Group. It switches on by
+itself once six repository secrets exist. Until then CI publishes the ad-hoc build exactly as before, and runs the
+signing steps as a dry run on every build so the path stays proven.
+
+### What changes for people using the Mac app
+
+| | Ad-hoc build (today) | Developer ID build (with the secrets) |
+|---|---|---|
+| First open | right-click › Open, or System Settings › Privacy & Security › *Open Anyway* | Notarized and stapled: it opens with a double-click. macOS asks only its usual question about an app downloaded from the internet. |
+| Pairing | The app, the Share menu item and the Safari extension each keep their own: paste the code into Share › Daylight once, and pair the extension in its popup | One pairing: pair in the app, and Share › Daylight and the Safari extension use it |
+| Settings and history | The Share menu card has its own Comfort switch (and, with Lab, its own Lab switch, LAB-PLAN 1.1). Items sent from the Share menu don't show in the app's history. | One Comfort switch, one Lab switch and one history for the app, the Share menu and the Safari extension: they share the App Group `<TEAMID>.com.daylight.share` |
+| Safari extension | Needs Safari › Settings › Developer › *Allow unsigned extensions*, again after every Safari restart | No developer setting: turn it on in Safari › Settings › Extensions |
+
+**Moving from the ad-hoc build.** Replace the app in Applications and open it. The first time, it moves its pairing,
+this Mac's name and its history into the shared group (`SharedStore.migrate`), and the Share menu item and the Safari
+extension use that pairing from then on. Comfort and the Lab switch are not moved: they start at their defaults
+(Comfort off, Lab on), so set them again if you had changed them.
+
+### Turn it on (one time)
+
+You need the Apple Developer account's **Account Holder** role, because only the Account Holder can create a Developer ID
+certificate.
+
+1. **Team ID** (`APPLE_TEAM_ID`): developer.apple.com › Account › Membership details › *Team ID* (10 letters and
+   digits).
+2. **Developer ID certificate** (`MAC_DEVELOPER_ID_P12`, `MAC_DEVELOPER_ID_P12_PASSWORD`):
+   - Create it on a Mac: Xcode › Settings › Accounts › your team › *Manage Certificates…* › **+** › *Developer ID
+     Application*. Or on developer.apple.com › Certificates, IDs & Profiles › Certificates › **+** › *Developer ID
+     Application* (G2 Sub-CA), with a request from Keychain Access › Certificate Assistant › *Request a Certificate From
+     a Certificate Authority…* (saved to disk); then download the certificate and double-click it.
+   - Export it with its key: Keychain Access › login › *My Certificates* › **Developer ID Application: *name*
+     (*TEAMID*)**. Its private key shows under it when you expand it. Right-click › *Export…* › *Personal Information
+     Exchange (.p12)*, with a password.
+   - The secret is the file in base64: `base64 -i DeveloperID.p12 | pbcopy`. The password is
+     `MAC_DEVELOPER_ID_P12_PASSWORD`.
+3. **App Store Connect API key** (`ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8`), used for notarization (and by the
+   TestFlight job):
+   - Create it in App Store Connect › Users and Access › Integrations › App Store Connect API › Team Keys › **+**.
+     Access *Developer* is enough for notarization; choose *Admin* if the same key is also for TestFlight (below).
+   - Download `AuthKey_<KEYID>.p8`. Apple offers the download only once.
+   - The *Key ID* is `ASC_KEY_ID`, the *Issuer ID* above the list is `ASC_ISSUER_ID`, and the file's contents are
+     `ASC_KEY_P8`: `pbcopy < AuthKey_<KEYID>.p8`.
+4. **Add the six secrets** in MHW › Settings › Secrets and variables › Actions › *New repository secret*, under exactly
+   these names. Or use `gh`:
+
+   ```sh
+   R=12twelve12hi/MHW
+   gh secret set APPLE_TEAM_ID -R $R --body ABCDE12345
+   base64 -i DeveloperID.p12 | gh secret set MAC_DEVELOPER_ID_P12 -R $R
+   gh secret set MAC_DEVELOPER_ID_P12_PASSWORD -R $R            # asks for the value
+   gh secret set ASC_KEY_ID -R $R --body <Key ID>
+   gh secret set ASC_ISSUER_ID -R $R --body <Issuer ID>
+   gh secret set ASC_KEY_P8 -R $R < AuthKey_<KEYID>.p8
+   ```
+
+5. **Run it:** push any change under `reader-experiment/apple/`, or open the latest *Reader experiment – Apple apps*
+   run in GitHub › Actions and choose *Re-run all jobs*. The `mac-developer-id` job's summary then reads *Mac release:
+   Developer ID*, and `Send-to-Daylight-mac.zip` on the release is the signed, notarized build. If a secret is
+   missing, the *Mac signing* job's log names it and the release stays ad-hoc signed.
+
+Nothing needs registering in your account. Developer ID apps need no provisioning profile, and macOS authorises a
+Team-ID-prefixed App Group (`<TEAMID>.com.daylight.share`, `Config/Base.xcconfig`) from the team signature alone.
+
+### What CI does
+
+Three mac-lane jobs in [`rx-apple.yml`](../../.github/workflows/rx-apple.yml), next to the ad-hoc `mac` job, which
+always runs:
+
+- **`check-mac-signing`** checks that all six secrets are present (it reads nothing else) and shellchecks the scripts.
+- **`mac-developer-id`** makes a Release build for the team (`DEVELOPMENT_TEAM`, not yet signed), so every bundle's
+  Info.plist names the team's App Group. It then runs
+  [`scripts/sign-mac.sh`](scripts/sign-mac.sh):
+  - it imports the .p12 into a temporary keychain (deleted afterwards);
+  - it signs the Share extension, the Safari extension and then the app, each with its own entitlements (the
+    `-AppGroup` files with the group filled in), the hardened runtime and a secure timestamp;
+  - it checks every bundle with `codesign --verify --deep --strict`. For each one it reads the entitlements actually
+    embedded (`codesign -d --entitlements`) and requires them to be the ones it was signed with: sandboxed, the one
+    App Group, the same group the bundle's `DaylightAppGroup` names, and no `get-task-allow`. It also checks the
+    Developer ID authority, the Team ID, the runtime flag and the timestamp;
+  - it notarizes with `xcrun notarytool submit --wait`, using the API key, and prints Apple's log if the submission is
+    refused; then it staples the ticket, asks Gatekeeper (`spctl -a -vv`, which must say *Notarized Developer ID*) and
+    zips the app with `ditto -c -k --keepParent`.
+
+  The job then runs the Mac smoke test ([`scripts/mac-smoke-test.sh`](scripts/mac-smoke-test.sh), the one the `mac` job
+  runs) on that zip: the app must use the App Group and pair, send and show *Delivered ✓*.
+- **`publish-mac-developer-id`** runs after `publish` and puts that zip on the release in place of the ad-hoc
+  `Send-to-Daylight-mac.zip`, under the same name.
+
+**Without the secrets** `mac-developer-id` is a dry run of the same script:
+- It builds for a stand-in team, `DRYRUN0000`, and signs with a throwaway self-signed code-signing certificate that
+  the job makes with `openssl`.
+- That covers the keychain import, signing every bundle, the embedded entitlements and the App Group value
+  (`DRYRUN0000.com.daylight.share`).
+- It skips notarization, stapling and the Gatekeeper check, and it does not require the Developer ID authority or a
+  Team ID.
+- It then runs the smoke test, in which the app keeps its own storage: a self-signed signature carries no Team ID, so
+  `SharedStore` never opens the group, and nothing asks for access.
+- It publishes nothing; the release keeps the ad-hoc build from the `mac` job.
+
+To sign on your own Mac instead, with the same environment variables as the secrets:
+
+```sh
+cd reader-experiment/apple && xcodegen
+xcodebuild -project SendToDaylight.xcodeproj -scheme SendToDaylight-macOS -configuration Release \
+  -destination 'generic/platform=macOS' -derivedDataPath build/dd DEVELOPMENT_TEAM=ABCDE12345 \
+  CODE_SIGN_STYLE=Manual CODE_SIGNING_ALLOWED=NO build
+MAC_DEVELOPER_ID_P12=$(base64 -i DeveloperID.p12) MAC_DEVELOPER_ID_P12_PASSWORD=… \
+  ASC_KEY_ID=… ASC_ISSUER_ID=… ASC_KEY_P8="$(cat AuthKey_….p8)" \
+  scripts/sign-mac.sh "build/dd/Build/Products/Release/Send to Daylight.app" ABCDE12345 Send-to-Daylight-mac.zip
+```
+
 ## TestFlight (later)
 
 The workflow uploads the iPhone app to TestFlight on every build once these repository secrets exist
