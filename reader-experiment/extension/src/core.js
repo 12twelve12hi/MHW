@@ -205,7 +205,9 @@ export function createApp({
 
   async function unpair() {
     return run(async () => {
-      await ds.applyPairingChange(storage, await getPairing(), null);
+      const current = await getPairing();
+      await lab.beforeUnpair(current); // a typed Server address goes with the pairing (LAB-PLAN 2.6)
+      await ds.applyPairingChange(storage, current, null);
       await storage.remove('pairing');
       cache = null;
       await badge.clear();

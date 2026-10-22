@@ -9,9 +9,11 @@
 //   F00.6  needs-server within 5 s; a relay that never answers: "Checking your Daylight server…", then OFFLINE at 5 s
 //   F00.7  no setup sentence or secret name on a screen before a feature is tapped or the server section opened
 //   F17.2  What's in Lab's header from the ledger: nothing heard, a v1.1 ack, a Lab hello
+//   1.5    What's in Lab opened again within 10 minutes shows the cached states at once, then the server's new answer
 //   2.6    re-pairing with another Daylight while a server is known: the popup's follow-up (the locked text, the new
 //          Server code with Copy, the re-run help) until OK; a fresh What's in Lab answer updates the rows' short
-//          states with a note open; Set up with a link (a bad link, the address confirmation, Cancel, a refused site)
+//          states with a note open; the server moved ("… moved to {host}. Use it?", Cancel, Use it); Set up with a
+//          link (a bad link, the address confirmation, Cancel, a refused site); Unpair forgets a typed Server address
 //
 //   PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node --test test/e2e/lab.e2e.mjs      (HEADED=1 to watch)
 
@@ -42,11 +44,20 @@ let relay, site, worker, ctx, sw, extId;
 const storageSet = (items) => sw.evaluate((i) => chrome.storage.local.set(i), items);
 const storageGet = async (key) => (await sw.evaluate((k) => chrome.storage.local.get(k), key))[key];
 const pair = (input) => sw.evaluate(async (i) => globalThis.sendToDaylight.pair({ input: i, confirm: true }), input);
-/** Unpairs, and forgets the Daylight server too (a typed Server address outlives a pairing: DESIGN 13.1's keys). */
-const unpair = () => sw.evaluate(async () => {
-  await globalThis.sendToDaylight.unpair();
-  await chrome.storage.local.remove(Object.keys(await chrome.storage.local.get(null)).filter((k) => k.startsWith('server/')));
-});
+/**
+ * Unpairs, which forgets a typed Server address with the pairing (checked here, 2.6), then forgets the rest of the
+ * Daylight server too, so the next test starts without it: the pin and the caches outlive a pairing (DESIGN 13.1).
+ */
+const unpair = async () => {
+  const kept = await sw.evaluate(async () => {
+    await globalThis.sendToDaylight.unpair();
+    return (await chrome.storage.local.get('server/manualUrl'))['server/manualUrl'] ?? null;
+  });
+  assert.equal(kept, null, 'Unpair forgot the typed Server address');
+  await sw.evaluate(async () => {
+    await chrome.storage.local.remove(Object.keys(await chrome.storage.local.get(null)).filter((k) => k.startsWith('server/')));
+  });
+};
 
 async function openPopup(tabId) {
   const popup = await ctx.newPage();
@@ -312,6 +323,24 @@ test('with a server: the typed Server address, then Ready, the rows’ own state
   const shorts = {};
   for (const id of ['F02', 'F37', 'F19', 'F36']) shorts[id] = await featureRow(page, id).locator('.lab-short').textContent().catch(() => null);
   assert.deepEqual(shorts, { F02: 'In a later update', F37: 'Needs a Claude key', F19: 'Needs an email domain', F36: 'In a later update' });
+
+  // Opened again within 10 minutes: the cached states at once, while the server is asked again (1.5).
+  worker.state.statusDelayMs = 2000;
+  try {
+    const again = await ctx.newPage();
+    await again.setViewportSize({ width: 360, height: 760 });
+    await again.goto(`chrome-extension://${extId}/lab.html#whats-in-lab`);
+    await again.waitForSelector('body[data-ready="1"]');
+    assert.equal(await again.locator('body[data-fresh="1"]').count(), 0, 'the server’s new answer is still on its way');
+    assert.equal(await again.textContent('.lab-group-state'), 'Ready', 'not “Checking your Daylight server…”');
+    const cached = {};
+    for (const id of ['F02', 'F37', 'F19', 'F36']) cached[id] = await featureRow(again, id).locator('.lab-short').textContent().catch(() => null);
+    assert.deepEqual(cached, shorts);
+    await again.waitForSelector('body[data-fresh="1"]', { timeout: 9000 });
+    assert.equal(await again.textContent('.lab-group-state'), 'Ready');
+    await again.close();
+  } finally { worker.state.statusDelayMs = 0; }
+
   await page.getByRole('button', { name: LAB_TEXT.features.F02.name, exact: true }).click();
   await featureRow(page, 'F02').locator('.lab-note-body[data-state="later"]').waitFor();
   assert.equal(await featureRow(page, 'F02').locator('.lab-note-text').textContent(), 'Your Daylight server is ready. Files over 9 MB comes to this app in a later Lab update.');
@@ -493,6 +522,57 @@ test('re-pairing with another Daylight while a server is known: the popup shows 
   assert.equal(await popup.isVisible('#repaired'), false, 'gone after OK');
   await popup.close();
   await page.close();
+  await storageSet({ settings: { lab: true } });
+  await unpair();
+});
+
+test('the server moved: the section asks “Your Daylight server moved to {host}. Use it?”; Cancel keeps the old server, Use it asks for the new site and pins it (2.6)', { timeout: 120000 }, async () => {
+  await storageSet({ settings: { lab: true, comfort: true } });
+  const secret = ds.generateSecret();
+  await pair(await ds.pairingLink({ secret, relay: relay.url, name: 'Moved Daylight' }));
+  const values = await S.deriveServerValues(await S.deriveServerSeed(secret));
+  const S2 = LAB_TEXT.serverSection;
+  // Pinned at `old`; the deploy made a new setup link, so a new Worker announces itself at `moved` (server DESIGN
+  // 3.5). This browser has neither site, so nothing is asked of either server here.
+  const old = 'https://daylight-aaaaaaaaaaaa.example.workers.dev';
+  const moved = 'https://daylight-bbbbbbbbbbbb.example.workers.dev';
+  await storageSet({ 'server/pin': { origin: old, fingerprint: values.fingerprint } });
+  await new ds.RelayClient({ relay: relay.url }).publish(values.configTopic, await S.buildConfigFrame(values, { server: moved }));
+  const server = await openLab('server');
+  const question = 'Your Daylight server moved to daylight-bbbbbbbbbbbb.example.workers.dev. Use it?';
+  assert.equal(L.serverMovedText(moved), question);
+  let ask = server.getByRole('group', { name: question });
+  await ask.waitFor();
+  assert.equal(await ask.locator('.lab-note-text').textContent(), question);
+  assert.deepEqual(await ask.getByRole('button').allTextContents(), [S2.setupConfirm, S2.setupCancel]);
+  assert.equal(await server.textContent('.lab-server-where'), `daylight-aaaaaaaaaaaa.example.workers.dev · ${S.showFingerprint(values.fingerprint)}`, 'still the old server');
+  // F27: no axe violations, every control named, nothing clipped at 360 px with Comfort.
+  await axe(server, 'lab.html: Daylight server, the server moved');
+  assert.deepEqual(await unnamed(server), []);
+  await assertNotClipped(server, 'lab.html: Daylight server, the server moved, Comfort');
+  await shot(server, 'server-moved');
+
+  // Cancel: the question closes, the focus goes on to Copy, nothing changes; it is asked again next time.
+  await ask.getByRole('button', { name: S2.setupCancel, exact: true }).click();
+  await ask.waitFor({ state: 'detached' });
+  assert.equal(await server.evaluate(() => document.activeElement?.classList.contains('lab-server-copy')), true);
+  assert.deepEqual(await storageGet('server/pin'), { origin: old, fingerprint: values.fingerprint });
+  await server.reload();
+  await server.waitForSelector('body[data-fresh="1"]', { timeout: 20000 });
+  ask = server.getByRole('group', { name: question });
+  await ask.waitFor();
+
+  // Use it: the new server's site is asked for (refused here), then the move is confirmed and the section drawn again.
+  await server.evaluate(() => { window.__asked = []; chrome.permissions.request = async (p) => { window.__asked.push(...(p?.origins ?? [])); return false; }; });
+  await ask.getByRole('button', { name: S2.setupConfirm, exact: true }).click();
+  await server.waitForFunction(() => !document.querySelector('.lab-server-moved') && document.body.dataset.fresh === '1', null, { timeout: 15000 });
+  assert.deepEqual(await server.evaluate(() => window.__asked), [`${moved}/*`]);
+  assert.deepEqual(await storageGet('server/pin'), { origin: moved, fingerprint: values.fingerprint });
+  assert.equal(await storageGet('server/pendingMove'), undefined);
+  assert.equal(await server.textContent('.lab-server-where'), `daylight-bbbbbbbbbbbb.example.workers.dev · ${S.showFingerprint(values.fingerprint)}`);
+  assert.equal(await server.getAttribute('.lab-server-state .lab-note-body', 'data-state'), 'needs-site-access', 'the new server’s site is still to allow');
+  assert.equal(await server.evaluate(() => document.activeElement?.id), 'server-h', 'the focus is on the section, whose state is read next');
+  await server.close();
   await storageSet({ settings: { lab: true } });
   await unpair();
 });

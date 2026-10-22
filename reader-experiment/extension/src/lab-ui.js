@@ -326,11 +326,44 @@ function setupForm(on) {
 }
 
 /**
+ * "Your Daylight server moved to {host}. Use it?" (2.6; the module's confirmMove on yes), as the setup link's
+ * confirmation asks: the question names the group, with the same Use it and Cancel. Use it calls on.move(true, model)
+ * (the caller asks for the new origin's site, confirms the move and draws the section again); Cancel closes it and
+ * changes nothing, so the section asks again the next time it opens.
+ */
+function movedQuestion(model, on) {
+  const S = LAB_TEXT.serverSection;
+  const ask = el('div', 'lab-note-body lab-server-moved');
+  const q = el('p', 'lab-note-text', model.moved);
+  q.id = nextId('lab-moved');
+  ask.setAttribute('role', 'group');
+  ask.setAttribute('aria-labelledby', q.id);
+  const yes = button(S.setupConfirm, 'btn primary');
+  const no = button(S.setupCancel);
+  const acts = el('div', 'lab-note-acts');
+  acts.append(yes, no);
+  ask.append(q, acts);
+  yes.addEventListener('click', async () => {
+    yes.disabled = true;
+    no.disabled = true;
+    try { await on.move?.(true, model); } finally { yes.disabled = false; no.disabled = false; }
+  });
+  no.addEventListener('click', () => {
+    const next = ask.parentElement?.querySelector('.lab-server-copy');
+    ask.remove();
+    on.move?.(false, model);
+    next?.focus();
+  });
+  return ask;
+}
+
+/**
  * The Daylight server section (2.6) into `box`. model: the background's server view {paired, state, message,
- * button, origins, host, fingerprint, v1Notice, serverCode, labInbox, aiToday, manualUrl, setupFirst, rerun}.
+ * button, origins, host, fingerprint, v1Notice, moved, serverCode, labInbox, aiToday, manualUrl, setupFirst, rerun}.
  * on: {fix(button, note, model) for the state's one button (Allow), copy(code) -> Promise<boolean>,
- *      saveAddress(url) -> Promise<{error?}>, and setupForm's setupCheck, setup and setupSaid}. Set up with a link
- * comes right after the state while the state's message says to paste a setup link (model.setupFirst), else last.
+ *      move(yes, model) for "moved … Use it?" (shown only with it), saveAddress(url) -> Promise<{error?}>, saveLabel,
+ *      and setupForm's setupCheck, setup and setupSaid}. Set up with a link comes right after the state while the
+ * state's message says to paste a setup link (model.setupFirst), else last; the move question comes next.
  */
 export function renderServerSection(box, model, on = {}) {
   const S = LAB_TEXT.serverSection;
@@ -352,6 +385,7 @@ export function renderServerSection(box, model, on = {}) {
   }
   const setup = on.setupCheck ? setupForm(on) : null;
   if (setup && model.setupFirst) box.append(setup);
+  if (model.moved && on.move) box.append(movedQuestion(model, on));
   const where = [model.host, model.fingerprint].filter(Boolean).join(' · ');
   if (where) box.append(el('p', 'lab-server-where', where));
   if (model.v1Notice) box.append(el('p', 'note lab-server-v1', model.v1Notice));
@@ -379,6 +413,7 @@ export function renderServerSection(box, model, on = {}) {
   const input = el('input');
   input.id = nextId('lab-address');
   label.htmlFor = input.id;
+  // 'https://' and 'Save' (the popup's name form's word) wait for LAB_TEXT keys, asked of the share lane.
   Object.assign(input, { type: 'url', value: model.manualUrl ?? '', autocomplete: 'off', spellcheck: false, placeholder: 'https://' });
   input.setAttribute('inputmode', 'url');
   const save = el('button', 'btn secondary', on.saveLabel ?? 'Save');

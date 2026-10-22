@@ -137,11 +137,31 @@ test('What’s in Lab: Chrome lists the four server features and Safari one, und
       o = await s.msg({ type: 'labOverview' });
       assert.deepEqual([o.server.state, o.server.short], ['needs-server', 'Not set up']);
       assert.ok(o.server.features.every((f) => f.short === null));
-      const cached = await s.msg({ type: 'labOverview', refresh: false });
-      assert.equal(cached.fresh, false);
+      // Opened again: the last answer at once, from storage (1.5), and nothing on the network.
+      const asked = s.log.length;
+      let cached = await s.msg({ type: 'labOverview', refresh: false });
+      assert.deepEqual([cached.fresh, cached.cached, cached.server.state, cached.server.short], [true, true, 'needs-server', 'Not set up']);
+      assert.ok(cached.server.features.every((f) => f.short === null));
+      assert.equal(s.log.length, asked, 'nothing went on the network');
+      // An answer older than 10 minutes isn't used: no short states until the server answers.
+      await s.fb.api.storage.local.set({ 'lab/server': { state: 'needs-server', at: Date.now() - 11 * MIN } });
+      cached = await s.msg({ type: 'labOverview', refresh: false });
+      assert.deepEqual([cached.fresh, cached.cached, cached.server.state, cached.server.short], [false, false, null, null]);
       assert.ok(cached.server.features.every((f) => f.short === null));
     } finally { await s.close(); }
   }
+});
+
+test('What’s in Lab opening reads the ack topic and asks the server at the same time, each within the 5 s', async () => {
+  const hang = await hangingServer();
+  const s = await setup({ relayUrl: hang.url, gateDeadlineMs: 400 });
+  try {
+    const t0 = Date.now();
+    const o = await s.msg({ type: 'labOverview' });
+    const took = Date.now() - t0;
+    assert.deepEqual([o.fresh, o.cached, o.server.state, o.server.short], [true, false, 'OFFLINE', 'Can’t reach the server']);
+    assert.ok(took >= 380 && took < 750, `one deadline, not two after each other (${took} ms)`);
+  } finally { await s.close(); await hang.close(); }
 });
 
 test('the gate: needs-pairing, then needs-server with the Server code to copy, within 5 s (F00.3, F00.6)', async () => {
@@ -218,6 +238,12 @@ test('the gate with a server: site access first, then the server’s states; rea
     const o = await s.msg({ type: 'labOverview' });
     assert.deepEqual([o.server.state, o.server.short], ['ready', 'Ready']);
     assert.deepEqual(o.server.features.map((f) => [f.id, f.short]), [['F02', 'In a later update'], ['F37', 'Needs a Claude key'], ['F19', 'Needs an email domain'], ['F36', 'In a later update']]);
+    // Opened again within 10 minutes: the same states at once, from the cached status (1.5), with nothing asked.
+    const before = [s.log.length, s.worker.count('GET /v1/status')];
+    const cached = await s.msg({ type: 'labOverview', refresh: false });
+    assert.deepEqual([cached.fresh, cached.cached, cached.server.state, cached.server.short], [true, true, 'ready', 'Ready']);
+    assert.deepEqual(cached.server.features.map((f) => [f.id, f.short]), o.server.features.map((f) => [f.id, f.short]));
+    assert.deepEqual([s.log.length, s.worker.count('GET /v1/status')], before);
     const st = await s.msg({ type: 'labState' });
     assert.deepEqual([st.serverState, st.serverSubtitle], ['ready', 'Optional · Ready']);
   } finally { await s.close(); }
@@ -319,6 +345,65 @@ test('Set up with a link (2.6, DESIGN 3.5): read here first, sent only on Use it
     v = await s.msg({ type: 'labServer' });
     assert.deepEqual([v.state, v.host, v.setupFirst], ['ready', 'daylight-0123456789ab.example.workers.dev', false]);
   } finally { await s.close(); }
+});
+
+test('the server moved (2.6): the section asks “moved to {host}. Use it?”, also while the old address fails; Use it pins the new one', async () => {
+  const s = await setup({ status: statusJson() });
+  const dead = await deadAddress();
+  const old = 'https://daylight-aaaaaaaaaaaa.example.workers.dev';
+  const moved = 'https://daylight-bbbbbbbbbbbb.example.workers.dev';
+  try {
+    const values = await S.deriveServerValues(await S.deriveServerSeed(s.secret));
+    s.worker.state.token = values.authToken;
+    // This pairing's server was pinned at `old`, whose Worker the deploy deleted when it made a new setup link
+    // (server DESIGN 3.5); the new Worker announces itself at `moved`.
+    s.fb.grant(`${old}/*`);
+    s.flags.route = { [old]: dead, [moved]: s.worker.url };
+    await s.fb.api.storage.local.set({ 'server/pin': { origin: old, fingerprint: values.fingerprint } });
+    await new ds.RelayClient({ relay: s.relay.url }).publish(values.configTopic, await S.buildConfigFrame(values, { server: moved }));
+    let v = await s.msg({ type: 'labServer' });
+    assert.deepEqual([v.state, v.host], ['OFFLINE', 'daylight-aaaaaaaaaaaa.example.workers.dev'], 'still on the old pin');
+    assert.equal(v.moved, 'Your Daylight server moved to daylight-bbbbbbbbbbbb.example.workers.dev. Use it?');
+    assert.equal(v.moved, L.serverMovedText(moved));
+    assert.deepEqual(v.movedOrigins, [`${moved}/*`]);
+    assert.deepEqual(await s.storage('server/pendingMove'), { origin: moved, fingerprint: values.fingerprint });
+    assert.equal(s.worker.count('GET /v1/status'), 0, 'nothing went to the new address before Use it');
+    // Not answered (Cancel changes nothing): asked again the next time.
+    assert.equal((await s.msg({ type: 'labServer' })).moved, L.serverMovedText(moved));
+
+    // Use it: the page asked for the new site, then the module pins the new origin, and the server is ready there.
+    s.fb.grant(`${moved}/*`);
+    assert.deepEqual(await s.msg({ type: 'labConfirmMove' }), { moved: true });
+    assert.deepEqual(await s.storage('server/pin'), { origin: moved, fingerprint: values.fingerprint });
+    assert.equal(await s.storage('server/pendingMove'), undefined);
+    v = await s.msg({ type: 'labServer' });
+    assert.deepEqual([v.state, v.host, v.moved, v.movedOrigins], ['ready', 'daylight-bbbbbbbbbbbb.example.workers.dev', null, null]);
+    assert.deepEqual(await s.msg({ type: 'labConfirmMove' }), { moved: false }, 'nothing left to confirm');
+    // A typed Server address wins over discovery: no question then.
+    await s.fb.api.storage.local.set({ 'server/pin': { origin: old, fingerprint: values.fingerprint } });
+    await s.useWorker();
+    v = await s.msg({ type: 'labServer' });
+    assert.deepEqual([v.state, v.moved], ['ready', null]);
+  } finally { await s.close(); }
+});
+
+test('the server moved and the old address never answers: the question still shows when the 5 s run out', async () => {
+  const hang = await hangingServer();
+  const s = await setup({ gateDeadlineMs: 400 });
+  const old = 'https://daylight-aaaaaaaaaaaa.example.workers.dev';
+  const moved = 'https://daylight-bbbbbbbbbbbb.example.workers.dev';
+  try {
+    const values = await S.deriveServerValues(await S.deriveServerSeed(s.secret));
+    s.fb.grant(`${old}/*`);
+    s.flags.route = { [old]: hang.url };
+    await s.fb.api.storage.local.set({ 'server/pin': { origin: old, fingerprint: values.fingerprint } });
+    await new ds.RelayClient({ relay: s.relay.url }).publish(values.configTopic, await S.buildConfigFrame(values, { server: moved }));
+    const v = await s.msg({ type: 'labServer' });
+    assert.deepEqual([v.state, v.moved], ['OFFLINE', L.serverMovedText(moved)]);
+    // Once the config names the pinned origin again, an old pendingMove asks nothing.
+    await s.fb.api.storage.local.set({ 'server/config': { ...(await s.storage('server/config')), server: old } });
+    assert.equal((await s.msg({ type: 'labServer' })).moved, null);
+  } finally { await s.close(); await hang.close(); }
 });
 
 // --- F17: the ledger -----------------------------------------------------------------------------------------------------
@@ -480,6 +565,29 @@ test('the re-pairing follow-up shows when the lock didn’t reach the server too
   } finally { await s.close(); }
 });
 
+test('Unpair forgets a typed Server address, so another Daylight’s pairing says pairing-mismatch, not BAD_AUTH (2.6)', async () => {
+  const s = await setup({ status: statusJson() });
+  const pinned = 'https://daylight-0123456789ab.example.workers.dev';
+  try {
+    const values = await S.deriveServerValues(await S.deriveServerSeed(s.secret));
+    await s.useWorker();
+    // The server was found on the relay once too: pinned for this pairing.
+    await s.fb.api.storage.local.set({ 'server/pin': { origin: pinned, fingerprint: values.fingerprint } });
+    assert.equal((await s.msg({ type: 'labServer' })).state, 'ready');
+    await s.app.unpair();
+    assert.equal(await s.storage('server/manualUrl'), undefined, 'the typed address went with the pairing');
+    assert.deepEqual(await s.storage('server/pin'), { origin: pinned, fingerprint: values.fingerprint }, 'the pin stays: it tells pairing-mismatch');
+    assert.equal(s.worker.count('POST /v1/admin/lock'), 0, 'unpairing locks nothing: the same Daylight may come back');
+
+    const statusCalls = s.worker.count('GET /v1/status');
+    await s.app.pair({ input: await ds.pairingLink({ secret: ds.generateSecret(), relay: s.relay.url }) });
+    const v = await s.msg({ type: 'labServer' });
+    assert.deepEqual([v.state, v.message, v.manualUrl, v.setupFirst], ['pairing-mismatch', S.STATE_MESSAGES['pairing-mismatch'], '', true]);
+    assert.equal(s.worker.count('GET /v1/status'), statusCalls, 'the old server wasn’t asked with the new pairing');
+    assert.equal(await s.storage('server/badAuthAt'), undefined);
+  } finally { await s.close(); }
+});
+
 // --- the words (1.6) -----------------------------------------------------------------------------------------------------
 
 test('the popup’s and lab.html’s Lab words are LAB_TEXT’s', () => {
@@ -494,5 +602,5 @@ test('the popup’s and lab.html’s Lab words are LAB_TEXT’s', () => {
   const lab = fs.readFileSync(path.join(b.dir, 'lab.html'), 'utf8');
   assert.equal(/<h2 id="lab-h">([^<]*)<\/h2>/.exec(lab)[1], L.LAB_TEXT.lab);
   assert.equal(/<h2 id="whats-h">([^<]*)<\/h2>/.exec(lab)[1], L.LAB_TEXT.whatsInLab);
-  assert.equal(/<h2 id="server-h">([^<]*)<\/h2>/.exec(lab)[1], L.LAB_TEXT.serverRow);
+  assert.equal(/<h2 id="server-h"[^>]*>([^<]*)<\/h2>/.exec(lab)[1], L.LAB_TEXT.serverRow);
 });

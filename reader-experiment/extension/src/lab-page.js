@@ -90,6 +90,10 @@ async function onFeature(f, box, retried = false) {
   return undefined;
 }
 
+/**
+ * What's in Lab: the cached states at once (the server's answer of the last 10 minutes, 1.5), else "Checking your
+ * Daylight server…" on the heading; then the ack topic and the server, asked now, update the lines in place.
+ */
 async function renderWhats(seq) {
   const box = $('whats');
   let model;
@@ -110,7 +114,7 @@ async function renderWhats(seq) {
  */
 function updateLines(box, model) {
   if (!updateWhatsInLab(box, model) && !box.querySelector('.lab-note > *')) renderWhatsInLab(box, model, { onTap: onFeature });
-  if (model.fresh) document.body.dataset.fresh = '1';
+  if (model.fresh && !model.cached) document.body.dataset.fresh = '1';
 }
 
 // --- the Daylight server ----------------------------------------------------------------------------------------------
@@ -125,6 +129,16 @@ async function renderServer(seq) {
   renderServerSection(box, model, {
     fix: async () => { if (model.state === 'needs-site-access' && (await askSite(model.origins))) await render(); },
     copy: (code) => copyText(code ?? ''),
+    // "Your Daylight server moved to {host}. Use it?" (2.6): the new origin's site while the click still counts, then
+    // the module's confirmMove; the section is drawn again with the new server's state, and the focus goes to its
+    // heading, so the state is read next. Cancel changes nothing.
+    move: async (yes, m) => {
+      if (!yes) return;
+      await askSite(m.movedOrigins);
+      await call('labConfirmMove');
+      await render();
+      $('server-h').focus();
+    },
     // Set up with a link (2.6): the host permission for the link's server on Use it, while the click still counts.
     setupCheck: (link) => call('labSetupCheck', { link }),
     setup: async (link, checked) => {
@@ -206,9 +220,12 @@ async function init() {
       const on = changes.settings.newValue?.lab !== false;
       if (on !== lab) { lab = on; render(); }
     }
-    // The ledger learnt something: What's in Lab's header line follows.
+    // The ledger learnt something: What's in Lab's header line follows. Once the server's live answer is on screen,
+    // the rows keep it (the cached states can be older than an answer that ran out of time).
     if (view === 'whats-in-lab' && (changes['lab/inbox'] || changes['lab/heard'])) {
-      call('labOverview', { refresh: false }).then((m) => { if (m.lab) updateLines($('whats'), m); }, () => {});
+      call('labOverview', { refresh: false }).then((m) => {
+        if (m.lab) updateLines($('whats'), document.body.dataset.fresh === '1' ? { ...m, fresh: false } : m);
+      }, () => {});
     }
   });
   try {

@@ -122,9 +122,10 @@ While Lab is on, two rows under the switch open the page `lab.html` in a tab:
 
 - **What’s in Lab ›**: the features this build has, each with a short state ("Ready", "Not set up", "In a later
   update", …). The header line says whether your Daylight has confirmed Lab ("Your Daylight: Lab on · checked in 4 min
-  ago"), from what it says on its confirmation channel; opening the page reads that channel once. In this first Lab
-  build (Wave 0) the list holds only the features that run on your own **Daylight server** (Files over 9 MB, Summaries
-  with Claude, Email-in address, Feeds and daily digest; Safari: Summaries with Claude). They are always shown and
+  ago"), from what it says on its confirmation channel; opening the page reads that channel once, while it asks the
+  server. The states the server gave in the last 10 minutes show at once, and its new answer replaces them. In this
+  first Lab build (Wave 0) the list holds only the features that run on your own **Daylight server** (Files over 9 MB,
+  Summaries with Claude, Email-in address, Feeds and daily digest; Safari: Summaries with Claude). They are always shown and
   never greyed out: tapping one that isn't set up shows one sentence under it, saying what's missing, with at most one
   button that fixes it from here (**Copy Server code**, or **Allow** for the server's site) and **OK**. Screen readers
   hear it. A ready server answers "comes to this app in a later Lab update" until the feature is built here.
@@ -139,24 +140,28 @@ While Lab is on, two rows under the switch open the page `lab.html` in a tab:
     pairing code, another address) says why and sends nothing. Then *Use this Daylight server?* names the link's
     address, and only **Use it** asks for that site and sends the server this pairing's Server code (*Setting up…*);
     the section then reads the server again. Your other devices and your Daylight find it on their own.
+  - **The server moved.** When your server announces itself at a new address (a deploy with *New setup link* makes a
+    new Worker and deletes the old one), the section asks *Your Daylight server moved to {host}. Use it?*. Until you
+    answer, it keeps using the address you had. **Use it** asks for the new site and switches to it; **Cancel**
+    changes nothing, and the question comes back the next time the section opens.
 
 Server calls run in the background (the pairing secret and the server's token never reach a web page). The first time a
 server feature or the Server address is used, the browser asks for access to the server's site; saying no shows
 *Needs access to this site*, with **Allow**. A server answer is used for 10 minutes; a server that doesn't answer within
 5 seconds reads as *Couldn’t reach the Daylight server*. Before this browser is paired with another Daylight, a server
 that knows the old pairing is locked (Lab on or off), so a lost or replaced pairing can't use it, and a typed Server
-address (the old server's) is forgotten. Afterwards, while Lab is on, the popup shows the locked text with the new
+address (the old server's) is forgotten. **Unpair** forgets a typed Server address too (it locks nothing: the same
+Daylight may come back). Afterwards, while Lab is on, the popup shows the locked text with the new
 **Server code**, **Copy** and how to re-run the deploy, under *Daylight server*, until **OK** (or until the new server
 answers).
 
 The Safari extension inside the iPhone and Mac apps gets Lab only once the iPhone and Mac apps have this wave's Lab
 (below, *Lab release gate*); until then it is the plain extension, with no Lab switch.
 
-**Not there yet** (strings the shared copy, `LAB_TEXT`, doesn't have; reported to the share and server lanes): the
-sheet for a server that moved (*Your Daylight server moved to {host}. Use it?* exists, its buttons don't), so a server
-redeployed at a new address with the same pairing keeps reading *Couldn’t reach the Daylight server* here until its
-address is typed in *Server address* or its new setup link is used; the setup steps in brief; and labels for the
-delivery mode and for the host and fingerprint line.
+**Not there yet** (strings the shared copy, `LAB_TEXT`, doesn't have; reported to the share lane): the setup steps in
+brief; labels for the delivery mode and for the host and fingerprint line; and keys for the Server address field's
+**Save** button and `https://` placeholder, which use the popup's own words until then. The server-moved question uses
+the setup confirmation's **Use it** and **Cancel**, which answer it word for word.
 
 ## Privacy
 
@@ -216,15 +221,18 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   `onAckHeader`, Lab on or off, and pruned to the outbox after each check), the gates (`labGate` with the 5 s deadline;
   the server's site access, then its state), the Daylight server (`DaylightServer`, discovery only with Lab on) and
   the lock before re-pairing (then the follow-up: `lab/repaired` until OK or a ready server). Its messages are
-  `labState`, `setLab`, `labOverview`, `labGate`, `labServer`, `labServerAddress`, `labSetupCheck` and `labSetup` (Set
-  up with a link: `parseSetupLink`, then `DaylightServer.setup`), `labRepaired` and `labRepairSeen`. `src/lab.html` and `src/lab-page.js` are the page; `src/lab-ui.js` builds its parts (the note,
+  `labState`, `setLab`, `labOverview`, `labGate`, `labServer`, `labServerAddress`, `labConfirmMove` (the server moved:
+  `DaylightServer.confirmMove`), `labSetupCheck` and `labSetup` (Set up with a link: `parseSetupLink`, then
+  `DaylightServer.setup`), `labRepaired` and `labRepairSeen`. `labOverview` with `refresh: false` answers from
+  `lab/server` and the cached status while they are 10 minutes old or less (`cached: true`), without the network. `src/lab.html` and `src/lab-page.js` are the page; `src/lab-ui.js` builds its parts (the note,
   What's in Lab, the server section) from data alone, so the web sender's build can copy it (B0). Every word is
   `LAB_TEXT`'s or the server module's. `LAB_FEATURES`, `LAB_SERVER_FEATURES` and `BUILT_FEATURES` in `lab.js` say what
   this build lists and runs; `LAB_NOTE_ENABLED` is `false` until a build has F01 or F04 (X1). A fresh What's in Lab
   answer updates the rows' short states in place (`updateWhatsInLab`), so a note opened meanwhile stays. Tests:
   `test/unit/lab.test.mjs` (node, against the mock relay, a stand-in server in `test/helpers/fake-worker.mjs` and Lab
   Daylights from `daylight-lab.js`) and `test/e2e/lab.e2e.mjs` (Chromium: the popup's row and `lab.html`, Lab on and
-  off, the notes, the Server code and Copy, OFFLINE at 5 s, no setup text before a tap, the header line).
+  off, the notes, the Server code and Copy, OFFLINE at 5 s, no setup text before a tap, the header line, the cached
+  states, the server-moved question, and Unpair forgetting a typed Server address).
   **Test hook** (LAB-PLAN 1.7): every build, the `chrome-test` one included, reads `settings.lab` from
   `storage.local` and never overwrites a stored value, so a test seeds `{settings: {lab: false}}` (after the first
   start wrote its default: `labDefaultWritten()` in `test/helpers/lab-off.mjs`) to run with Lab off.

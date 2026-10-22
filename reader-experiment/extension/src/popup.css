@@ -233,6 +233,7 @@ input.switch:checked::before { left: calc(100% - 1.23em); background: var(--btn-
 .lab-server-setup .row .btn { width: auto; margin-top: 0; }
 .lab-server-setup-footer { margin: 4px 0 0; overflow-wrap: anywhere; }
 .lab-server-setup-confirm { margin-top: 8px; }
+.lab-server-moved { margin: 0 0 10px; }
 .lab-server-setup-confirm-title { margin: 0 0 4px; font-weight: 600; overflow-wrap: anywhere; }
 .lab-server-setup-said:empty { display: none; }
 .lab-server-setup-said { margin: 6px 0 0; overflow-wrap: anywhere; }
