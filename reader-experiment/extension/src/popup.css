@@ -180,6 +180,56 @@ input.switch:checked { background: var(--ink); border-color: var(--ink); }
 input.switch:checked::before { left: calc(100% - 1.23em); background: var(--btn-ink); }
 .switch-footer { margin: 0 0 14px; }
 
+/* Lab (LAB-PLAN 1.1, 1.4, 1.5): rows that open a screen, What's in Lab, the needs-setup note and the Daylight server
+   section (lab.html; lab-ui.js builds the parts). Nothing here is greyed out: a feature that needs setup looks and
+   acts like any other control. */
+.nav-rows { margin: 2px 0 6px; }
+.nav-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; margin-top: 6px; padding: 9px 12px;
+  font: inherit; color: var(--ink); text-align: left; cursor: pointer;
+  background: var(--card); border: 1px solid var(--rule-strong); border-radius: 10px;
+}
+.nav-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.nav-label { font-weight: 600; overflow-wrap: anywhere; }
+.nav-sub { color: var(--muted); font-size: .8667em; overflow-wrap: anywhere; }
+.nav-sub:empty { display: none; }
+.chev { flex: none; color: var(--muted); font-size: 1.2em; line-height: 1; }
+
+.lab-inbox { margin: 2px 0 12px; color: var(--muted); overflow-wrap: anywhere; }
+.lab-features { list-style: none; margin: 0; padding: 0; }
+.lab-feature { border-top: 1px solid var(--rule); padding: 4px 0; }
+.lab-feature:last-child { border-bottom: 1px solid var(--rule); }
+.lab-row {
+  display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: 100%; padding: 8px 2px;
+  font: inherit; color: var(--ink); text-align: left; background: transparent; border: 0; border-radius: 8px; cursor: pointer;
+}
+/* Hover underlines the name rather than shading the row, so the text keeps its contrast (Comfort's rules are darker). */
+.lab-row:hover .lab-name, .nav-row:hover .nav-label { text-decoration: underline; text-underline-offset: 2px; }
+.lab-name { font-weight: 600; overflow-wrap: anywhere; }
+.lab-sentence { color: var(--muted); font-size: .9333em; overflow-wrap: anywhere; }
+.lab-short { font-size: .8667em; font-weight: 600; overflow-wrap: anywhere; }
+.lab-group { margin-top: 18px; }
+.lab-group-h { margin: 0 0 2px; font-size: .8667em; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+.lab-group-state { margin: 0 0 8px; font-weight: 600; overflow-wrap: anywhere; }
+.lab-note:empty { display: none; }
+.lab-note-body { margin: 2px 0 8px; padding: 8px 10px; border: 1px solid var(--rule-strong); border-radius: 8px; background: var(--card); }
+.lab-note-text { margin: 0; font-size: .9333em; overflow-wrap: anywhere; }
+.lab-note-follow { margin-top: 4px; color: var(--muted); }
+.lab-note-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.lab-note-acts .btn { width: auto; margin-top: 8px; padding: 6px 12px; }
+.lab-server-state { margin: 4px 0 10px; }
+.lab-server-ready { margin: 0; font-weight: 600; }
+.lab-server-where { margin: 0 0 8px; color: var(--muted); overflow-wrap: anywhere; }
+.lab-server-h { margin: 14px 0 4px; font-size: .8667em; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+.lab-server-code { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .02em; overflow-wrap: anywhere; }
+.lab-server-copy { width: auto; }
+.lab-server-copied:empty { display: none; }
+.lab-server-copied { margin: 4px 0 0; }
+.lab-server-inbox, .lab-server-ai { margin: 10px 0 0; overflow-wrap: anywhere; }
+.lab-server-address { margin-top: 6px; }
+.lab-server-address .row .btn { width: auto; margin-top: 0; }
+.lab-server-rerun { margin-top: 14px; overflow-wrap: anywhere; }
+
 /* Comfort (F27, not Lab): larger text and buttons, more contrast, no motion. */
 body.comfort { font-size: 125%; --muted: var(--ink); --rule: var(--rule-strong); }
 body.comfort *, body.comfort *::before, body.comfort *::after { transition: none !important; animation: none !important; }
@@ -189,7 +239,9 @@ body.comfort :is(button, summary, .switch-row) { min-height: 48px; }
 body.comfort summary { display: flex; align-items: center; }
 body.comfort :is(.back, .remove) { display: inline-flex; align-items: center; }
 body.comfort .icon-btn { min-width: 48px; display: inline-flex; align-items: center; justify-content: center; border: 2px solid var(--rule-strong); }
-body.comfort :is(.btn, .retry, input, textarea, .page-card, .permission, .kind) { border-width: 2px; }
+body.comfort :is(.btn, .retry, input, textarea, .page-card, .permission, .kind, .nav-row, .lab-note-body) { border-width: 2px; }
+body.comfort :is(.lab-feature, .history li) { border-top-width: 2px; }
+body.comfort .lab-feature:last-child { border-bottom-width: 2px; }
 body.comfort input.switch { border-width: 2px; }
 body.comfort .history li { border-top-width: 2px; }
 body.comfort .history li:last-child { border-bottom-width: 2px; }

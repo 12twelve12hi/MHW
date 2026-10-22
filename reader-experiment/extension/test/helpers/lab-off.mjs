@@ -17,6 +17,27 @@ import path from 'node:path';
 export const BASELINES = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'e2e', 'lab-off-baseline');
 const UPDATE = process.env.UPDATE_LAB_OFF_BASELINE === '1';
 
+/**
+ * What LAB-PLAN 1.3 keeps with Lab off, in a settings screen's tree: the Lab switch row and its footer (LAB_TEXT's
+ * words). The only lines expectBaseline may omit.
+ */
+export function labSwitchLines(LAB_TEXT) {
+  return [`- text: ${LAB_TEXT.lab}`, `- switch "${LAB_TEXT.lab}"`, `- paragraph: ${LAB_TEXT.switchFooter}`];
+}
+
+/**
+ * Waits until the extension's first start wrote its Lab default (settings.lab, LAB-PLAN 1.2), so a test that seeds
+ * settings afterwards is never overwritten by it. sw: the service worker.
+ */
+export async function labDefaultWritten(sw) {
+  for (let i = 0; i < 100; i++) {
+    const s = await sw.evaluate(() => chrome.storage.local.get('settings')).catch(() => ({}));
+    if (s?.settings?.lab !== undefined) return s.settings;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error('the extension never wrote settings.lab');
+}
+
 /** A fixed pairing secret, so codes and links in the tree are the same every run. */
 export const FIXED_SECRET = Uint8Array.from({ length: 16 }, (_, i) => (i * 37 + 11) & 0xff);
 

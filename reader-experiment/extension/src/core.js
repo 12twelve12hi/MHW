@@ -2,6 +2,7 @@
 // globals, so the unit tests drive it with a fake one; background.js wires it to the real events.
 
 import * as ds from './daylight-share.js';
+import { createLab } from './lab.js';
 import { capturePage, pdfStart, pdfChunk, pdfEnd, linkText } from './inject.js';
 import {
   PDF_MIME, PDF_CHUNK, MAX_PDF, NOTES, originPattern, pdfFileName, isPdfBytes, titleFromName,
@@ -25,6 +26,8 @@ export function areaStorage(area) {
     async get(k) { const o = await area.get(k); return o?.[k]; },
     async set(k, v) { await area.set({ [k]: v }); },
     async remove(k) { await area.remove(k); },
+    // applyPairingChange removes every lab/* key of another pairing, the ones it doesn't know by name too.
+    async keys() { return Object.keys((await area.get(null)) ?? {}); },
   };
 }
 
@@ -103,6 +106,7 @@ function makeBadge(action) {
 
 export function createApp({
   api, target = 'chrome', storage, fetch: fetchImpl, now = () => Date.now(), log = console, pdfChunkSize = PDF_CHUNK,
+  gateDeadlineMs,
 } = {}) {
   storage ??= areaStorage(api.storage.local);
   const fetchFn = fetchImpl ?? ((...a) => globalThis.fetch(...a));
@@ -130,12 +134,19 @@ export function createApp({
     try { return await ds.loadPairing(storage); } catch { return null; }
   }
 
+  // Lab (lab.js): the switch, the ledger every ack-topic frame feeds (Lab on or off), the gates and the server.
+  const lab = createLab({
+    api, target, storage, fetch: fetchFn, now, log, run, getPairing, getSettings, deviceName: () => deviceName(), appId,
+    refreshAcks: async () => { const s = await getSender(); if (s) await run(() => s.checkAcks()); },
+    ...(gateDeadlineMs ? { gateDeadlineMs } : {}),
+  });
+
   async function getSender() {
     const pairing = await getPairing();
     if (!pairing) return null;
     const from = await deviceName();
     const key = `${pairing.code}|${pairing.relay}|${from}`;
-    if (cache?.key !== key) cache = { key, sender: new ds.Sender({ pairing, storage, from, app: appId, fetch: fetchFn, now }) };
+    if (cache?.key !== key) cache = { key, sender: new ds.Sender({ pairing, storage, from, app: appId, fetch: fetchFn, now, onAckHeader: lab.hook }) };
     return cache.sender;
   }
 
@@ -170,6 +181,8 @@ export function createApp({
       }
       // A typed code (or a link without a name) for the Daylight already paired keeps the name it has.
       if (!ds.cleanName(next.name) && current && ds.samePairingSecret(current, next)) next.name = current.name;
+      // Another Daylight: a Daylight server that knows this pairing is locked first (LAB-PLAN 2.6), Lab on or off.
+      await lab.beforeRepair(current, next);
       await ds.applyPairingChange(storage, current, next);
       await ds.savePairing(storage, next);
       if (from != null) await storage.set('settings', { ...(await getSettings()), from: ds.cleanName(from) });
@@ -245,7 +258,7 @@ export function createApp({
       paired: !!pairing, name: pairing?.name ?? '', relay: pairing?.relay ?? '',
       defaultRelay: !pairing || pairing.relay === ds.DEFAULT_RELAY,
       from: settings.from ?? '', defaultFrom: await defaultFrom(), target, version, shortcut: await shortcut(),
-      comfort: !!settings.comfort,
+      comfort: !!settings.comfort, lab: settings.lab !== false,
     };
   }
 
@@ -437,9 +450,11 @@ export function createApp({
   async function tick() {
     const s = await getSender();
     if (!s) return { delivered: 0, resent: 0 };
-    return run(async () => {
+    const r = await run(async () => {
       try { return await maintain(s, now()); } catch (e) { log.warn?.('Send to Daylight: tick failed', e); return { delivered: 0, resent: 0 }; }
     });
+    await lab.prune();
+    return r;
   }
 
   async function withBadge(fn) {
@@ -531,8 +546,9 @@ export function createApp({
     } catch { /* ignore */ }
   }
 
-  /** Browser start or install/update: menus, alarm, a Safari app pairing, then acks and re-sends. */
+  /** Browser start or install/update: Lab's default, menus, alarm, a Safari app pairing, then acks and re-sends. */
   async function start() {
+    await lab.ensureDefault();
     await setupMenus();
     await ensureAlarms();
     await pairFromApp();
@@ -557,7 +573,11 @@ export function createApp({
       case 'remove': return remove(msg.id);
       case 'tick': return tick();
       case 'clearBadge': await badge.clear(); return {};
-      default: throw new ds.ShareError('message', `unknown message ${msg?.type}`);
+      default: {
+        const r = await lab.onMessage(msg);
+        if (r === undefined) throw new ds.ShareError('message', `unknown message ${msg?.type}`);
+        return r;
+      }
     }
   }
 
@@ -574,6 +594,6 @@ export function createApp({
   return {
     storage, state, pair, unpair, setDeviceName, setComfort, pairFromApp, sendTab, sendPdf, sendUrl, retry, remove, tick, start,
     setupMenus, ensureAlarms, onMenu, onCommand, onAlarm, onPermissionsAdded, onMessage, handleMessage,
-    getSender, getPairing, claim,
+    getSender, getPairing, claim, lab,
   };
 }

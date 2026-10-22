@@ -7,7 +7,7 @@ import { built } from '../helpers/built.mjs';
 import { fakeBrowser } from '../helpers/fake-browser.mjs';
 import { startMockRelay } from '../../../share/js/mock-relay.mjs';
 
-test('the Safari background script pairs from the app and sends', async () => {
+test('the Safari background script pairs from the app, sends, and runs Lab', async () => {
   const b = built('safari');
   const ds = await b.load('daylight-share.js');
   const relay = await startMockRelay();
@@ -54,6 +54,24 @@ test('the Safari background script pairs from the app and sends', async () => {
     assert.equal(other.result.needsConfirm.button, 'Switch');
     assert.equal(other.result.needsConfirm.lines.at(-1), 'This replaces Desk Daylight. Items not yet delivered to it will not be sent.');
     assert.equal((await fb.api.runtime.sendMessage({ type: 'state' })).result.name, 'Desk Daylight', 'nothing changed before the answer');
+
+    // Lab (X0) in the bundle: on by default, What's in Lab with Safari's one server feature, its gate, the server section.
+    const L = await b.load('daylight-lab.js');
+    for (let i = 0; i < 50 && (await fb.api.storage.local.get('settings')).settings?.lab === undefined; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.equal((await fb.api.storage.local.get('settings')).settings.lab, true, 'the first start wrote lab = true');
+    const lab = await fb.api.runtime.sendMessage({ type: 'labState' });
+    assert.equal(lab.ok, true, lab.error);
+    assert.deepEqual([lab.result.lab, lab.result.serverState, lab.result.serverSubtitle], [true, 'needs-server', 'Optional · Not set up']);
+    const o = (await fb.api.runtime.sendMessage({ type: 'labOverview' })).result;
+    assert.deepEqual(o.server.features.map((f) => f.id), ['F37']);
+    assert.equal(o.header, 'Needs Lab on your Daylight · checked in just now');
+    const g = (await fb.api.runtime.sendMessage({ type: 'labGate', feature: 'F37' })).result;
+    assert.deepEqual([g.state, g.message, g.button], ['needs-server', L.LAB_TEXT.needs['needs-server'], 'Copy Server code']);
+    assert.match(g.serverCode, /^daylightserver:\/\/setup\?c=/);
+    const v = (await fb.api.runtime.sendMessage({ type: 'labServer' })).result;
+    assert.equal(v.serverCode, g.serverCode);
+    assert.equal((await fb.api.runtime.sendMessage({ type: 'setLab', lab: false })).result.lab, false);
+    assert.equal((await fb.api.runtime.sendMessage({ type: 'labGate', feature: 'F37' })).result.state, 'lab-off');
   } finally {
     await relay.close();
     delete globalThis.browser;

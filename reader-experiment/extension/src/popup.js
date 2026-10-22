@@ -90,6 +90,41 @@ function announce(text) {
   setTimeout(() => { a.textContent = text; }, 50);
 }
 
+// --- Lab (LAB-PLAN 1.1) ---------------------------------------------------------------------------------------------
+
+/** The Lab switch, and the two rows under it while Lab is on. */
+function applyLab(on) {
+  $('lab').checked = !!on;
+  $('lab-rows').hidden = !on;
+  if (st) st.lab = !!on;
+}
+
+/** The "Daylight server ›" row's subtitle ("Optional · Not set up"): the last answer at once, then a fresh one. */
+async function loadServerSubtitle(refresh = true) {
+  if (!st?.lab) return;
+  try {
+    const r = await call('labState', { refresh });
+    if (r.serverSubtitle) $('server-sub').textContent = r.serverSubtitle;
+  } catch { /* the row still opens the section */ }
+}
+
+async function onLab() {
+  const want = $('lab').checked;
+  applyLab(want);
+  try {
+    applyLab((await call('setLab', { lab: want })).lab);
+  } catch {
+    applyLab(!want);
+  }
+  if (st?.lab) loadServerSubtitle();
+}
+
+/** What's in Lab and the Daylight server open the extension page lab.html (1.1), in a tab. */
+async function openLab(view) {
+  const url = api.runtime.getURL(`lab.html#${view}`);
+  try { await api.tabs.create({ url }); } catch { location.href = url; }
+}
+
 // --- pairing --------------------------------------------------------------------------------------------------------
 
 /**
@@ -370,6 +405,8 @@ function renderSettings() {
   backTo = $('view-pair').hidden ? 'view-send' : 'view-pair';
   show('view-settings');
   $('comfort').checked = !!st.comfort;
+  applyLab(st.lab);
+  if (st.lab) loadServerSubtitle(false).then(() => loadServerSubtitle(true));
   $('settings-paired').hidden = !st.paired;
   $('set-daylight').textContent = st.name || 'Your Daylight (no name given)';
   $('set-relay').textContent = st.relay.replace(/^https:\/\//, '');
@@ -436,12 +473,21 @@ async function init() {
   $('open-settings').addEventListener('click', renderSettings);
   $('close-settings').addEventListener('click', () => (backTo === 'view-pair' || !st?.paired ? renderPair() : renderSend()));
   $('comfort').addEventListener('change', onComfort);
+  $('lab').addEventListener('change', onLab);
+  $('open-whats-in-lab').addEventListener('click', () => openLab('whats-in-lab'));
+  $('open-server').addEventListener('click', () => openLab('server'));
   $('name-form').addEventListener('submit', onSaveName);
   $('unpair').addEventListener('click', onUnpair);
   api.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     if (changes.outbox) { rows = changes.outbox.newValue ?? []; renderHistory(); }
-    if (changes.settings) applyComfort(changes.settings.newValue?.comfort);
+    if (changes.settings) {
+      applyComfort(changes.settings.newValue?.comfort);
+      // The switch may change in lab.html too.
+      const lab = changes.settings.newValue?.lab !== false;
+      if (st && lab !== st.lab) { applyLab(lab); if (lab) loadServerSubtitle(false); }
+    }
+    if (changes['lab/server'] && st?.lab) loadServerSubtitle(false);
   });
   // Comfort first, so the popup opens at its size.
   try { applyComfort((await api.storage.local.get('settings'))?.settings?.comfort); } catch { /* the background says */ }

@@ -16,7 +16,9 @@ api.commands?.onCommand?.addListener((command, tab) => { app.onCommand(command, 
 api.alarms?.onAlarm?.addListener((alarm) => { app.onAlarm(alarm); });
 api.permissions?.onAdded?.addListener((perms) => { app.onPermissionsAdded(perms); });
 
-// Every wake-up: make sure the 15-minute alarm exists (browsers may drop alarms on restart). Safari's background page
-// is not told about installs reliably on iOS, so it also sets up its menus and asks the app for a pairing here.
+// Every wake-up: make sure the 15-minute alarm exists (browsers may drop alarms on restart), and that the Lab switch
+// has its default (on, LAB-PLAN 1.2; a stored value stays). Safari's background page is not told about installs
+// reliably on iOS, so it also sets up its menus and asks the app for a pairing here.
 app.ensureAlarms();
+app.lab.ensureDefault().catch(() => {});
 if (TARGET === 'safari') { app.setupMenus(); app.pairFromApp(); }

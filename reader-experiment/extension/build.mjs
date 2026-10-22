@@ -7,7 +7,9 @@
 //
 //   node build.mjs [--target chrome|safari|chrome-test] [--no-zip]
 //
-// The protocol library is copied from ../share/js/daylight-share.js, the one source of truth. The version is
+// The protocol library is copied from ../share/js/daylight-share.js, the one source of truth, and so is the Lab module
+// ../share/js/daylight-lab.js (LAB-PLAN 2.7.2). The Daylight server's client module ../server/client/daylight-server.js
+// is copied with one change: its import of the protocol library points at the copy next to it. The version is
 // package.json's, with the CI run number as the patch number when GITHUB_RUN_NUMBER is set (or RX_EXT_VERSION).
 
 import fs from 'node:fs';
@@ -19,6 +21,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(here, 'src');
 const DIST = path.join(here, 'dist');
 const SHARE_LIB = path.join(here, '..', 'share', 'js', 'daylight-share.js');
+const LAB_LIB = path.join(here, '..', 'share', 'js', 'daylight-lab.js');
+const SERVER_LIB = path.join(here, '..', 'server', 'client', 'daylight-server.js');
+const SERVER_IMPORT = "from '../../share/js/daylight-share.js';";
 const TARGETS = ['chrome', 'safari', 'chrome-test'];
 
 export function version() {
@@ -92,6 +97,18 @@ export function bundleClassic(entry) {
   return out + '})();\n';
 }
 
+/**
+ * The server client module as the extension (and the web sender) loads it: next to its copy of daylight-share.js.
+ * Only the one import line changes; anything else in the module that needs rewriting is an error here, not at run time.
+ */
+export function serverModule(text = fs.readFileSync(SERVER_LIB, 'utf8')) {
+  const n = text.split(SERVER_IMPORT).length - 1;
+  if (n !== 1) throw new Error(`daylight-server.js: expected one import of ../../share/js/daylight-share.js, found ${n}`);
+  const out = text.replace(SERVER_IMPORT, "from './daylight-share.js';");
+  if (/from\s+'\.\.\//.test(out)) throw new Error('daylight-server.js: an import outside the module folder');
+  return out;
+}
+
 function copyDir(from, to) {
   fs.mkdirSync(to, { recursive: true });
   for (const e of fs.readdirSync(from, { withFileTypes: true })) {
@@ -107,6 +124,8 @@ export function buildTarget(target, distRoot = DIST) {
   fs.rmSync(out, { recursive: true, force: true });
   copyDir(SRC, out);
   fs.copyFileSync(SHARE_LIB, path.join(out, 'daylight-share.js'));
+  fs.copyFileSync(LAB_LIB, path.join(out, 'daylight-lab.js'));
+  fs.writeFileSync(path.join(out, 'daylight-server.js'), serverModule());
   const browser = target === 'safari' ? 'safari' : 'chrome';
   fs.writeFileSync(path.join(out, 'target.js'), `// Written by build.mjs.\nexport const TARGET = '${browser}';\n`);
   fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify(manifestFor(target), null, 2) + '\n');

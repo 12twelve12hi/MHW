@@ -88,8 +88,8 @@ the last few sends in the words every Send to Daylight app uses:
 - **Not delivered**, with why, and **Try again** where trying again can help (for example the Daylight didn't pick it
   up within a week).
 
-Every row has **Remove**. The **⋯** button opens settings: **Comfort** (below), the Daylight's name, the relay, this
-browser's name, **Change pairing…** and **Unpair**. Before pairing it opens Comfort alone.
+Every row has **Remove**. The **⋯** button opens settings: **Lab** (below), **Comfort** (below), the Daylight's name,
+the relay, this browser's name, **Change pairing…** and **Unpair**. Before pairing it opens Lab and Comfort alone.
 
 **Accessibility.** Every control has a name, states are said in words and glyphs (never colour alone), status text
 wraps instead of being cut short (also at 200% zoom), and a history row that turns *Delivered ✓*, *Waiting to send* or
@@ -110,6 +110,36 @@ a week shows *Not delivered* with **Try again**; its copy is kept for that until
 Daylight picks up the last re-send late, a confirmation that arrives within about two weeks still turns it into
 *Delivered ✓*. With nothing waiting or still to be confirmed, the extension doesn't contact the relay.
 
+## Lab
+
+New features are tried out behind one **Lab** switch, the first row of ⋯ settings (LAB-PLAN 1). It is **on** by
+default; turn it off for the plain app (*New features we’re trying out. Turn Lab off for the plain app; nothing you sent
+is lost.*). Turning it off hides every Lab control and stops Lab's background work; it keeps the pairing, the outbox,
+the history and the Daylight server's settings, and an item already on its way still goes. The switch belongs to this
+browser: pairing, unpairing and renaming leave it as it is, and Safari's extension has its own, apart from the app's.
+
+While Lab is on, two rows under the switch open the page `lab.html` in a tab:
+
+- **What’s in Lab ›**: the features this build has, each with a short state ("Ready", "Not set up", "In a later
+  update", …). The header line says whether your Daylight has confirmed Lab ("Your Daylight: Lab on · checked in 4 min
+  ago"), from what it says on its confirmation channel; opening the page reads that channel once. In this first Lab
+  build (Wave 0) the list holds only the features that run on your own **Daylight server** (Files over 9 MB, Summaries
+  with Claude, Email-in address, Feeds and daily digest; Safari: Summaries with Claude). They are always shown and
+  never greyed out: tapping one that isn't set up shows one sentence under it, saying what's missing, with at most one
+  button that fixes it from here (**Copy Server code**, or **Allow** for the server's site) and **OK**. Screen readers
+  hear it. A ready server answers "comes to this app in a later Lab update" until the feature is built here.
+- **Daylight server ›** (*Optional · Not set up*): where setup happens. It shows the server's state in full (with the
+  exact GitHub secret names), the server's address and fingerprint, the **Server code** with **Copy** (the
+  `daylightserver://` link form when the pairing's relay isn't ntfy.sh), when the Daylight last said hello to the
+  server, today's AI spend, the optional **Server address** field and how to re-run the deploy. See
+  [`../server/README.md`](../server/README.md) to turn the server on.
+
+Server calls run in the background (the pairing secret and the server's token never reach a web page). The first time a
+server feature or the Server address is used, the browser asks for access to the server's site; saying no shows
+*Needs access to this site*, with **Allow**. A server answer is used for 10 minutes; a server that doesn't answer within
+5 seconds reads as *Couldn’t reach the Daylight server*. Before this browser is paired with another Daylight, a server
+that knows the old pairing is locked (Lab on or off), so a lost or replaced pairing can't use it.
+
 ## Privacy
 
 Everything is end-to-end encrypted (AES-256-GCM) with a key derived from the pairing code. The relay (ntfy.sh by
@@ -121,7 +151,7 @@ pairing code can send to your Daylight, so treat it like a password; **Reset pai
 Permissions: `activeTab` and `scripting` read the tab you chose to send, only when you click, press the shortcut or
 use the menu; `contextMenus`, `alarms`, `storage` and `unlimitedStorage` run the menus, the retries and the outbox
 (kept until delivered, so it can be re-sent); host access to `https://ntfy.sh` reaches the relay. Access to other
-sites is optional and asked for one site at a time, only to download a PDF.
+sites is optional and asked for one site at a time: to download a PDF, and (Lab) to reach your own Daylight server.
 
 ## Build and test
 
@@ -139,8 +169,11 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
 ```
 
 - `src/` is the source for both browsers. `build.mjs` copies it, adds the protocol library from
-  [`../share/js/daylight-share.js`](../share/js/daylight-share.js) (the one source of truth; never edit the copies),
-  writes `target.js` and each browser's manifest:
+  [`../share/js/daylight-share.js`](../share/js/daylight-share.js) and the Lab module
+  [`../share/js/daylight-lab.js`](../share/js/daylight-lab.js) (the one sources of truth; never edit the copies),
+  and the Daylight server's client module [`../server/client/daylight-server.js`](../server/client/daylight-server.js)
+  with its one import pointed at the copy next to it (`serverModule()`), writes `target.js` and each browser's
+  manifest:
   - **Chrome:** Manifest V3 with a module service worker.
   - **Safari:** Manifest V3 with a non-persistent background page made of one classic script (`build.mjs` bundles
     the modules), which works on every Safari with Manifest V3 on macOS and iOS; adds `nativeMessaging` (to ask the
@@ -159,13 +192,31 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   same code on a new relay, then another Daylight's code with its question). `test/e2e/web.e2e.mjs` does the same for
   the web sender, including the `#pair=` question, a file over 9 MB refused before it is read, the Android share
   target and offline use. Screenshots land in `test-results/`.
+- **Lab** (LAB-PLAN F00 and F17, card X0): `src/lab.js` runs in the background (`createLab`, wired by `core.js`): the
+  switch (`settings.lab`; missing means on, and the first start writes `true`), the sender ledger
+  (`daylight-lab.js` `LabLedger`, fed by every frame on the Daylight's confirmation topic through the Sender's
+  `onAckHeader`, Lab on or off, and pruned to the outbox after each check), the gates (`labGate` with the 5 s deadline;
+  the server's site access, then its state), the Daylight server (`DaylightServer`, discovery only with Lab on) and
+  the lock before re-pairing. Its messages are `labState`, `setLab`, `labOverview`, `labGate`, `labServer` and
+  `labServerAddress`. `src/lab.html` and `src/lab-page.js` are the page; `src/lab-ui.js` builds its parts (the note,
+  What's in Lab, the server section) from data alone, so the web sender's build can copy it (B0). Every word is
+  `LAB_TEXT`'s or the server module's. `LAB_FEATURES`, `LAB_SERVER_FEATURES` and `BUILT_FEATURES` in `lab.js` say what
+  this build lists and runs; `LAB_NOTE_ENABLED` is `false` until a build has F01 or F04 (X1). Tests:
+  `test/unit/lab.test.mjs` (node, against the mock relay, a stand-in server in `test/helpers/fake-worker.mjs` and Lab
+  Daylights from `daylight-lab.js`) and `test/e2e/lab.e2e.mjs` (Chromium: the popup's row and `lab.html`, Lab on and
+  off, the notes, the Server code and Copy, OFFLINE at 5 s, no setup text before a tap, the header line).
+  **Test hook** (LAB-PLAN 1.7): every build, the `chrome-test` one included, reads `settings.lab` from
+  `storage.local` and never overwrites a stored value, so a test seeds `{settings: {lab: false}}` (after the first
+  start wrote its default: `labDefaultWritten()` in `test/helpers/lab-off.mjs`) to run with Lab off.
 - `test/e2e/a11y.e2e.mjs` is the accessibility baseline (LAB-PLAN F27) for the popup and the web sender: axe-core
   finds no violations in any view (pairing, the pairing question, sending with a row in every state, settings), light
   and dark, Comfort off and on (F27.1); with Comfort on at 360 px no text is clipped (`scrollWidth <= clientWidth`,
   `scrollHeight <= clientHeight + 1` for every element with text) and status text wraps at 200% text (F27.4); every
   control has a name; Comfort's switch and its words (`LAB_TEXT.comfort`, `.comfortFooter`); the announcements; and
   typed-code pairing. Its screenshots (`test-results/a11y/`) are uploaded by CI for review, not compared. The checks
-  live in `test/helpers/a11y.mjs`.
+  live in `test/helpers/a11y.mjs`. `lab.html` is held to the same with Lab on and off (its switch, What's in Lab with
+  a note open, the server section with no server and a ready one; notes and lines wrap at 200% text), and so is the
+  popup's Settings with Lab on and off.
 - **Lab-off parity** (LAB-PLAN 1.7, F00.2): `test/e2e/lab-off-parity.e2e.mjs` (popup) and
   `test/e2e/web-lab-off-parity.e2e.mjs` (web sender) compare each main screen's accessibility tree (pairing, sending
   with a row in every state, settings), taken with Playwright's `locator('body').ariaSnapshot()`, with the baselines in
@@ -175,8 +226,9 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   replaced by `<port>`, `<version>`, `<shortcut>` and `<default name>`; the pairing, names and row ages are fixed
   (`test/helpers/lab-off.mjs`). Re-record only together with a matching non-Lab change:
   `UPDATE_LAB_OFF_BASELINE=1 node --test test/e2e/lab-off-parity.e2e.mjs test/e2e/web-lab-off-parity.e2e.mjs`.
-  With Lab off the Lab switch row itself stays (LAB-PLAN 1.3); `expectBaseline(page, name, {omit})` drops exactly
-  those lines and nothing else.
+  With Lab off the Lab switch row itself stays (LAB-PLAN 1.3); `expectBaseline(page, name, {omit: labSwitchLines(LAB_TEXT)})`
+  drops exactly those lines (the switch and its footer) from Settings, and nothing else. `lab.e2e.mjs` also checks that
+  with Lab on, Wave 0 leaves the pairing and sending screens equal to the same baselines.
 - CI: [`.github/workflows/rx-extension.yml`](../../.github/workflows/rx-extension.yml) has one job per lane (LAB-PLAN
   6.1; each marked `# lane:`): **ext** builds the extension and runs every test whose file name doesn't start with
   `web` (the Safari bundle's and the accessibility test included), and **web** builds the web sender and runs the
@@ -185,7 +237,8 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   artifact, and the accessibility screenshots are `rx-extension-a11y-screenshots`.
 - **Lab release gate** (LAB-PLAN 6.2): the extension's and the web sender's Lab builds reach the release and Pages
   only after the iPhone and Mac builds of the same wave. `lab-wave.json` here (and `../web/lab-wave.json`) names the
-  Lab wave of the folder's code: `null` until X0 (B0 for the web sender) sets `"w0"`, then `"w1"` from X1 (B1).
+  Lab wave of the folder's code: `null` until X0 (B0 for the web sender) sets `"w0"`, then `"w1"` from X1 (B1). The
+  extension's says `"w0"` since X0, so its zip waits for the gate's `w0`.
   While [`../lab-release-gate.json`](../lab-release-gate.json) has that wave `false`, the build and its tests still
   run, but its zip isn't uploaded and the run shows a notice saying so. A change to the gate file starts the workflow,
   so opening a wave publishes the held builds.

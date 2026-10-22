@@ -7,7 +7,10 @@
 //   and    every control has a name, Comfort is a switch outside Lab (off by default, kept across pairing changes),
 //          a row's new state is announced, and typed-code pairing is always one step away.
 //
-// Screenshots go to test-results/a11y/ (uploaded by CI for review, not compared). lab.html joins with X0.
+// lab.html (X0) is held to the same, with Lab on and off: its switch, What's in Lab (with a note open) and the
+// Daylight server section, with no server and with a ready one; the popup's Settings with Lab off too.
+//
+// Screenshots go to test-results/a11y/ (uploaded by CI for review, not compared).
 //
 //   PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node --test test/e2e/a11y.e2e.mjs      (HEADED=1 to watch)
 
@@ -22,11 +25,14 @@ import { webBuilt } from '../helpers/web-built.mjs';
 import { startSite } from '../helpers/server.mjs';
 import { axe, assertAxeSees, assertNotClipped, unnamed, shot, scaleText, historyRows } from '../helpers/a11y.mjs';
 import { startMockRelay } from '../../../share/js/mock-relay.mjs';
+import { labDefaultWritten } from '../helpers/lab-off.mjs';
+import { startFakeWorker, statusJson } from '../helpers/fake-worker.mjs';
 
 const b = built('chrome-test');
 const w = webBuilt();
 const ds = await b.load('daylight-share.js');
 const LAB_TEXT = (await import('../../../share/js/daylight-lab.js')).LAB_TEXT;
+const S = await b.load('daylight-server.js');
 const STATUS_TEXT = '.status, .st, .note, .error, [role=status], [role=alert]';
 const LONG_PAGE = 'A long page title that needs two lines or more in a popup three hundred and sixty pixels wide, at least';
 
@@ -80,6 +86,8 @@ before(async () => {
     if (await sw.evaluate(() => !!globalThis.chrome?.runtime?.id && !!globalThis.sendToDaylight).catch(() => false)) break;
     await new Promise((r) => setTimeout(r, 100));
   }
+  // The Lab default is written before any test seeds settings (LAB-PLAN 1.2), so it never overwrites them.
+  await labDefaultWritten(sw);
   link = await ds.pairingLink({ secret: ds.generateSecret(), relay: relay.url, name: 'A11y Daylight' });
   otherLink = await ds.pairingLink({ secret: ds.generateSecret(), relay: relay.url, name: 'Another Daylight' });
 });
@@ -335,4 +343,106 @@ test('web sender: status text wraps at 200% text, and a row that changes state i
   await page.waitForFunction(() => document.querySelector('#announce').textContent !== '');
   assert.equal(await page.textContent('#announce'), `Delivered ✓: ${rows[0].title}`);
   await page.close();
+});
+
+// --- lab.html (X0) ----------------------------------------------------------------------------------------------------
+
+/** lab.html at a view, once the background's fresh answer is on it. */
+async function openLab(view) {
+  const page = await ctx.newPage();
+  await page.setViewportSize({ width: 360, height: 760 });
+  await page.goto(`chrome-extension://${extId}/lab.html#${view}`);
+  await page.waitForSelector('body[data-fresh="1"]', { timeout: 20000 });
+  return page;
+}
+
+test('lab.html, Lab on and off: no axe violations, light and dark, Comfort off and on; nothing clipped at 360 px; notes wrap at 200%', { timeout: 240000 }, async () => {
+  const secret = ds.generateSecret();
+  await sw.evaluate(async (input) => globalThis.sendToDaylight.pair({ input, from: 'A11y Chrome', confirm: true }), await ds.pairingLink({ secret, relay: relay.url, name: 'A11y Daylight' }));
+  const worker = await startFakeWorker({ status: statusJson({ features: { ai: 'needs-key' }, lastSeen: new Date(Date.now() - 300000).toISOString(), usd: 0.5, limitUsd: 3 }) });
+  worker.state.token = (await S.deriveServerValues(await S.deriveServerSeed(secret))).authToken;
+  try {
+    for (const comfort of [false, true]) {
+      const tag = comfort ? ', Comfort' : '';
+      const sfx = comfort ? '-comfort' : '';
+      await storageSet({ settings: { from: 'A11y Chrome', lab: true, comfort } });
+      await sw.evaluate(async () => chrome.storage.local.remove(['server/manualUrl', 'server/status', 'server/statusAt']));
+
+      const hub = await openLab('lab');
+      assert.equal(await hub.evaluate(() => document.body.classList.contains('comfort')), comfort);
+      if (!comfort) await assertAxeSees(hub);
+      await axeBoth(hub, `lab.html: Lab${tag}`);
+      if (comfort) await assertNotClipped(hub, 'lab.html: Lab, Comfort');
+      await shot(hub, `lab-hub${sfx}`);
+      await hub.close();
+
+      const whats = await openLab('whats-in-lab');
+      await axeBoth(whats, `lab.html: What’s in Lab${tag}`);
+      await whats.getByRole('button', { name: LAB_TEXT.features.F37.name, exact: true }).click();
+      await whats.locator('li[data-feature="F37"] .lab-note-body[data-state="needs-server"]').waitFor();
+      await axeBoth(whats, `lab.html: What’s in Lab, a note open${tag}`);
+      if (comfort) await assertNotClipped(whats, 'lab.html: What’s in Lab, a note open, Comfort');
+      await shot(whats, `lab-whats-note${sfx}`);
+      await scaleText(whats, 2);
+      await assertNotClipped(whats, `lab.html: What’s in Lab at 200%${tag}`);
+      await shot(whats, `lab-whats-note-200${sfx}`);
+      await whats.close();
+
+      const server = await openLab('server');
+      await axeBoth(server, `lab.html: Daylight server, not set up${tag}`);
+      if (comfort) await assertNotClipped(server, 'lab.html: Daylight server, not set up, Comfort');
+      await shot(server, `lab-server${sfx}`);
+      await server.getByLabel(LAB_TEXT.serverSection.serverAddress).fill(worker.url);
+      await server.getByRole('button', { name: 'Save' }).click();
+      await server.waitForFunction(() => document.querySelector('.lab-server-ready')?.textContent === 'Ready', null, { timeout: 15000 });
+      await axeBoth(server, `lab.html: Daylight server, ready${tag}`);
+      if (comfort) await assertNotClipped(server, 'lab.html: Daylight server, ready, Comfort');
+      await scaleText(server, 2);
+      await assertNotClipped(server, `lab.html: Daylight server at 200%${tag}`);
+      await scaleText(server, 1);
+      await shot(server, `lab-server-ready${sfx}`);
+      await server.close();
+
+      const ready = await openLab('whats-in-lab');
+      await axeBoth(ready, `lab.html: What’s in Lab with a server${tag}`);
+      if (comfort) await assertNotClipped(ready, 'lab.html: What’s in Lab with a server, Comfort');
+      await ready.close();
+
+      // Lab off: lab.html is the switch alone, whatever its address; the popup's Settings has no rows.
+      await storageSet({ settings: { from: 'A11y Chrome', lab: false, comfort } });
+      const off = await openLab('whats-in-lab');
+      assert.equal(await off.getAttribute('body', 'data-view'), 'lab');
+      await axeBoth(off, `lab.html: Lab off${tag}`);
+      if (comfort) await assertNotClipped(off, 'lab.html: Lab off, Comfort');
+      await shot(off, `lab-off${sfx}`);
+      await off.close();
+      const popup = await openPopup();
+      await popup.getByRole('button', { name: 'Settings' }).click();
+      await popup.waitForSelector('#view-settings:not([hidden])');
+      assert.equal(await popup.isVisible('#lab-rows'), false);
+      await axeBoth(popup, `popup: settings, Lab off${tag}`);
+      if (comfort) await assertNotClipped(popup, 'popup: settings, Lab off, Comfort');
+      await popup.close();
+    }
+  } finally {
+    await worker.close();
+    await sw.evaluate(async () => chrome.storage.local.remove(['server/manualUrl', 'server/status', 'server/statusAt']));
+    await storageSet({ settings: { from: 'A11y Chrome', lab: true, comfort: false } });
+  }
+});
+
+test('popup Settings with Lab on: the switch and its two rows, light and dark, Comfort off and on; nothing clipped at 360 px', { timeout: 90000 }, async () => {
+  for (const comfort of [false, true]) {
+    await storageSet({ settings: { from: 'A11y Chrome', lab: true, comfort } });
+    const popup = await openPopup();
+    await popup.getByRole('button', { name: 'Settings' }).click();
+    await popup.waitForSelector('#lab-rows:not([hidden])');
+    await popup.waitForFunction(() => document.querySelector('#server-sub').textContent !== '');
+    assert.equal(await popup.getByRole('switch', { name: LAB_TEXT.lab, exact: true }).isChecked(), true);
+    await axeBoth(popup, `popup: settings, Lab on${comfort ? ', Comfort' : ''}`);
+    if (comfort) await assertNotClipped(popup, 'popup: settings, Lab on, Comfort');
+    await shot(popup, `popup-settings-lab${comfort ? '-comfort' : ''}`);
+    await popup.close();
+  }
+  await storageSet({ settings: { from: 'A11y Chrome', lab: true, comfort: false } });
 });

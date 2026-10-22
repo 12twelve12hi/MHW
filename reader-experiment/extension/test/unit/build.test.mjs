@@ -5,11 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { built } from '../helpers/built.mjs';
-import { manifestFor, bundleClassic, version } from '../../build.mjs';
+import { manifestFor, bundleClassic, version, serverModule } from '../../build.mjs';
 import { zipDir, unzip, listFiles } from '../../scripts/zip.mjs';
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const SHARE = path.join(here, '..', '..', '..', 'share', 'js', 'daylight-share.js');
+const LAB = path.join(here, '..', '..', '..', 'share', 'js', 'daylight-lab.js');
+const SERVER = path.join(here, '..', '..', '..', 'server', 'client', 'daylight-server.js');
 const targets = Object.fromEntries(['chrome', 'safari', 'chrome-test'].map((t) => [t, built(t)]));
 const manifest = (t) => JSON.parse(fs.readFileSync(path.join(targets[t].dir, 'manifest.json'), 'utf8'));
 
@@ -54,16 +56,27 @@ test('the test build only adds local host access', () => {
   assert.deepEqual({ ...b, host_permissions: 0, name: 0 }, { ...a, host_permissions: 0, name: 0 });
 });
 
-test('every build carries an unmodified copy of daylight-share.js and no remote code', () => {
+test('every build carries unmodified copies of daylight-share.js and daylight-lab.js, the server module, and no remote code', () => {
   const lib = fs.readFileSync(SHARE);
+  const labLib = fs.readFileSync(LAB);
+  const server = fs.readFileSync(SERVER, 'utf8');
   for (const [t, { dir }] of Object.entries(targets)) {
     assert.ok(fs.readFileSync(path.join(dir, 'daylight-share.js')).equals(lib), `${t}: copy of the shared library`);
+    assert.ok(fs.readFileSync(path.join(dir, 'daylight-lab.js')).equals(labLib), `${t}: copy of the Lab module (LAB-PLAN 2.7.2)`);
+    // The server client module, next to the protocol library: only its one import changes.
+    const copy = fs.readFileSync(path.join(dir, 'daylight-server.js'), 'utf8').split('\n');
+    const src = server.split('\n');
+    assert.equal(copy.length, src.length, `${t}: daylight-server.js`);
+    const changed = src.map((l, i) => [l, copy[i]]).filter(([a, c]) => a !== c);
+    assert.deepEqual(changed, [["} from '../../share/js/daylight-share.js';", "} from './daylight-share.js';"]], `${t}: daylight-server.js changes only its import`);
     for (const f of listFiles(dir).filter((f) => /\.(js|html)$/.test(f))) {
       const s = fs.readFileSync(path.join(dir, f), 'utf8');
       assert.doesNotMatch(s, /\beval\(|new Function\(|<script[^>]+src="https?:|importScripts\(/, `${t}/${f}`);
     }
-    const html = fs.readFileSync(path.join(dir, 'popup.html'), 'utf8');
-    for (const ref of html.matchAll(/(?:src|href)="([^"]+)"/g)) assert.ok(fs.existsSync(path.join(dir, ref[1])), `${t}: ${ref[1]} exists`);
+    for (const page of ['popup.html', 'lab.html']) {
+      const html = fs.readFileSync(path.join(dir, page), 'utf8');
+      for (const ref of html.matchAll(/(?:src|href)="([^"]+)"/g)) assert.ok(fs.existsSync(path.join(dir, ref[1])), `${t}: ${page}: ${ref[1]} exists`);
+    }
   }
 });
 
@@ -105,10 +118,18 @@ test('the classic bundler refuses module forms it does not handle', () => {
   assert.equal(new Function(`${out.replace('(() => {', 'return (() => {').replace(/\}\)\(\);\n$/, '').replace(/^\/\/.*\n/, '')}; return __module0.a(); })();`)(), 2);
 });
 
-test('lab-wave.json names no Lab wave, or one the release gate knows (LAB-PLAN 6.2)', () => {
+test('lab-wave.json names the Lab wave of this code, one the release gate knows (LAB-PLAN 6.2)', () => {
   const gate = JSON.parse(fs.readFileSync(path.join(here, '..', '..', '..', 'lab-release-gate.json'), 'utf8'));
   const { wave } = JSON.parse(fs.readFileSync(path.join(here, '..', '..', 'lab-wave.json'), 'utf8'));
   assert.ok(wave === null || typeof gate[wave] === 'boolean', `extension/lab-wave.json: unknown wave ${wave}`);
+  // The extension has Lab code from X0 on, so its builds wait for the iPhone and Mac builds of that wave.
+  assert.notEqual(wave, null, 'the extension has Lab code: lab-wave.json must name its wave');
+});
+
+test('serverModule refuses a client module whose imports it can’t point at the copy next to it', () => {
+  assert.throws(() => serverModule("import { a } from './x.js';\n"), /expected one import/);
+  assert.throws(() => serverModule("import { a } from '../../share/js/daylight-share.js';\nimport { b } from '../y.js';\n"), /outside the module folder/);
+  assert.equal(serverModule("import {\n  a,\n} from '../../share/js/daylight-share.js';\n"), "import {\n  a,\n} from './daylight-share.js';\n");
 });
 
 test('the popup’s Comfort switch says exactly what LAB_TEXT says (F27, LAB-PLAN 1.6)', async () => {
@@ -118,6 +139,7 @@ test('the popup’s Comfort switch says exactly what LAB_TEXT says (F27, LAB-PLA
   assert.equal(/<label for="comfort" class="switch-label">([^<]*)<\/label>/.exec(html)[1], LAB_TEXT.comfort);
   assert.equal(/<p id="comfort-footer"[^>]*>([^<]*)<\/p>/.exec(html)[1], LAB_TEXT.comfortFooter);
   assert.match(html, /<input id="comfort" class="switch" type="checkbox" role="switch" aria-describedby="comfort-footer">/);
-  // Comfort is not Lab: no Lab module in a build without Lab.
-  assert.doesNotMatch(html, /daylight-lab/);
+  // Comfort is not Lab: it comes after the Lab block and outside it (LAB-PLAN 1.1), so Lab off never hides it.
+  assert.ok(html.indexOf('id="comfort"') > html.indexOf('id="lab-footer"'));
+  assert.ok(!/<div id="lab-rows"[\s\S]*id="comfort"[\s\S]*<\/div>\s*<p id="lab-footer"/.test(html));
 });

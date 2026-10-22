@@ -1,6 +1,7 @@
 // Lab-off parity for the popup (LAB-PLAN 1.7, F00.2): with Lab off (settings.lab = false, the chrome-test build's
 // hook), the pairing, sending and settings screens' accessibility trees equal the non-Lab baselines recorded from the
-// P0 close-out (test/e2e/lab-off-baseline/popup-*.yml; helpers in test/helpers/lab-off.mjs).
+// P0 close-out (test/e2e/lab-off-baseline/popup-*.yml; helpers in test/helpers/lab-off.mjs). Settings keeps one thing
+// with Lab off (1.3): the Lab switch row and its footer, which are the only lines left out before comparing.
 //
 //   PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node --test test/e2e/lab-off-parity.e2e.mjs
 //   UPDATE_LAB_OFF_BASELINE=1 …   re-records, only together with a matching non-Lab change
@@ -13,11 +14,12 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { built } from '../helpers/built.mjs';
 import { startSite } from '../helpers/server.mjs';
-import { expectBaseline, parityRows, FIXED_SECRET } from '../helpers/lab-off.mjs';
+import { expectBaseline, parityRows, FIXED_SECRET, labSwitchLines, labDefaultWritten } from '../helpers/lab-off.mjs';
 import { startMockRelay } from '../../../share/js/mock-relay.mjs';
 
 const b = built('chrome-test');
 const ds = await b.load('daylight-share.js');
+const { LAB_TEXT } = await b.load('daylight-lab.js');
 const LAB_OFF = { from: 'Parity Chrome', lab: false };
 
 let relay, site, ctx, sw, extId;
@@ -56,6 +58,7 @@ after(async () => {
 });
 
 test('popup with Lab off: pairing, sending and settings equal the non-Lab baselines', { timeout: 90000 }, async () => {
+  await labDefaultWritten(sw);
   await sw.evaluate((s) => chrome.storage.local.set({ settings: s }), LAB_OFF);
   const unpaired = await openPopup();
   await expectBaseline(unpaired, 'popup-pair');
@@ -73,7 +76,9 @@ test('popup with Lab off: pairing, sending and settings equal the non-Lab baseli
   await expectBaseline(popup, 'popup-send');
   await popup.click('#open-settings');
   await popup.waitForSelector('#view-settings:not([hidden])');
-  await expectBaseline(popup, 'popup-settings');
+  assert.equal(await popup.isVisible('#lab-rows'), false, 'no Lab rows with Lab off');
+  assert.equal(await popup.getByRole('switch', { name: LAB_TEXT.lab, exact: true }).isChecked(), false);
+  await expectBaseline(popup, 'popup-settings', { omit: labSwitchLines(LAB_TEXT) });
   await popup.close();
   await page.close();
 });

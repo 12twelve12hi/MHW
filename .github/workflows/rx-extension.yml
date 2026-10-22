@@ -20,6 +20,9 @@ on:
       - 'reader-experiment/web/**'
       - 'reader-experiment/share/**'
       - '!reader-experiment/share/**/*.md'
+      # The extension's build copies the Daylight server's client module, and its Lab tests read the server vectors.
+      - 'reader-experiment/server/client/**'
+      - 'reader-experiment/server/vectors/**'
       - 'reader-experiment/lab-release-gate.json'
       - '.github/workflows/rx-extension.yml'
   workflow_dispatch:
@@ -58,10 +61,10 @@ jobs:
       - name: Build the extension (Chrome, Safari, test build)
         run: node build.mjs
 
-      - name: Unit tests (with the Safari background bundle)
+      - name: Unit tests (Lab and the Safari background bundle included)
         run: node --test $(ls test/unit/*.test.mjs | grep -v '/web')
 
-      - name: End-to-end tests in Chromium (popup, accessibility, Lab-off parity)
+      - name: End-to-end tests in Chromium (popup, lab.html, accessibility, Lab-off parity)
         run: node --test --test-concurrency=1 $(ls test/e2e/*.e2e.mjs | grep -v '/web')
 
       - uses: actions/upload-artifact@v4
