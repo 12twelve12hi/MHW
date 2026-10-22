@@ -87,6 +87,8 @@ struct MacWhatsInLab: View {
     var body: some View {
         WhatsInLabView(lab: model.lab, footer: MacLab.whatsInLabFooter(model.storage))
             .listStyle(.inset)
+            // The list is a group for VoiceOver; it needs a name (F27.2), as the History list has one.
+            .accessibilityLabel(LabText.whatsInLab)
     }
 }
 

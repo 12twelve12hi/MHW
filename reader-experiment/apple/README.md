@@ -183,9 +183,11 @@ How it is checked, in the `mac` job of `rx-apple.yml`:
   `LabServerNoteTests` (with no server on a mock relay: *Not set up*, the needs-server sentence and Copy Server code,
   and the Daylight server section's Server code, which equal `server/vectors` › `derived`, F00.3, F00.5, F00.6; on a
   relay that never answers: *Checking your Daylight server…*, then OFFLINE at 5 s, F00.6) and
-  `LabAccessibilityAuditTests` (the audit of Settings with Lab on, What's in Lab with and without a note, the Daylight
-  server section and the Share menu card with its Lab switch, Comfort off and on, F27.2). The job starts the two relays
-  these need (`$DLS_LAB_RELAY`, `$DLS_SILENT_RELAY`);
+  `LabAccessibilityAuditTests` (the audit of Settings with Lab on, What's in Lab with and without a note and the
+  Daylight server section, Comfort off and on, F27.2; the Share menu card, not one of F27.2's screens, is measured by
+  the truncation audit). The job starts the two relays these need (`$DLS_LAB_RELAY`, `$DLS_SILENT_RELAY`). The Mac
+  audit allows one more system element: the group row AppKit draws around a list section's header (What's in Lab's
+  *With your Daylight server (optional)*), which holds only the header's words;
 - `LabOffParityTests` (F00.2): with Lab off, Settings and the Share menu card equal their P0 baselines, the Lab switch
   row aside;
 - the truncation audit (F27.4) measures Settings with Lab on, What's in Lab and the Daylight server section too, and

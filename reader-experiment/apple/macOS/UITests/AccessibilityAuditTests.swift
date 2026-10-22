@@ -34,6 +34,17 @@ final class AccessibilityAuditTests: XCTestCase {
            ["Send to Daylight", "Settings"].contains(element.children(matching: .any).firstMatch.label) {
             return "the AppKit view that hosts the SwiftUI content, around the content's named group"
         }
+        // A list's section header (What's in Lab's "With your Daylight server (optional)"): AppKit draws a group row
+        // around the header's text, which is all it holds and which VoiceOver reads.
+        if issue.auditType == .sufficientElementDescription, element.elementType == .group, element.label.isEmpty {
+            let inside = element.children(matching: .any).allElementsBoundByIndex
+            if inside.count == 1, inside[0].elementType == .staticText, !inside[0].label.isEmpty,
+               XCUIApplication().outlines.allElementsBoundByIndex.contains(where: {
+                   $0.frame.insetBy(dx: -1, dy: -1).contains(element.frame)
+               }) {
+                return "the row AppKit draws around a list section's header, which holds only the header's words (“\(inside[0].label)”)"
+            }
+        }
         if element.label == "emoji & symbols" {
             return "the system's emoji item in the Touch Bar of a text field"
         }
@@ -49,8 +60,10 @@ final class AccessibilityAuditTests: XCTestCase {
                 if !inSheet.exists && sheet.frame.intersects(element.frame) {
                     return "text of the main window under the open Settings sheet"
                 }
-                let scroll = sheet.scrollViews.firstMatch
-                if inSheet.exists && scroll.exists && !scroll.frame.insetBy(dx: -1, dy: -1).contains(element.frame) {
+                // The scroll view the text is in: Settings', or that of a page its Lab section opened (the
+                // navigation stack keeps Settings in the tree underneath).
+                let scrolls = sheet.scrollViews.allElementsBoundByIndex.filter { $0.frame.intersects(element.frame) }
+                if inSheet.exists && scrolls.contains(where: { !$0.frame.insetBy(dx: -1, dy: -1).contains(element.frame) }) {
                     return "text the Settings sheet has scrolled partly out of view"
                 }
             } else if let list = UITestSupport.historyList(), !list.visible.insetBy(dx: -1, dy: -1).contains(element.frame),

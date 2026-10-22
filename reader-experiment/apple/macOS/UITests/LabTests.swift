@@ -177,20 +177,26 @@ enum LabUI {
         return texts.filter { t in secretNames.contains { t.contains($0) } || sentences.contains { t.contains($0) } }
     }
 
-    /// Waits until `words` shows under `root` (as a text's label or value).
+    /// Waits until some element under `root` has exactly these words as its label, title or value. (A walk of the tree,
+    /// not a query: a list section's header is a text a `staticTexts` query does not match by its label.)
     @discardableResult
     static func waitFor(_ words: String, in root: XCUIElement, timeout: TimeInterval = 10) -> Bool {
-        UITestSupport.staticText(words, in: root).waitForExistence(timeout: timeout)
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            if ((try? texts(root)) ?? []).contains(words) { return true }
+            if Date() > deadline { return false }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
     }
 
     /// Waits until What's in Lab has the server's answer: its server heading's line no longer says "Checking your
     /// Daylight server…" (the gate's 5 s at most, and the ack topic's).
     static func waitForOverview(in root: XCUIElement) throws {
-        XCTAssertTrue(waitFor(try text("serverHeading"), in: root), "What's in Lab did not show its server heading")
-        let checking = UITestSupport.staticText(try text("checking"), in: root)
+        XCTAssertTrue(waitFor(try text("serverHeading"), in: root), "What's in Lab did not show its server heading: \(said(root))")
+        let checking = try text("checking")
         let deadline = Date().addingTimeInterval(15)
-        while checking.exists && Date() < deadline { Thread.sleep(forTimeInterval: 0.5) }
-        XCTAssertFalse(checking.exists, "What's in Lab still says it is checking the server after 15 s")
+        while ((try? texts(root)) ?? []).contains(checking) && Date() < deadline { Thread.sleep(forTimeInterval: 0.5) }
+        XCTAssertFalse(((try? texts(root)) ?? []).contains(checking), "What's in Lab still says it is checking the server after 15 s")
     }
 
     /// The general pasteboard's text once it is `expected` (at most `timeout` seconds), else what it holds.
@@ -483,8 +489,9 @@ final class LabServerNoteTests: XCTestCase {
     }
 }
 
-/// F27.2 for the Lab screens: Settings with Lab on, What's in Lab, the Daylight server section (with no server on the
-/// relay: its longest version, with the steps) and the Share menu card with its own Lab switch, with Comfort off and on.
+/// F27.2 for the Lab screens: Settings with Lab on, What's in Lab (with and without a note) and the Daylight server
+/// section (with no server on the relay: its longest version, with the steps), with Comfort off and on. (The Share menu
+/// card is not one of F27.2's screens; its texts are measured by the truncation audit, F27.4.)
 final class LabAccessibilityAuditTests: XCTestCase {
     @MainActor
     func testTheLabScreensPassTheAudit() throws {
@@ -515,13 +522,6 @@ final class LabAccessibilityAuditTests: XCTestCase {
             UITestSupport.screenshot(app, "mac-lab-server\(shot)", in: self)
             try UITestSupport.audit(app, "daylight server" + suffix, allowed: AccessibilityAuditTests.allowed)
             app.terminate()
-
-            let card = LabUI.launch(lab: true, paired: false, comfort: comfort,
-                                    extra: ["-DLSShareCard", UITestSupport.cardWithItsOwnSettings])
-            XCTAssertTrue(LabUI.element(LabUI.labSwitchID, in: card.windows.firstMatch).waitForExistence(timeout: 30))
-            UITestSupport.screenshot(card, "mac-lab-share-card\(shot)", in: self)
-            try UITestSupport.audit(card, "share card, Lab on" + suffix, allowed: AccessibilityAuditTests.allowed)
-            card.terminate()
         }
     }
 }
