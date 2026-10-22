@@ -346,6 +346,17 @@ public final class TruncationRecorder {
     /// How many texts reported both their frame and what they need.
     public var measured: Int { entries.values.filter { $0.frame != nil && $0.needed != nil }.count }
 
+    /// The size each text needs, by its words (the first text with those words), for comparing the same screen at two
+    /// text sizes.
+    public var neededSizes: [String: CGSize] {
+        var out: [String: CGSize] = [:]
+        for key in order {
+            guard let e = entries[key], let needed = e.needed, out[e.text] == nil else { continue }
+            out[e.text] = needed
+        }
+        return out
+    }
+
     /// Every text that is cut, in the order they were first seen (half a point of slack): "“Delivered ✓” has
     /// 120×17, needs 120×34", or "“…” runs past the edge (12…340 of 320)".
     public var problems: [String] {

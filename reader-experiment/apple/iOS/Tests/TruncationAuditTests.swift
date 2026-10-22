@@ -20,6 +20,22 @@ final class TruncationAuditTests: XCTestCase {
         XCTAssertEqual(check.wrapped.problems, [])
     }
 
+    /// Dynamic Type (F27.2's audit, checked here independently): every text on the main screens grows with the text
+    /// size. The accessibility audit says the opposite about text it loses at the largest size (it scrolls off), and
+    /// AccessibilityAuditTests relies on this test for those reports.
+    @MainActor
+    func testEveryTextGrowsWithTheTextSize() async throws {
+        let screens = await AuditScreens.scaling()
+        XCTAssertEqual(screens.map { $0.screen }, ["home", "settings", "pair"])
+        for screen in screens {
+            print("Dynamic Type iOS \(screen.screen): \(screen.measured) texts compared, \(screen.problems.count) did not grow")
+            XCTAssertGreaterThanOrEqual(screen.measured, 5, "\(screen.screen): too few texts compared")
+            for problem in screen.problems {
+                XCTFail("\(screen.screen): \(problem)")
+            }
+        }
+    }
+
     @MainActor
     func testNoTextIsCutWithComfortAtTheNarrowestWidth() async throws {
         let reports = await AuditScreens.reports(shots: Self.shots)

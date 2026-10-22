@@ -1,0 +1,71 @@
+{
+  "nodes" : [
+    {
+      "label" : "Send to Daylight",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Pair with your Daylight",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Send articles, web pages and PDFs from this iPhone to your Daylight.",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "On your Daylight, open Daylight Share and choose This is my Daylight. It shows a QR code and a 28-character pairing code.",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Everything you send is end-to-end encrypted with a key from that code. Items travel through the free ntfy.sh relay (or your own), which only sees ciphertext.",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Scan the QR code",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "Scan Qr Code",
+      "type" : "image",
+      "value" : ""
+    },
+    {
+      "label" : "Scan the QR code",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Or type the code",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Pairing code, e.g. ABCD-EFGH-…",
+      "type" : "textField",
+      "value" : ""
+    },
+    {
+      "label" : "Pair",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "Paste",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "Opening a daylightshare:// pairing link on this iPhone also pairs it, once you confirm.",
+      "type" : "staticText",
+      "value" : ""
+    }
+  ],
+  "platform" : "ios",
+  "screen" : "pair"
+}

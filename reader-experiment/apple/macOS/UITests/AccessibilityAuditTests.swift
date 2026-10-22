@@ -36,9 +36,23 @@ final class AccessibilityAuditTests: XCTestCase {
         if element.label == "emoji & symbols" {
             return "the system's emoji item in the Touch Bar of a text field"
         }
-        if issue.auditType == .contrast, element.elementType == .staticText,
-           UITestSupport.text(element.value) == "Send to Daylight" {
-            return "the window's title, which the system dims while a sheet is open"
+        if issue.auditType == .contrast, element.elementType == .staticText {
+            let value = UITestSupport.text(element.value)
+            if value == "Send to Daylight" {
+                return "the window's title, which the system dims while a sheet is open"
+            }
+            // The audit measures text where it is laid out, also where something covers it.
+            let sheet = XCUIApplication().windows.firstMatch.sheets.firstMatch
+            if sheet.exists {
+                let inSheet = sheet.staticTexts.matching(NSPredicate(format: "value == %@", value)).firstMatch
+                if !inSheet.exists && sheet.frame.intersects(element.frame) {
+                    return "text of the main window under the open Settings sheet"
+                }
+                let scroll = sheet.scrollViews.firstMatch
+                if inSheet.exists && scroll.exists && !scroll.frame.insetBy(dx: -1, dy: -1).contains(element.frame) {
+                    return "text the Settings sheet has scrolled partly out of view"
+                }
+            }
         }
         return nil
     }

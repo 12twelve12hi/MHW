@@ -20,6 +20,24 @@ for f in "$dir"/*.json; do
   cat "$f"
   echo "=====END lab-off-baseline $name====="
 done
+# The trees the tests only printed (the Mac's test runner may not write outside its sandbox): the last of each.
+python3 - "$log" "$dir" <<'PY'
+import os, re, sys
+log, folder = sys.argv[1], sys.argv[2]
+written = set(os.listdir(folder)) if os.path.isdir(folder) else set()
+blocks, name, lines = {}, None, []
+for line in open(log, encoding='utf-8', errors='replace'):
+    m = re.match(r'=====BEGIN lab-off-baseline (\S+)=====$', line.strip())
+    if m:
+        name, lines = m.group(1), [line]
+    elif name:
+        lines.append(line)
+        if line.strip().startswith('=====END lab-off-baseline'):
+            blocks[name], name = ''.join(lines), None
+for key in sorted(blocks):
+    if key not in written:
+        sys.stdout.write(blocks[key])
+PY
 
 if [ "$status" != "0" ]; then
   echo "----- the last 80 lines of $log -----"

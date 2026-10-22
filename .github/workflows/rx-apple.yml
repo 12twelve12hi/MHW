@@ -200,6 +200,9 @@ jobs:
             -resultBundlePath build/ios-tests.xcresult CODE_SIGNING_ALLOWED=NO > build/ios-tests.log 2>&1
           status=$?
           set -e
+          # The UI tests' screenshots (also attached to the result bundle).
+          xcrun xcresulttool export attachments --path build/ios-tests.xcresult --output-path build/shots/attachments \
+            > /dev/null 2>&1 || echo "::warning::could not export the result bundle's attachments"
           bash scripts/ci-test-summary.sh build/ios-tests.log build/baselines "$status"
 
       - uses: actions/upload-artifact@v4
@@ -384,8 +387,11 @@ jobs:
             > build/mac-tests.log 2>&1
           status=$?
           set -e
-          # The truncation audit runs inside the (sandboxed) app, which keeps its screenshots in its own container.
+          # The truncation audit runs inside the (sandboxed) app, which keeps its screenshots in its own container; the UI
+          # tests' screenshots are in the result bundle (the Mac's test runner may not write outside its sandbox).
           cp "$HOME/Library/Containers/com.daylight.share.mac/Data/tmp/dls-shots/"*.png build/shots/ 2>/dev/null || true
+          xcrun xcresulttool export attachments --path build/mac-tests.xcresult --output-path build/shots/attachments \
+            > /dev/null 2>&1 || echo "::warning::could not export the result bundle's attachments"
           bash scripts/ci-test-summary.sh build/mac-tests.log build/baselines "$status"
 
       - uses: actions/upload-artifact@v4

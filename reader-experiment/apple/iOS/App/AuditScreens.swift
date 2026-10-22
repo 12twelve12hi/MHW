@@ -29,6 +29,32 @@ enum AuditScreens {
         return out
     }
 
+    /// Dynamic Type: every probed text on each main screen needs more height at accessibility3 than at the default
+    /// size (Comfort off), so it follows the text size. -> the screens, each with the texts that did not grow.
+    static func scaling() async -> [(screen: String, measured: Int, problems: [String])] {
+        let paired = await sampleModel(paired: true)
+        let unpaired = await sampleModel(paired: false)
+        let screens: [(String, AnyView)] = [
+            ("home", AnyView(HomeView().environmentObject(paired))),
+            ("settings", AnyView(SettingsView().environmentObject(paired))),
+            ("pair", AnyView(PairView().environmentObject(unpaired))),
+        ]
+        var out: [(screen: String, measured: Int, problems: [String])] = []
+        for (name, view) in screens {
+            let small = await host(view, comfort: false, typeSize: .large, height: 6000).neededSizes
+            let large = await host(view, comfort: false, typeSize: .accessibility3, height: 6000).neededSizes
+            var problems: [String] = []
+            for (text, size) in small.sorted(by: { $0.key < $1.key }) {
+                guard let bigger = large[text] else { continue }
+                if bigger.height <= size.height {
+                    problems.append("“\(text)” needs \(Int(size.height)) pt at the default size and \(Int(bigger.height)) pt at accessibility3")
+                }
+            }
+            out.append((name, small.keys.filter { large[$0] != nil }.count, problems))
+        }
+        return out
+    }
+
     /// The audit's own check: a text squeezed into too little height is reported, and the same text left to wrap is
     /// not.
     static func selfCheck() async -> (cut: Report, wrapped: Report) {
@@ -84,12 +110,20 @@ enum AuditScreens {
     /// Hosts `view` in a window `narrowestWidth` wide with Comfort on and text at accessibility3, lets it settle, and
     /// reports the probed texts that are cut. Writes a screenshot to `shots` when given.
     static func measure(_ screen: String, _ view: AnyView, height: CGFloat, shots: URL?) async -> Report {
+        let recorder = await host(view, comfort: true, typeSize: .accessibility3, height: height, shots: shots, name: screen)
+        return Report(screen: screen, measured: recorder.measured, problems: recorder.problems)
+    }
+
+    /// Hosts `view` in a window `narrowestWidth` wide at `typeSize`, with Comfort on or off, lets it settle, and returns
+    /// what its probed texts reported. Writes a screenshot to `shots` when given.
+    static func host(_ view: AnyView, comfort: Bool, typeSize: DynamicTypeSize, height: CGFloat, shots: URL? = nil,
+                     name: String = "") async -> TruncationRecorder {
         let recorder = TruncationRecorder(width: narrowestWidth)
         let root = view
-            .comfort(true)
-            .dynamicTypeSize(.accessibility3)
+            .comfort(comfort)
+            .dynamicTypeSize(typeSize)
             .environment(\.truncationRecorder, recorder)
-        let host = UIHostingController(rootView: root)
+        let hosting = UIHostingController(rootView: root)
         let window: UIWindow
         if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
             window = UIWindow(windowScene: scene)
@@ -97,26 +131,25 @@ enum AuditScreens {
             window = UIWindow()
         }
         window.frame = CGRect(x: 0, y: 0, width: narrowestWidth, height: height)
-        window.rootViewController = host
+        window.rootViewController = hosting
         window.isHidden = false
         for _ in 0..<20 {
-            host.view.setNeedsLayout()
-            host.view.layoutIfNeeded()
+            hosting.view.setNeedsLayout()
+            hosting.view.layoutIfNeeded()
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         if let shots {
             let format = UIGraphicsImageRendererFormat()
             format.scale = 1
-            let image = UIGraphicsImageRenderer(bounds: host.view.bounds, format: format).image { _ in
-                _ = host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+            let image = UIGraphicsImageRenderer(bounds: hosting.view.bounds, format: format).image { _ in
+                _ = hosting.view.drawHierarchy(in: hosting.view.bounds, afterScreenUpdates: true)
             }
             try? FileManager.default.createDirectory(at: shots, withIntermediateDirectories: true)
-            try? image.pngData()?.write(to: shots.appendingPathComponent("truncation-ios-\(screen).png"))
+            try? image.pngData()?.write(to: shots.appendingPathComponent("truncation-ios-\(name).png"))
         }
-        let report = Report(screen: screen, measured: recorder.measured, problems: recorder.problems)
         window.isHidden = true
         window.rootViewController = nil
-        return report
+        return recorder
     }
 }
 #endif
