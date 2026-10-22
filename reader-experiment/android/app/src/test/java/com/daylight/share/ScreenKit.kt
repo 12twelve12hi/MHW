@@ -8,7 +8,6 @@ import android.content.IntentFilter
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
@@ -16,7 +15,6 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.test.SemanticsMatcher
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
@@ -272,22 +270,21 @@ object ScreenKit {
 
     /**
      * Saves what the app shows as `<name>.png` in `app/build/f27-screenshots` (CI uploads them for review; they are not
-     * compared): the root captured with `captureToImage()` under native graphics, cut 16 dp below the last row that holds
-     * anything but white (the test window is very tall). Returns the file, or null outside Gradle.
+     * compared): the activity's window drawn into a bitmap under native graphics, cut 16 dp below the last row that
+     * holds anything but white (the test window is very tall). Compose's `captureToImage()` is not used: it waits for
+     * the window to draw a frame, which Robolectric never does, and times out after 2 s (Compose 1.8, Robolectric 4.14);
+     * drawing the window's views gives the same pixels. Returns the file, or null outside Gradle.
      */
     fun screenshot(compose: AppRule, name: String): File? {
         val dir = System.getProperty("dls.screenshots")?.let(::File) ?: return null
         compose.waitForIdle()
-        val full = try {
-            compose.onRoot().captureToImage().asAndroidBitmap()
-        } catch (e: Throwable) {
-            // captureToImage waits for the window to draw a frame; drawing the window's views gives the same pixels.
-            println("f27-screenshot: $name: captureToImage failed (${e.javaClass.simpleName}: ${e.message}); drawing the window instead")
-            val v = compose.activity.window.decorView
-            Bitmap.createBitmap(v.width, v.height, Bitmap.Config.ARGB_8888).also { v.draw(Canvas(it)) }
-        }
+        val window = compose.activity.window.decorView
+        val full = Bitmap.createBitmap(window.width, window.height, Bitmap.Config.ARGB_8888)
+        compose.runOnUiThread { window.draw(Canvas(full)) }
+        val inked = lastInkedRow(full)
+        check(inked > 0) { "$name: the screenshot is blank" }
         val pad = (16 * compose.density.density).roundToInt()
-        val height = minOf(full.height, lastInkedRow(full) + 1 + pad)
+        val height = minOf(full.height, inked + 1 + pad)
         val shot = Bitmap.createBitmap(full, 0, 0, full.width, height)
         dir.mkdirs()
         val file = File(dir, "$name.png")
