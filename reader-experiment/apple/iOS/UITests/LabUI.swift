@@ -75,10 +75,11 @@ enum LabUI {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
 
-    /// A text with exactly these words (its label or its value).
+    /// An element with exactly these words (its label or its value), whatever its type: a text, or a `Label` (the
+    /// needs-setup note's sentence, after its hidden icon).
     @MainActor
     static func text(_ words: String, in root: XCUIElement) -> XCUIElement {
-        UITestSupport.staticText(words, in: root)
+        root.descendants(matching: .any).matching(NSPredicate(format: "label == %@ OR value == %@", words, words)).firstMatch
     }
 
     /// Any element whose label contains these words.
