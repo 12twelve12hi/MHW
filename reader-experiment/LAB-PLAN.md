@@ -281,6 +281,20 @@ Under controls, `LAB_TEXT` overrides the module's `needs-server` and `needs-lab-
 because that is where setup happens. The server lane brings DESIGN 14.1's `needs-lab-inbox` text in line in Wave S
 (S0, 4.2).
 
+**Copy added Oct 22 (from the W1 reviews).** The share lane adds these to LAB_TEXT, and the apps take them from
+there. ASCII apostrophes and quotes here; the apps show ’ “ ”.
+
+| LAB_TEXT id | Text | Used by |
+|---|---|---|
+| `setup.steps.toolbarButton` | Click the puzzle piece in Chrome's toolbar, then the pin next to Send to Daylight. | Chrome's Setup check (F26.3) |
+| `setup.steps.readerReadLater` | The Reader turned down the last pages it was handed. Open the Reader's settings, allow pages from other apps, then tap Test the Reader hand-off. | DC-1 Inbox Setup check (F26.3); the button is `setup.readerTest` |
+| `arrivals.quietHoursFooter` | From 22:00 to 07:00, arrivals don't make a sound. | F15's Quiet hours switch |
+| `arrivals.excerptOne` | New excerpt from {from} | F15: one waiting excerpt (several use `excerptsGroup`) |
+| `handover.*` | The five sentences of 5.3.4, word for word | K6's handover line and settings |
+
+A share-in-place batch where only some items went out reuses v1.1's result wording ("{n} items." plus the error) and
+needs no new string. The Reader's own setting name in `readerReadLater` is checked on the W1 device round.
+
 ### 1.7 Test hooks (test builds and launch arguments only)
 
 | Platform | Hook |
