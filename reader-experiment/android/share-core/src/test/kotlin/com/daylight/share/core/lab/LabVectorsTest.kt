@@ -29,9 +29,10 @@ import org.junit.Test
 import kotlin.io.path.createTempDirectory
 
 /**
- * Checks the Kotlin Lab port against ../../share/vectors/lab-vectors.json (made by the JS reference, LAB-PROTOCOL
- * 2.8): every W0 section, and the W1 strings labText pins. The W1 sections labExcerpt, diagnostics and testArticle
- * belong to K3 ([LATER]); a section this test does not know fails [everySectionIsPorted], so none is skipped silently.
+ * Checks the Kotlin Lab port against ../../share/vectors/lab-vectors.json (made by the JS reference, LAB-PROTOCOL 2.8
+ * and 2.9): every W0 section (K0) and every W1 section (K3: labExcerpt, diagnostics, testArticle and the W1 labText
+ * cases). A section this test does not know fails [everySectionIsPorted], so none is skipped silently. smart intake's
+ * own file, normalise.json, is NormaliseVectorsTest's.
  */
 class LabVectorsTest {
     private val v get() = Vectors.lab
@@ -40,14 +41,13 @@ class LabVectorsTest {
 
     companion object {
         /** The sections this test checks. */
-        val PORTED = listOf("constants", "labTopics", "labFrames", "labParse", "labLedger", "labGate", "labHeaderExtras", "labRowText", "labText", "v1Safety")
+        val PORTED = listOf(
+            "constants", "labTopics", "labFrames", "labParse", "labLedger", "labGate", "labHeaderExtras", "labRowText", "labText", "v1Safety",
+            "labExcerpt", "diagnostics", "testArticle",
+        )
 
         /** Sections of later cards (LAB-PLAN 3.5), with the card that ports them. */
-        val LATER = mapOf(
-            "labExcerpt" to "K3 (W1): Excerpt and classifyShare",
-            "diagnostics" to "K3 (W1): redactDiagnostics and the activity log",
-            "testArticle" to "K3 (W1): testArticle",
-        )
+        val LATER = emptyMap<String, String>()
         val META = listOf("protocol", "generatedBy", "notes")
     }
 
@@ -72,8 +72,17 @@ class LabVectorsTest {
             "FAST_CHECK_WINDOW_MS" to Lab.FAST_CHECK_WINDOW_MS, "STATE_RANK" to Lab.STATE_RANK, "LAB_STATES" to Lab.LAB_STATES,
             "CAPS" to linkedMapOf("st" to Lab.Caps.ST, "tap" to Lab.Caps.TAP, "readerLink" to Lab.Caps.READER_LINK, "capKind" to Lab.Caps.CAP_KIND, "readerDoc" to Lab.Caps.READER_DOC, "quiet" to Lab.Caps.QUIET),
             "FEATURE_CAPS" to Lab.FEATURE_CAPS, "SERVER_FEATURES" to Lab.SERVER_FEATURES, "SERVER_KEYS" to Lab.SERVER_KEYS, "USE_FEATURES" to Lab.USE_FEATURES,
+            // W1 (K3)
+            "EXCERPT_MAX_CHARS" to Excerpt.MAX_CHARS, "EXCERPT_LINE_MAX" to Excerpt.LINE_MAX, "EXCERPT_NAME_WORDS" to Excerpt.NAME_WORDS,
+            "TEXT_FRAGMENT_WORDS" to Excerpt.TEXT_FRAGMENT_WORDS, "ACTIVITY_MAX" to SetupCheck.ACTIVITY_MAX, "DIAGNOSTICS_EVENTS" to SetupCheck.DIAGNOSTICS_EVENTS,
+            "TEST_URL_PREFIX" to SetupCheck.TEST_URL_PREFIX, "EXCERPT_TAGS" to Excerpt.TAGS, "EXCERPT_AS_P" to Excerpt.AS_P, "EXCERPT_DROP" to Excerpt.DROP,
+            "TRACKING_PARAMS" to Normalise.TRACKING_PARAMS,
+            "TRACKING_BY_SITE" to Normalise.TRACKING_BY_SITE.map { r ->
+                if (r.subdomainsOf != null) linkedMapOf("subdomainsOf" to r.subdomainsOf, "params" to r.params) else linkedMapOf("domains" to r.domains, "params" to r.params)
+            },
         )
         for ((k, value) in kotlin) assertEquals(k, c[k], norm(value))
+        assertEquals("every constant of the vectors has a Kotlin value", c.keys, kotlin.keys)
         assertEquals(Lab.STATE_RANK.keys.toList(), Lab.LAB_STATES)
     }
 
@@ -334,8 +343,37 @@ class LabVectorsTest {
         for (c in s["labInboxSeen"].objs()) assertEquals(Json.write(c), c["expect"], LabText.labInboxSeenText(c["lastSeen"], c["now"].long()!!))
         for (c in s["aiToday"].objs()) assertEquals(Json.write(c), c["expect"], LabText.aiTodayText(c["used"], c["cap"]))
         for (c in s["setupConfirm"].objs()) assertEquals(c["expect"], LabText.setupConfirmText(c["server"] as String))
+        for (c in s["hostLine"].objs()) assertEquals(Json.write(c), c["expect"], LabText.hostLineText(c["host"] as String?, c["fingerprint"] as String?))
         assertEquals("Copy Server code", LabText.button("needs-server"))
         assertNull(LabText.button("needs-inbox"))
+    }
+
+    /**
+     * The setup steps are a list of five, pinned against the array labText › serverSection › steps: four of them hold a
+     * comma, so the joined form in strings is never split. Every other list's items are comma-free, and step 2 is the
+     * server module's RERUN_HELP word for word (2.6).
+     */
+    @Test
+    fun labTextLists() {
+        val t = v["labText"].obj()
+        val steps = t["serverSection"].obj()["steps"] as List<*>
+        assertEquals(5, steps.size)
+        assertEquals(steps, LabText.SERVER_STEPS)
+        assertEquals(steps, LabText.list("serverSection.steps"))
+        assertTrue("steps hold commas", LabText.SERVER_STEPS.any { ',' in it })
+        val joined = t["strings"].obj()["serverSection.steps"] as String
+        assertEquals(joined, LabText.SERVER_STEPS.joinToString(","))
+        assertTrue("splitting the joined form does not give the five steps back", joined.split(',').size != 5)
+        assertEquals(com.daylight.share.core.server.ServerMessages.RERUN_HELP, LabText.SERVER_STEPS[1])
+        assertEquals(setOf("serverSection.steps", "featureOrder", "serverFeatureOrder", "excerpt.months"), LabText.lists.keys)
+        for ((id, list) in LabText.lists) {
+            assertEquals(id, t["strings"].obj()[id], list.joinToString(","))
+            if (id != "serverSection.steps") {
+                assertTrue(id, list.none { ',' in it })
+                assertEquals(id, list, (t["strings"].obj()[id] as String).split(','))
+            }
+        }
+        assertEquals(12, LabText.list("excerpt.months").size)
     }
 
     @Test
@@ -357,6 +395,105 @@ class LabVectorsTest {
             assertEquals(c["a11y"], LabText.useA11y(c["id"] as String))
         }
         assertEquals(t["useFeatures"].objs().map { it["id"] }, Lab.USE_FEATURES)
+    }
+
+    // ---- W1 (K3)
+
+    private fun excerptJson(e: Excerpt.Item?): Any? = norm(
+        e?.let {
+            linkedMapOf<String, Any?>("kind" to it.kind, "mime" to it.mime, "name" to it.name).apply {
+                if (it.url != null) put("url", it.url)
+                put("title", it.title)
+                put("content", it.content)
+                put("extras", it.extras)
+            }
+        },
+    )
+
+    private fun sha256Hex(s: String) = Bytes.toHex(java.security.MessageDigest.getInstance("SHA-256").digest(Bytes.utf8(s)))
+
+    /** labExcerpt (F11.3, F11.5): items, the sanitiser, plain text, fragments, dates, names, classifyShare, the limits. */
+    @Test
+    fun labExcerpt() {
+        val e = v["labExcerpt"].obj()
+        val utc = java.time.ZoneOffset.UTC
+        for (c in e["items"].objs()) {
+            val i = c["input"].obj()
+            val got = Excerpt.item(
+                i["text"] as String?, i["html"] as String?, i["url"] as String?, i["pageTitle"] as String?, i["site"] as String?,
+                i["app"] as String?, i["date"], utc,
+            )
+            assertEquals(c["name"] as String, c["expect"], excerptJson(got))
+        }
+        for (c in e["sanitize"].objs()) {
+            val r = Excerpt.sanitize(c["html"] as String, (c["maxChars"] as Double).toInt())
+            assertEquals(c["name"] as String, c["expect"], norm(linkedMapOf("html" to r.html, "trimmed" to r.trimmed)))
+        }
+        for (c in e["textHtml"].objs()) {
+            val r = Excerpt.textHtml(c["text"] as String, (c["maxChars"] as Double).toInt())
+            assertEquals(c["name"] as String, c["expect"], norm(linkedMapOf("html" to r.html, "trimmed" to r.trimmed)))
+        }
+        for (c in e["fragments"].objs()) assertEquals(c["name"] as String, c["expect"], Excerpt.textFragment(c["url"] as String, c["text"] as String))
+        for (c in e["dates"].objs()) assertEquals(c["date"].toString(), c["expect"], Excerpt.date(c["date"]))
+        for (c in e["fileNames"].objs()) assertEquals(c["name"] as String, c["expect"], Excerpt.fileName(c["text"] as String, c["note"] == true))
+        for (c in e["classify"].objs()) {
+            val i = c["input"].obj()
+            val r = Normalise.classifyShare(i["text"] as String?, i["url"] as String?, i["title"] as String?, i["source"] as String?)
+            assertEquals(c["name"] as String, c["expect"], norm(linkedMapOf("kind" to r.kind, "url" to r.url, "text" to r.text)))
+        }
+        // F11.5: every case that is not rule 1-3 (or nothing at all) is a link, headline + link shares included.
+        val links = e["classify"].objs().filter { !Regex("^rule [123]").containsMatchIn(it["name"] as String) && it["name"] != "nothing" }
+        assertTrue(links.size >= 7)
+        for (c in links) assertEquals("F11.5: ${c["name"]}", "link", c["expect"].obj()["kind"])
+        // The 50,000-character limit, in HTML (from text and from HTML) and in Markdown.
+        val l = e["limits"].obj()
+        val input = l["input"].obj()
+        val text = JsText.trim((input["textRepeat"] as String).repeat((input["times"] as Double).toInt()))
+        fun pin(s: String, want: Map<String, Any?>, what: String) {
+            assertEquals(what, want["length"].long(), s.length.toLong())
+            assertEquals(what, want["sha256"], sha256Hex(s))
+            assertTrue(what, s.endsWith(want["tail"] as String))
+        }
+        val url = input["url"] as String
+        val pageTitle = input["pageTitle"] as String
+        pin(Excerpt.item(text, url = url, pageTitle = pageTitle, date = input["date"])!!.content, l["textItem"].obj(), "text")
+        pin(Excerpt.item(text, html = "<p>$text</p>", url = url, pageTitle = pageTitle, date = input["date"])!!.content, l["htmlItem"].obj(), "html")
+        pin(Excerpt.markdown(text, input["app"] as String, input["date"]), l["note"].obj(), "note")
+    }
+
+    /** diagnostics (F26.2): redaction, activity lines and whole reports. */
+    @Test
+    fun diagnostics() {
+        val d = v["diagnostics"].obj()
+        for (c in d["redact"].objs()) assertEquals(c["text"] as String, c["expect"], SetupCheck.redactDiagnostics(c["text"] as String))
+        fun event(m: Map<String, Any?>) = SetupCheck.Event(m["time"].long()!!, m["type"] as String, m["id8"] as String, m["kind"] as String, m["status"] as String, (m["http"] as Double).toInt())
+        for (c in d["activity"].objs()) {
+            val e = event(c["event"].obj())
+            assertEquals(c["line"], SetupCheck.activityLine(e))
+            assertEquals(c["event"], norm(e.toJson()))
+            assertEquals(e, SetupCheck.Event.fromJson(c["event"].obj()))
+        }
+        for (c in d["reports"].objs()) {
+            val i = c["input"].obj()
+            val got = SetupCheck.diagnosticsReport(
+                app = i["app"] as String, version = i["version"] as String, platform = i["platform"] as String, lab = i["lab"] == true,
+                caps = (i["caps"] as List<*>).map { it as String }, checkedIn = i["checkedIn"].long(),
+                statuses = i["rows"].objs().map { it["status"] as String }, relay = i["relay"] as String,
+                log = i["log"].objs().map(::event), now = i["now"].long()!!,
+            )
+            assertEquals(c["expect"], got)
+        }
+    }
+
+    /** testArticle (F26): the item to send, exactly. */
+    @Test
+    fun testArticle() {
+        for (c in v["testArticle"].objs()) {
+            val i = c["input"].obj()
+            val a = SetupCheck.testArticle(i["id"] as String, i["device"] as String)
+            val got = linkedMapOf("id" to a.id, "kind" to a.kind, "url" to a.url, "title" to a.title, "content" to a.content, "extras" to a.extras)
+            assertEquals(c["expect"], norm(got))
+        }
     }
 
     /**

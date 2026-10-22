@@ -12,7 +12,7 @@ and passes their vectors.
 | Package | What |
 |---|---|
 | `com.daylight.share.core` | The protocol: `Pairing`, `Keys`, `FrameCodec`, `ItemHeader`, `ItemBuilder`, `Reassembler`, `RelayClient`, `Outbox` (sender), `Receiver` (Inbox), `RowText`, `PairingConfirmation`, `RelayProbe` |
-| `…core.lab` | Lab (K0, Wave 0): frames, the sender's ledger, the Inbox's hellos and states, the copy, the gate, the timeline text |
+| `…core.lab` | Lab (K0, Wave 0): frames, the sender's ledger, the Inbox's hellos and states, the copy, the gate, the timeline text. W1 (K3): smart intake (`Normalise`), excerpts (`Excerpt`), Setup check (`SetupCheck`) |
 | `…core.server` | The Daylight server client, the W0 subset of LAB-PLAN 2.6 |
 
 ## Lab (LAB-PLAN K0)
@@ -51,8 +51,11 @@ Every v1.0 and v1.1 peer keeps working (`LabSkewTest`).
 | `LabTopics` | The return and control lanes' topics (2.4), for W2 and W3 |
 
 `LabStrings.kt` is generated from `LAB_TEXT`: after the share lane changes a string, run
-`node scripts/lab-strings.mjs` (`--check` says whether it is current). Never edit a string here: `LabVectorsTest`
-pins every one to `share/vectors/lab-vectors.json`.
+`node scripts/lab-strings.mjs` (`--check` says whether it is current; CI runs it). Never edit a string here:
+`LabVectorsTest` pins every one to `share/vectors/lab-vectors.json`. `LabStrings.ALL` holds every string by its dotted
+id, a list joined with ","; `LabStrings.LISTS` holds every list as a list. Read lists with `LabText.list(id)` (or
+`FEATURE_ORDER`, `SERVER_FEATURE_ORDER`, `SERVER_STEPS`), never by splitting the joined form: three of the five
+`serverSection.steps` hold commas.
 
 **Wiring it into the app (K1).**
 
@@ -83,6 +86,39 @@ pins every one to `share/vectors/lab-vectors.json`.
   and with a new pairing, `clearManualUrl()` (a typed address and the cached status are the old server's), as the web
   and Windows builds do.
 
+## W1 (LAB-PLAN K3)
+
+The W1 reference functions of `share/js/daylight-lab.js` and `daylight-share.js` (LAB-PROTOCOL 2.7.1, 2.9), rule for
+rule, pinned by `share/vectors/normalise.json` and the W1 sections of `lab-vectors.json`, and checked against the JS
+itself on random input (`W1DifferentialTest`). Nothing here changes the wire: without Lab fields an item's frames are
+exactly v1.1's, and every new parameter has a default, so v1.1 callers compile and behave as before.
+
+| Where | What |
+|---|---|
+| `lab.Normalise` | Smart intake (F16, F11's rule): `normaliseShare(text, url, subject, source, clean)` → `Result(kind, url, title, excerpt, orig)` (`Result.extras` is the `x-orig` to send); `classifyShare` (6.5 Q1 = b: an excerpt only for `source = "selection"`; every headline + link share is a link); `cleanShareUrl`, `findShareUrl`, `shareTitle`, `hasTextFragment`, `withoutTextFragment`, `textFragmentText`; `isAppleNewsUrl` and `extractAppleNewsTarget` (only iPhone and Mac fetch apple.news; Android leaves the link as it is) |
+| `lab.Excerpt` | Excerpts (F11): `item(text, html, url, pageTitle, site, app, date)` → an `Item` (an HTML file with a text-fragment `url`, or a Markdown note; `x-cap: "excerpt"`; `toOutgoing()` gives the `OutgoingItem` and its body), `html`, `markdown`, `fileName`, `title`, `textFragment`, `date`, `sanitize`, `textHtml` |
+| `lab.SetupCheck` | Setup check (F26): `testArticle(id, device)` (`toOutgoing()`), `activityEvent`, `appendActivity` (the last 200), `activityLine`, `diagnosticsReport(…)` and `redactDiagnostics` |
+| `lab.LabText` | The W1 and server-section strings (`LabText["serverSection.stepsHeading"]`, …), `SERVER_STEPS` (shown numbered 1-5 while the server is `needs-server`; step 2 is `ServerMessages.RERUN_HELP`), `hostLineText(host, fingerprint)`, `list(id)` |
+| `OutgoingItem.extras` | The Lab item fields to write (2.3, 2.9.2), only with Lab on: `ItemBuilder.labHeaderFields` keeps `x-cap` when it is one of the four values and `x-orig` when it passes the web URL rule and is at most 1,024 characters; `prepare` leaves `x-orig` out when it alone would turn part 0 into a large frame. They go on part 0 only, and the row's stored header keeps them, so every re-send writes the same fields |
+| `Outbox.add`/`send(…, defer = true)` | Shared while offline (F07): the row is stored as failed / `network` with 0 attempts and `lastPublish` now ("Waiting for connection" in `LabRowText` when the app passes `online = false`); nothing is published, the content is kept |
+| `Outbox.flushNetwork(maxFrames = 30, maxAttachmentBytes = 18_000_000)` | Back online (F07): the `network` rows oldest first, whatever their back-off; a pass stops before a row that would take it over a cap (it always takes its first row), publishes nothing more after a 429 and no attachment after a 413, and leaves rows past the week to `resendDue`. Space passes `Outbox.FLUSH_SPACING_MS` (3 minutes) apart |
+| `lab.LabRowText` | The step line and `final` (2.5) came with K0 and pass the W1 vectors unchanged |
+
+**Wiring it into the app (K4, K5).**
+
+- *Every entry point, Lab on:* `Normalise.normaliseShare(text, url, subject, source, clean = LabText.labUseOn(lab, labUse,
+  "F16"))`. A link goes as `OutgoingItem(Kind.URL, url = r.url, title = r.title, extras = r.extras)`; an excerpt or note
+  (only with `source = Normalise.SOURCE_SELECTION`, which Android's share sheet sends only after 6.5 Q1's paths are
+  built in K4) goes through `Excerpt.item(r.excerpt, url = r.url, …)!!.toOutgoing()`. With Lab off, nothing here runs:
+  v1.1's `Text.findUrl` and no extras.
+- *Offline (F07):* with no network, `outbox.send(item, body, defer = true)`, and from the `CONNECTED` worker
+  `outbox.flushNetwork()`, at most once every `Outbox.FLUSH_SPACING_MS`. `LabRowText.Context(…, online = false)` while
+  the device is offline.
+- *Setup check (F26):* `SetupCheck.testArticle(device = name).toOutgoing()`; keep the activity log with `appendActivity`
+  (store `Event.toJson()`, read with `Event.fromJson`) and copy `diagnosticsReport(…)`, which is already redacted.
+- *Inbox (K5):* `LabText.inboxKindLine(kind, header.extras, size, from)` and `LabText.cleanedFromText(header.xOrig)`.
+- *Server section:* `LabText.SERVER_STEPS` and `LabText.hostLineText(origin, ServerCode.showFingerprint(…))`.
+
 **`core.server`** (2.6's W0 subset): `ServerCode` (`deriveSeed`, `format`, `parse`, `derive`, `showFingerprint`),
 `ServerBox` (config frames), `ServerConfig.check`, `DaylightServer` (`discover`, `confirmMove`, `setManualUrl`,
 `clearManualUrl`, `status`, `state`, `request`, `noteError`, `lockBeforeRepair`, `notice`, `markNoticeShown`,
@@ -100,10 +136,31 @@ both readings against the JS under node.
 | Test | Covers |
 |---|---|
 | `VectorsTest`, `RelayTest`, `LiveRelayTest` | Protocol 1.1: `share/vectors/test-vectors.json`, the mock relay with ntfy.sh's limits, JS interop both ways, a live round trip (informational); the ack publish's 429 and 413 in `limitStatus` and `sendAcks` (2.7.1) |
-| `lab.LabVectorsTest` | Every W0 section of `share/vectors/lab-vectors.json` (constants, labTopics, labFrames, labParse, labLedger, labGate, labHeaderExtras, labRowText, labText, v1Safety). labExcerpt, diagnostics and testArticle are W1 sections for K3; a section no test knows fails `everySectionIsPorted` |
+| `lab.LabVectorsTest` | Every section of `share/vectors/lab-vectors.json`: W0 (constants, labTopics, labFrames, labParse, labLedger, labGate, labHeaderExtras, labRowText, labText, v1Safety) and W1 (labExcerpt, diagnostics, testArticle, the W1 labText cases, the setup steps as a list); a section no test knows fails `everySectionIsPorted` |
+| `lab.NormaliseVectorsTest` | `share/vectors/normalise.json` (every case, x-orig on part 0, Apple News pages); the headline + link shares (F11.5, F16.1); tracking removal that changes nothing else (F16.3); hostile HTML; hostile input that must stay linear and must not overflow the JVM's stack; the excerpt limits (F11.3, F11.4) |
+| `lab.W1DifferentialTest` | About 6,300 random inputs built from what makes platforms differ (JS whitespace, `\b`, case folding, lone surrogates, escapes, unclosed tags) through the JS reference (`src/test/js/w1-reference.mjs`) and the Kotlin port: every answer must be the same |
+| `OfflineQueueTest` | F07 through the mock relay with ntfy.sh's limits: `defer`; 70 links in three passes with no 429; ten 9 MB files never over 18 MB a pass or 20 MB on the relay, the rest into the 3-hour wait (F07.3); the pass rules and both caps; a row whose content is gone; Lab fields on part 0 of every attempt |
 | `server.ServerVectorsTest` | `server/vectors/server-vectors.json` › derived, serverCodeParsing, frames (config), negative, serverState (with what `noteError` does to the cache); discovery, the pin and a move, the status cache, the gate's deadline; server addresses read as the JS reads them (`src/test/js/server-origins.mjs`) |
 | `lab.LabInboxTest` | 2.2.4 with a fake clock: the merge rule, 24 a frame, 30 s spacing, giving way, the daily cap, halving, hellos, `lab: 0` and its repeats, a new or cleared store with Lab off, the pending cap, the digest; `record`, the notes and `clear` during a publish in flight, and two flushes of one file; the ledger's file and pruning |
 | `lab.LabSkewTest` | F17.1 through the mock relay: the Kotlin Lab sender against the v1.0, v1.1 and current JS Receivers and a JS Lab Daylight; the v1.0, v1.1 and Lab JS Senders against the Kotlin Inbox with and without `LabInbox`; two publishers (Kotlin Daylight Share, JS Lab Reader) in both handover orders; Lab extras through the on-disk spool; an ack publish answered 429 or 413 makes the Kotlin Daylight give way for the hour |
 
 The old JS peers are `share/js/test/fixtures/daylight-share-v1.0.js` and `-v1.1.js`; `src/test/js/interop.mjs` drives
 them (`MockRelay.jsWith(MockRelay.jsLib("v1.0"), …)`).
+
+## Still to check on a device
+
+share-core has no screens, so it has no device item of its own. These W1 device-round items (Rooted 2, with a real
+phone and the real ntfy.sh relay) run its code; the app cards (K4 phone, K5 Inbox) wire it and run them:
+
+- **F07.1 (Android phone):** in flight mode, a share reads "Waiting for connection" (`defer`), and once the network is
+  back the item goes within a minute while the app runs, and with the app closed within WorkManager's window
+  (`flushNetwork` from the `CONNECTED` worker).
+- **F11.5 (Android, after 6.5 Q1):** an NYT "headline + link" shared from Chrome arrives as a link the Reader downloads
+  (`Normalise.classifyShare`).
+- **F16 on real shares:** Chrome, the Guardian, Substack, X and NYT apps on the phone: each share reaches the Daylight
+  as a link with the headline as its title and the tracking parameters gone; the Inbox's details read "Cleaned from
+  {host}" (`x-orig`).
+- **F26.1:** the test article (`SetupCheck.testArticle`) reaches the Reader on Rooted 2 in each condition of F01.1, and
+  the checklist ticks Delivered and In your Reader.
+- **F03.4 (Inbox):** every row's kind line ("Page as you saw it", "Excerpt", "Test article", …) shows, and TalkBack
+  reads it.

@@ -180,9 +180,13 @@ class Outbox(
      * Validates and stores a new item (status "sending", not due for 15 minutes): [publish] sends it now. Content over
      * 9 MB is refused before anything is read or stored ([Text.tooBigMessage]). [content] is the item's bytes; with
      * [moveContent] a [FileBody] (a private copy of what was shared) is moved into the outbox instead of copied.
-     * Throws [ShareException] for bad input, and "storage" when the content cannot be stored.
+     * With [defer] (shared while offline, LAB-PLAN F07; the JS `send(item, {defer: true})`) the row is stored as
+     * waiting for a connection instead: failed with [ErrorCode.NETWORK], 0 attempts and `lastPublish` now, its content
+     * kept, for [flushNetwork] when the connection is back (or [resendDue]'s back-off after a minute).
+     * Throws [ShareException] for bad input (nothing is stored, deferred or not), and "storage" when the content cannot
+     * be stored.
      */
-    fun add(item: OutgoingItem, content: Body?, moveContent: Boolean = false): OutboxRow = synchronized(lock) {
+    fun add(item: OutgoingItem, content: Body?, moveContent: Boolean = false, defer: Boolean = false): OutboxRow = synchronized(lock) {
         if (content != null && item.kind != Kind.URL && content.length > Limits.MAX_ITEM) {
             throw ShareException("too-large", Text.tooBigMessage(content.length))
         }
@@ -212,15 +216,19 @@ class Outbox(
             }
         }
         val now = clock()
-        val row = OutboxRow(prepared.header, created = now, attemptStarted = now, attachment = prepared.attachment)
+        var row = OutboxRow(prepared.header, created = now, attemptStarted = now, attachment = prepared.attachment)
+        if (defer) row = row.copy(status = Status.FAILED, errorCode = ErrorCode.NETWORK, lastPublish = now, error = DEFERRED)
         saveRow(row)
         row
     }
 
-    /** Shares one item now: [add], then one attempt. Returns the row. */
-    fun send(item: OutgoingItem, content: Body?, moveContent: Boolean = false): OutboxRow = synchronized(lock) {
-        val row = add(item, content, moveContent)
-        attemptStored(row).row
+    /**
+     * Shares one item now: [add], then one attempt. Returns the row. With [defer] (offline, F07) nothing is published:
+     * the row waits for a connection ([add]).
+     */
+    fun send(item: OutgoingItem, content: Body?, moveContent: Boolean = false, defer: Boolean = false): OutboxRow = synchronized(lock) {
+        val row = add(item, content, moveContent, defer)
+        if (defer) row else attemptStored(row).row
     }
 
     /**
@@ -269,13 +277,20 @@ class Outbox(
         return Attempt(row, error, true)
     }
 
-    /** Re-sends a row from its stored content, or ends it (no content: gone; over 9 MB: too-large). */
-    private fun attemptStored(row: OutboxRow): Attempt {
-        fun end(code: String, dropContent: Boolean): Attempt {
+    /** A row's frames ([prepared]), or null with the row as it was ended ([row]). */
+    private class Stored(val prepared: PreparedItem?, val row: OutboxRow)
+
+    /**
+     * A row's frames from its stored content (the JS `_buildStored`), or none after ending the row (no content: expired
+     * / gone; over 9 MB: expired / too-large). The stored header carries the row's Lab fields, so every attempt writes
+     * the same ones.
+     */
+    private fun prepareStored(row: OutboxRow): Stored {
+        fun end(code: String, dropContent: Boolean): Stored {
             val r = row.copy(status = Status.EXPIRED, errorCode = code)
             saveRow(r)
             if (dropContent) store.contentFile(row.id).delete()
-            return Attempt(r, null, false)
+            return Stored(null, r)
         }
         val body: Body = if (row.kind == Kind.URL) BytesBody(ByteArray(0)) else {
             val f = store.contentFile(row.id)
@@ -285,6 +300,13 @@ class Outbox(
         if (row.size > Limits.MAX_ITEM) return end(ErrorCode.TOO_LARGE, true)
         val prepared = PreparedItem(row.header, body, chunkSize)
         if (prepared.parts > Limits.MAX_PARTS) return end(ErrorCode.TOO_LARGE, true)
+        return Stored(prepared, row)
+    }
+
+    /** Re-sends a row from its stored content, or ends it (no content: gone; over 9 MB: too-large). */
+    private fun attemptStored(row: OutboxRow): Attempt {
+        val stored = prepareStored(row)
+        val prepared = stored.prepared ?: return Attempt(stored.row, null, false)
         return attempt(row, prepared)
     }
 
@@ -375,6 +397,41 @@ class Outbox(
     }
 
     /**
+     * Coming back online (LAB-PLAN F07; the JS `flushNetwork`): attempts the rows waiting with [ErrorCode.NETWORK]
+     * (status failed) now, oldest first, whatever their back-off. A pass stops before a row that would take it over
+     * [maxFrames] frames or [maxAttachmentBytes] bytes of attachment frames (a pass always takes its first row, so a row
+     * larger than the caps cannot block the queue). It follows [resendDue]'s pass rules: after a 429 it publishes
+     * nothing more, and after a 413 no more attachments. Rows past the week are left to [resendDue], which expires them.
+     * Space passes at least [FLUSH_SPACING_MS] apart: in that time ntfy.sh's request bucket refills by 36, so a pass of
+     * 30 never meets an empty bucket. Returns the rows it attempted.
+     */
+    fun flushNetwork(maxFrames: Int = FLUSH_MAX_FRAMES, maxAttachmentBytes: Long = FLUSH_MAX_ATTACHMENT_BYTES): List<OutboxRow> = synchronized(lock) {
+        var stopAll = false
+        var stopAttachments = false
+        var frames = 0
+        var bytes = 0L
+        val out = ArrayList<OutboxRow>()
+        for (row in store.load().first.asReversed().sortedBy { it.created }) {
+            if (stopAll) break
+            if (row.status != Status.FAILED || row.errorCode != ErrorCode.NETWORK) continue
+            if (clock() - row.created > Limits.OUTBOX_EXPIRY_MS) continue
+            if (stopAttachments && row.attachment) continue
+            val prepared = prepareStored(row).prepared ?: continue
+            val attachmentBytes = (0 until prepared.parts).sumOf { p -> prepared.frameLength(p).let { if (FrameCodec.isSmall(it)) 0L else it } }
+            if (stopAttachments && attachmentBytes > 0) continue
+            val first = out.isEmpty()
+            if (!first && (frames + prepared.parts > maxFrames || bytes + attachmentBytes > maxAttachmentBytes)) break
+            frames += prepared.parts
+            bytes += attachmentBytes
+            val r = attempt(row, prepared)
+            out += r.row
+            if (r.error?.status == 429) stopAll = true
+            else if (r.error?.code == ErrorCode.FULL) stopAttachments = true
+        }
+        out
+    }
+
+    /**
      * "Retry now" (a failed row) and "Try again" (an expired row with error code "", full or refused): publishes it
      * again with the same id and header. Any other row is left as it is (a sending, sent or delivered row is never
      * uploaded again by a tap). Returns the row, or null when there is none.
@@ -456,6 +513,16 @@ class Outbox(
 
         /** The sentence when the content cannot be copied into the outbox. */
         const val OUT_OF_SPACE = "This device is out of space, so it can’t send this."
+
+        /** [OutboxRow.error] of a row shared while offline ([add] with defer), as the JS writes it. */
+        const val DEFERRED = "deferred while offline"
+
+        /** [flushNetwork]'s caps per pass (F07): 30 frames, 18 MB of attachment frames. */
+        const val FLUSH_MAX_FRAMES = 30
+        const val FLUSH_MAX_ATTACHMENT_BYTES = 18_000_000L
+
+        /** The least time between two [flushNetwork] passes (F07). */
+        const val FLUSH_SPACING_MS = 3 * 60_000L
 
         private val SENDER_CODES = setOf(ErrorCode.NETWORK, ErrorCode.FULL, ErrorCode.REFUSED)
         private val SLOW_CODES = setOf(ErrorCode.FULL, ErrorCode.REFUSED)

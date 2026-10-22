@@ -14,6 +14,11 @@ object Vectors {
     val lab: Map<String, Any?> by lazy {
         Json.parse(File(System.getProperty("dls.labVectors") ?: "../../share/vectors/lab-vectors.json").readText()) as Map<String, Any?>
     }
+    /** share/vectors/normalise.json (W1 smart intake), next to lab-vectors.json. */
+    val normalise: Map<String, Any?> by lazy {
+        val lab = File(System.getProperty("dls.labVectors") ?: "../../share/vectors/lab-vectors.json")
+        Json.parse(File(lab.absoluteFile.parentFile, "normalise.json").readText()) as Map<String, Any?>
+    }
     val server: Map<String, Any?> by lazy {
         Json.parse(File(System.getProperty("dls.serverVectors") ?: "../../server/vectors/server-vectors.json").readText()) as Map<String, Any?>
     }

@@ -58,8 +58,10 @@ jobs:
 
       # Without an Android SDK Gradle configures only :share-core (settings.gradle.kts), which is all this job needs.
       # Lab (K0): the Lab and server vectors, LabInbox's rules and the F17 skew suite against the JS v1.0, v1.1 and
-      # current references.
-      - name: Protocol tests (vectors, mock relay, JS interop, Lab and server vectors, skew suite)
+      # current references. W1 (K3): normalise.json and the labExcerpt, diagnostics and testArticle vectors, the F07
+      # offline outbox through the mock relay with ntfy.sh's limits, and the W1 functions against the JS reference on
+      # random input.
+      - name: Protocol tests (vectors, mock relay, JS interop, Lab W0 and W1 and server vectors, skew suite)
         run: ./gradlew --no-daemon -Pdls.skipApp=true :share-core:test
 
       - name: Live round trip through ntfy.sh (informational)

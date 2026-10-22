@@ -17,6 +17,15 @@ object LabText {
     /** The string [id]; an unknown id is a programming error. */
     operator fun get(id: String): String = LabStrings.ALL[id] ?: throw IllegalArgumentException("no Lab string $id")
 
+    /**
+     * Every LAB_TEXT list by its dotted id ("serverSection.steps", "featureOrder", …). [strings] holds them joined with
+     * ","; read a list here, never by splitting that form: an item may hold a comma.
+     */
+    val lists: Map<String, List<String>> get() = LabStrings.LISTS
+
+    /** The list [id]; an unknown id is a programming error. */
+    fun list(id: String): List<String> = LabStrings.LISTS[id] ?: throw IllegalArgumentException("no Lab list $id")
+
     // ---- 1.6: the switch, its note and the list
     val LAB: String get() = get("lab")
     val SWITCH_FOOTER: String get() = get("switchFooter")
@@ -33,8 +42,15 @@ object LabText {
     val NEVER_CHECKED_IN: String get() = get("neverCheckedIn")
 
     /** 1.4: the features in list order, then the four server features (listed last, under [SERVER_HEADING]). */
-    val FEATURE_ORDER: List<String> get() = get("featureOrder").split(',')
-    val SERVER_FEATURE_ORDER: List<String> get() = get("serverFeatureOrder").split(',')
+    val FEATURE_ORDER: List<String> get() = list("featureOrder")
+    val SERVER_FEATURE_ORDER: List<String> get() = list("serverFeatureOrder")
+
+    /**
+     * The Daylight server section's setup steps (2.6, "The rest of the server section's copy"), shown numbered 1-5 under
+     * [get] ("serverSection.stepsHeading") while the server's state is needs-server. Step 2 is the server module's
+     * RERUN_HELP word for word.
+     */
+    val SERVER_STEPS: List<String> get() = list("serverSection.steps")
 
     private val SLOT = Regex("\\{(\\w+)\\}")
 
@@ -132,6 +148,18 @@ object LabText {
 
     /** The setup link's confirmation (2.6 "Setup link", step 3); [server] is the parsed link's origin. */
     fun setupConfirmText(server: String?): String = fill(get("serverSection.setupConfirmBody"), mapOf("host" to originHost(server)))
+
+    /**
+     * The server section's host line (2.6): "{host} · {fingerprint}", {host} filled as [serverMovedText] fills it (the
+     * port stays) and [fingerprint] as given (`ServerCode.showFingerprint`). When one side is empty the line is the
+     * other alone; both empty give "".
+     */
+    fun hostLineText(host: String?, fingerprint: String?): String {
+        val h = originHost(host)
+        val f = fingerprint ?: ""
+        if (h.isEmpty() || f.isEmpty()) return h.ifEmpty { f }
+        return fill(get("serverSection.hostLine"), mapOf("host" to h, "fingerprint" to f))
+    }
 
     /**
      * The server section's Lab Inbox line (2.6). [lastSeen]: GET /v1/status's `inbox.lastSeen`, an ISO 8601 UTC time

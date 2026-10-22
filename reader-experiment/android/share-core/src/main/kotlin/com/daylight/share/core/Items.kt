@@ -58,6 +58,12 @@ data class OutgoingItem(
     val sent: String? = null,
     val from: String? = null,
     val app: String? = null,
+    /**
+     * The Lab item header fields requested (LAB-PROTOCOL 2.3, 2.9.2): `x-cap` and `x-orig`, only with Lab on. The
+     * builder keeps what [ItemBuilder.labHeaderFields] allows and leaves `x-orig` out when it alone would make part 0 a
+     * large frame; [PreparedItem.header] carries what part 0 writes. Empty (the default): exactly v1.1's frames.
+     */
+    val extras: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -157,11 +163,31 @@ object ItemBuilder {
         val header = ItemHeader(
             id = item.id, kind = kind, url = url, title = title, name = name, mime = mime, size = size, sha256 = sha,
             enc = enc, sent = item.sent ?: Bytes.isoTime(nowMs), from = Text.cleanName(item.from).ifEmpty { null },
-            app = item.app?.take(60)?.ifEmpty { null },
+            app = item.app?.take(60)?.ifEmpty { null }, extras = labHeaderFields(item.extras),
         )
-        val prepared = PreparedItem(header, encoded, chunkSize)
+        var prepared = PreparedItem(header, encoded, chunkSize)
         if (prepared.parts > Limits.MAX_PARTS) throw ShareException("too-large", "That file is too large to send.")
+        // x-orig is left out when it alone would turn a small part 0 into a large one (an attachment: kept 3 h, re-sent
+        // at 185 minutes; LAB-PROTOCOL 2.3). The decision is the JS buildItemFrames', on the same frame length.
+        if (header.xOrig != null && !FrameCodec.isSmall(prepared.frameLength(0))) {
+            val without = PreparedItem(header.copy(extras = header.extras - ItemHeader.X_ORIG), encoded, chunkSize)
+            if (FrameCodec.isSmall(without.frameLength(0))) prepared = without
+        }
         return prepared
+    }
+
+    /**
+     * The Lab item header fields a sender may write (LAB-PROTOCOL 2.3; the JS `labHeaderFields`): `x-cap` when it is
+     * one of [ItemHeader.X_CAP_VALUES]; `x-orig` when it passes the web URL rule (the trimmed value) and is at most
+     * [ItemHeader.X_ORIG_MAX] characters. Anything else is left out. [prepare] also leaves `x-orig` out when it would
+     * make a small frame large.
+     */
+    fun labHeaderFields(extras: Map<String, String?>?): Map<String, String> {
+        if (extras.isNullOrEmpty()) return emptyMap()
+        val out = LinkedHashMap<String, String>()
+        extras[ItemHeader.X_CAP]?.takeIf { it in ItemHeader.X_CAP_VALUES }?.let { out[ItemHeader.X_CAP] = it }
+        extras[ItemHeader.X_ORIG]?.let(Text::webUrl)?.takeIf { it.length <= ItemHeader.X_ORIG_MAX }?.let { out[ItemHeader.X_ORIG] = it }
+        return out
     }
 
     /** Convenience for in-memory items (tests, small shares): all frames at once. */
