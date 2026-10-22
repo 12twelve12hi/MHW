@@ -196,8 +196,10 @@ export async function axeBoth(page, what) {
 
 /**
  * The F27.4 check, in the page. Each text node's box (its nearest element that isn't inline) must hold its text:
- * scrollWidth <= clientWidth and scrollHeight <= clientHeight + 1. Hidden and screen-reader-only text is skipped, and
- * the page itself must not scroll sideways. only: a selector; when set, only boxes inside it are checked.
+ * scrollWidth <= clientWidth and scrollHeight <= clientHeight + 1. So must every text field: a textarea's or input's
+ * value, or its placeholder while it is empty (a textarea's scroll size counts its placeholder; an input's placeholder
+ * is measured in its ::placeholder font against the field's content box). Hidden and screen-reader-only text is
+ * skipped, and the page itself must not scroll sideways. only: a selector; when set, only boxes inside it are checked.
  * -> [] or the boxes that clip.
  */
 export function clipped(page, { only = null } = {}) {
@@ -205,18 +207,39 @@ export function clipped(page, { only = null } = {}) {
     const bad = [];
     const seen = new Set();
     const name = (e) => `${e.tagName.toLowerCase()}${e.id ? `#${e.id}` : ''}${[...e.classList].map((c) => `.${c}`).join('')}`;
+    const visible = (e) => e.checkVisibility({ visibilityProperty: true, opacityProperty: false });
+    const overflows = (e) => e.scrollWidth > e.clientWidth || e.scrollHeight > e.clientHeight + 1;
+    const sizes = (e) => `scroll ${e.scrollWidth}x${e.scrollHeight}, client ${e.clientWidth}x${e.clientHeight}`;
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     for (let n = walker.nextNode(); n; n = walker.nextNode()) {
       if (!n.nodeValue.trim()) continue;
       let e = n.parentElement;
-      if (!e || e.closest('.sr-only, script, style, noscript, template')) continue;
+      if (!e || e.closest('.sr-only, script, style, noscript, template, textarea')) continue;
       while (e && e !== document.body && ['inline', 'contents'].includes(getComputedStyle(e).display)) e = e.parentElement;
       if (!e || seen.has(e)) continue;
       seen.add(e);
       if (only && !e.closest(only)) continue;
-      if (!e.checkVisibility({ visibilityProperty: true, opacityProperty: false })) continue;
-      if (e.scrollWidth > e.clientWidth || e.scrollHeight > e.clientHeight + 1) {
-        bad.push(`${name(e)} "${e.textContent.trim().slice(0, 50)}": scroll ${e.scrollWidth}x${e.scrollHeight}, client ${e.clientWidth}x${e.clientHeight}`);
+      if (!visible(e)) continue;
+      if (overflows(e)) bad.push(`${name(e)} "${e.textContent.trim().slice(0, 50)}": ${sizes(e)}`);
+    }
+    // Text fields: what is typed in them, or their placeholder.
+    const TEXT_TYPES = ['text', 'url', 'search', 'email', 'tel', 'password', 'number'];
+    const measure = document.createElement('canvas').getContext('2d');
+    for (const e of document.body.querySelectorAll('textarea, input')) {
+      if (e.tagName === 'INPUT' && !TEXT_TYPES.includes(e.type)) continue;
+      if (only && !e.closest(only)) continue;
+      if (!visible(e)) continue;
+      const text = e.value || e.placeholder;
+      if (!text) continue;
+      const what = `${name(e)} ${e.value ? 'value' : 'placeholder'} "${text.slice(0, 50)}"`;
+      if (overflows(e)) { bad.push(`${what}: ${sizes(e)}`); continue; }
+      if (e.tagName === 'INPUT' && !e.value) {
+        const s = getComputedStyle(e);
+        const p = getComputedStyle(e, '::placeholder');
+        measure.font = `${p.fontStyle} ${p.fontWeight} ${p.fontSize} ${p.fontFamily}`;
+        const need = measure.measureText(text).width + (parseFloat(p.letterSpacing) || 0) * [...text].length;
+        const room = e.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);
+        if (need > room + 0.5) bad.push(`${what}: needs ${Math.ceil(need)} px, has ${Math.floor(room)} px`);
       }
     }
     const d = document.documentElement;
@@ -245,7 +268,7 @@ export async function shot(page, name) {
   await page.screenshot({ path: path.join(SHOTS, `${name}.png`), fullPage: true });
 }
 
-/** Turns the page's root text up to `scale` times its size (200% text: Windows' text size, or zoom). */
+/** Turns the page's root text up to `scale` times its size (Windows' text size, 100–225%, or zoom). */
 export async function scaleText(page, scale) {
   await page.evaluate((s) => {
     const html = document.documentElement;

@@ -68,7 +68,11 @@ input[type="url"], input[type="text"], textarea {
   border-radius: 8px;
   padding: 9px 10px;
 }
-textarea { resize: vertical; font-family: "Cascadia Mono", Consolas, ui-monospace, monospace; font-size: .9333em; letter-spacing: .03em; }
+/* The pairing code and the relay grow with what they hold, and with the text size, so a typed code, link or relay (and
+   the placeholder) is always shown whole, also at 225% text with Comfort (F27.4). WebView2 sizes them (field-sizing,
+   Edge 123+); their rows= are the fallback. */
+textarea { field-sizing: content; resize: none; overflow-wrap: anywhere; }
+#code { min-height: calc(2lh + 22px); font-family: "Cascadia Mono", Consolas, ui-monospace, monospace; font-size: .9333em; letter-spacing: .03em; }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 
 details { margin: 10px 0 0; }
@@ -125,12 +129,14 @@ details[open] summary { color: var(--ink); }
 .error:empty { display: none; }
 
 .confirm-lines { margin: 0 0 4px; }
-.confirm-line { margin: 0 0 8px; }
+.confirm-line { margin: 0 0 8px; overflow-wrap: anywhere; }
 .code-start { font-family: "Cascadia Mono", Consolas, ui-monospace, monospace; font-size: 1.15em; letter-spacing: .08em; }
 
-.row { display: flex; gap: 8px; align-items: stretch; }
-.row .btn { margin-top: 12px; }
-.row.tight { gap: 6px; flex: 0 1 auto; flex-wrap: wrap; min-width: 0; }
+/* Buttons side by side, each as wide; when their words no longer fit side by side (225% text), one under the other. */
+.row { display: flex; flex-wrap: wrap; gap: 0 8px; align-items: stretch; }
+.row > .btn { flex: 1 1 0; width: auto; margin-top: 12px; }
+.row.tight { gap: 6px; flex: 0 1 auto; min-width: 0; }
+.row.tight > .btn { flex: 0 1 auto; }
 
 .recent-h { margin: 18px 0 4px; font-size: .8667em; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
 .history { list-style: none; margin: 0; padding: 0; }

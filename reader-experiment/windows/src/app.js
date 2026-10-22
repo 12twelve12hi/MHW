@@ -618,6 +618,14 @@ async function init() {
   window.addEventListener('error', (e) => { note(`error: ${e.message}`); writeStatusSoon(); });
   window.addEventListener('unhandledrejection', (e) => { note(`unhandled: ${e.reason?.message ?? e.reason}`); writeStatusSoon(); });
   $('pair-form').addEventListener('submit', onPairSubmit);
+  // The relay is one line that wraps (F27.4): Enter pairs, as in a one-line field, and a pasted line break goes.
+  $('relay').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); $('pair-form').requestSubmit(); }
+  });
+  $('relay').addEventListener('input', () => {
+    const r = $('relay');
+    if (/[\r\n]/.test(r.value)) r.value = r.value.replace(/\s*[\r\n]+\s*/g, '');
+  });
   $('confirm-yes').addEventListener('click', () => onConfirm(true));
   $('confirm-no').addEventListener('click', () => onConfirm(false));
   $('choose').addEventListener('click', () => $('file').click());

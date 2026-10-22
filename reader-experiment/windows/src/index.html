@@ -32,7 +32,9 @@
         <details id="advanced">
           <summary>Advanced</summary>
           <label for="relay">Relay URL</label>
-          <input id="relay" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://ntfy.sh">
+          <!-- One line that wraps rather than scrolls (F27.4); Enter pairs, as in a one-line field. -->
+          <textarea id="relay" rows="1" inputmode="url" aria-multiline="false" autocomplete="off" autocapitalize="off"
+            spellcheck="false" placeholder="https://ntfy.sh"></textarea>
           <p class="hint small">Only if your Daylight uses its own ntfy server. A pairing link already includes it.</p>
         </details>
         <p id="pair-error" class="error" role="alert"></p>

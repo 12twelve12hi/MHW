@@ -4,7 +4,10 @@
 //   F27.1  axe-core (@axe-core/playwright, pinned in package.json) reports no violations on every view, light and dark,
 //          Comfort off and on;
 //   F27.4  with Comfort on, at the narrowest window, no text is cut short or clipped (scrollWidth <= clientWidth and
-//          scrollHeight <= clientHeight + 1 for every element with text), and status text still wraps at 200% text;
+//          scrollHeight <= clientHeight + 1 for every element with text, and for every text field's value or
+//          placeholder), in every view: at 100% text, and at 200% and 225% (Windows' largest text size) with a typed
+//          code, relay and pairing link, both pairing questions and the hotkey recorder; the page never scrolls
+//          sideways. Without Comfort, status text still wraps at 200% text;
 //   and    every control has a name; Comfort is a switch in Settings outside Lab (off by default, before pairing too,
 //          kept across pairing changes); a row's new state ("Delivered ✓", "Not delivered") is announced through a
 //          polite live region; states are words; typed-code pairing is always one step away.
@@ -168,21 +171,134 @@ test('paired, every history state: no axe violations, light and dark, Comfort of
   }
 });
 
-test('status text wraps at 200% text; with Comfort at 200% the window still never scrolls sideways', { timeout: 120000 }, async () => {
-  for (const comfort of [false, true]) {
-    const page = await ui.open({ kv: await paired({ outbox: historyRows(), settings: { comfort } }) });
-    await page.evaluate(() => { document.querySelector('#status').textContent = 'Not delivered. The relay set on your Daylight keeps turning this down. Check that setting on your Daylight, then try again.'; });
-    await scaleText(page, 2);
-    await assertNotClipped(page, `send: status text at 200%${comfort ? ', Comfort' : ''}`, { only: STATUS_TEXT });
-    if (comfort) await assertNotClipped(page, 'send at 200%, Comfort');
-    await shot(page, `send-200${comfort ? '-comfort' : ''}`);
-    await openSettings(page);
-    await assertNotClipped(page, `settings: status text at 200%${comfort ? ', Comfort' : ''}`, { only: STATUS_TEXT });
-    if (comfort) await assertNotClipped(page, 'settings at 200%, Comfort');
-    await shot(page, `settings-200${comfort ? '-comfort' : ''}`);
-    await page.context().close();
-  }
+test('without Comfort, status text still wraps at 200% text', { timeout: 60000 }, async () => {
+  const page = await ui.open({ kv: await paired({ outbox: historyRows() }) });
+  await page.evaluate(() => { document.querySelector('#status').textContent = 'Not delivered. The relay set on your Daylight keeps turning this down. Check that setting on your Daylight, then try again.'; });
+  await scaleText(page, 2);
+  await assertNotClipped(page, 'send: status text at 200%', { only: STATUS_TEXT });
+  await shot(page, 'send-200');
+  await openSettings(page);
+  await assertNotClipped(page, 'settings: status text at 200%', { only: STATUS_TEXT });
+  await shot(page, 'settings-200');
+  await page.context().close();
 });
+
+test('the F27.4 check sees a text field that cuts off its code or placeholder, and a row that scrolls sideways', { timeout: 60000 }, async () => {
+  const page = await ui.open({ kv: kvOf({ settings: { comfort: true } }) });
+  await page.click('#advanced summary');
+  await page.getByLabel('Pairing code or link').fill(await ds.formatCode(OTHER_SECRET));
+  // A field that doesn't grow (as with rows= alone) is caught for its value, then for its placeholder. (Styles are
+  // set through the CSSOM: the window's CSP refuses a style tag.)
+  const force = (sel, props) => page.evaluate(({ sel, props }) => {
+    for (const e of document.querySelectorAll(sel)) for (const [k, v] of Object.entries(props)) e.style.setProperty(k, v, 'important');
+  }, { sel, props });
+  await scaleText(page, 2);
+  await force('#code', { 'field-sizing': 'fixed', 'min-height': '0', height: '2.5em' });
+  assert.match((await clipped(page)).join('\n'), /^textarea#code value "A46H-DJW3-/m);
+  await page.getByLabel('Pairing code or link').fill('');
+  assert.match((await clipped(page)).join('\n'), /^textarea#code placeholder "ABCD-EFGH-/m);
+  // An input's placeholder too, measured in its own font, though its scroll size ignores it.
+  await page.evaluate(() => {
+    const i = document.createElement('input');
+    i.id = 'probe'; i.type = 'url'; i.setAttribute('aria-label', 'probe');
+    i.placeholder = 'https://a-placeholder-much-too-long-for-a-narrow-field.example.org';
+    document.querySelector('#advanced').append(i);
+  });
+  assert.match((await clipped(page)).join('\n'), /^input#probe placeholder "https:\/\/a-placeholder-much-too-long.*needs \d+ px, has \d+ px$/m);
+  // Two buttons that can't wrap.
+  await page.evaluate(() => { document.querySelector('#probe').remove(); });
+  await force('.row', { 'flex-wrap': 'nowrap' });
+  await force('.row > .btn', { flex: 'none', width: '60vw' });
+  await page.evaluate(() => { document.querySelector('#view-pair').hidden = true; document.querySelector('#view-confirm').hidden = false; });
+  assert.match((await clipped(page)).join('\n'), /the page scrolls sideways: .*button#confirm-no/);
+  await page.context().close();
+});
+
+/** Windows' text sizes up to its largest (Settings › Accessibility › Text size goes to 225%), as the page's root text. */
+const BIG_TEXT = [2, 2.25];
+const SELF_HOSTED = 'https://ntfy.example.org/a-self-hosted-relay';
+const LONG_NAME = 'The Daylight on the kitchen table upstairs';
+
+for (const scale of BIG_TEXT) {
+  const pct = `${Math.round(scale * 100)}%`;
+
+  test(`with Comfort at ${pct} text, nothing is clipped at the narrowest window before pairing: the code and relay as typed, a pasted link, the error, Settings, a link's question`, { timeout: 120000 }, async () => {
+    const page = await ui.open({ kv: kvOf({ settings: { comfort: true } }) });
+    await scaleText(page, scale);
+    const check = (what) => assertNotClipped(page, `${what}, Comfort, ${pct} text`);
+    await check('pairing, its placeholder');
+    await page.click('#advanced summary');
+    await check('pairing, Advanced open');
+    const code = await ds.formatCode(OTHER_SECRET);
+    await page.getByLabel('Pairing code or link').fill(code);
+    await page.getByLabel('Relay URL').fill(SELF_HOSTED);
+    await check('pairing, a typed code and relay');
+    // The whole code shows, as the user checks it against the Daylight's screen.
+    assert.ok(await page.$eval('#code', (t) => t.scrollHeight <= t.clientHeight + 1 && t.getBoundingClientRect().height > 2 * parseFloat(getComputedStyle(t).lineHeight)));
+    await shot(page, `pair-code-${pct.replace('%', '')}-comfort`);
+    // Enter in the relay pairs, as in a one-line field, and a pasted line break goes.
+    await page.getByLabel('Relay URL').fill(`${SELF_HOSTED}\n`);
+    assert.equal(await page.inputValue('#relay'), SELF_HOSTED);
+    await page.getByLabel('Pairing code or link').fill(await ds.pairingLink({ secret: OTHER_SECRET, relay: SELF_HOSTED, name: LONG_NAME }));
+    await check('pairing, a pasted pairing link');
+    await page.getByLabel('Pairing code or link').fill('');
+    await page.getByLabel('Relay URL').press('Enter');
+    await page.waitForFunction(() => document.querySelector('#pair-error').textContent !== '');
+    await check('pairing, its error');
+    await openSettings(page);
+    await check('Settings, not paired');
+    await page.getByRole('button', { name: '‹ Back' }).click();
+    await page.waitForSelector('#view-pair:not([hidden])');
+    // A pairing link opened from a browser: the question, in the protocol's words, with Pair and Cancel.
+    const link = await ds.pairingLink({ secret: OTHER_SECRET, relay: SELF_HOSTED, name: LONG_NAME });
+    await page.evaluate((l) => window.__fake.queue({ type: 'pair', link: l }), link);
+    await page.waitForSelector('#view-confirm:not([hidden])');
+    assert.equal(await page.textContent('#confirm-yes'), 'Pair');
+    await check('pair with a Daylight? (a link)');
+    await shot(page, `confirm-link-${pct.replace('%', '')}-comfort`);
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await page.waitForSelector('#view-pair:not([hidden])');
+    assert.equal(await stored(page, 'pairing'), undefined, 'Cancel pairs nothing');
+    assert.deepEqual(page.errors, []);
+    await page.context().close();
+  });
+
+  test(`with Comfort at ${pct} text, nothing is clipped at the narrowest window while paired: sending, Settings, the hotkey, Change pairing… and its Switch question`, { timeout: 120000 }, async () => {
+    const page = await ui.open({ kv: await paired({ outbox: historyRows(), settings: { comfort: true } }) });
+    await scaleText(page, scale);
+    const check = (what) => assertNotClipped(page, `${what}, Comfort, ${pct} text`);
+    await page.evaluate(() => {
+      document.querySelector('#status').textContent = 'Not delivered. The relay set on your Daylight keeps turning this down. Check that setting on your Daylight, then try again.';
+      document.querySelector('#drop').classList.add('over');
+    });
+    await check('send, a row in every state, a long status');
+    await shot(page, `send-${pct.replace('%', '')}-comfort`);
+    await page.evaluate(() => document.querySelector('#drop').classList.remove('over'));
+    await openSettings(page);
+    await check('Settings');
+    await shot(page, `settings-${pct.replace('%', '')}-comfort`);
+    await page.getByRole('button', { name: 'Change…' }).click();
+    await page.waitForFunction(() => document.querySelector('#hotkey-now').textContent === 'Press the keys…');
+    await check('Settings, recording the hotkey');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => document.querySelector('#hotkey-now').textContent !== 'Press the keys…');
+    await page.getByRole('button', { name: 'Change pairing…' }).click();
+    await page.waitForSelector('#view-pair:not([hidden])');
+    await check('Change pairing…');
+    await page.getByLabel('Pairing code or link').fill(await ds.formatCode(OTHER_SECRET));
+    await check('Change pairing…, a typed code');
+    await page.click('#pair-btn');
+    await page.waitForSelector('#view-confirm:not([hidden])');
+    assert.equal(await page.textContent('#confirm-yes'), 'Switch');
+    await check('replace the pairing? (Switch)');
+    await shot(page, `confirm-${pct.replace('%', '')}-comfort`);
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await page.waitForSelector('#view-send:not([hidden])');
+    assert.equal((await stored(page, 'pairing')).code, await ds.formatCode(FIXED_SECRET), 'Cancel keeps the pairing');
+    assert.deepEqual(page.errors, []);
+    await page.context().close();
+  });
+}
 
 test('a row that reaches Delivered ✓ or Not delivered is said through a polite live region', { timeout: 120000 }, async () => {
   const now = Date.now();
