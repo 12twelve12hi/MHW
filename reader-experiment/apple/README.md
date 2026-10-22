@@ -186,8 +186,12 @@ How it is checked, in the `mac` job of `rx-apple.yml`:
   `LabAccessibilityAuditTests` (the audit of Settings with Lab on, What's in Lab with and without a note and the
   Daylight server section, Comfort off and on, F27.2; the Share menu card, not one of F27.2's screens, is measured by
   the truncation audit). The job starts the two relays these need (`$DLS_LAB_RELAY`, `$DLS_SILENT_RELAY`). The Mac
-  audit allows one more system element: the group row AppKit draws around a list section's header (What's in Lab's
-  *With your Daylight server (optional)*), which holds only the header's words;
+  audit allows one more system element, the group row AppKit draws around a list section's header (What's in Lab's
+  *With your Daylight server (optional)*), which holds only the header's words, and text a Lab page's form has
+  scrolled partly or wholly out of view. On the Lab pages alone it also allows a contrast report on a text whose own
+  pixels measure at least 7:1 (WCAG AAA; `MeasuredContrast`, both numbers printed): the audit reported the first
+  setup step, black on white (about 17:1), in three runs while every other text of that size and colour passed. Grey
+  text measures far below 7:1 and still fails;
 - `LabOffParityTests` (F00.2): with Lab off, Settings and the Share menu card equal their P0 baselines, the Lab switch
   row aside;
 - the truncation audit (F27.4) measures Settings with Lab on, What's in Lab and the Daylight server section too, and

@@ -492,7 +492,28 @@ final class LabServerNoteTests: XCTestCase {
 /// F27.2 for the Lab screens: Settings with Lab on, What's in Lab (with and without a note) and the Daylight server
 /// section (with no server on the relay: its longest version, with the steps), with Comfort off and on. (The Share menu
 /// card is not one of F27.2's screens; its texts are measured by the truncation audit, F27.4.)
+///
+/// Allowed: what `AccessibilityAuditTests.allowed` allows (elements the system draws), and a contrast report on a text
+/// whose own pixels measure at least 7:1 (WCAG's AAA level; the audit asks for 4.5:1). On these pages the Mac's audit
+/// reported the first setup step as failing contrast in three runs, though it is black on white (its glyphs measure
+/// about (19, 19, 19) on (251, 251, 251), some 17:1), while every other text of the same size and colour passed. Both
+/// numbers are printed for every such report; grey text (the system's secondary grey is about 3.5:1) is not allowed.
 final class LabAccessibilityAuditTests: XCTestCase {
+    /// The contrast WCAG asks of text at AAA, which a reported text's own pixels must reach to be allowed.
+    static let measuredContrastFloor = 7.0
+
+    @available(macOS 14.0, *)
+    static func allowed(_ issue: XCUIAccessibilityAuditIssue) -> String? {
+        if let why = AccessibilityAuditTests.allowed(issue) { return why }
+        guard issue.auditType == .contrast, let element = issue.element, element.exists,
+              element.elementType == .staticText,
+              let m = MeasuredContrast.of(element) else { return nil }
+        let summary = String(format: "%.1f:1 (glyphs %@ on %@)", m.ratio, m.glyphs, m.background)
+        print("AUDIT macos contrast report on “\(UITestSupport.text(element.value).prefix(60))”: its pixels measure \(summary)")
+        guard m.ratio >= measuredContrastFloor else { return nil }
+        return "its own pixels measure \(summary), above WCAG's 7:1"
+    }
+
     @MainActor
     func testTheLabScreensPassTheAudit() throws {
         guard #available(macOS 14.0, *) else { throw XCTSkip("performAccessibilityAudit needs macOS 14 or later") }
@@ -504,24 +525,79 @@ final class LabAccessibilityAuditTests: XCTestCase {
             let app = LabUI.launch(lab: true, paired: true, relay: relay, comfort: comfort)
             let sheet = LabUI.openSettings(app, paired: true)
             UITestSupport.screenshot(app, "mac-lab-settings\(shot)", in: self)
-            try UITestSupport.audit(app, "settings, Lab on" + suffix, allowed: AccessibilityAuditTests.allowed)
+            try UITestSupport.audit(app, "settings, Lab on" + suffix, allowed: Self.allowed)
 
             LabUI.open(LabUI.whatsInLabID, in: sheet)
             try LabUI.waitForOverview(in: sheet)
             UITestSupport.screenshot(app, "mac-lab-whats-in-lab\(shot)", in: self)
-            try UITestSupport.audit(app, "what's in lab" + suffix, allowed: AccessibilityAuditTests.allowed)
+            try UITestSupport.audit(app, "what's in lab" + suffix, allowed: Self.allowed)
             LabUI.element(LabUI.featureID("F37"), in: sheet).click()
             XCTAssertTrue(LabUI.element(LabUI.noteID, in: sheet).waitForExistence(timeout: 10), "no note after a tap")
             Thread.sleep(forTimeInterval: 6) // past "Checking…", to the gate's answer
             UITestSupport.screenshot(app, "mac-lab-whats-in-lab-note\(shot)", in: self)
-            try UITestSupport.audit(app, "what's in lab, a note" + suffix, allowed: AccessibilityAuditTests.allowed)
+            try UITestSupport.audit(app, "what's in lab, a note" + suffix, allowed: Self.allowed)
 
             LabUI.goBack(in: sheet)
             LabUI.open(LabUI.serverRowID, in: sheet)
             XCTAssertTrue(LabUI.element(LabUI.serverCodeID, in: sheet).waitForExistence(timeout: 15), "the server section did not load")
+            Thread.sleep(forTimeInterval: 2) // the section's rows have settled in place
             UITestSupport.screenshot(app, "mac-lab-server\(shot)", in: self)
-            try UITestSupport.audit(app, "daylight server" + suffix, allowed: AccessibilityAuditTests.allowed)
+            try UITestSupport.audit(app, "daylight server" + suffix, allowed: Self.allowed)
             app.terminate()
         }
+    }
+}
+
+/// A text's contrast as its own pixels show it (`XCUIElement.screenshot()`): WCAG's ratio between its glyphs (the
+/// darkest 2% of its pixels) and its background (its median pixel), from sRGB relative luminance. For dark text on a
+/// light background; light text on a dark one is measured the other way round (the lightest 2%), and the larger ratio
+/// counts. nil for an element not wholly inside the window (the audit measures hidden text where it is laid out).
+enum MeasuredContrast {
+    struct Result {
+        let ratio: Double
+        let glyphs: String
+        let background: String
+    }
+
+    struct Pixel {
+        let lum: Double
+        let r: Int, g: Int, b: Int
+        var rgb: String { "(\(r), \(g), \(b))" }
+    }
+
+    static func of(_ element: XCUIElement) -> Result? {
+        let window = XCUIApplication().windows.firstMatch.frame
+        guard element.frame.width >= 4, element.frame.height >= 4,
+              window.insetBy(dx: -1, dy: -1).contains(element.frame),
+              let tiff = element.screenshot().image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        var pixels: [Pixel] = []
+        pixels.reserveCapacity(rep.pixelsWide * rep.pixelsHigh)
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide {
+                guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                let r = c.redComponent, g = c.greenComponent, b = c.blueComponent
+                pixels.append(Pixel(lum: luminance(r, g, b), r: Int(r * 255), g: Int(g * 255), b: Int(b * 255)))
+            }
+        }
+        guard pixels.count >= 50 else { return nil }
+        pixels.sort { $0.lum < $1.lum }
+        let edge = pixels.count / 50
+        let background = pixels[pixels.count / 2]
+        let dark = pixels[edge], light = pixels[pixels.count - 1 - edge]
+        let darkOnLight = (background.lum + 0.05) / (dark.lum + 0.05)
+        let lightOnDark = (light.lum + 0.05) / (background.lum + 0.05)
+        return darkOnLight >= lightOnDark
+            ? Result(ratio: darkOnLight, glyphs: dark.rgb, background: background.rgb)
+            : Result(ratio: lightOnDark, glyphs: light.rgb, background: background.rgb)
+    }
+
+    /// WCAG 2's relative luminance of an sRGB colour (components 0...1).
+    static func luminance(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> Double {
+        func channel(_ c: CGFloat) -> Double {
+            let v = Double(c)
+            return v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
     }
 }
