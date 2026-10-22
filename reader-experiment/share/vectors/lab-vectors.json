@@ -13,7 +13,11 @@
     "labHeaderExtras: checkItemHeader (ItemHeader.check) of headerJson must succeed and its extras must equal expect: x-cap when it is seen, clean, excerpt or test; x-orig when it passes the web URL rule (the trimmed value; receivers do not apply the sender's 1,024-character limit); both from part 0 only; every other x- field dropped.",
     "labRowText: describeLabRow(row, now, ctx) (LabRowText) must equal expect.label, sentence, action (null, \"retry-now\" or \"try-again\"), stepLine (null for v1.1 rows) and final; expect.a11y is the row's accessibility label (\"{label}. {sentence}\"). ctx.hasCap is the list of tokens for which hasCap is true; ctx.state is {s, t}, a bare token or null; ctx.online false means offline.",
     "labText: strings is LAB_TEXT flattened to dotted ids (arrays joined with \",\"); every app shows exactly these. messages: needsMessage(state, {platform, feature, short, heading, message}) -> expect (null = no text of its own: the server module's text is used). checkedIn: checkedInText(ms, now). inboxHeader: the What's in Lab header line. features: the name and sentence of each Lab feature, in list order (the four server features last). serverRow: the server's state for the whole server -> heading (serverHeadingShort: the line under What's in Lab's server heading; needs-server is \"Not set up\"; an unknown state is error) and subtitle (serverRowSubtitle: the \"Daylight server ›\" row, \"Optional · {short}\" with that heading form). serverFeature: serverFeatureShort(state, headingState) -> a server feature row's own short state, or null when its state equals the heading's (unknown states count as error). serverSection (2.6, the Daylight server section): moved: serverMovedText(moved) fills {host} with discover()'s new origin minus its scheme and any path, as text (the port stays); labInboxSeen: labInboxSeenText(lastSeen, now) with GET /v1/status's inbox.lastSeen (an ISO time read by rule D, or ms; anything else is the not-yet line); aiToday: aiTodayText(used, cap), where an amount is n × 100 in double precision rounded half up to cents (so 1.005 is \"1\" and 0.015 is \"0.02\"; never printf or toFixed), \".00\" left out, and anything but a finite number above 0 is \"0\".",
-    "v1Safety: each labFrames frame as a v1.0 or v1.1 ack reader sees it: it opens as an ack whose ids are [], so it acks nothing and no row changes. Kotlin's AckHeader.idsOf and Swift's AckHeader.ids(in:) must return [] for each."
+    "v1Safety: each labFrames frame as a v1.0 or v1.1 ack reader sees it: it opens as an ack whose ids are [], so it acks nothing and no row changes. Kotlin's AckHeader.idsOf and Swift's AckHeader.ids(in:) must return [] for each.",
+    "W1 (L1; LAB-PROTOCOL 2.9). normalise.json holds smart intake (F16). labText also has: kindLines (inboxKindLine: the line under an Inbox row, F03), cleanedFrom (cleanedFromText(orig): \"Cleaned from {host}\" or null), use (labUseOn(settings, feature): Lab on and the feature's Use switch not off; a missing key is on) and useFeatures (the features with a Use switch, their footers and the switch's accessibility label).",
+    "labExcerpt (F11): items: excerptItem(input) -> the item to send ({kind, mime, name, url?, title, content, extras}) or null; sanitize: sanitizeExcerptHtml(html, maxChars) -> {html, trimmed}; textHtml: excerptTextHtml(text, maxChars); fragments: textFragment(url, text) (null for a URL that fails the web URL rule); dates: excerptDate(date) (\"\" when the date is not a valid YYYY-MM-DD); fileNames: excerptFileName(text, {note}); classify: classifyShare(input) -> {kind, url, text} (6.5 Q1 = b: rules 1-3 only); limits: the input text is textRepeat repeated `times` times, then trimmed; excerptItem (text alone, and with html \"<p>\" + text + \"</p>\") and excerptMarkdown must give a content of `length` UTF-16 units with that SHA-256 (of its UTF-8) and that ending.",
+    "diagnostics (F26): redact: redactDiagnostics(text) -> expect; activity: activityEvent(input) -> event, activityLine(event) -> line; reports: diagnosticsReport(input) -> expect (input.now is the clock for the check-in's relative time).",
+    "testArticle (F26): testArticle({id, device}) -> the item to send ({id, kind, url, title, content, extras})."
   ],
   "constants": {
     "LAB_LEVEL": 1,
@@ -79,7 +83,145 @@
       "email": "F19",
       "feeds": "F36",
       "deliver": "F37"
-    }
+    },
+    "USE_FEATURES": [
+      "F03",
+      "F04",
+      "F08",
+      "F10",
+      "F16",
+      "F33"
+    ],
+    "EXCERPT_MAX_CHARS": 50000,
+    "EXCERPT_LINE_MAX": 100,
+    "EXCERPT_NAME_WORDS": 6,
+    "TEXT_FRAGMENT_WORDS": 8,
+    "ACTIVITY_MAX": 200,
+    "DIAGNOSTICS_EVENTS": 50,
+    "TEST_URL_PREFIX": "https://daylight.invalid/test/",
+    "EXCERPT_TAGS": [
+      "p",
+      "br",
+      "b",
+      "strong",
+      "i",
+      "em",
+      "u",
+      "s",
+      "sub",
+      "sup",
+      "a",
+      "ul",
+      "ol",
+      "li",
+      "blockquote",
+      "code",
+      "pre",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6"
+    ],
+    "EXCERPT_AS_P": [
+      "address",
+      "article",
+      "aside",
+      "caption",
+      "center",
+      "dd",
+      "details",
+      "div",
+      "dt",
+      "figcaption",
+      "figure",
+      "footer",
+      "header",
+      "main",
+      "section",
+      "summary",
+      "tr"
+    ],
+    "EXCERPT_DROP": [
+      "script",
+      "style",
+      "template",
+      "noscript",
+      "iframe",
+      "object",
+      "textarea",
+      "select",
+      "title",
+      "head",
+      "svg",
+      "math",
+      "canvas",
+      "video",
+      "audio",
+      "button"
+    ],
+    "TRACKING_PARAMS": [
+      "fbclid",
+      "gclid",
+      "gbraid",
+      "wbraid",
+      "dclid",
+      "msclkid",
+      "mc_cid",
+      "mc_eid",
+      "igshid",
+      "igsh",
+      "yclid",
+      "twclid",
+      "ttclid",
+      "_hsenc",
+      "_hsmi",
+      "mkt_tok",
+      "ref_src",
+      "ref_url",
+      "__s",
+      "sr_share"
+    ],
+    "TRACKING_BY_SITE": [
+      {
+        "domains": [
+          "youtube.com",
+          "youtu.be",
+          "open.spotify.com"
+        ],
+        "params": [
+          "si"
+        ]
+      },
+      {
+        "domains": [
+          "twitter.com",
+          "x.com"
+        ],
+        "params": [
+          "s",
+          "t"
+        ]
+      },
+      {
+        "domains": [
+          "nytimes.com"
+        ],
+        "params": [
+          "smid",
+          "smtyp"
+        ]
+      },
+      {
+        "subdomainsOf": "substack.com",
+        "params": [
+          "r",
+          "triedRedirect",
+          "showWelcome"
+        ]
+      }
+    ]
   },
   "labTopics": {
     "aads": {
@@ -5420,7 +5562,191 @@
       "rel.hours": "{h} h ago",
       "rel.days": "{d} days ago",
       "inboxLabOn": "Your Daylight: Lab on · checked in {rel}",
-      "inboxLabNeeds": "{short} · checked in {rel}"
+      "inboxLabNeeds": "{short} · checked in {rel}",
+      "use.label": "Use",
+      "use.a11y": "Use {feature}",
+      "use.footers.F03": "When it’s off, there’s no note when a share brings only the link.",
+      "use.footers.F04": "When it’s off, Share › Daylight stays open until the item is sent, as before.",
+      "use.footers.F08": "When it’s off, your Daylight isn’t offered in the share sheet’s top row.",
+      "use.footers.F10": "When it’s off, pages go as you see them, without Send as or the thin-page check.",
+      "use.footers.F16": "When it’s off, links go exactly as they were shared, tracking and all.",
+      "use.footers.F33": "When it’s off, the app doesn’t offer to send a link you copied.",
+      "badge.sending": "…",
+      "badge.delivered": "✓",
+      "badge.error": "!",
+      "badge.waiting": "⌛",
+      "bigFiles": "Send files over 9 MB ›",
+      "linkOnly.iphone": "Only the link came through. If this needs your login, open it in Safari and share from there.",
+      "linkOnly.android": "Only the link came through. For pages behind a login, send from your computer’s browser with the Send to Daylight extension.",
+      "linkOnly.openInSafari": "Open in Safari",
+      "kindLine.seen": "Page as you saw it",
+      "kindLine.clean": "Clean article",
+      "kindLine.excerpt": "Excerpt",
+      "kindLine.test": "Test article",
+      "kindLine.link": "Link (the Reader downloads it)",
+      "kindLine.document": "Document · {mb} MB",
+      "kindLine.from": " · from {from}",
+      "cleanedFrom": "Cleaned from {host}",
+      "senderSees": "Sender sees: {label}",
+      "shareInPlace.card": "Sending to {name}",
+      "shareInPlace.yourDaylight": "your Daylight",
+      "shareInPlace.options": "Options",
+      "shareInPlace.send": "Send",
+      "shareInPlace.sendLinkInstead": "Send the link instead",
+      "shareInPlace.sendAsExcerpt": "Send as excerpt",
+      "shareInPlace.sendLink": "Send link",
+      "shareInPlace.title": "Title",
+      "shareInPlace.linkOnlyCard": "This page can’t be read here, so its link will be sent.",
+      "shareInPlace.alwaysOptions": "Always show Options before sending",
+      "shareInPlace.tellFails": "Tell me when a send fails",
+      "shareInPlace.tellReader": "Tell me when it’s in my Reader",
+      "shareInPlace.failedTitle": "Couldn’t send ‘{title}’ to {name}",
+      "shareInPlace.failedText": "Open to try again.",
+      "shareInPlace.inReader": "In your Reader ✓: {title}",
+      "shareInPlace.channel": "Send results",
+      "shareInPlace.toolbarSend": "Send when I click the toolbar button",
+      "queue.heading": "Waiting to send ({n})",
+      "queue.cancel": "Cancel",
+      "sentTo": "Sent to {name}",
+      "automation.confirmTitle": "Send to {name}?",
+      "automation.send": "Send",
+      "automation.cancel": "Cancel",
+      "automation.quickSends": "Allow quick sends from other apps",
+      "automation.quickSendsFooter": "Lets Shortcuts, scripts and other apps send without asking. Any app or web page could then send to your Daylight.",
+      "automation.spokenSent": "Sent to {name}.",
+      "automation.phraseSendCopied": "Send copied link with {app}",
+      "automation.phraseCheck": "Check my Daylight with {app}",
+      "automation.emptyFile": "This file is empty, so nothing was sent.",
+      "automation.unreadableFile": "Couldn’t read this file, so nothing was sent.",
+      "automation.notWebAddress": "That isn’t a web address or a file.",
+      "cli.notPaired": "Not paired yet. Run daylight-send pair with the code Daylight Share shows on your Daylight, or set DAYLIGHT_PAIRING.",
+      "cli.paired": "Paired with {name}. Items go through {relay}.",
+      "cli.noItem": "Nothing with the id {id} in this outbox.",
+      "cli.noItems": "Nothing sent from here yet.",
+      "cli.ticked": "{delivered} delivered, {resent} sent again.",
+      "cli.timedOut": "Stopped waiting after {secs} s. Run daylight-send status {id} to check again.",
+      "sendAs.line": "Send as: {mode} ▾",
+      "sendAs.menu.page": "Page as you see it",
+      "sendAs.menu.clean": "Clean article",
+      "sendAs.menu.link": "Link only",
+      "sendAs.menu.selection": "Selection",
+      "sendAs.short.page": "Page",
+      "sendAs.short.clean": "Clean article",
+      "sendAs.short.link": "Link only",
+      "sendAs.short.selection": "Selection",
+      "sendAs.thin": "This page looks thin ({n} words). Send the full page instead?",
+      "sendAs.sendFull": "Send full page",
+      "sendAs.sendAnyway": "Send anyway",
+      "sendAs.review": "Review before sending",
+      "sendAs.reviewTitle": "Review",
+      "sendAs.reviewStats": "{n} words · about {mb} MB",
+      "excerpt.menu": "Send selection to Daylight",
+      "excerpt.waitsOnce": "Excerpts wait for a tap on your Daylight for now.",
+      "excerpt.fileName": "Excerpt - {words}.html",
+      "excerpt.fileNameBare": "Excerpt.html",
+      "excerpt.noteName": "Note - {words}.md",
+      "excerpt.noteNameBare": "Note.md",
+      "excerpt.title": "“{line}” · {page}",
+      "excerpt.titleBare": "“{line}”",
+      "excerpt.trimmed": "(Excerpt trimmed to 50,000 characters.)",
+      "excerpt.sharedFromOn": "— shared from {app} on {date}",
+      "excerpt.sharedOn": "— shared on {date}",
+      "excerpt.sharedFrom": "— shared from {app}",
+      "excerpt.date": "{d} {month} {y}",
+      "excerpt.months": "January,February,March,April,May,June,July,August,September,October,November,December",
+      "arrivals.setting": "Arrival notices",
+      "arrivals.off": "Off",
+      "arrivals.quiet": "Quiet",
+      "arrivals.alert": "Alert",
+      "arrivals.channelQuiet": "Arrivals",
+      "arrivals.channelAlert": "Arrivals (alert)",
+      "arrivals.quietHours": "Quiet hours",
+      "arrivals.addToReader": "Add to Reader",
+      "arrivals.keepForLater": "Keep for later",
+      "arrivals.keptForLater": "Kept for later",
+      "arrivals.saved": "Saved to the Reader: {title}",
+      "arrivals.savedText": "From {from}",
+      "arrivals.dismiss": "Dismiss",
+      "arrivals.savedGroup": "{n} saved from {from}",
+      "arrivals.yourDevices": "your devices",
+      "arrivals.excerptsGroup": "{n} excerpts from {from}",
+      "arrivals.healthOn": "Last checked {rel} · Instant delivery on",
+      "arrivals.healthOff": "Last checked {rel} · Instant delivery off",
+      "arrivals.stopped": "Instant delivery stopped. Turn it back on to get items within seconds.",
+      "arrivals.turnOn": "Turn on",
+      "arrivals.channelHealth": "Inbox health",
+      "addToPrintMenu": "Add to the Print menu",
+      "setup.title": "Setup check",
+      "setup.ok": "✓ {check}",
+      "setup.notOk": "! {check}",
+      "setup.showSteps": "Show steps",
+      "setup.testSend": "Send a test article",
+      "setup.testFooter": "It’s added to your Reader library; delete it there when you’re done.",
+      "setup.readerTest": "Test the Reader hand-off",
+      "setup.delivered": "Delivered",
+      "setup.inReader": "In your Reader",
+      "setup.activity": "Activity log",
+      "setup.copyDiagnostics": "Copy diagnostics",
+      "setup.copied": "Copied",
+      "setup.checks.paired": "Pairing",
+      "setup.checks.shareItem": "Daylight in the share sheet",
+      "setup.checks.safariExtension": "Safari extension",
+      "setup.checks.notifications": "Notifications",
+      "setup.checks.backgroundRefresh": "Background App Refresh",
+      "setup.checks.shareMenu": "Share menu extension",
+      "setup.checks.loginItem": "Open at login",
+      "setup.checks.printMenu": "Print menu",
+      "setup.checks.batteryOptimisation": "Battery optimisation",
+      "setup.checks.newItemsChannel": "“New items” notices",
+      "setup.checks.overlay": "Display over other apps",
+      "setup.checks.instantDelivery": "Instant delivery",
+      "setup.checks.reader": "A Reader that saves pages",
+      "setup.checks.readerReadLater": "The Reader’s read-later",
+      "setup.checks.toolbarButton": "Toolbar button",
+      "setup.checks.shortcut": "Keyboard shortcut",
+      "setup.checks.siteAccess": "Site access",
+      "setup.checks.installed": "Installed as an app",
+      "setup.checks.storage": "Storage kept by the browser",
+      "setup.checks.sendTo": "Send to shortcut",
+      "setup.checks.hotkey": "Hotkey",
+      "setup.steps.shareItem": "In the share sheet, scroll the row of apps to More, tap Edit, and add Daylight.",
+      "setup.steps.safariExtension": "Open Settings › Apps › Safari › Extensions and turn on Send to Daylight.",
+      "setup.steps.shareMenu": "Open System Settings › General › Login Items & Extensions › Sharing and turn on Daylight.",
+      "testArticle.title": "Test article from {device}",
+      "testArticle.heading": "A test article from Send to Daylight",
+      "testArticle.p1": "This short article was sent by Setup check in Send to Daylight. If you are reading it on your Daylight, the whole path works: your device sealed it, the relay carried it, Daylight Share on your Daylight opened it, and the Reader saved it to your library. Nothing in it needs the network, so it reads the same with Wi-Fi off.",
+      "testArticle.p2": "It is written to be long enough that the Reader keeps it as a page of its own. Very short pages make the Reader fetch the address again, and the address of this article leads nowhere on purpose: it ends in .invalid, a name that never resolves. So if you see this text, it came through Send to Daylight and not from the web.",
+      "testArticle.p3": "Back on the device you sent it from, Setup check follows the article along its way. It ticks Delivered when your Daylight confirms that the item arrived, and In your Reader when the Reader says that it saved it. If your Daylight asks before it opens new items, the check waits until you tap the notice there, and says so in the meantime.",
+      "testArticle.p4": "You can send a test article whenever something seems wrong, for example after you change your Wi-Fi, update an app or pair again. Each one has a new address, so the Reader never mistakes one for another, and each one shows up as a new item in your library. When the checks look right, you are ready to send pages, links and documents for real.",
+      "testArticle.p5": "A few things are worth knowing while you are here. Pages you send go as you saw them, logged-in parts included, but without scripts or anything you typed into forms. Links you send are cleaned of tracking first. And items you share while offline wait on your device and go as soon as it is back online.",
+      "testArticle.p6": "When you are done, delete this article in the Reader, as you would delete anything else you read. Deleting it changes nothing in Send to Daylight or in Daylight Share, and sending another test article later works just as this one did. Thank you for trying the Lab version of Send to Daylight.",
+      "diagnostics.heading": "Send to Daylight diagnostics",
+      "diagnostics.app": "App: {app} {version} ({platform})",
+      "diagnostics.lab": "Lab: {state}",
+      "diagnostics.on": "on",
+      "diagnostics.off": "off",
+      "diagnostics.caps": "Lab caps from your Daylight: {caps}",
+      "diagnostics.noCaps": "nothing heard",
+      "diagnostics.checkedIn": "Last check-in: {time}",
+      "diagnostics.never": "never",
+      "diagnostics.outbox": "Outbox: {counts}",
+      "diagnostics.relay": "Relay: {relay}",
+      "diagnostics.relayNtfy": "ntfy.sh",
+      "diagnostics.relayCustom": "custom relay",
+      "diagnostics.events": "Recent events, oldest first:",
+      "diagnostics.noEvents": "none",
+      "copiedLink.chip": "Send copied link",
+      "copiedLink.confirm": "Send {host} to {name}?",
+      "copiedLink.pasteAndSend": "Paste and send",
+      "copiedLink.confirmShort": "Send {host}?",
+      "copiedLink.noLink": "No link on the clipboard.",
+      "contextMenu.page": "Send page to Daylight",
+      "contextMenu.clean": "Send clean article to Daylight",
+      "contextMenu.link": "Send link to Daylight",
+      "contextMenu.selection": "Send selection to Daylight",
+      "contextMenu.image": "Send this image’s page to Daylight",
+      "contextMenu.pdf": "Send PDF link to Daylight",
+      "contextMenu.showInMenu": "Show in the right-click menu"
     },
     "messages": [
       {
@@ -6368,6 +6694,222 @@
         "name": "Feeds and daily digest",
         "sentence": "Follow feeds; new articles arrive one by one or in a morning digest."
       }
+    ],
+    "kindLines": [
+      {
+        "input": {
+          "kind": "page",
+          "extras": {}
+        },
+        "expect": "Page as you saw it"
+      },
+      {
+        "input": {
+          "kind": "page",
+          "extras": {
+            "x-cap": "seen"
+          },
+          "from": "iPhone"
+        },
+        "expect": "Page as you saw it · from iPhone"
+      },
+      {
+        "input": {
+          "kind": "page",
+          "extras": {
+            "x-cap": "clean"
+          }
+        },
+        "expect": "Clean article"
+      },
+      {
+        "input": {
+          "kind": "file",
+          "extras": {
+            "x-cap": "excerpt"
+          },
+          "size": 1200,
+          "from": "Anjan’s Mac"
+        },
+        "expect": "Excerpt · from Anjan’s Mac"
+      },
+      {
+        "input": {
+          "kind": "page",
+          "extras": {
+            "x-cap": "test"
+          }
+        },
+        "expect": "Test article"
+      },
+      {
+        "input": {
+          "kind": "url",
+          "extras": {},
+          "from": "Chrome"
+        },
+        "expect": "Link (the Reader downloads it) · from Chrome"
+      },
+      {
+        "input": {
+          "kind": "file",
+          "extras": {},
+          "size": 2345678
+        },
+        "expect": "Document · 2.4 MB"
+      },
+      {
+        "input": {
+          "kind": "page",
+          "extras": {
+            "x-cap": "bogus"
+          }
+        },
+        "expect": "Page as you saw it"
+      },
+      {
+        "input": {
+          "kind": "url",
+          "extras": {
+            "x-cap": "clean"
+          }
+        },
+        "expect": "Link (the Reader downloads it)"
+      },
+      {
+        "input": {
+          "kind": "file",
+          "size": 0
+        },
+        "expect": "Document · 0 MB"
+      }
+    ],
+    "cleanedFrom": [
+      {
+        "orig": "https://www.example.com/a?utm_source=x",
+        "expect": "Cleaned from www.example.com"
+      },
+      {
+        "orig": "https://news.example.org:8443/x",
+        "expect": "Cleaned from news.example.org:8443"
+      },
+      {
+        "orig": "https://user@Example.COM/x",
+        "expect": "Cleaned from example.com"
+      },
+      {
+        "orig": "not a url",
+        "expect": null
+      },
+      {
+        "orig": null,
+        "expect": null
+      }
+    ],
+    "use": [
+      {
+        "settings": {
+          "lab": true
+        },
+        "feature": "F04",
+        "expect": true
+      },
+      {
+        "settings": {
+          "lab": false
+        },
+        "feature": "F04",
+        "expect": false
+      },
+      {
+        "settings": {},
+        "feature": "F16",
+        "expect": true
+      },
+      {
+        "settings": {
+          "lab": true,
+          "labUse": {
+            "F16": false
+          }
+        },
+        "feature": "F16",
+        "expect": false
+      },
+      {
+        "settings": {
+          "lab": true,
+          "labUse": {
+            "F16": false
+          }
+        },
+        "feature": "F04",
+        "expect": true
+      },
+      {
+        "settings": {
+          "lab": true,
+          "labUse": {
+            "F01": false
+          }
+        },
+        "feature": "F01",
+        "expect": true
+      },
+      {
+        "settings": {
+          "lab": false
+        },
+        "feature": "F01",
+        "expect": false
+      },
+      {
+        "settings": {
+          "lab": true,
+          "labUse": {
+            "F33": true
+          }
+        },
+        "feature": "F33",
+        "expect": true
+      },
+      {
+        "settings": null,
+        "feature": "F03",
+        "expect": true
+      }
+    ],
+    "useFeatures": [
+      {
+        "id": "F03",
+        "footer": "When it’s off, there’s no note when a share brings only the link.",
+        "a11y": "Use Pages as you see them"
+      },
+      {
+        "id": "F04",
+        "footer": "When it’s off, Share › Daylight stays open until the item is sent, as before.",
+        "a11y": "Use Share in place"
+      },
+      {
+        "id": "F08",
+        "footer": "When it’s off, your Daylight isn’t offered in the share sheet’s top row.",
+        "a11y": "Use Your Daylight in the share sheet"
+      },
+      {
+        "id": "F10",
+        "footer": "When it’s off, pages go as you see them, without Send as or the thin-page check.",
+        "a11y": "Use Send as"
+      },
+      {
+        "id": "F16",
+        "footer": "When it’s off, links go exactly as they were shared, tracking and all.",
+        "a11y": "Use Clean links"
+      },
+      {
+        "id": "F33",
+        "footer": "When it’s off, the app doesn’t offer to send a link you copied.",
+        "a11y": "Use Send copied link"
+      }
     ]
   },
   "v1Safety": [
@@ -6408,6 +6950,1120 @@
       "frameBase64": "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",
       "kind": "ack",
       "ackIds": []
+    }
+  ],
+  "labExcerpt": {
+    "items": [
+      {
+        "name": "a plain-text selection with its page",
+        "input": {
+          "text": "Reading on paper is slower, and that is the point.\n\nWe remember more when we slow down.",
+          "url": "https://www.example.com/essays/slow-reading?ref=home",
+          "pageTitle": "Slow Reading",
+          "date": "2026-10-22"
+        },
+        "expect": {
+          "kind": "file",
+          "mime": "text/html",
+          "name": "Excerpt - Reading on paper is slower, and.html",
+          "url": "https://www.example.com/essays/slow-reading?ref=home#:~:text=Reading%20on%20paper%20is%20slower%2C%20and%20that%20is",
+          "title": "“Reading on paper is slower, and that is the point.” · Slow Reading",
+          "content": "<!doctype html><html><head><meta charset=\"utf-8\"><title>“Reading on paper is slower, and that is the point.” · Slow Reading</title></head><body><article>\n<p><a href=\"https://www.example.com/essays/slow-reading?ref=home\">Slow Reading</a> · example.com · 22 October 2026</p><blockquote><p>Reading on paper is slower, and that is the point.</p><p>We remember more when we slow down.</p></blockquote></article></body></html>",
+          "extras": {
+            "x-cap": "excerpt"
+          }
+        }
+      },
+      {
+        "name": "selection HTML is sanitised",
+        "input": {
+          "text": "First line of a quote that is selected. Second paragraph here.",
+          "html": "<div class=\"x\">First line of a <b onclick=\"x()\">quote</b> that is <span style=\"c\">selected</span>.</div><script>alert(1)</script><p>Second <a href=\"javascript:x\">paragraph</a> <a href=\"https://e.com/?a=1&amp;b=2\" target=\"_blank\">here</a>.</p></blockquote></article>",
+          "url": "https://www.example.com/story?x=1",
+          "pageTitle": "The Story",
+          "date": "2026-10-22"
+        },
+        "expect": {
+          "kind": "file",
+          "mime": "text/html",
+          "name": "Excerpt - First line of a quote that.html",
+          "url": "https://www.example.com/story?x=1#:~:text=First%20line%20of%20a%20quote%20that%20is%20selected.",
+          "title": "“First line of a quote that is selected. Second paragraph here.” · The Story",
+          "content": "<!doctype html><html><head><meta charset=\"utf-8\"><title>“First line of a quote that is selected. Second paragraph here.” · The Story</title></head><body><article>\n<p><a href=\"https://www.example.com/story?x=1\">The Story</a> · example.com · 22 October 2026</p><blockquote><p>First line of a <b>quote</b> that is selected.</p><p>Second <a>paragraph</a> <a href=\"https://e.com/?a=1&amp;b=2\">here</a>.</p></blockquote></article></body></html>",
+          "extras": {
+            "x-cap": "excerpt"
+          }
+        }
+      },
+      {
+        "name": "a site name given",
+        "input": {
+          "text": "A line.",
+          "url": "https://example.org/p",
+          "pageTitle": "Page",
+          "site": "Example Weekly",
+          "date": "2026-10-22"
+        },
+        "expect": {
+          "kind": "file",
+          "mime": "text/html",
+          "name": "Excerpt - A line..html",
+          "url": "https://example.org/p#:~:text=A%20line.",
+          "title": "“A line.” · Page",
+          "content": "<!doctype html><html><head><meta charset=\"utf-8\"><title>“A line.” · Page</title></head><body><article>\n<p><a href=\"https://example.org/p\">Page</a> · Example Weekly · 22 October 2026</p><blockquote><p>A line.</p></blockquote></article></body></html>",
+          "extras": {
+            "x-cap": "excerpt"
+          }
+        }
+      },
+      {
+        "name": "no page title: the site is the link",
+        "input": {
+          "text": "A line.",
+          "url": "https://www.example.org/p",
+          "date": "2026-10-22"
+        },
+        "expect": {
+          "kind": "file",
+          "mime": "text/html",
+          "name": "Excerpt - A line..html",
+          "url": "https://www.example.org/p#:~:text=A%20line.",
+          "title": "“A line.”",
+          "content": "<!doctype html><html><head><meta charset=\"utf-8\"><title>“A line.”</title></head><body><article>\n<p><a href=\"https://www.example.org/p\">example.org</a> · 22 October 2026</p><blockquote><p>A line.</p></blockquote></article></body></html>",
+          "extras": {
+            "x-cap": "excerpt"
+          }
+        }
+      },
+      {
+        "name": "no date",
+        "input": {
+          "text": "A line.",
+          "url": "https://example.org/p",
+          "pageTitle": "Page"
+        },
+        "expect": {
+          "kind": "file",
+          "mime": "text/html",
+          "name": "Excerpt - A line..html",
+          "url": "https://example.org/p#:~:text=A%20line.",
+          "title": "“A line.” · Page",
+          "content": "<!doctype html><html><head><meta charset=\"utf-8\"><title>“A line.” · Page</title></head><body><article>\n<p><a href=\"https://example.org/p\">Page</a> · example.org</p><blockquote><p>A line.</p></blockquote></article></body></html>",
+          "extras": {
+            "x-cap": "excerpt"
+          }
+        }
+      },
+      {
+        "name": "a URL that already has a text fragment keeps it",
+        "input": {
+          "text": "Lorem ipsum dolor sit amet",
+          "url": "https://example.com/article#:~:text=Lorem%20ipsum%20dolor%20sit",
+          "pageTitle": "Article",
+          "date": "2026-10-22"
+        },
+        "expect": {
+          "kind": "file",
+          "mime": "text/html",
+          "name": "Excerpt - Lorem ipsum dolor sit amet.html",
+          "url": "https://example.com/article#:~:text=Lorem%20ipsum%20dolor%20sit",
+          "title": "“Lorem ipsum dolor sit amet” · Article",
+          "content": "<!doctype html><html><head><meta charset=\"utf-8\"><title>“Lorem ipsum dolor sit amet” · Article</title></head><body><article>\n<p><a href=\"https://example.com/article\">Article</a> · example.com · 22 October 2026</p><blockquote><p>Lorem ipsum dolor sit amet</p></blockquote></article></body></html>",
+          "extras": {
+            "x-cap": "excerpt"
+          }
+        }
+      },
+      {
+        "name": "a URL with a fragment: the text fragment replaces it, the link drops nothing",
+        "input": {
+          "text": "Section text - with a dash, a comma & an ampersand",
+          "url": "https://example.com/doc#part-2",
+          "pageTitle": "Doc",
+          "date": "2026-10-22"
+        },
+        "expect": {
+          "kind": "file",
+          "mime": "text/html",
+          "name": "Excerpt - Section text - with a dash,.html",
+          "url": "https://example.com/doc#:~:text=Section%20text%20%2D%20with%20a%20dash%2C%20a%20comma",
+          "title": "“Section text - with a dash, a comma & an ampersand” · Doc",
+          "content": "<!doctype html><html><head><meta charset=\"utf-8\"><title>“Section text - with a dash, a comma &amp; an ampersand” · Doc</title></head><body><article>\n<p><a href=\"https://example.com/doc#part-2\">Doc</a> · example.com · 22 October 2026</p><blockquote><p>Section text - with a dash, a comma &amp; an ampersand</p></blockquote></article></body></html>",
+          "extras": {
+            "x-cap": "excerpt"
+          }
+        }
+      },
+      {
+        "name": "a long first line is cut at 100 characters",
+        "input": {
+          "text": "This first line goes on for well over one hundred characters so that the title has to be cut short with an ellipsis at the end of it.\nSecond line.",
+          "url": "https://example.com/long",
+          "pageTitle": "Long",
+          "date": "2026-10-22"
+        },
+        "expect": {
+          "kind": "file",
+          "mime": "text/html",
+          "name": "Excerpt - This first line goes on for.html",
+          "url": "https://example.com/long#:~:text=This%20first%20line%20goes%20on%20for%20well%20over",
+          "title": "“This first line goes on for well over one hundred characters so that the title has to be cut short w…” · Long",
+          "content": "<!doctype html><html><head><meta charset=\"utf-8\"><title>“This first line goes on for well over one hundred characters so that the title has to be cut short w…” · Long</title></head><body><article>\n<p><a href=\"https://example.com/long\">Long</a> · example.com · 22 October 2026</p><blockquote><p>This first line goes on for well over one hundred characters so that the title has to be cut short with an ellipsis at the end of it.<br>Second line.</p></blockquote></article></body></html>",
+          "extras": {
+            "x-cap": "excerpt"
+          }
+        }
+      },
+      {
+        "name": "characters to escape in the title and page title",
+        "input": {
+          "text": "5 < 6 & \"quotes\" > here",
+          "url": "https://example.com/esc?a=1&b=2",
+          "pageTitle": "Tom & Jerry <3",
+          "date": "2026-10-22"
+        },
+        "expect": {
+          "kind": "file",
+          "mime": "text/html",
+          "name": "Excerpt - 5 6 & quotes .html",
+          "url": "https://example.com/esc?a=1&b=2#:~:text=5%20%3C%206%20%26%20%22quotes%22%20%3E%20here",
+          "title": "“5 < 6 & \"quotes\" > here” · Tom & Jerry <3",
+          "content": "<!doctype html><html><head><meta charset=\"utf-8\"><title>“5 &lt; 6 &amp; \"quotes\" &gt; here” · Tom &amp; Jerry &lt;3</title></head><body><article>\n<p><a href=\"https://example.com/esc?a=1&amp;b=2\">Tom &amp; Jerry &lt;3</a> · example.com · 22 October 2026</p><blockquote><p>5 &lt; 6 &amp; \"quotes\" &gt; here</p></blockquote></article></body></html>",
+          "extras": {
+            "x-cap": "excerpt"
+          }
+        }
+      },
+      {
+        "name": "a note: text without a URL, from Notes",
+        "input": {
+          "text": "Buy oat milk\r\nCall Sam about Friday",
+          "app": "Notes",
+          "date": "2026-10-22"
+        },
+        "expect": {
+          "kind": "file",
+          "mime": "text/markdown",
+          "name": "Note - Buy oat milk Call Sam about.md",
+          "title": "“Buy oat milk”",
+          "content": "Buy oat milk\nCall Sam about Friday\n\n— shared from Notes on 22 October 2026\n",
+          "extras": {
+            "x-cap": "excerpt"
+          }
+        }
+      },
+      {
+        "name": "a note without an app",
+        "input": {
+          "text": "Just a thought.",
+          "date": "2026-10-22"
+        },
+        "expect": {
+          "kind": "file",
+          "mime": "text/markdown",
+          "name": "Note - Just a thought..md",
+          "title": "“Just a thought.”",
+          "content": "Just a thought.\n\n— shared on 22 October 2026\n",
+          "extras": {
+            "x-cap": "excerpt"
+          }
+        }
+      },
+      {
+        "name": "a note without an app or a date",
+        "input": {
+          "text": "Just a thought."
+        },
+        "expect": {
+          "kind": "file",
+          "mime": "text/markdown",
+          "name": "Note - Just a thought..md",
+          "title": "“Just a thought.”",
+          "content": "Just a thought.\n",
+          "extras": {
+            "x-cap": "excerpt"
+          }
+        }
+      },
+      {
+        "name": "a note with emoji words",
+        "input": {
+          "text": "🙂 one two three four five six seven",
+          "date": "2026-10-22"
+        },
+        "expect": {
+          "kind": "file",
+          "mime": "text/markdown",
+          "name": "Note - 🙂 one two three four five.md",
+          "title": "“🙂 one two three four five six seven”",
+          "content": "🙂 one two three four five six seven\n\n— shared on 22 October 2026\n",
+          "extras": {
+            "x-cap": "excerpt"
+          }
+        }
+      },
+      {
+        "name": "empty text: no item",
+        "input": {
+          "text": "   ",
+          "url": "https://example.com/"
+        },
+        "expect": null
+      },
+      {
+        "name": "a file name with characters files cannot have",
+        "input": {
+          "text": "What: is * this? <a> \"b\" | c/d",
+          "url": "https://example.com/f",
+          "pageTitle": "F",
+          "date": "2026-10-22"
+        },
+        "expect": {
+          "kind": "file",
+          "mime": "text/html",
+          "name": "Excerpt - What is this a b .html",
+          "url": "https://example.com/f#:~:text=What%3A%20is%20*%20this%3F%20%3Ca%3E%20%22b%22%20%7C%20c%2Fd",
+          "title": "“What: is * this? <a> \"b\" | c/d” · F",
+          "content": "<!doctype html><html><head><meta charset=\"utf-8\"><title>“What: is * this? &lt;a&gt; \"b\" | c/d” · F</title></head><body><article>\n<p><a href=\"https://example.com/f\">F</a> · example.com · 22 October 2026</p><blockquote><p>What: is * this? &lt;a&gt; \"b\" | c/d</p></blockquote></article></body></html>",
+          "extras": {
+            "x-cap": "excerpt"
+          }
+        }
+      },
+      {
+        "name": "a local date from a Date-able number is used as given (vectors use strings)",
+        "input": {
+          "text": "Date string with a bad day",
+          "url": "https://example.com/d",
+          "pageTitle": "D",
+          "date": "2026-02-30"
+        },
+        "expect": {
+          "kind": "file",
+          "mime": "text/html",
+          "name": "Excerpt - Date string with a bad day.html",
+          "url": "https://example.com/d#:~:text=Date%20string%20with%20a%20bad%20day",
+          "title": "“Date string with a bad day” · D",
+          "content": "<!doctype html><html><head><meta charset=\"utf-8\"><title>“Date string with a bad day” · D</title></head><body><article>\n<p><a href=\"https://example.com/d\">D</a> · example.com</p><blockquote><p>Date string with a bad day</p></blockquote></article></body></html>",
+          "extras": {
+            "x-cap": "excerpt"
+          }
+        }
+      }
+    ],
+    "sanitize": [
+      {
+        "name": "allowed tags stay, attributes go",
+        "html": "<p class=\"a\" id=\"b\">One <strong style=\"x\">two</strong> <em>three</em> <u>u</u> <s>s</s> <sub>1</sub><sup>2</sup> <code>c</code></p>",
+        "maxChars": 50000,
+        "expect": {
+          "html": "<p>One <strong>two</strong> <em>three</em> <u>u</u> <s>s</s> <sub>1</sub><sup>2</sup> <code>c</code></p>",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "headings, lists, pre and blockquote",
+        "html": "<h1>H1</h1><h6>H6</h6><ul><li>a</li><li>b</li></ul><ol><li>c</li></ol><pre>  x\n  y</pre><blockquote>q</blockquote>",
+        "maxChars": 50000,
+        "expect": {
+          "html": "<h1>H1</h1><h6>H6</h6><ul><li>a</li><li>b</li></ul><ol><li>c</li></ol><pre>  x\n  y</pre><blockquote>q</blockquote>",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "block tags become paragraphs",
+        "html": "<section><div>One</div><div>Two</div></section><figure><figcaption>Cap</figcaption></figure><table><tr><td>A</td><td>B</td></tr></table>",
+        "maxChars": 50000,
+        "expect": {
+          "html": "<p><p>One</p><p>Two</p></p><p><p>Cap</p></p><p>AB</p>",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "upper-case tags",
+        "html": "<P>Up</P><B>bold</B><BR><DIV>d</DIV>",
+        "maxChars": 50000,
+        "expect": {
+          "html": "<p>Up</p><b>bold</b><br><p>d</p>",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "br forms",
+        "html": "a<br>b<br/>c<br />d</br>e",
+        "maxChars": 50000,
+        "expect": {
+          "html": "a<br>b<br>c<br>de",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "scripts, styles and friends go with their content",
+        "html": "a<script>alert(1)</script>b<style>p{}</style>c<noscript>n</noscript>d<template><p>t</p></template>e<iframe src=\"x\">i</iframe>f<svg><text>s</text></svg>g<button>Buy</button>h<select><option>o</option></select>i<textarea>t</textarea>j",
+        "maxChars": 50000,
+        "expect": {
+          "html": "abcdefghij",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "an unclosed script runs to the end",
+        "html": "keep<script>var a = \"</p>\";",
+        "maxChars": 50000,
+        "expect": {
+          "html": "keep",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "a custom element named like a dropped one stays as text",
+        "html": "<script-x>kept</script-x> and <scripts>also</scripts>",
+        "maxChars": 50000,
+        "expect": {
+          "html": "kept and also",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "comments, doctype and processing instructions go",
+        "html": "<!DOCTYPE html>a<!-- hidden <b>x</b> -->b<?xml version=\"1.0\"?>c<!-- unclosed",
+        "maxChars": 50000,
+        "expect": {
+          "html": "abc",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "links: http(s) only, references undone, then escaped",
+        "html": "<a href=\"https://e.com/?a=1&amp;b=&quot;2&quot;\">ok</a> <a href=\"JAVASCRIPT:alert(1)\">js</a> <a href='http://e.com/x'>single</a> <a href=https://e.com/u>bare</a> <a>none</a> <a href=\"mailto:x@y.z\">mail</a> <a href=\" https://e.com/trim \">trim</a> <a data-href=\"https://e.com/no\" title='x'>data</a>",
+        "maxChars": 50000,
+        "expect": {
+          "html": "<a href=\"https://e.com/?a=1&amp;b=&quot;2&quot;\">ok</a> <a>js</a> <a href=\"http://e.com/x\">single</a> <a href=\"https://e.com/u\">bare</a> <a>none</a> <a>mail</a> <a href=\"https://e.com/trim\">trim</a> <a>data</a>",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "stray closing tags are dropped",
+        "html": "</blockquote></article><p>inside</p></body></html><p>after</p>",
+        "maxChars": 50000,
+        "expect": {
+          "html": "<p>inside</p><p>after</p>",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "a closing tag closes what was opened after it",
+        "html": "<p><b><i>x</p>y</i>z",
+        "maxChars": 50000,
+        "expect": {
+          "html": "<p><b><i>x</i></b></p>yz",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "open tags are closed at the end",
+        "html": "<ul><li><a href=\"https://e.com/\">x",
+        "maxChars": 50000,
+        "expect": {
+          "html": "<ul><li><a href=\"https://e.com/\">x</a></li></ul>",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "text escaping keeps character references",
+        "html": "a & b &amp; c &copy; &#169; &#xA9; &bogus d < e > f &#12345678; &;",
+        "maxChars": 50000,
+        "expect": {
+          "html": "a &amp; b &amp; c &copy; &#169; &#xA9; &amp;bogus d &lt; e &gt; f &amp;#12345678; &amp;;",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "a < that starts no tag",
+        "html": "1 < 2 and <3 and < b>",
+        "maxChars": 50000,
+        "expect": {
+          "html": "1 &lt; 2 and &lt;3 and &lt; b&gt;",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "a quoted > inside an attribute",
+        "html": "<p title=\"a > b\">t</p><a href=\"https://e.com/?q=>\">gt</a>",
+        "maxChars": 50000,
+        "expect": {
+          "html": "<p>t</p><a href=\"https://e.com/?q=&gt;\">gt</a>",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "an unclosed quote: the < is text",
+        "html": "<p title=\"oops>text</p>",
+        "maxChars": 50000,
+        "expect": {
+          "html": "&lt;p title=\"oops&gt;text",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "images and inputs go",
+        "html": "a<img src=\"x.png\" alt=\"pic\">b<input value=\"v\">c<hr>d",
+        "maxChars": 50000,
+        "expect": {
+          "html": "abcd",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "nested lists",
+        "html": "<ul><li>a<ul><li>b</li></ul></li></ul>",
+        "maxChars": 50000,
+        "expect": {
+          "html": "<ul><li>a<ul><li>b</li></ul></li></ul>",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "emoji and combining marks are kept",
+        "html": "<p>Café 🙂 é</p>",
+        "maxChars": 50000,
+        "expect": {
+          "html": "<p>Café 🙂 é</p>",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "cut at 10 characters",
+        "html": "<p>Hello <b>wonderful</b> world</p>",
+        "maxChars": 10,
+        "expect": {
+          "html": "<p>Hello <b>wond</b></p>",
+          "trimmed": true
+        }
+      },
+      {
+        "name": "a reference counts as one character",
+        "html": "<p>&amp;&amp;&amp;&amp;&amp;xyz</p>",
+        "maxChars": 6,
+        "expect": {
+          "html": "<p>&amp;&amp;&amp;&amp;&amp;x</p>",
+          "trimmed": true
+        }
+      },
+      {
+        "name": "exactly at the limit: not cut",
+        "html": "<p>12345</p>",
+        "maxChars": 5,
+        "expect": {
+          "html": "<p>12345</p>",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "the limit falls between tags",
+        "html": "<p>12345</p><p>6</p>",
+        "maxChars": 5,
+        "expect": {
+          "html": "<p>12345</p><p></p>",
+          "trimmed": true
+        }
+      },
+      {
+        "name": "tags after the limit with no text: not cut",
+        "html": "<p>12345</p><br><p></p>",
+        "maxChars": 5,
+        "expect": {
+          "html": "<p>12345</p><br><p></p>",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "an emoji counts as one",
+        "html": "🙂🙂🙂🙂",
+        "maxChars": 2,
+        "expect": {
+          "html": "🙂🙂",
+          "trimmed": true
+        }
+      }
+    ],
+    "textHtml": [
+      {
+        "name": "paragraphs and line breaks",
+        "text": "One\nline two\n\n\nThree\r\nfour\r\rFive",
+        "maxChars": 50000,
+        "expect": {
+          "html": "<p>One<br>line two</p><p>Three<br>four</p><p>Five</p>",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "escaping",
+        "text": "a < b & c > d \"e\"",
+        "maxChars": 50000,
+        "expect": {
+          "html": "<p>a &lt; b &amp; c &gt; d \"e\"</p>",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "blank lines with spaces split paragraphs",
+        "text": "a\n  \t\nb",
+        "maxChars": 50000,
+        "expect": {
+          "html": "<p>a</p><p>b</p>",
+          "trimmed": false
+        }
+      },
+      {
+        "name": "cut at 7 characters",
+        "text": "abcdefghij",
+        "maxChars": 7,
+        "expect": {
+          "html": "<p>abcdefg</p>",
+          "trimmed": true
+        }
+      }
+    ],
+    "fragments": [
+      {
+        "name": "eight words",
+        "url": "https://example.com/a",
+        "text": "one two three four five six seven eight nine ten",
+        "expect": "https://example.com/a#:~:text=one%20two%20three%20four%20five%20six%20seven%20eight"
+      },
+      {
+        "name": "dash, comma, ampersand and non-ASCII",
+        "url": "https://example.com/a?x=1",
+        "text": "self-made, rock & roll — Café",
+        "expect": "https://example.com/a?x=1#:~:text=self%2Dmade%2C%20rock%20%26%20roll%20%E2%80%94%20Caf%C3%A9"
+      },
+      {
+        "name": "an existing fragment is replaced",
+        "url": "https://example.com/a#old",
+        "text": "new words",
+        "expect": "https://example.com/a#:~:text=new%20words"
+      },
+      {
+        "name": "no words: the URL as it is",
+        "url": "https://example.com/a#keep",
+        "text": "   ",
+        "expect": "https://example.com/a#keep"
+      },
+      {
+        "name": "an invalid URL: null",
+        "url": "example.com/a",
+        "text": "words",
+        "expect": null
+      },
+      {
+        "name": "too long: the URL as it is",
+        "url": "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "text": "some words here",
+        "expect": "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "dates": [
+      {
+        "date": "2026-10-22",
+        "expect": "22 October 2026"
+      },
+      {
+        "date": "2026-01-01",
+        "expect": "1 January 2026"
+      },
+      {
+        "date": "2024-02-29",
+        "expect": "29 February 2024"
+      },
+      {
+        "date": "2025-02-29",
+        "expect": ""
+      },
+      {
+        "date": "2026-13-01",
+        "expect": ""
+      },
+      {
+        "date": "2026-10-22T08:00:00Z",
+        "expect": ""
+      },
+      {
+        "date": "",
+        "expect": ""
+      },
+      {
+        "date": null,
+        "expect": ""
+      },
+      {
+        "date": "yesterday",
+        "expect": ""
+      }
+    ],
+    "fileNames": [
+      {
+        "name": "six words",
+        "text": "one two three four five six seven",
+        "note": false,
+        "expect": "Excerpt - one two three four five six.html"
+      },
+      {
+        "name": "fewer words",
+        "text": "Short one",
+        "note": false,
+        "expect": "Excerpt - Short one.html"
+      },
+      {
+        "name": "a note",
+        "text": "Buy oat milk and bread and eggs",
+        "note": true,
+        "expect": "Note - Buy oat milk and bread and.md"
+      },
+      {
+        "name": "no words",
+        "text": "  ",
+        "note": false,
+        "expect": "Excerpt.html"
+      },
+      {
+        "name": "no words, note",
+        "text": "",
+        "note": true,
+        "expect": "Note.md"
+      },
+      {
+        "name": "unsafe characters",
+        "text": "a/b c:d *e? \"f\" <g>",
+        "note": false,
+        "expect": "Excerpt - a b c d e f g .html"
+      },
+      {
+        "name": "a long word",
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "note": false,
+        "expect": "Excerpt - xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.html"
+      }
+    ],
+    "classify": [
+      {
+        "name": "rule 1: context menu selection",
+        "input": {
+          "text": "A passage the user selected.",
+          "url": "https://example.com/a",
+          "title": "Page",
+          "source": "selection"
+        },
+        "expect": {
+          "kind": "excerpt",
+          "url": "https://example.com/a",
+          "text": "A passage the user selected."
+        }
+      },
+      {
+        "name": "rule 1: Safari selectionText",
+        "input": {
+          "text": "  Selected in Safari.  ",
+          "url": "https://example.com/b",
+          "title": "B",
+          "source": "selection"
+        },
+        "expect": {
+          "kind": "excerpt",
+          "url": "https://example.com/b",
+          "text": "Selected in Safari."
+        }
+      },
+      {
+        "name": "rule 1: \"Send as excerpt\" on a headline + link",
+        "input": {
+          "text": "Opinion | The Real Reason Inflation Is Still Too High, According to Economists https://nyti.ms/3XyZabc",
+          "source": "selection"
+        },
+        "expect": {
+          "kind": "excerpt",
+          "url": "https://nyti.ms/3XyZabc",
+          "text": "Opinion | The Real Reason Inflation Is Still Too High, According to Economists"
+        }
+      },
+      {
+        "name": "rule 1: a selection without a URL: a note",
+        "input": {
+          "text": "No link here.",
+          "source": "selection"
+        },
+        "expect": {
+          "kind": "note",
+          "url": null,
+          "text": "No link here."
+        }
+      },
+      {
+        "name": "rule 2: a text fragment with the quote",
+        "input": {
+          "text": "\"Quoted words here.\"\nhttps://example.com/p#:~:text=Quoted%20words%20here"
+        },
+        "expect": {
+          "kind": "excerpt",
+          "url": "https://example.com/p#:~:text=Quoted%20words%20here",
+          "text": "Quoted words here."
+        }
+      },
+      {
+        "name": "rule 2: a text fragment alone",
+        "input": {
+          "url": "https://example.com/p#:~:text=start%20words,end%20words"
+        },
+        "expect": {
+          "kind": "excerpt",
+          "url": "https://example.com/p#:~:text=start%20words,end%20words",
+          "text": "start words … end words"
+        }
+      },
+      {
+        "name": "rule 3: no URL: a note",
+        "input": {
+          "text": "Plain text from Notes."
+        },
+        "expect": {
+          "kind": "note",
+          "url": null,
+          "text": "Plain text from Notes."
+        }
+      },
+      {
+        "name": "rule 4 is off: 40+ words + link is a link",
+        "input": {
+          "text": "This is the best thread on e-paper displays I have read all year. It covers refresh rates, ghosting, warm light and why a 60 Hz reflective screen feels so different from a Kindle when you scroll. Read it before you buy a tablet for reading. Seriously, it is worth the ten minutes. https://x.com/a/status/1"
+        },
+        "expect": {
+          "kind": "link",
+          "url": "https://x.com/a/status/1",
+          "text": "This is the best thread on e-paper displays I have read all year. It covers refresh rates, ghosting, warm light and why a 60 Hz reflective screen feels so different from a Kindle when you scroll. Read it before you buy a tablet for reading. Seriously, it is worth the ten minutes."
+        }
+      },
+      {
+        "name": "rule 4 is off: three sentences + link is a link",
+        "input": {
+          "text": "One. Two. Three. https://example.com/three"
+        },
+        "expect": {
+          "kind": "link",
+          "url": "https://example.com/three",
+          "text": "One. Two. Three."
+        }
+      },
+      {
+        "name": "NYT headline + link",
+        "input": {
+          "text": "Opinion | The Real Reason Inflation Is Still Too High, According to Economists https://nyti.ms/3XyZabc"
+        },
+        "expect": {
+          "kind": "link",
+          "url": "https://nyti.ms/3XyZabc",
+          "text": "Opinion | The Real Reason Inflation Is Still Too High, According to Economists"
+        }
+      },
+      {
+        "name": "Guardian headline + link",
+        "input": {
+          "text": "Climate crisis: world on track for 2.7C of heating, UN says | Climate crisis | The Guardian https://www.theguardian.com/environment/2026/oct/20/climate-un-report"
+        },
+        "expect": {
+          "kind": "link",
+          "url": "https://www.theguardian.com/environment/2026/oct/20/climate-un-report",
+          "text": "Climate crisis: world on track for 2.7C of heating, UN says | Climate crisis | The Guardian"
+        }
+      },
+      {
+        "name": "Apple News headline + link",
+        "input": {
+          "text": "Why the Fed Can’t Stop Worrying — The Atlantic https://apple.news/AJkLmNoPqRsTuVwXyZ"
+        },
+        "expect": {
+          "kind": "link",
+          "url": "https://apple.news/AJkLmNoPqRsTuVwXyZ",
+          "text": "Why the Fed Can’t Stop Worrying — The Atlantic"
+        }
+      },
+      {
+        "name": "Substack share",
+        "input": {
+          "text": "Read “The Quiet Year” by Jane Doe on Substack: https://open.substack.com/pub/janedoe/p/the-quiet-year"
+        },
+        "expect": {
+          "kind": "link",
+          "url": "https://open.substack.com/pub/janedoe/p/the-quiet-year",
+          "text": "Read “The Quiet Year” by Jane Doe on Substack:"
+        }
+      },
+      {
+        "name": "X post + link",
+        "input": {
+          "text": "Thread on e-paper. https://x.com/someone/status/1849123456789012345"
+        },
+        "expect": {
+          "kind": "link",
+          "url": "https://x.com/someone/status/1849123456789012345",
+          "text": "Thread on e-paper."
+        }
+      },
+      {
+        "name": "Chrome on Android Title\\nURL",
+        "input": {
+          "text": "Why Paper Still Wins for Reading\nhttps://www.example.com/news/paper-wins-123"
+        },
+        "expect": {
+          "kind": "link",
+          "url": "https://www.example.com/news/paper-wins-123",
+          "text": "Why Paper Still Wins for Reading"
+        }
+      },
+      {
+        "name": "a URL alone",
+        "input": {
+          "url": "https://example.com/only"
+        },
+        "expect": {
+          "kind": "link",
+          "url": "https://example.com/only",
+          "text": ""
+        }
+      },
+      {
+        "name": "nothing",
+        "input": {
+          "text": ""
+        },
+        "expect": {
+          "kind": "none",
+          "url": null,
+          "text": ""
+        }
+      }
+    ],
+    "limits": {
+      "input": {
+        "textRepeat": "word ",
+        "times": 10010,
+        "trim": true,
+        "url": "https://example.com/big",
+        "pageTitle": "Big",
+        "date": "2026-10-22",
+        "app": "Notes"
+      },
+      "textItem": {
+        "length": 50377,
+        "sha256": "a832ac0e29f3b813f78e287eae42f8ee4ec65bca89308e69e315d0250485451f",
+        "tail": "rd word word word word word word word word word word word word word word </p><p>(Excerpt trimmed to 50,000 characters.)</p></blockquote></article></body></html>"
+      },
+      "htmlItem": {
+        "length": 50377,
+        "sha256": "a832ac0e29f3b813f78e287eae42f8ee4ec65bca89308e69e315d0250485451f",
+        "tail": "rd word word word word word word word word word word word word word word </p><p>(Excerpt trimmed to 50,000 characters.)</p></blockquote></article></body></html>"
+      },
+      "note": {
+        "length": 50082,
+        "sha256": "497be85a82678f86d5e65f2319e92b43a1d60d8b726fd7bb69bd0d3e92e743c6",
+        "tail": "rd word word word word word word word word word word word word word word word \n\n(Excerpt trimmed to 50,000 characters.)\n\n— shared from Notes on 22 October 2026\n"
+      }
+    }
+  },
+  "diagnostics": {
+    "redact": [
+      {
+        "text": "send 0f1e2d3c url sent 201",
+        "expect": "send 0f1e2d3c url sent 201"
+      },
+      {
+        "text": "GET https://ntfy.sh/dls-0123456789abcdef0123456789abcdef/json?poll=1&since=all failed: 429",
+        "expect": "GET [url] failed: 429"
+      },
+      {
+        "text": "topic dls-0123456789ABCDEF0123456789abcdef, in a path ntfy.sh/dls-00112233445566778899aabbccddeeff/json",
+        "expect": "topic [topic], in a path ntfy.sh/[topic]/json"
+      },
+      {
+        "text": "pairing daylightshare://pair?c=ABCDEFGHIJKLMNOPQRSTUVWXYZ23&r=https%3A%2F%2Frelay.example.org",
+        "expect": "pairing [url]"
+      },
+      {
+        "text": "code ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23 and abcdefghijklmnopqrstuvwxyz23 and ABCDEFGHIJKLMNOPQRSTUVWXYZ23",
+        "expect": "code [code] and [code] and [code]"
+      },
+      {
+        "text": "not a code: ABCDEFGHIJKLMNOPQRSTUVWXYZ2 (27) or ABCDEFGHIJKLMNOPQRSTUVWXYZ234 (29) or 0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+        "expect": "not a code: ABCDEFGHIJKLMNOPQRSTUVWXYZ2 (27) or ABCDEFGHIJKLMNOPQRSTUVWXYZ234 (29) or 0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+      },
+      {
+        "text": "server SERVER-ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23 then daylightserver://setup?c=ABC&r=https://relay.example.org&k=tok",
+        "expect": "server [server code] then [server code]"
+      },
+      {
+        "text": "state=server-outdated needs-server error SERVER problem",
+        "expect": "state=server-outdated needs-server error SERVER problem"
+      },
+      {
+        "text": "www.example.com/path and http://localhost:8787/x and chrome-extension://abcdef/popup.html",
+        "expect": "[url] and [url] and [url]"
+      },
+      {
+        "text": "quotes \"https://example.com/a\" and <https://example.com/b>",
+        "expect": "quotes \"[url]\" and <[url]>"
+      },
+      {
+        "text": "",
+        "expect": ""
+      }
+    ],
+    "activity": [
+      {
+        "event": {
+          "time": 1792483200000,
+          "type": "send",
+          "id8": "0f1e2d3c",
+          "kind": "url",
+          "status": "sent",
+          "http": 200
+        },
+        "line": "2026-10-20T08:00:00.000Z send 0f1e2d3c url sent 200"
+      },
+      {
+        "event": {
+          "time": 1792483230000,
+          "type": "ack",
+          "id8": "0f1e2d3c",
+          "kind": "url",
+          "status": "delivered",
+          "http": 0
+        },
+        "line": "2026-10-20T08:00:30.000Z ack 0f1e2d3c url delivered -"
+      },
+      {
+        "event": {
+          "time": 1792483260000,
+          "type": "poll-error",
+          "id8": "",
+          "kind": "",
+          "status": "GET https://ntfy.sh/dls-0123456789abcdef0123456789abcdef/json failed",
+          "http": 429
+        },
+        "line": "2026-10-20T08:01:00.000Z poll-error - - GET https://ntfy.sh/dls-0123456789abcdef0123456789abcdef/json failed 429"
+      }
+    ],
+    "reports": [
+      {
+        "input": {
+          "app": "Send to Daylight",
+          "version": "1.5.0",
+          "platform": "iphone",
+          "lab": true,
+          "caps": [
+            "reader-link",
+            "st",
+            "tap"
+          ],
+          "checkedIn": 1792482960000,
+          "now": 1792483200000,
+          "relay": "https://ntfy.sh",
+          "rows": [
+            {
+              "status": "sent"
+            },
+            {
+              "status": "delivered"
+            },
+            {
+              "status": "delivered"
+            },
+            {
+              "status": "failed"
+            },
+            {
+              "status": "expired"
+            },
+            {
+              "status": "sending"
+            }
+          ],
+          "log": [
+            {
+              "time": 1792483200000,
+              "type": "send",
+              "id8": "0f1e2d3c",
+              "kind": "url",
+              "status": "sent",
+              "http": 200
+            },
+            {
+              "time": 1792483230000,
+              "type": "ack",
+              "id8": "0f1e2d3c",
+              "kind": "url",
+              "status": "delivered",
+              "http": 0
+            },
+            {
+              "time": 1792483260000,
+              "type": "poll-error",
+              "id8": "",
+              "kind": "",
+              "status": "GET https://ntfy.sh/dls-0123456789abcdef0123456789abcdef/json failed",
+              "http": 429
+            }
+          ]
+        },
+        "expect": "Send to Daylight diagnostics\nApp: Send to Daylight 1.5.0 (iphone)\nLab: on\nLab caps from your Daylight: reader-link, st, tap\nLast check-in: 2026-10-20T07:56:00.000Z (4 min ago)\nOutbox: sending 1 · sent 1 · delivered 2 · failed 1 · expired 1\nRelay: ntfy.sh\nRecent events, oldest first:\n2026-10-20T08:00:00.000Z send 0f1e2d3c url sent 200\n2026-10-20T08:00:30.000Z ack 0f1e2d3c url delivered -\n2026-10-20T08:01:00.000Z poll-error - - GET [url] failed 429\n"
+      },
+      {
+        "input": {
+          "app": "Send to Daylight",
+          "version": "1.5.0",
+          "platform": "iphone",
+          "lab": false,
+          "caps": [],
+          "checkedIn": null,
+          "now": 1792483200000,
+          "relay": "https://relay.example.org:8443",
+          "rows": [],
+          "log": []
+        },
+        "expect": "Send to Daylight diagnostics\nApp: Send to Daylight 1.5.0 (iphone)\nLab: off\nLab caps from your Daylight: nothing heard\nLast check-in: never\nOutbox: sending 0 · sent 0 · delivered 0 · failed 0 · expired 0\nRelay: custom relay\nRecent events, oldest first:\nnone\n"
+      }
+    ]
+  },
+  "testArticle": [
+    {
+      "input": {
+        "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "device": "Anjan’s iPhone"
+      },
+      "expect": {
+        "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "kind": "page",
+        "url": "https://daylight.invalid/test/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "title": "Test article from Anjan’s iPhone",
+        "content": "<!doctype html><html><head><meta charset=\"utf-8\"><title>Test article from Anjan’s iPhone</title><meta name=\"dl:capture\" content=\"test\"></head><body><article><h1>A test article from Send to Daylight</h1><p>This short article was sent by Setup check in Send to Daylight. If you are reading it on your Daylight, the whole path works: your device sealed it, the relay carried it, Daylight Share on your Daylight opened it, and the Reader saved it to your library. Nothing in it needs the network, so it reads the same with Wi-Fi off.</p><p>It is written to be long enough that the Reader keeps it as a page of its own. Very short pages make the Reader fetch the address again, and the address of this article leads nowhere on purpose: it ends in .invalid, a name that never resolves. So if you see this text, it came through Send to Daylight and not from the web.</p><p>Back on the device you sent it from, Setup check follows the article along its way. It ticks Delivered when your Daylight confirms that the item arrived, and In your Reader when the Reader says that it saved it. If your Daylight asks before it opens new items, the check waits until you tap the notice there, and says so in the meantime.</p><p>You can send a test article whenever something seems wrong, for example after you change your Wi-Fi, update an app or pair again. Each one has a new address, so the Reader never mistakes one for another, and each one shows up as a new item in your library. When the checks look right, you are ready to send pages, links and documents for real.</p><p>A few things are worth knowing while you are here. Pages you send go as you saw them, logged-in parts included, but without scripts or anything you typed into forms. Links you send are cleaned of tracking first. And items you share while offline wait on your device and go as soon as it is back online.</p><p>When you are done, delete this article in the Reader, as you would delete anything else you read. Deleting it changes nothing in Send to Daylight or in Daylight Share, and sending another test article later works just as this one did. Thank you for trying the Lab version of Send to Daylight.</p></article></body></html>",
+        "extras": {
+          "x-cap": "test"
+        }
+      }
+    },
+    {
+      "input": {
+        "id": "0123456789abcdef0123456789abcdef",
+        "device": ""
+      },
+      "expect": {
+        "id": "0123456789abcdef0123456789abcdef",
+        "kind": "page",
+        "url": "https://daylight.invalid/test/0123456789abcdef0123456789abcdef",
+        "title": "Test article from Send to Daylight",
+        "content": "<!doctype html><html><head><meta charset=\"utf-8\"><title>Test article from Send to Daylight</title><meta name=\"dl:capture\" content=\"test\"></head><body><article><h1>A test article from Send to Daylight</h1><p>This short article was sent by Setup check in Send to Daylight. If you are reading it on your Daylight, the whole path works: your device sealed it, the relay carried it, Daylight Share on your Daylight opened it, and the Reader saved it to your library. Nothing in it needs the network, so it reads the same with Wi-Fi off.</p><p>It is written to be long enough that the Reader keeps it as a page of its own. Very short pages make the Reader fetch the address again, and the address of this article leads nowhere on purpose: it ends in .invalid, a name that never resolves. So if you see this text, it came through Send to Daylight and not from the web.</p><p>Back on the device you sent it from, Setup check follows the article along its way. It ticks Delivered when your Daylight confirms that the item arrived, and In your Reader when the Reader says that it saved it. If your Daylight asks before it opens new items, the check waits until you tap the notice there, and says so in the meantime.</p><p>You can send a test article whenever something seems wrong, for example after you change your Wi-Fi, update an app or pair again. Each one has a new address, so the Reader never mistakes one for another, and each one shows up as a new item in your library. When the checks look right, you are ready to send pages, links and documents for real.</p><p>A few things are worth knowing while you are here. Pages you send go as you saw them, logged-in parts included, but without scripts or anything you typed into forms. Links you send are cleaned of tracking first. And items you share while offline wait on your device and go as soon as it is back online.</p><p>When you are done, delete this article in the Reader, as you would delete anything else you read. Deleting it changes nothing in Send to Daylight or in Daylight Share, and sending another test article later works just as this one did. Thank you for trying the Lab version of Send to Daylight.</p></article></body></html>",
+        "extras": {
+          "x-cap": "test"
+        }
+      }
     }
   ]
 }

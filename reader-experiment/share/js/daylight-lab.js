@@ -11,7 +11,8 @@
 
 import {
   ShareError, PROTOCOL_VERSION, PURPOSE_ACK, utf8, toHex, sha256, concat, cleanName, nowIso, encryptFrame,
-  isSmallFrame, describeRow,
+  isSmallFrame, describeRow, webUrl, cleanTitle, safeFileName, formatMB, MAX_URL, X_CAP_VALUES, X_ORIG_MAX,
+  newItemId, normalizeRelay, DEFAULT_RELAY,
 } from './daylight-share.js';
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -440,6 +441,235 @@ export const LAB_TEXT = {
   // 1.4: the header line of What's in Lab
   inboxLabOn: 'Your Daylight: Lab on · checked in {rel}',
   inboxLabNeeds: '{short} · checked in {rel}',
+
+  // ---- W1 (L1): the strings of LAB-PLAN 3.3, plus the per-feature Use switches (6.5 Q5 = yes) ----
+
+  // Use switches: in What's in Lab, on the rows of the features that change how sharing behaves (USE_FEATURES). On by
+  // default; the one Lab switch still turns all of Lab off. The footer says what turning it off does.
+  use: {
+    label: 'Use',
+    a11y: 'Use {feature}',
+    footers: {
+      F03: 'When it’s off, there’s no note when a share brings only the link.',
+      F04: 'When it’s off, Share › Daylight stays open until the item is sent, as before.',
+      F08: 'When it’s off, your Daylight isn’t offered in the share sheet’s top row.',
+      F10: 'When it’s off, pages go as you see them, without Send as or the thin-page check.',
+      F16: 'When it’s off, links go exactly as they were shared, tracking and all.',
+      F33: 'When it’s off, the app doesn’t offer to send a link you copied.',
+    },
+  },
+  // F01: the extension's toolbar badge (the state of the most recent row)
+  badge: { sending: '…', delivered: '✓', error: '!', waiting: '⌛' },
+  // F02 entry point, under v1.1's too-big sentence
+  bigFiles: 'Send files over 9 MB ›',
+  // F03: the link-only hint (once on the device, then in Setup check) and the Inbox's row lines (F03, F11)
+  linkOnly: {
+    iphone: 'Only the link came through. If this needs your login, open it in Safari and share from there.',
+    android: 'Only the link came through. For pages behind a login, send from your computer’s browser with the Send to Daylight extension.',
+    openInSafari: 'Open in Safari',
+  },
+  kindLine: {
+    seen: 'Page as you saw it',
+    clean: 'Clean article',
+    excerpt: 'Excerpt',
+    test: 'Test article',
+    link: 'Link (the Reader downloads it)',
+    document: 'Document · {mb} MB',
+    from: ' · from {from}',
+  },
+  cleanedFrom: 'Cleaned from {host}',
+  senderSees: 'Sender sees: {label}',
+  // F04: share in place
+  shareInPlace: {
+    card: 'Sending to {name}',
+    yourDaylight: 'your Daylight',
+    options: 'Options',
+    send: 'Send',
+    sendLinkInstead: 'Send the link instead',
+    sendAsExcerpt: 'Send as excerpt',
+    sendLink: 'Send link',
+    title: 'Title',
+    linkOnlyCard: 'This page can’t be read here, so its link will be sent.',
+    alwaysOptions: 'Always show Options before sending',
+    tellFails: 'Tell me when a send fails',
+    tellReader: 'Tell me when it’s in my Reader',
+    failedTitle: 'Couldn’t send ‘{title}’ to {name}',
+    failedText: 'Open to try again.',
+    inReader: 'In your Reader ✓: {title}',
+    channel: 'Send results',
+    toolbarSend: 'Send when I click the toolbar button',
+  },
+  // F07: the queue in History
+  queue: { heading: 'Waiting to send ({n})', cancel: 'Cancel' },
+  // F08: Windows toast
+  sentTo: 'Sent to {name}',
+  // F09: automation (URL scheme, App Intents, the Android intent, the command line)
+  automation: {
+    confirmTitle: 'Send to {name}?',
+    send: 'Send',
+    cancel: 'Cancel',
+    quickSends: 'Allow quick sends from other apps',
+    quickSendsFooter: 'Lets Shortcuts, scripts and other apps send without asking. Any app or web page could then send to your Daylight.',
+    spokenSent: 'Sent to {name}.',
+    phraseSendCopied: 'Send copied link with {app}',
+    phraseCheck: 'Check my Daylight with {app}',
+    emptyFile: 'This file is empty, so nothing was sent.',
+    unreadableFile: 'Couldn’t read this file, so nothing was sent.',
+    notWebAddress: 'That isn’t a web address or a file.',
+  },
+  // F09: the command line (daylight-send); its usage text lives in the tool
+  cli: {
+    notPaired: 'Not paired yet. Run daylight-send pair with the code Daylight Share shows on your Daylight, or set DAYLIGHT_PAIRING.',
+    paired: 'Paired with {name}. Items go through {relay}.',
+    noItem: 'Nothing with the id {id} in this outbox.',
+    noItems: 'Nothing sent from here yet.',
+    ticked: '{delivered} delivered, {resent} sent again.',
+    timedOut: 'Stopped waiting after {secs} s. Run daylight-send status {id} to check again.',
+  },
+  // F10: Send as
+  sendAs: {
+    line: 'Send as: {mode} ▾',
+    menu: { page: 'Page as you see it', clean: 'Clean article', link: 'Link only', selection: 'Selection' },
+    short: { page: 'Page', clean: 'Clean article', link: 'Link only', selection: 'Selection' },
+    thin: 'This page looks thin ({n} words). Send the full page instead?',
+    sendFull: 'Send full page',
+    sendAnyway: 'Send anyway',
+    review: 'Review before sending',
+    reviewTitle: 'Review',
+    reviewStats: '{n} words · about {mb} MB',
+  },
+  // F11: excerpts. The file names, titles and footers are part of what is sent (excerptItem, excerptMarkdown).
+  excerpt: {
+    menu: 'Send selection to Daylight',
+    waitsOnce: 'Excerpts wait for a tap on your Daylight for now.',
+    fileName: 'Excerpt - {words}.html',
+    fileNameBare: 'Excerpt.html',
+    noteName: 'Note - {words}.md',
+    noteNameBare: 'Note.md',
+    title: '“{line}” · {page}',
+    titleBare: '“{line}”',
+    trimmed: '(Excerpt trimmed to 50,000 characters.)',
+    sharedFromOn: '— shared from {app} on {date}',
+    sharedOn: '— shared on {date}',
+    sharedFrom: '— shared from {app}',
+    date: '{d} {month} {y}',
+    months: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'],
+  },
+  // F15: arrival notices and Inbox health (DC-1 Inbox)
+  arrivals: {
+    setting: 'Arrival notices',
+    off: 'Off',
+    quiet: 'Quiet',
+    alert: 'Alert',
+    channelQuiet: 'Arrivals',
+    channelAlert: 'Arrivals (alert)',
+    quietHours: 'Quiet hours',
+    addToReader: 'Add to Reader',
+    keepForLater: 'Keep for later',
+    keptForLater: 'Kept for later',
+    saved: 'Saved to the Reader: {title}',
+    savedText: 'From {from}',
+    dismiss: 'Dismiss',
+    savedGroup: '{n} saved from {from}',
+    yourDevices: 'your devices',
+    excerptsGroup: '{n} excerpts from {from}',
+    healthOn: 'Last checked {rel} · Instant delivery on',
+    healthOff: 'Last checked {rel} · Instant delivery off',
+    stopped: 'Instant delivery stopped. Turn it back on to get items within seconds.',
+    turnOn: 'Turn on',
+    channelHealth: 'Inbox health',
+  },
+  // F23 (Mac): Setup check's button
+  addToPrintMenu: 'Add to the Print menu',
+  // F26: Setup check, the test article, the activity log and diagnostics
+  setup: {
+    title: 'Setup check',
+    ok: '✓ {check}',
+    notOk: '! {check}',
+    showSteps: 'Show steps',
+    testSend: 'Send a test article',
+    testFooter: 'It’s added to your Reader library; delete it there when you’re done.',
+    readerTest: 'Test the Reader hand-off',
+    delivered: 'Delivered',
+    inReader: 'In your Reader',
+    activity: 'Activity log',
+    copyDiagnostics: 'Copy diagnostics',
+    copied: 'Copied',
+    checks: {
+      paired: 'Pairing',
+      shareItem: 'Daylight in the share sheet',
+      safariExtension: 'Safari extension',
+      notifications: 'Notifications',
+      backgroundRefresh: 'Background App Refresh',
+      shareMenu: 'Share menu extension',
+      loginItem: 'Open at login',
+      printMenu: 'Print menu',
+      batteryOptimisation: 'Battery optimisation',
+      newItemsChannel: '“New items” notices',
+      overlay: 'Display over other apps',
+      instantDelivery: 'Instant delivery',
+      reader: 'A Reader that saves pages',
+      readerReadLater: 'The Reader’s read-later',
+      toolbarButton: 'Toolbar button',
+      shortcut: 'Keyboard shortcut',
+      siteAccess: 'Site access',
+      installed: 'Installed as an app',
+      storage: 'Storage kept by the browser',
+      sendTo: 'Send to shortcut',
+      hotkey: 'Hotkey',
+    },
+    steps: {
+      shareItem: 'In the share sheet, scroll the row of apps to More, tap Edit, and add Daylight.',
+      safariExtension: 'Open Settings › Apps › Safari › Extensions and turn on Send to Daylight.',
+      shareMenu: 'Open System Settings › General › Login Items & Extensions › Sharing and turn on Daylight.',
+    },
+  },
+  testArticle: {
+    title: 'Test article from {device}',
+    heading: 'A test article from Send to Daylight',
+    p1: 'This short article was sent by Setup check in Send to Daylight. If you are reading it on your Daylight, the whole path works: your device sealed it, the relay carried it, Daylight Share on your Daylight opened it, and the Reader saved it to your library. Nothing in it needs the network, so it reads the same with Wi-Fi off.',
+    p2: 'It is written to be long enough that the Reader keeps it as a page of its own. Very short pages make the Reader fetch the address again, and the address of this article leads nowhere on purpose: it ends in .invalid, a name that never resolves. So if you see this text, it came through Send to Daylight and not from the web.',
+    p3: 'Back on the device you sent it from, Setup check follows the article along its way. It ticks Delivered when your Daylight confirms that the item arrived, and In your Reader when the Reader says that it saved it. If your Daylight asks before it opens new items, the check waits until you tap the notice there, and says so in the meantime.',
+    p4: 'You can send a test article whenever something seems wrong, for example after you change your Wi-Fi, update an app or pair again. Each one has a new address, so the Reader never mistakes one for another, and each one shows up as a new item in your library. When the checks look right, you are ready to send pages, links and documents for real.',
+    p5: 'A few things are worth knowing while you are here. Pages you send go as you saw them, logged-in parts included, but without scripts or anything you typed into forms. Links you send are cleaned of tracking first. And items you share while offline wait on your device and go as soon as it is back online.',
+    p6: 'When you are done, delete this article in the Reader, as you would delete anything else you read. Deleting it changes nothing in Send to Daylight or in Daylight Share, and sending another test article later works just as this one did. Thank you for trying the Lab version of Send to Daylight.',
+  },
+  // F26: Copy diagnostics (redactDiagnostics runs over all of it)
+  diagnostics: {
+    heading: 'Send to Daylight diagnostics',
+    app: 'App: {app} {version} ({platform})',
+    lab: 'Lab: {state}',
+    on: 'on',
+    off: 'off',
+    caps: 'Lab caps from your Daylight: {caps}',
+    noCaps: 'nothing heard',
+    checkedIn: 'Last check-in: {time}',
+    never: 'never',
+    outbox: 'Outbox: {counts}',
+    relay: 'Relay: {relay}',
+    relayNtfy: 'ntfy.sh',
+    relayCustom: 'custom relay',
+    events: 'Recent events, oldest first:',
+    noEvents: 'none',
+  },
+  // F33: send the copied link
+  copiedLink: {
+    chip: 'Send copied link',
+    confirm: 'Send {host} to {name}?',
+    pasteAndSend: 'Paste and send',
+    confirmShort: 'Send {host}?',
+    noLink: 'No link on the clipboard.',
+  },
+  // F34: the browser's right-click menu
+  contextMenu: {
+    page: 'Send page to Daylight',
+    clean: 'Send clean article to Daylight',
+    link: 'Send link to Daylight',
+    selection: 'Send selection to Daylight',
+    image: 'Send this image’s page to Daylight',
+    pdf: 'Send PDF link to Daylight',
+    showInMenu: 'Show in the right-click menu',
+  },
 };
 
 const fill = (s, vars) => s.replace(/\{(\w+)\}/g, (m, k) => (vars[k] ?? m));
@@ -992,4 +1222,674 @@ export class LabInboxSim {
     }
     return { ...res, lab: await this.labInbox.flush() };
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// W1 (L1): smart intake (F16), excerpts (F11), the test article and diagnostics (F26), the Inbox's row lines (F03)
+// and the per-feature Use switches (6.5 Q5). Pure functions with no DOM and no URL parser: every rule is textual, so
+// Swift and Kotlin can match it exactly (LAB-PROTOCOL 2.9; vectors: normalise.json, labExcerpt and diagnostics).
+// "Whitespace" is ECMAScript's \s: U+0009-000D, U+0020, U+00A0, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F,
+// U+3000 and U+FEFF. "Characters" are Unicode code points.
+
+/** The features whose What's in Lab row has a Use switch (6.5 Q5): they change how sharing behaves. */
+export const USE_FEATURES = ['F03', 'F04', 'F08', 'F10', 'F16', 'F33'];
+export const EXCERPT_MAX_CHARS = 50000;
+export const EXCERPT_LINE_MAX = 100;
+export const EXCERPT_NAME_WORDS = 6;
+export const TEXT_FRAGMENT_WORDS = 8;
+export const ACTIVITY_MAX = 200;
+export const DIAGNOSTICS_EVENTS = 50;
+export const TEST_URL_PREFIX = 'https://daylight.invalid/test/';
+/** The tags an excerpt keeps (F11); `href` only on `a`, and only http(s). */
+export const EXCERPT_TAGS = ['p', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'sub', 'sup', 'a', 'ul', 'ol', 'li',
+  'blockquote', 'code', 'pre', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
+/** Block tags an excerpt keeps as paragraphs, so that their text does not run together. */
+export const EXCERPT_AS_P = ['address', 'article', 'aside', 'caption', 'center', 'dd', 'details', 'div', 'dt',
+  'figcaption', 'figure', 'footer', 'header', 'main', 'section', 'summary', 'tr'];
+/** Elements an excerpt drops with everything inside them. */
+export const EXCERPT_DROP = ['script', 'style', 'template', 'noscript', 'iframe', 'object', 'textarea', 'select',
+  'title', 'head', 'svg', 'math', 'canvas', 'video', 'audio', 'button'];
+/** Tracking parameters removed from every URL (F16 step 4); names compare exactly, and every utm_* goes too. */
+export const TRACKING_PARAMS = ['fbclid', 'gclid', 'gbraid', 'wbraid', 'dclid', 'msclkid', 'mc_cid', 'mc_eid', 'igshid',
+  'igsh', 'yclid', 'twclid', 'ttclid', '_hsenc', '_hsmi', 'mkt_tok', 'ref_src', 'ref_url', '__s', 'sr_share'];
+/** Tracking parameters removed on some sites only: a host matches a domain when it is the domain or ends in "." + it. */
+export const TRACKING_BY_SITE = [
+  { domains: ['youtube.com', 'youtu.be', 'open.spotify.com'], params: ['si'] },
+  { domains: ['twitter.com', 'x.com'], params: ['s', 't'] },
+  { domains: ['nytimes.com'], params: ['smid', 'smtyp'] },
+  { subdomainsOf: 'substack.com', params: ['r', 'triedRedirect', 'showWelcome'] },
+];
+
+/** Fills {slots} in a LAB_TEXT string; a slot without a value stays as it is. */
+export function fillText(s, vars = {}) { return fill(String(s ?? ''), vars); }
+
+/**
+ * Whether a Lab feature is in use (6.5 Q5): Lab is on and, for a feature with a Use switch (USE_FEATURES), that switch
+ * is not off. settings: {lab, labUse: {F04: false, …}}; a missing key means on (1.2). The stores keep the switches
+ * next to `lab`: Apple `dls.labUse.<id>` (Bool), Android `labUse.<id>`, JS `settings.labUse[<id>]`.
+ */
+export function labUseOn(settings, feature) {
+  if (settings?.lab === false) return false;
+  if (!USE_FEATURES.includes(feature)) return true;
+  return settings?.labUse?.[feature] !== false;
+}
+
+const escapeText = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const escapeAttr = (s) => escapeText(s).replace(/"/g, '&quot;');
+const codePoints = (s) => Array.from(String(s ?? ''));
+
+/** Undoes the character references a serialiser writes: &amp; &lt; &gt; &quot; &#39; &apos; and numeric ones. */
+function decodeEntities(s) {
+  return String(s).replace(/&(amp|lt|gt|quot|apos|#39|#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6});/g, (m, e) => {
+    switch (e) {
+      case 'amp': return '&';
+      case 'lt': return '<';
+      case 'gt': return '>';
+      case 'quot': return '"';
+      case 'apos': case '#39': return '\'';
+      default: {
+        const n = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+        return n > 0 && n <= 0x10ffff && (n < 0xd800 || n > 0xdfff) ? String.fromCodePoint(n) : m;
+      }
+    }
+  });
+}
+
+/** An attribute's raw value (quoted with " or ', or unquoted) in a tag's attribute text, or null. */
+function attrValue(attrs, name) {
+  const re = /(?:^|[\s"'/])([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+  for (const m of String(attrs).matchAll(re)) {
+    if (m[1].toLowerCase() === name) return m[2] ?? m[3] ?? m[4] ?? '';
+  }
+  return null;
+}
+
+// ---- URLs, as text (the input has passed webUrl)
+
+function urlParts(u) {
+  const i = u.indexOf('://');
+  let rest = u.slice(i + 3);
+  let fragment = null, query = null;
+  const h = rest.indexOf('#');
+  if (h >= 0) { fragment = rest.slice(h + 1); rest = rest.slice(0, h); }
+  const q = rest.indexOf('?');
+  if (q >= 0) { query = rest.slice(q + 1); rest = rest.slice(0, q); }
+  const slash = rest.indexOf('/');
+  const authority = slash >= 0 ? rest.slice(0, slash) : rest;
+  const hostport = authority.slice(authority.lastIndexOf('@') + 1);
+  let host;
+  if (hostport.startsWith('[')) host = hostport.slice(0, hostport.indexOf(']') + 1);
+  else { const c = hostport.indexOf(':'); host = c < 0 ? hostport : hostport.slice(0, c); }
+  return { scheme: u.slice(0, i), authority, hostport, host: host.toLowerCase(), path: slash >= 0 ? rest.slice(slash) : '', query, fragment };
+}
+
+const urlJoin = (p) => `${p.scheme}://${p.authority}${p.path}${p.query === null ? '' : '?' + p.query}${p.fragment === null ? '' : '#' + p.fragment}`;
+const hostIs = (host, domain) => host === domain || host.endsWith('.' + domain);
+const paramName = (piece) => { const eq = piece.indexOf('='); return eq < 0 ? piece : piece.slice(0, eq); };
+
+/** The first parameter named exactly `name`, percent-decoded as UTF-8 ('+' stays '+'), or null (also when invalid). */
+function queryParam(query, name) {
+  if (query === null) return null;
+  for (const piece of query.split('&')) {
+    if (paramName(piece) !== name) continue;
+    const eq = piece.indexOf('=');
+    try { return decodeURIComponent(eq < 0 ? '' : piece.slice(eq + 1)); } catch { return null; }
+  }
+  return null;
+}
+
+const GOOGLE_HOST = /^(?:www\.)?google(?:\.[a-z]{2,3}){1,2}$/;
+
+/** One unwrap step of F16 step 3, or null. The caller checks the result with webUrl. */
+function unwrapOnce(u) {
+  const p = urlParts(u);
+  const tail = (from) => p.path.slice(from) + (p.query === null ? '' : '?' + p.query) + (p.fragment === null ? '' : '#' + p.fragment);
+  const firstValid = (...vs) => vs.find((v) => v !== null && webUrl(v) !== null) ?? null;
+  if (GOOGLE_HOST.test(p.host)) {
+    if (p.path.startsWith('/amp/s/')) return 'https://' + tail(7);
+    if (p.path === '/url') return firstValid(queryParam(p.query, 'q'), queryParam(p.query, 'url'));
+  }
+  if (p.host.endsWith('.cdn.ampproject.org')) {
+    if (p.path.startsWith('/c/s/') || p.path.startsWith('/v/s/')) return 'https://' + tail(5);
+    if (p.path.startsWith('/c/')) return 'http://' + tail(3);
+  }
+  if ((p.host === 'l.facebook.com' || p.host === 'lm.facebook.com') && p.path === '/l.php') return queryParam(p.query, 'u');
+  if (p.host === 'l.instagram.com' && (p.path === '' || p.path === '/')) return queryParam(p.query, 'u');
+  if ((p.host === 'www.linkedin.com' || p.host === 'linkedin.com') && (p.path === '/safety/go' || p.path === '/safety/go/')) {
+    return queryParam(p.query, 'url');
+  }
+  if (p.host === 'open.substack.com') {
+    const m = /^\/pub\/([A-Za-z0-9-]+)\/p\/([^/]+)(\/.*)?$/.exec(p.path);
+    if (m) return `https://${m[1].toLowerCase()}.substack.com/p/${m[2]}${m[3] ?? ''}` + tail(p.path.length);
+  }
+  return null;
+}
+
+function isTracking(name, host) {
+  if (name.startsWith('utm_') || TRACKING_PARAMS.includes(name)) return true;
+  for (const r of TRACKING_BY_SITE) {
+    const site = r.subdomainsOf ? host.endsWith('.' + r.subdomainsOf) : r.domains.some((d) => hostIs(host, d));
+    if (site && r.params.includes(name)) return true;
+  }
+  return false;
+}
+
+/** F16 step 4: removes tracking parameters. Nothing else changes; a URL with none to remove comes back unchanged. */
+function stripTracking(u) {
+  const p = urlParts(u);
+  if (p.query === null) return u;
+  const pieces = p.query.split('&');
+  const keep = pieces.filter((piece) => !isTracking(paramName(piece), p.host));
+  if (keep.length === pieces.length) return u;
+  const q = keep.filter((piece) => piece !== '').join('&');
+  return urlJoin({ ...p, query: q === '' ? null : q });
+}
+
+/**
+ * F16 steps 3 and 4 on a URL that passes the web URL rule: unwrap redirectors without the network (Google AMP and
+ * /url, the AMP cache, Facebook, Instagram, LinkedIn, open.substack.com; at most 5 steps, each result checked with
+ * webUrl), then remove tracking parameters. -> the cleaned URL (the input itself when nothing applies), or null for
+ * an input that is not a web URL.
+ */
+export function cleanShareUrl(url) {
+  let cur = webUrl(url);
+  if (!cur) return null;
+  for (let i = 0; i < 5; i++) {
+    const next = unwrapOnce(cur);
+    const ok = next === null ? null : webUrl(next);
+    if (!ok || ok === cur) break;
+    cur = ok;
+  }
+  return stripTracking(cur);
+}
+
+const URL_TRAIL = '.,;:!?\'"»”’';
+const countOf = (s, c) => s.split(c).length - 1;
+
+/**
+ * F16 step 1: the first http(s) URL in shared text: a run of characters other than whitespace, < > and " that starts
+ * with http:// or https:// (any case), without trailing . , ; : ! ? ' " » ” ’ and without a trailing ) or ] while it
+ * is unbalanced (repeated until none applies), that passes webUrl. -> {url, start, end} (UTF-16 offsets of the URL
+ * in `text`), or null.
+ */
+export function findShareUrl(text) {
+  const t = String(text ?? '');
+  for (const m of t.matchAll(/https?:\/\/[^\s<>"]+/gi)) {
+    const s = m[0];
+    const n = { '(': countOf(s, '('), ')': countOf(s, ')'), '[': countOf(s, '['), ']': countOf(s, ']') };
+    let end = s.length;
+    for (;;) {
+      const c = s[end - 1];
+      if (URL_TRAIL.includes(c) || (c === ')' && n['('] < n[')']) || (c === ']' && n['['] < n[']'])) {
+        if (c in n) n[c] -= 1;
+        end -= 1;
+        continue;
+      }
+      break;
+    }
+    const u = s.slice(0, end);
+    if (webUrl(u) === u) return { url: u, start: m.index, end: m.index + u.length };
+  }
+  return null;
+}
+
+/** True when the URL's fragment holds a text directive (`:~:text=`), as Chrome on Android shares a selection. */
+export function hasTextFragment(url) {
+  const u = String(url ?? '');
+  const h = u.indexOf('#');
+  return h >= 0 && u.slice(h).includes(':~:text=');
+}
+
+/** The URL without its fragment directive (from `:~:` on), and without the '#' when nothing is left before it. */
+export function withoutTextFragment(url) {
+  const u = String(url ?? '');
+  const h = u.indexOf('#');
+  if (h < 0) return u;
+  const k = u.indexOf(':~:', h);
+  if (k < 0) return u;
+  return k === h + 1 ? u.slice(0, h) : u.slice(0, k);
+}
+
+/**
+ * The quoted text of a URL's first text directive: its start and end (prefix- and -suffix left out), each
+ * percent-decoded (left as it is when that fails), joined with " … ". "" when there is none.
+ */
+export function textFragmentText(url) {
+  const u = String(url ?? '');
+  const h = u.indexOf('#');
+  if (h < 0) return '';
+  const k = u.indexOf(':~:', h);
+  if (k < 0) return '';
+  const directive = u.slice(k + 3).split('&').find((d) => d.startsWith('text='));
+  if (!directive) return '';
+  let parts = directive.slice(5).split(',');
+  if (parts.length > 1 && parts[0].endsWith('-')) parts = parts.slice(1);
+  if (parts.length > 1 && parts[parts.length - 1].startsWith('-')) parts = parts.slice(0, -1);
+  const dec = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+  return parts.map(dec).map((s) => s.trim()).filter(Boolean).join(' … ');
+}
+
+const QUOTE_PAIRS = [['"', '"'], ['“', '”'], ['\'', '\''], ['‘', '’'], ['«', '»'], ['„', '“']];
+
+/** Removes one pair of quotes around the whole text ("…", “…”, '…', ‘…’, «…», „…“), then trims. */
+function unquote(s) {
+  for (const [a, b] of QUOTE_PAIRS) {
+    if (s.length >= 2 && s.startsWith(a) && s.endsWith(b)) return s.slice(a.length, s.length - b.length).trim();
+  }
+  return s;
+}
+
+/**
+ * Link or excerpt (F11, with the user's answer to LAB-PLAN 6.5 Q1 = (b)): text becomes an excerpt only when the share
+ * is clearly a selection. Rules, in order:
+ *   1. source is 'selection' (the extension's context menu or Selection mode, a Safari share's selectionText, or the
+ *      Options choice "Send as excerpt"): an excerpt of the text (without its URL), or a note when there is no URL;
+ *   2. the URL carries a text fragment (#:~:text=, Chrome on Android's shared selection): an excerpt of the text
+ *      without the URL (one pair of surrounding quotes removed), or else of the fragment's own text;
+ *   3. there is no URL at all (Notes, Books, the Mac Services text type): a note;
+ *   everything else is a link, with the text left over as its title: "headline + link" shares stay links, however
+ *   long. (Rule 4 of the plan, 40 words or 3 sentences, is not used under 6.5 Q1 (b).)
+ * text: the shared text; url: a URL shared on its own (used when it passes webUrl; else the first URL in the text);
+ * title: the page title or subject (kept in the signature, unused under (b)); source: 'selection' or anything else.
+ * -> {kind: 'link' | 'excerpt' | 'note' | 'none', url (or null), text (the text without its URL, trimmed)}
+ */
+export function classifyShare({ text = '', url = '', title = '', source = '' } = {}) { // eslint-disable-line no-unused-vars
+  const t = String(text ?? '');
+  const found = findShareUrl(t);
+  const u = (url ? webUrl(url) : null) ?? found?.url ?? null;
+  const rest = (found ? t.slice(0, found.start) + t.slice(found.end) : t).trim();
+  if (source === 'selection') {
+    if (rest) return { kind: u ? 'excerpt' : 'note', url: u, text: rest };
+    return u ? { kind: 'link', url: u, text: '' } : { kind: 'none', url: null, text: '' };
+  }
+  if (u && hasTextFragment(u)) {
+    const quote = unquote(rest) || textFragmentText(u);
+    if (quote) return { kind: 'excerpt', url: u, text: quote };
+  }
+  if (!u) return rest ? { kind: 'note', url: null, text: rest } : { kind: 'none', url: null, text: '' };
+  return { kind: 'link', url: u, text: rest };
+}
+
+const TITLE_EDGE = ' -–—:|·"\'“”‘’«»„';
+const TITLE_PUNCT = '.,;!?';
+
+/**
+ * A title from shared text whose URL was taken out: the empty pairs a URL leaves behind, () [] <> "" “” ‘’ «» (with
+ * only whitespace inside), become a space; whitespace is collapsed; then, until none applies, whitespace, - – — : | ·
+ * and quotes are trimmed from both ends, . , ; ! ? from the start, and . , ; ! ? from the end when a space comes
+ * before them; then cleanTitle.
+ */
+export function shareTitle(text) {
+  const s = String(text ?? '').replace(/\(\s*\)|\[\s*\]|<\s*>|"\s*"|“\s*”|‘\s*’|«\s*»/g, ' ').replace(/\s+/g, ' ');
+  let a = 0, b = s.length;
+  for (let moved = true; moved;) {
+    moved = false;
+    while (a < b && (TITLE_EDGE.includes(s[a]) || TITLE_PUNCT.includes(s[a]))) { a += 1; moved = true; }
+    while (b > a && TITLE_EDGE.includes(s[b - 1])) { b -= 1; moved = true; }
+    let k = b;
+    while (k > a && TITLE_PUNCT.includes(s[k - 1])) k -= 1;
+    if (k < b && k > a && s[k - 1] === ' ') { b = k; moved = true; }
+  }
+  return cleanTitle(s.slice(a, b));
+}
+
+/**
+ * Smart intake (F16), for every entry point while Lab is on (and F16's Use switch, labUseOn).
+ * {text, url, subject, source} -> {kind, url, title, excerpt, orig}:
+ *   kind and the URL come from classifyShare; url is cleanShareUrl's result (null for a note);
+ *   title: for a link, `subject` when it is not empty, else the text without its URL (shareTitle); null when empty and
+ *     for every excerpt and note (a headline is always a title, however long);
+ *   excerpt: the excerpt's or note's text, else null;
+ *   orig: the URL as shared when the cleaned one differs and it is at most X_ORIG_MAX characters, else null. Send it as
+ *     x-orig (buildItemFrames also leaves it out when it would make a small frame large).
+ * Apple News links (apple.news) stay as they are here: iPhone and Mac resolve them with one fetch and
+ * extractAppleNewsTarget, then run normaliseShare on the result.
+ */
+export function normaliseShare({ text = '', url = '', subject = '', source = '' } = {}) {
+  const c = classifyShare({ text, url, title: subject, source });
+  const out = { kind: c.kind, url: null, title: null, excerpt: null, orig: null };
+  if (c.url) {
+    out.url = cleanShareUrl(c.url);
+    if (out.url !== c.url && c.url.length <= X_ORIG_MAX) out.orig = c.url;
+  }
+  if (c.kind === 'excerpt' || c.kind === 'note') out.excerpt = c.text;
+  else if (c.kind === 'link') out.title = cleanTitle(subject) || shareTitle(c.text) || null;
+  return out;
+}
+
+/** True for an Apple News link (apple.news or a subdomain): iPhone and Mac resolve these (F16 step 5). */
+export function isAppleNewsUrl(url) {
+  const u = webUrl(url);
+  return !!u && hostIs(urlParts(u).host, 'apple.news');
+}
+
+/**
+ * F16 step 5, the pure part: the article an Apple News page points to. The string argument of
+ * redirectToUrlAfterTimeout("…") (JavaScript escapes undone), else the first <a href> after <body> whose value
+ * (character references undone) passes the web URL rule. -> the URL, or null.
+ */
+export function extractAppleNewsTarget(html) {
+  const s = String(html ?? '');
+  const m = /redirectToUrlAfterTimeout\(\s*(["'])((?:\\[\s\S]|(?!\1)[^\\])*)\1/.exec(s);
+  if (m) {
+    const target = m[2].replace(/\\(u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|[\s\S])/g, (_, e) => (
+      e.length > 1 ? String.fromCharCode(parseInt(e.slice(1), 16)) : e));
+    const u = webUrl(target);
+    if (u) return u;
+  }
+  const body = s.search(/<body[\s>]/i);
+  if (body < 0) return null;
+  for (const a of s.slice(body).matchAll(/<a(?=[\s>])((?:[^<>"']|"[^<"]*"|'[^<']*')*)>/gi)) {
+    const href = attrValue(a[1], 'href');
+    const u = href === null ? null : webUrl(decodeEntities(href));
+    if (u) return u;
+  }
+  return null;
+}
+
+// ---- Excerpts (F11)
+
+const words = (text, n) => String(text ?? '').trim().split(/\s+/).filter(Boolean).slice(0, n);
+
+/** "Excerpt - {first 6 words}.html", or with note: true "Note - {first 6 words}.md" (through safeFileName). */
+export function excerptFileName(text, { note = false } = {}) {
+  const E = LAB_TEXT.excerpt;
+  const bare = note ? E.noteNameBare : E.fileNameBare;
+  const w = words(text, EXCERPT_NAME_WORDS).join(' ');
+  return w ? safeFileName(fill(note ? E.noteName : E.fileName, { words: w }), bare) : bare;
+}
+
+/** The excerpt's first line: the first line with text, whitespace collapsed, cut to 100 characters with "…". */
+export function excerptFirstLine(text) {
+  const line = String(text ?? '').split(/\r\n|\r|\n/).map((l) => l.replace(/\s+/g, ' ').trim()).find(Boolean) ?? '';
+  const cps = codePoints(line);
+  return cps.length <= EXCERPT_LINE_MAX ? line : cps.slice(0, EXCERPT_LINE_MAX).join('').trimEnd() + '…';
+}
+
+/** "“{first line}” · {page title}" ("“{first line}”" without one), through cleanTitle. */
+export function excerptTitle({ text = '', pageTitle = '' } = {}) {
+  const line = excerptFirstLine(text);
+  const page = cleanTitle(pageTitle);
+  if (!line) return page;
+  return cleanTitle(page ? fill(LAB_TEXT.excerpt.title, { line, page }) : fill(LAB_TEXT.excerpt.titleBare, { line }));
+}
+
+/**
+ * The source URL plus a text fragment of the first 8 words (F11): the URL without its fragment, then
+ * "#:~:text=" and the words joined with one space, percent-encoded as UTF-8 except A-Z a-z 0-9 _ . ! ~ * ' ( ) (so
+ * '-', ',' and '&' are encoded). The URL unchanged when there are no words, or the result would not pass webUrl or be
+ * over 4,096 characters. null when the URL does not pass webUrl.
+ */
+export function textFragment(url, text) {
+  const u = webUrl(url);
+  if (!u) return null;
+  const w = words(text, TEXT_FRAGMENT_WORDS);
+  if (!w.length) return u;
+  let enc;
+  try { enc = encodeURIComponent(w.join(' ')).replace(/-/g, '%2D'); } catch { return u; }
+  const h = u.indexOf('#');
+  const out = `${h >= 0 ? u.slice(0, h) : u}#:~:text=${enc}`;
+  return out.length <= MAX_URL && webUrl(out) === out ? out : u;
+}
+
+/** "22 October 2026" from 'YYYY-MM-DD' (checked as rule D checks dates), or from ms / a Date in local time. '' else. */
+export function excerptDate(date) {
+  let y, m, d;
+  if (typeof date === 'string') {
+    const r = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(date);
+    if (!r) return '';
+    [y, m, d] = r.slice(1).map(Number);
+    if (m < 1 || m > 12 || d < 1 || d > monthDays(y, m)) return '';
+  } else if ((typeof date === 'number' && Number.isFinite(date)) || date instanceof Date) {
+    const x = new Date(date);
+    if (Number.isNaN(x.getTime())) return '';
+    y = x.getFullYear(); m = x.getMonth() + 1; d = x.getDate();
+  } else {
+    return '';
+  }
+  return fill(LAB_TEXT.excerpt.date, { d, month: LAB_TEXT.excerpt.months[m - 1], y });
+}
+
+const ENTITY_AT = /^&(?:[A-Za-z][A-Za-z0-9]{0,31}|#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6});/;
+const TAG_RE = /<(\/?)([A-Za-z][A-Za-z0-9-]*)((?:[^<>"']|"[^<"]*"|'[^<']*')*)>/g;
+
+/**
+ * An excerpt's selection HTML, sanitised (F11; LAB-PROTOCOL 2.9 has the exact steps):
+ *   1. remove comments (<!-- to -->, or to the end), then every other <!…> and <?…> (to the next >, or the end);
+ *   2. remove each element of EXCERPT_DROP with its content (case-insensitive, to its first closing tag, or the end);
+ *   3. read the rest as text and tags. Text: & that does not start a character reference becomes &amp;, < and >
+ *      become &lt; and &gt;. Tags: names are lowercased; EXCERPT_AS_P become p; tags outside EXCERPT_TAGS are dropped
+ *      (their text stays); br is <br> (its closing tag is dropped); a keeps only an href that passes webUrl once its
+ *      character references are undone; every other kept tag loses all its attributes. A closing tag closes the
+ *      innermost open element of that name and every element opened after it, and is dropped when none is open;
+ *      open elements are closed at the end.
+ *   Text past maxChars characters (a character reference counts as one) is cut. -> {html, trimmed}
+ */
+export function sanitizeExcerptHtml(html, maxChars = EXCERPT_MAX_CHARS) {
+  let s = String(html ?? '').replace(/<!--[\s\S]*?(?:-->|$)/g, '').replace(/<[!?][^>]*>?/g, '');
+  for (const name of EXCERPT_DROP) s = s.replace(new RegExp(`<${name}(?=[\\s/>])[^>]*>[\\s\\S]*?(?:</${name}\\s*>|$)`, 'gi'), '');
+  let out = '', count = 0, trimmed = false, last = 0;
+  const stack = [];
+  const text = (raw) => {
+    for (let i = 0; i < raw.length;) {
+      if (count >= maxChars) { trimmed = true; return false; }
+      const c = raw[i];
+      if (c === '&') {
+        const ref = ENTITY_AT.exec(raw.slice(i, i + 40));
+        if (ref) { out += ref[0]; i += ref[0].length; count += 1; continue; }
+        out += '&amp;';
+      } else if (c === '<') out += '&lt;';
+      else if (c === '>') out += '&gt;';
+      else {
+        const n = raw.codePointAt(i) > 0xffff ? 2 : 1;
+        out += raw.slice(i, i + n); i += n; count += 1; continue;
+      }
+      i += 1; count += 1;
+    }
+    return true;
+  };
+  for (const m of s.matchAll(TAG_RE)) {
+    if (!text(s.slice(last, m.index))) break;
+    last = m.index + m[0].length;
+    let name = m[2].toLowerCase();
+    if (EXCERPT_AS_P.includes(name)) name = 'p';
+    if (!EXCERPT_TAGS.includes(name) || (name === 'br' && m[1])) continue;
+    if (m[1]) {
+      const k = stack.lastIndexOf(name);
+      if (k >= 0) while (stack.length > k) out += `</${stack.pop()}>`;
+    } else if (name === 'br') {
+      out += '<br>';
+    } else {
+      const href = name === 'a' ? attrValue(m[3], 'href') : null;
+      const u = href === null ? null : webUrl(decodeEntities(href));
+      out += u ? `<a href="${escapeAttr(u)}">` : `<${name}>`;
+      stack.push(name);
+    }
+  }
+  if (!trimmed) text(s.slice(last));
+  while (stack.length) out += `</${stack.pop()}>`;
+  return { html: out, trimmed };
+}
+
+/** Plain selection text as excerpt HTML: cut to maxChars characters, then paragraphs (split at lines that are only
+ * whitespace) of escaped lines joined with <br>. -> {html, trimmed} */
+export function excerptTextHtml(text, maxChars = EXCERPT_MAX_CHARS) {
+  let cps = codePoints(String(text ?? '').replace(/\r\n?/g, '\n'));
+  const trimmed = cps.length > maxChars;
+  if (trimmed) cps = cps.slice(0, maxChars);
+  const paras = [];
+  let cur = [];
+  for (const line of cps.join('').split('\n')) {
+    if (/^\s*$/.test(line)) { if (cur.length) { paras.push(cur); cur = []; } } else cur.push(line);
+  }
+  if (cur.length) paras.push(cur);
+  return { html: paras.map((p) => `<p>${p.map(escapeText).join('<br>')}</p>`).join(''), trimmed };
+}
+
+/**
+ * The excerpt document (F11), for a selection with a source URL:
+ *   <!doctype html><html><head><meta charset="utf-8"><title>{title}</title></head><body><article>\n
+ *   <p><a href="{source url}">{page title}</a> · {site} · {date}</p><blockquote>{selection}</blockquote></article></body></html>
+ * title: excerptTitle; source url: `url` without its text fragment; the link reads the page title, else the site;
+ * site: `site`, else the URL's host without "www."; it is left out when it equals the link's text, and the date
+ * (excerptDate) when there is none. selection: sanitizeExcerptHtml(html) when `html` has text, else
+ * excerptTextHtml(text), plus <p>(Excerpt trimmed to 50,000 characters.)</p> when cut.
+ */
+export function excerptHtml({ text = '', html = '', url = '', pageTitle = '', site = '', date = null } = {}) {
+  const src = url ? webUrl(url) : null;
+  const source = src ? withoutTextFragment(src) : '';
+  const body = String(html ?? '').trim() ? sanitizeExcerptHtml(html) : excerptTextHtml(String(text ?? '').trim());
+  const quote = body.html + (body.trimmed ? `<p>${escapeText(LAB_TEXT.excerpt.trimmed)}</p>` : '');
+  const page = cleanTitle(pageTitle);
+  const host = source ? urlParts(source).host.replace(/^www\./, '') : '';
+  const siteName = cleanTitle(site) || host;
+  const linkText = page || siteName;
+  const parts = [];
+  if (source) parts.push(`<a href="${escapeAttr(source)}">${escapeText(linkText || source)}</a>`);
+  else if (linkText) parts.push(escapeText(linkText));
+  if (siteName && siteName !== linkText) parts.push(escapeText(siteName));
+  const d = excerptDate(date);
+  if (d) parts.push(escapeText(d));
+  const head = parts.length ? `<p>${parts.join(' · ')}</p>` : '';
+  return '<!doctype html><html><head><meta charset="utf-8"><title>' + escapeText(excerptTitle({ text, pageTitle }))
+    + '</title></head><body><article>\n' + head + '<blockquote>' + quote + '</blockquote></article></body></html>';
+}
+
+/**
+ * The note for text without a URL (F11): the text (line breaks as \n, trimmed; cut to 50,000 characters, then a blank
+ * line and "(Excerpt trimmed to 50,000 characters.)"), a blank line, then "— shared from {app} on {date}" ("— shared
+ * on {date}" without an app, "— shared from {app}" without a date, nothing without either), and a final newline.
+ */
+export function excerptMarkdown({ text = '', app = '', date = null } = {}) {
+  const E = LAB_TEXT.excerpt;
+  const cps = codePoints(String(text ?? '').replace(/\r\n?/g, '\n').trim());
+  const body = cps.length > EXCERPT_MAX_CHARS ? `${cps.slice(0, EXCERPT_MAX_CHARS).join('')}\n\n${E.trimmed}` : cps.join('');
+  const a = cleanName(app), d = excerptDate(date);
+  const footer = a && d ? fill(E.sharedFromOn, { app: a, date: d }) : d ? fill(E.sharedOn, { date: d }) : a ? fill(E.sharedFrom, { app: a }) : '';
+  return footer ? `${body}\n\n${footer}\n` : `${body}\n`;
+}
+
+/**
+ * The item for a selection (F11), ready for Sender.send: with a source URL, an HTML document (`url` = the source URL
+ * with a text fragment, kept as it is when it already has one; name excerptFileName; title excerptTitle); without
+ * one, a Markdown note ("Note - ….md", title "“{first line}”"). Both carry x-cap "excerpt". null when the text is
+ * empty. date: 'YYYY-MM-DD', or ms in local time; app: where a note came from ("Notes"), when known.
+ */
+export function excerptItem({ text = '', html = '', url = '', pageTitle = '', site = '', app = '', date = null } = {}) {
+  const t = String(text ?? '').trim();
+  if (!t) return null;
+  const src = url ? webUrl(url) : null;
+  if (src) {
+    return {
+      kind: 'file', mime: 'text/html', name: excerptFileName(t), url: hasTextFragment(src) ? src : textFragment(src, t),
+      title: excerptTitle({ text: t, pageTitle }), content: excerptHtml({ text: t, html, url: src, pageTitle, site, date }),
+      extras: { 'x-cap': 'excerpt' },
+    };
+  }
+  return {
+    kind: 'file', mime: 'text/markdown', name: excerptFileName(t, { note: true }), title: excerptTitle({ text: t }),
+    content: excerptMarkdown({ text: t, app, date }), extras: { 'x-cap': 'excerpt' },
+  };
+}
+
+// ---- The Inbox's row lines (F03, F11) and item details (2.3)
+
+/**
+ * The line under an Inbox row's title (F03): "Page as you saw it" (page, x-cap seen or none), "Clean article",
+ * "Excerpt", "Test article", "Link (the Reader downloads it)" (url) or "Document · {MB} MB" (file), then
+ * " · from {from}". extras: the item's checked extras; an unknown x-cap counts as none.
+ */
+export function inboxKindLine({ kind, extras = {}, size = 0, from = '' } = {}) {
+  const K = LAB_TEXT.kindLine;
+  const cap = X_CAP_VALUES.includes(extras?.['x-cap']) ? extras['x-cap'] : null;
+  let line;
+  if (cap === 'excerpt') line = K.excerpt;
+  else if (cap === 'test') line = K.test;
+  else if (kind === 'url') line = K.link;
+  else if (kind === 'page') line = cap === 'clean' ? K.clean : K.seen;
+  else line = fill(K.document, { mb: formatMB(size) });
+  const f = cleanName(from);
+  return f ? line + fill(K.from, { from: f }) : line;
+}
+
+/** "Cleaned from {host}" for an item's x-orig (2.3; the host and port, as text), or null without a valid one. */
+export function cleanedFromText(orig) {
+  const u = webUrl(orig);
+  return u ? fill(LAB_TEXT.cleanedFrom, { host: urlParts(u).hostport.toLowerCase() }) : null;
+}
+
+// ---- Setup check (F26): the test article, the activity log and diagnostics
+
+/**
+ * The test article (F26): a page of about 400 words (LAB_TEXT.testArticle), so the Reader neither fetches it again nor
+ * keeps only a link. -> {id, kind: 'page', url: 'https://daylight.invalid/test/<id>', title: 'Test article from
+ * {device}', content, extras: {'x-cap': 'test'}}, ready for Sender.send.
+ */
+export function testArticle({ id = newItemId(), device = '' } = {}) {
+  if (!ID_RE.test(String(id))) throw new ShareError('id', 'bad item id');
+  const T = LAB_TEXT.testArticle;
+  const title = cleanTitle(fill(T.title, { device: cleanName(device) || LAB_TEXT.appName.web }));
+  const paras = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'].map((k) => `<p>${escapeText(T[k])}</p>`).join('');
+  const content = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeText(title)}</title>`
+    + `<meta name="dl:capture" content="test"></head><body><article><h1>${escapeText(T.heading)}</h1>${paras}</article></body></html>`;
+  return { id, kind: 'page', url: TEST_URL_PREFIX + id, title, content, extras: { 'x-cap': 'test' } };
+}
+
+/**
+ * Removes what diagnostics must never carry (F26), in this order: daylightserver://… links and SERVER- codes ->
+ * "[server code]"; anything that looks like a URL (scheme://…, or www.…) -> "[url]"; "dls-" + 32 hex -> "[topic]";
+ * 28-character base32 codes, with or without dashes between groups of 4 -> "[code]".
+ */
+export function redactDiagnostics(text) {
+  return String(text ?? '')
+    .replace(/daylightserver:\/\/[^\s"'<>]*/gi, '[server code]')
+    .replace(/\bSERVER-[A-Za-z0-9-]+/g, '[server code]')
+    .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>]*/g, '[url]')
+    .replace(/\bwww\.[^\s"'<>]+/gi, '[url]')
+    .replace(/\bdls-[0-9a-f]{32}\b/gi, '[topic]')
+    .replace(/\b[A-Z2-7]{4}(?:-?[A-Z2-7]{4}){6}\b/gi, '[code]');
+}
+
+/** An activity log entry (F26): {time (ms), type, id8, kind, status, http}. Titles, names, URLs and from never go in. */
+export function activityEvent({ time = Date.now(), type = '', id = '', kind = '', status = '', http = 0 } = {}) {
+  return { time, type: String(type), id8: String(id ?? '').slice(0, 8), kind: String(kind ?? ''), status: String(status ?? ''), http: Number(http) || 0 };
+}
+
+/** Appends an event to a log, keeping the last ACTIVITY_MAX (200). -> the new list. */
+export function appendActivity(log, event) {
+  return [...(Array.isArray(log) ? log : []), activityEvent(event)].slice(-ACTIVITY_MAX);
+}
+
+/** One log line: "{ISO time} {type} {id8} {kind} {status} {http}", '-' for an empty field. */
+export function activityLine(e) {
+  const t = Number.isFinite(e?.time) ? new Date(e.time).toISOString() : '-';
+  return [t, e?.type, e?.id8, e?.kind, e?.status, e?.http].map((v) => (v === undefined || v === null || v === '' || v === 0 ? '-' : String(v))).join(' ');
+}
+
+const ROW_STATUSES = ['sending', 'sent', 'delivered', 'failed', 'expired'];
+
+/**
+ * "Copy diagnostics" (F26): the app and version, platform, Lab on or off, the caps seen, the last check-in, the
+ * outbox's counts by status, the relay as "ntfy.sh" or "custom relay", and the last 50 events, all through
+ * redactDiagnostics. rows: the outbox rows (only their status is read); log: activity events; checkedIn: ms or null.
+ */
+export function diagnosticsReport({ app = '', version = '', platform = '', lab = true, caps = [], checkedIn = null, rows = [], relay = '', log = [], now = Date.now() } = {}) {
+  const D = LAB_TEXT.diagnostics;
+  let ntfy = false;
+  try { ntfy = normalizeRelay(relay) === DEFAULT_RELAY; } catch { ntfy = false; }
+  const counts = ROW_STATUSES.map((st) => `${st} ${(rows ?? []).filter((r) => r?.status === st).length}`).join(' · ');
+  const check = Number.isFinite(checkedIn) ? `${new Date(checkedIn).toISOString()} (${relativeTime(checkedIn, now)})` : D.never;
+  const events = (Array.isArray(log) ? log : []).slice(-DIAGNOSTICS_EVENTS).map(activityLine);
+  const lines = [
+    D.heading,
+    fill(D.app, { app, version, platform }),
+    fill(D.lab, { state: lab ? D.on : D.off }),
+    fill(D.caps, { caps: caps?.length ? caps.join(', ') : D.noCaps }),
+    fill(D.checkedIn, { time: check }),
+    fill(D.outbox, { counts }),
+    fill(D.relay, { relay: ntfy ? D.relayNtfy : D.relayCustom }),
+    D.events,
+    ...(events.length ? events : [D.noEvents]),
+  ];
+  return redactDiagnostics(lines.join('\n') + '\n');
 }

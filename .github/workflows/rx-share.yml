@@ -1,8 +1,9 @@
 name: Reader experiment - share protocol
 
 # Tests the Daylight Share protocol's JavaScript reference implementation, its Lab additions (LAB-PROTOCOL.md) and their
-# vectors, the version-skew suite and the household soak, then does a live round trip through https://ntfy.sh to prove
-# the relay behaves as the protocol assumes.
+# vectors, the capture code, the daylight-send command line, the version-skew suite and the household soak, then does
+# a live round trip through https://ntfy.sh to prove the relay behaves as the protocol assumes. A push publishes the
+# one-file daylight-send.mjs to the "reader-experiment-latest" release.
 on:
   push:
     branches: [claude/sweet-goldberg-ej1nb0]
@@ -20,6 +21,7 @@ permissions:
   contents: read
 
 jobs:
+  # lane: share
   test:
     runs-on: ubuntu-latest
     defaults:
@@ -30,6 +32,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: reader-experiment/share/package-lock.json
+      - name: Install the test DOM (linkedom; nothing shipped depends on it)
+        run: npm ci
       - name: Vectors are up to date
         run: |
           cp vectors/test-vectors.json /tmp/committed.json
@@ -42,14 +48,53 @@ jobs:
           '
           cp /tmp/committed.json vectors/test-vectors.json
       - name: Lab vectors are up to date
-        # lab-vectors.json has no deflate output, so it must regenerate byte for byte
+        # lab-vectors.json and normalise.json hold no deflate output, so they must regenerate byte for byte
         run: |
           node vectors/generate-lab.mjs
-          git diff --exit-code -- vectors/lab-vectors.json || { echo "lab-vectors.json is stale: run node vectors/generate-lab.mjs"; exit 1; }
-      - name: Unit, mock-relay, Lab, skew and soak tests
+          git diff --exit-code -- vectors/lab-vectors.json vectors/normalise.json || { echo "lab-vectors.json or normalise.json is stale: run node vectors/generate-lab.mjs"; exit 1; }
+      - name: Capture code is the pinned source (Readability 0.6.0)
+        run: node js/capture/sync.mjs --check js/capture/clean-html.js js/capture/Readability.js
+      - name: Unit, mock-relay, Lab, W1, command line, skew and soak tests
+        env:
+          CI: 'true'
         run: node --test js/test/*.test.mjs 2>&1 | tee /tmp/test.log; test "${PIPESTATUS[0]}" -eq 0
       - name: Household soak summary
         if: always()
         run: grep -h '\[soak ' /tmp/test.log | sed 's/^# //' >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Build daylight-send.mjs (one file, Node 22, no dependencies)
+        run: |
+          node js/bin/build.mjs dist/daylight-send.mjs
+          node dist/daylight-send.mjs --version
+          # it runs with nothing installed next to it
+          mkdir -p /tmp/alone && cp dist/daylight-send.mjs /tmp/alone/ && (cd /tmp/alone && node daylight-send.mjs --help >/dev/null)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daylight-send
+          path: reader-experiment/share/dist/daylight-send.mjs
+          if-no-files-found: error
       - name: Live round trip through ntfy.sh
         run: node js/live-ntfy.mjs https://ntfy.sh
+
+  # lane: share
+  publish:
+    name: Publish daylight-send.mjs to the release
+    needs: test
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Runs queue rather than cancel, so a release upload is never cut off half way.
+    concurrency:
+      group: rx-share-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: daylight-send
+          path: out
+      - name: Publish daylight-send.mjs to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/scripts/rx-publish.sh out/daylight-send.mjs

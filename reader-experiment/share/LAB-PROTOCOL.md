@@ -6,6 +6,9 @@ timeline text or the gate is made here (share lane) first. Section numbers below
 and 0.x, 1.x, 3.x–6.x are in `../LAB-PLAN.md`. "PROTOCOL" is `PROTOCOL.md` (revision 1.1), "DESIGN" is
 `../server/DESIGN.md`.*
 
+*Section 2.9 (W1's reference functions: smart intake, excerpts, Setup check, Use switches) was added by L1 on Oct 22,
+2026, with `vectors/normalise.json`.*
+
 *The JavaScript reference is `js/daylight-lab.js` (2.7.2) with the 2.7.1 changes in `js/daylight-share.js`, and the
 vectors are `vectors/lab-vectors.json`, made by `vectors/generate-lab.mjs`. Where the reference had to choose
 something this text leaves open, the choice is listed in `README.md` › "Lab (L0)" and pinned by the vectors.*
@@ -595,3 +598,157 @@ the protocol vectors' secret:
   the pairing ack topic: they deliver nothing and change no row. That they count as presence in v1 mode is harmless,
   and DESIGN 5.5 is updated to say so. Wave S adds the server ack topic in Lab mode (4.2).
 
+
+### 2.9 W1 reference functions (L1)
+
+*Added by L1 (Oct 22, 2026). Normative for the W1 ports (A3: `ShareNormaliser`, `Excerpt`; K3: `Normalise`, `Excerpt`).
+These rules come from LAB-PLAN F11, F16 and F26 and the user's answers of Oct 22 (6.5 Q1 = b, Q5 = yes); where those
+leave room, the choice below is pinned by `vectors/normalise.json` and the `labExcerpt`, `diagnostics`,
+`testArticle` and W1 `labText` sections of `vectors/lab-vectors.json`. Every rule is textual (no URL parser, no DOM),
+so all three languages agree. **Whitespace** is ECMAScript's `\s`: U+0009–000D, U+0020, U+00A0, U+1680, U+2000–200A,
+U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF (Kotlin's and Swift's defaults differ: spell the set out).
+**Characters** are Unicode code points. **Percent-decoding** is UTF-8 with `+` left as `+`; an invalid escape or
+invalid UTF-8 counts as a failure.*
+
+**2.9.1 Smart intake (F16).** `normaliseShare({text, url, subject, source})` → `{kind, url, title, excerpt, orig}`:
+
+1. **Finding the URL** (`findShareUrl`). Each run of characters other than whitespace, `<`, `>` and `"` that starts
+   with `http://` or `https://` (any case), in order: drop a trailing `. , ; : ! ? ' " » ” ’`, or a trailing `)` or
+   `]` while the run holds fewer `(` than `)` (`[` than `]`), until neither applies; the first result that passes the
+   web URL rule unchanged is the URL.
+2. **Link or excerpt** (`classifyShare`). The URL is `url` when it passes the web URL rule, else the one found in
+   `text`; `rest` is `text` without the found URL's characters, trimmed. Then, in order: `source` is `selection` →
+   `excerpt` of `rest` (`note` without a URL; `link` when `rest` is empty, `none` when there is no URL either); the URL's
+   fragment holds `:~:text=` → `excerpt` of `rest` without one pair of surrounding quotes (`"…"`, `“…”`, `'…'`, `‘…’`,
+   `«…»`, `„…“`), or, when that is empty, of the fragment's text (`textFragmentText`: the first `text=` directive after
+   `:~:`, split on `,`, a first part ending in `-` and a last part starting with `-` dropped when more than one part
+   is left, each part percent-decoded (kept as it is when that fails) and trimmed, empty parts dropped, joined with
+   ` … `); no URL → `note`
+   of `rest` (`none` when empty); otherwise `link`. **There is no word-count rule**: plan rule 4 (40 words or 3
+   sentences) is off under 6.5 Q1 = (b), so every headline + link share is a link.
+3. **Cleaning** (`cleanShareUrl`), for every kind with a URL: up to 5 unwrap steps, each result kept only when it
+   passes the web URL rule (and differs), then tracking removal. Host comparisons are on the lowercased host
+   (`authority` after the last `@`, without the port); "host is D" means equal to D or ending in `.D`.
+   - `(www.)?google(.xx){1,2}` with a path starting `/amp/s/` → `https://` + the rest (path, query and fragment);
+     path `/url` → the first of the parameters `q`, `url` whose decoded value passes the web URL rule;
+   - a host ending in `.cdn.ampproject.org`: path `/c/s/…` or `/v/s/…` → `https://…`; `/c/…` → `http://…`;
+   - `l.facebook.com` or `lm.facebook.com` with path `/l.php` → parameter `u`; `l.instagram.com` with path `/` or
+     empty → `u`; `www.linkedin.com` or `linkedin.com` with path `/safety/go` (or `/safety/go/`) → `url`;
+   - `open.substack.com` with path `/pub/<pub>/p/<slug>[/…]` (`<pub>` of `A-Z a-z 0-9 -`) →
+     `https://<pub lowercased>.substack.com/p/<slug>[/…]`, query and fragment kept;
+   - tracking parameters, compared by their raw name (before `=`, not decoded, case-sensitive): every name starting
+     `utm_`, the list `TRACKING_PARAMS`, and per site `TRACKING_BY_SITE` (`si` on youtube.com, youtu.be and
+     open.spotify.com; `s` and `t` on twitter.com and x.com; `smid` and `smtyp` on nytimes.com; `r`, `triedRedirect`
+     and `showWelcome` on hosts ending in `.substack.com`). When none is present the URL is returned byte for byte.
+     Otherwise the query is rebuilt from the remaining non-empty pieces, in order, joined with `&`, and loses its `?`
+     when nothing is left; scheme, authority, path and fragment are untouched.
+4. **Title** (links only): `subject` through `cleanTitle` when not empty, else `shareTitle(rest)`: the empty pairs
+   `()`, `[]`, `<>`, `""`, `“”`, `‘’`, `«»` (only whitespace inside) become a space; whitespace runs become one space;
+   then until nothing changes: whitespace, `- – — : | ·` and the quotes `" ' “ ” ‘ ’ « » „` are trimmed from both ends,
+   `. , ; ! ?` from the start, and `. , ; ! ?` from the end when a space precedes them; then `cleanTitle`. Empty →
+   null. Excerpts and notes have `title` null and their text in `excerpt`.
+5. **`orig`** = the URL as found or given when the cleaned URL differs and it is at most `X_ORIG_MAX` = 1,024
+   characters, else null.
+6. **Apple News** (`isAppleNewsUrl`: host is `apple.news`) stays as it is in `normaliseShare`. iPhone and Mac fetch it
+   once (ephemeral session, no cookies, 3 s) and pass the page to `extractAppleNewsTarget(html)`: the string literal
+   argument of the first `redirectToUrlAfterTimeout(` followed by optional whitespace and a quote, with `\uXXXX`,
+   `\xXX` and `\c` escapes undone, when it passes the web URL rule; else, after the first `<body` followed by
+   whitespace or `>`, the first `<a …>` tag (read as tags are in 2.9.3) whose `href` (quoted or not, character references `&amp; &lt; &gt; &quot;
+   &#39; &apos;` and numeric ones undone) passes the web URL rule; else null. Then `normaliseShare` on the result.
+
+**2.9.2 Writing the header fields (2.3).** `buildItemFrames` takes `item.extras` (`labHeaderFields`): `x-cap` only
+when it is one of the four values, `x-orig` only when it passes the web URL rule (trimmed) and is at most 1,024
+characters. Both go on **part 0 only**. If part 0's frame is large with `x-orig` and small without it, `x-orig` is left
+out. `built.extras` says what part 0 carries; without extras the frames are exactly v1.1's. The Sender keeps the
+requested extras on the row (`row.extras`, only when there are any), so every re-send writes the same fields.
+
+**2.9.3 Excerpts (F11).** `excerptItem({text, html, url, pageTitle, site, app, date})` → the item to send, or null when
+`text` (trimmed) is empty. Both forms carry `extras: {'x-cap': 'excerpt'}`.
+
+- **With a source URL** (passes the web URL rule): `kind: 'file'`, `mime: 'text/html'`, `name` =
+  `excerptFileName(text)`, `url` = the source URL when it already holds a text fragment, else `textFragment(url,
+  text)`, `title` = `excerptTitle`, `content` = `excerptHtml`.
+- **Without one**: `mime: 'text/markdown'`, `name` = `excerptFileName(text, {note: true})`, `title` = `excerptTitle`
+  without a page title, `content` = `excerptMarkdown`.
+- `excerptFileName`: the first 6 whitespace-separated words joined with one space, in "Excerpt - {words}.html" (or
+  "Note - {words}.md"), through `safeFileName`; no words → "Excerpt.html" ("Note.md").
+- `excerptTitle`: the first line (split on CRLF, CR or LF) that has text, whitespace runs as one space, trimmed; over
+  100 characters it is cut to 100, trailing whitespace removed, and `…` added. Then "“{line}” · {page title}" (page
+  title through `cleanTitle`), "“{line}”" without one, the page title alone without a line; through `cleanTitle`.
+- `textFragment(url, text)`: the URL without its fragment, then `#:~:text=` and the first 8 words joined with one space,
+  UTF-8 percent-encoded except `A-Z a-z 0-9 _ . ! ~ * ' ( )`. The URL unchanged when there are no words, the text
+  cannot be encoded (a lone surrogate), or the result is over 4,096 characters or fails the web URL rule.
+- `excerptDate(date)`: `YYYY-MM-DD` (fields checked as rule D checks them) → "22 October 2026"; a number of ms or a
+  Date → the same from its local date; anything else → "".
+- `excerptHtml`: exactly `<!doctype html><html><head><meta charset="utf-8"><title>{title}</title></head><body><article>`,
+  a line feed, then `<p>{header}</p><blockquote>{selection}</blockquote></article></body></html>`. `{title}` is
+  `excerptTitle`. The source is the URL without its fragment directive (from `:~:` on, and without the `#` when nothing
+  precedes `:~:`). `{header}` joins with ` · `: `<a href="{source}">{page title, else the site, else the source}</a>`;
+  the site (`site` through `cleanTitle`, else the source's host without a leading `www.`) when it differs from the
+  link's text; the date when there is one. Text is escaped `&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`; attributes also
+  `"` → `&quot;`. `{selection}` is `sanitizeExcerptHtml(html)` when `html` has non-whitespace, else
+  `excerptTextHtml(text trimmed)`, followed by `<p>(Excerpt trimmed to 50,000 characters.)</p>` when cut.
+- `sanitizeExcerptHtml(html, maxChars = 50,000)` → `{html, trimmed}`:
+  1. remove comments (`<!--` to the first `-->`, or to the end), then every `<!…>` and `<?…>` (to the next `>`, or the
+     end);
+  2. for each name of `EXCERPT_DROP` in order, remove (ignoring case) each `<name` followed by whitespace, `/` or `>`,
+     up to the next `>`, and everything after it to the first `</name` + optional whitespace + `>`, or to the end (an
+     opening tag with no `>` after it stays, and becomes text in step 3);
+  3. tags are `<`, an optional `/`, a name (`[A-Za-z][A-Za-z0-9-]*`), then any run of characters other than `<`, `>`,
+     `"` and `'`, or of whole `"…"` / `'…'` strings with no `<` in them, then `>` (so scanning a tag never passes a
+     `<`, and stays linear). Between tags is text: each character is copied and counted,
+     except `&` (a character reference `&name;`, `&#digits;` or `&#xhex;` of at most 32, 7 and 6 characters is copied
+     and counts as one; any other `&` becomes `&amp;`), `<` (`&lt;`) and `>` (`&gt;`). When `maxChars` characters have
+     been copied and any text remains, the rest of the input is dropped and `trimmed` is true;
+  4. tag names are lowercased; `EXCERPT_AS_P` become `p`; names outside `EXCERPT_TAGS` are dropped, their text kept.
+     `<br>` (any attributes, any `/`) is written `<br>`; `</br>` is dropped. An `a` keeps `href` only when its value
+     (the first attribute named `href`, in any case; quoted with `"` or `'`, or unquoted) with character references
+     undone passes the web URL rule; it is written `<a href="…">` (attribute-escaped), else `<a>`. Every other kept tag
+     is written with no attributes and pushed on a stack of open elements. A closing tag closes the innermost open
+     element of that name and every element opened after it (writing their closing tags), and is dropped when no such
+     element is open. At the end, every open element is closed, innermost first.
+- `excerptTextHtml(text, maxChars)`: CRLF and CR become LF; cut to `maxChars` characters (`trimmed`); lines that are
+  only whitespace separate paragraphs; each paragraph is `<p>` + its lines text-escaped and joined with `<br>` + `</p>`.
+- `excerptMarkdown({text, app, date})`: the text with CRLF and CR as LF, trimmed; over 50,000 characters it is cut to
+  50,000 and followed by a blank line and "(Excerpt trimmed to 50,000 characters.)". Then a blank line and "— shared
+  from {app} on {date}" ("— shared on {date}" without an app, "— shared from {app}" without a date, nothing without
+  either), then a line feed.
+
+**2.9.4 Setup check (F26).**
+
+- `testArticle({id, device})` → `{id, kind: 'page', url: 'https://daylight.invalid/test/' + id, title, content,
+  extras: {'x-cap': 'test'}}`. `title` = "Test article from {device}" (device through `cleanName`, default "Send to
+  Daylight"). `content` = `<!doctype html><html><head><meta charset="utf-8"><title>{title}</title><meta
+  name="dl:capture" content="test"></head><body><article><h1>{heading}</h1>` + `<p>{pN}</p>` for `LAB_TEXT.testArticle`
+  p1 to p6 in order + `</article></body></html>` (text-escaped; no spaces between the tags; one string).
+- `redactDiagnostics(text)`, in this order: `daylightserver://` and what follows up to whitespace, `"`, `'`, `<` or
+  `>` (any case) → `[server code]`; `SERVER-` (case-sensitive, at a word boundary) and the following run of
+  `A-Z a-z 0-9 -` → `[server code]`; a scheme (`[A-Za-z][A-Za-z0-9+.-]*` at a word boundary) + `://` + what follows up
+  to whitespace, `"`, `'`, `<` or `>` → `[url]`; `www.` (any case, at a word boundary) + at least one character up to
+  the same stops → `[url]`; `dls-` + 32 hex (any case, word boundaries) → `[topic]`; 4 base32 characters followed by
+  six groups of an optional `-` and 4 more (any case, word boundaries) → `[code]`.
+- `activityEvent({time, type, id, kind, status, http})` keeps only `{time, type, id8 (the id's first 8 characters),
+  kind, status, http}`: no title, URL, name or `from` ever enters the log. `appendActivity` keeps the last 200.
+  `activityLine(e)`: ISO time, type, id8, kind, status and http joined with spaces, `-` for an empty field (and for
+  `http` 0).
+- `diagnosticsReport({app, version, platform, lab, caps, checkedIn, rows, relay, log, now})`: the lines of
+  `LAB_TEXT.diagnostics` in order (heading; app; Lab on/off; caps joined with ", " or "nothing heard"; the check-in as
+  ISO time and its relative time, or "never"; the outbox counts "sending n · sent n · delivered n · failed n ·
+  expired n"; the relay "ntfy.sh" when it normalises to `https://ntfy.sh`, else "custom relay"; "Recent events, oldest
+  first:" and the last 50 activity lines, or "none"), joined with line feeds, a final line feed, all through
+  `redactDiagnostics`.
+
+**2.9.5 Inbox lines (F03, F11) and item details (2.3).** `inboxKindLine({kind, extras, size, from})`: `x-cap`
+`excerpt` → "Excerpt"; `test` → "Test article"; `kind` url → "Link (the Reader downloads it)"; page → "Clean
+article" for `clean`, else "Page as you saw it"; file → "Document · {formatMB(size)} MB"; then " · from {from}" when
+`from` (through `cleanName`) is not empty. `cleanedFromText(orig)` → "Cleaned from {host}" with the authority's host
+and port (lowercased, no user info), or null when `orig` fails the web URL rule.
+
+**2.9.6 Use switches (6.5 Q5).** The rows of `USE_FEATURES` (F03, F04, F08, F10, F16, F33) in What's in Lab carry a
+**Use** switch, on by default, with the footer `LAB_TEXT.use.footers[id]` and the accessibility label "Use {feature
+name}". `labUseOn(settings, feature)` is false when Lab is off, true for a feature without a switch, else true unless
+its switch is off; a missing key is on. Stores, next to `lab`: Apple `dls.labUse.<id>` (Bool), Android `labUse.<id>`,
+JS `settings.labUse[<id>]`. Turning a Use switch off keeps that feature's own settings, as turning Lab off does.
+
+**2.9.7 The command line (F09).** `share/js/bin/daylight-send.mjs`, built into one file by `share/js/bin/build.mjs`;
+`../SEND-API.md` is its manual and the list of every entry point.

@@ -1,0 +1,1171 @@
+{
+  "protocol": "Daylight Share Lab, W1 smart intake (reader-experiment/share/LAB-PROTOCOL.md 2.9; LAB-PLAN F16)",
+  "generatedBy": "reader-experiment/share/vectors/generate-lab.mjs",
+  "notes": [
+    "Deterministic: CI regenerates this file and requires no diff.",
+    "cases: normaliseShare(input) must equal expect exactly. input: {text?, url?, subject?, source?} (absent = \"\"). expect: {kind (\"link\", \"excerpt\", \"note\" or \"none\"), url (cleaned, or null), title (links only, or null), excerpt (excerpts and notes, or null), orig (the URL as shared when the cleaned one differs and it is at most 1,024 characters, or null)}. Under LAB-PLAN 6.5 Q1 = (b), text is an excerpt only for an explicit selection (source \"selection\") or a text-fragment URL; a note has no URL; every headline + link share is a link.",
+    "xOrigFrames: build an item (id X, sent 2026-10-20T08:00:00.000Z; contentHex bytes or contentText UTF-8 for pages and files, no compression) with the Lab extras requested; part 0 must carry exactly expect.fields (its x- header fields), and be small (base64 at most 3,800 characters) when expect.small. x-orig is left out over 1,024 characters, when it fails the web URL rule, and when it alone would turn a small frame into a large one; an unknown x-cap is left out.",
+    "appleNews: extractAppleNewsTarget(html) must equal expect (a URL or null)."
+  ],
+  "cases": [
+    {
+      "name": "NYT app: \"Opinion | headline\" + short link",
+      "input": {
+        "text": "Opinion | The Real Reason Inflation Is Still Too High, According to Economists https://nyti.ms/3XyZabc"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://nyti.ms/3XyZabc",
+        "title": "Opinion | The Real Reason Inflation Is Still Too High, According to Economists",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "NYT: headline + link with smid",
+      "input": {
+        "text": "The Morning: A Quiet Revolution in Batteries https://www.nytimes.com/2026/10/20/briefing/batteries.html?smid=nytcore-ios-share&referringSource=articleShare"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.nytimes.com/2026/10/20/briefing/batteries.html?referringSource=articleShare",
+        "title": "The Morning: A Quiet Revolution in Batteries",
+        "excerpt": null,
+        "orig": "https://www.nytimes.com/2026/10/20/briefing/batteries.html?smid=nytcore-ios-share&referringSource=articleShare"
+      }
+    },
+    {
+      "name": "NYT gift link sentence stays a link",
+      "input": {
+        "text": "I’m giving you access to one of my subscriber-only articles. https://www.nytimes.com/2026/10/19/science/octopus-dreams.html?unlocked_article_code=1.abc.XYZ&smid=url-share"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.nytimes.com/2026/10/19/science/octopus-dreams.html?unlocked_article_code=1.abc.XYZ",
+        "title": "I’m giving you access to one of my subscriber-only articles.",
+        "excerpt": null,
+        "orig": "https://www.nytimes.com/2026/10/19/science/octopus-dreams.html?unlocked_article_code=1.abc.XYZ&smid=url-share"
+      }
+    },
+    {
+      "name": "Guardian: \"headline | section | The Guardian\" + link",
+      "input": {
+        "text": "Climate crisis: world on track for 2.7C of heating, UN says | Climate crisis | The Guardian https://www.theguardian.com/environment/2026/oct/20/climate-un-report?CMP=share_btn_url"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.theguardian.com/environment/2026/oct/20/climate-un-report?CMP=share_btn_url",
+        "title": "Climate crisis: world on track for 2.7C of heating, UN says | Climate crisis | The Guardian",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Guardian app: link with the headline as subject",
+      "input": {
+        "text": "https://www.theguardian.com/world/2026/oct/21/story?CMP=Share_iOSApp_Other",
+        "subject": "Ferry services resume after the strike | World news | The Guardian"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.theguardian.com/world/2026/oct/21/story?CMP=Share_iOSApp_Other",
+        "title": "Ferry services resume after the strike | World news | The Guardian",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Apple News: headline + apple.news link (resolved later by iPhone and Mac)",
+      "input": {
+        "text": "Why the Fed Can’t Stop Worrying — The Atlantic https://apple.news/AJkLmNoPqRsTuVwXyZ"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://apple.news/AJkLmNoPqRsTuVwXyZ",
+        "title": "Why the Fed Can’t Stop Worrying — The Atlantic",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Apple News: link alone with subject",
+      "input": {
+        "url": "https://apple.news/AbC-dEf_123",
+        "subject": "The Year in Tiny Houses"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://apple.news/AbC-dEf_123",
+        "title": "The Year in Tiny Houses",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Substack app: \"Read “…” by … on Substack:\" + open.substack.com",
+      "input": {
+        "text": "Read “The Quiet Year” by Jane Doe on Substack: https://open.substack.com/pub/janedoe/p/the-quiet-year?r=2abc&utm_campaign=post&utm_medium=web&showWelcome=true"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://janedoe.substack.com/p/the-quiet-year",
+        "title": "Read “The Quiet Year” by Jane Doe on Substack",
+        "excerpt": null,
+        "orig": "https://open.substack.com/pub/janedoe/p/the-quiet-year?r=2abc&utm_campaign=post&utm_medium=web&showWelcome=true"
+      }
+    },
+    {
+      "name": "Substack: post link with email tracking",
+      "input": {
+        "text": "https://janedoe.substack.com/p/the-quiet-year?utm_source=substack&utm_medium=email&r=2abc&triedRedirect=true"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://janedoe.substack.com/p/the-quiet-year",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://janedoe.substack.com/p/the-quiet-year?utm_source=substack&utm_medium=email&r=2abc&triedRedirect=true"
+      }
+    },
+    {
+      "name": "X: a long post + link stays a link (6.5 Q1 b)",
+      "input": {
+        "text": "This is the best thread on e-paper displays I have read all year. It covers refresh rates, ghosting, warm light and why a 60 Hz reflective screen feels so different from a Kindle when you scroll. Read it before you buy a tablet for reading. Seriously, it is worth the ten minutes. https://x.com/someone/status/1849123456789012345?s=46&t=AbCdEfGh123"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://x.com/someone/status/1849123456789012345",
+        "title": "This is the best thread on e-paper displays I have read all year. It covers refresh rates, ghosting, warm light and why a 60 Hz reflective screen feels so different from a Kindle when you scroll. Read it before you buy a tablet for reading. Seriously, it is worth the ten minutes.",
+        "excerpt": null,
+        "orig": "https://x.com/someone/status/1849123456789012345?s=46&t=AbCdEfGh123"
+      }
+    },
+    {
+      "name": "X: twitter.com link with s",
+      "input": {
+        "text": "https://twitter.com/someone/status/1849123456789012345?s=20"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://twitter.com/someone/status/1849123456789012345",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://twitter.com/someone/status/1849123456789012345?s=20"
+      }
+    },
+    {
+      "name": "Chrome on Android: \"Title\\nURL\"",
+      "input": {
+        "text": "Why Paper Still Wins for Reading\nhttps://www.example.com/news/paper-wins-123"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.example.com/news/paper-wins-123",
+        "title": "Why Paper Still Wins for Reading",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Chrome on Android: subject + URL as text",
+      "input": {
+        "text": "https://www.example.com/news/paper-wins-123",
+        "subject": "Why Paper Still Wins for Reading"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.example.com/news/paper-wins-123",
+        "title": "Why Paper Still Wins for Reading",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "A headline over 40 words + link stays a link",
+      "input": {
+        "text": "Live updates: the storm makes landfall near the coast as officials order evacuations, close schools and bridges, open shelters across three counties, warn of flooding along every river in the region, and ask everyone who can to stay home until the weekend while crews work to restore power https://www.example.com/live/storm"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.example.com/live/storm",
+        "title": "Live updates: the storm makes landfall near the coast as officials order evacuations, close schools and bridges, open shelters across three counties, warn of flooding along every river in the region, and ask everyone who can to stay home until the weekend while crews work to restore power",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Three sentences + link stay a link",
+      "input": {
+        "text": "Big news today. The library is open late. Bring a friend! https://example.org/library"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.org/library",
+        "title": "Big news today. The library is open late. Bring a friend!",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "A dash-separated headline",
+      "input": {
+        "text": "Readers Are Back — and They Want Paper - The Verge https://www.theverge.com/2026/10/20/readers"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.theverge.com/2026/10/20/readers",
+        "title": "Readers Are Back — and They Want Paper - The Verge",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Rule 1: a selection with its page",
+      "input": {
+        "text": "The quick brown fox jumps over the lazy dog.",
+        "url": "https://example.com/fox",
+        "subject": "Fox facts",
+        "source": "selection"
+      },
+      "expect": {
+        "kind": "excerpt",
+        "url": "https://example.com/fox",
+        "title": null,
+        "excerpt": "The quick brown fox jumps over the lazy dog.",
+        "orig": null
+      }
+    },
+    {
+      "name": "Rule 1: a selection without a URL is a note",
+      "input": {
+        "text": "Remember to pack the charger.",
+        "source": "selection"
+      },
+      "expect": {
+        "kind": "note",
+        "url": null,
+        "title": null,
+        "excerpt": "Remember to pack the charger.",
+        "orig": null
+      }
+    },
+    {
+      "name": "Rule 1: a selection with no text is a link",
+      "input": {
+        "text": "  ",
+        "url": "https://example.com/fox",
+        "subject": "Fox facts",
+        "source": "selection"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/fox",
+        "title": "Fox facts",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Rule 2: Chrome on Android shares a selection with a text fragment",
+      "input": {
+        "text": "\"Lorem ipsum dolor sit amet, consectetur adipiscing elit.\"\nhttps://example.com/article#:~:text=Lorem%20ipsum%20dolor%20sit"
+      },
+      "expect": {
+        "kind": "excerpt",
+        "url": "https://example.com/article#:~:text=Lorem%20ipsum%20dolor%20sit",
+        "title": null,
+        "excerpt": "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
+        "orig": null
+      }
+    },
+    {
+      "name": "Rule 2: curly quotes around the selection",
+      "input": {
+        "text": "“A passage worth keeping.” https://example.com/article#:~:text=A%20passage%20worth"
+      },
+      "expect": {
+        "kind": "excerpt",
+        "url": "https://example.com/article#:~:text=A%20passage%20worth",
+        "title": null,
+        "excerpt": "A passage worth keeping.",
+        "orig": null
+      }
+    },
+    {
+      "name": "Rule 2: only the URL: the fragment’s text",
+      "input": {
+        "text": "https://example.com/article#:~:text=The%20quick%20brown,lazy%20dog"
+      },
+      "expect": {
+        "kind": "excerpt",
+        "url": "https://example.com/article#:~:text=The%20quick%20brown,lazy%20dog",
+        "title": null,
+        "excerpt": "The quick brown … lazy dog",
+        "orig": null
+      }
+    },
+    {
+      "name": "Rule 2: prefix and suffix are left out",
+      "input": {
+        "url": "https://example.com/article#:~:text=see-,the%20quiet%20year,-ends"
+      },
+      "expect": {
+        "kind": "excerpt",
+        "url": "https://example.com/article#:~:text=see-,the%20quiet%20year,-ends",
+        "title": null,
+        "excerpt": "the quiet year",
+        "orig": null
+      }
+    },
+    {
+      "name": "Rule 2: tracking is still removed, the fragment kept",
+      "input": {
+        "text": "https://example.com/article?utm_source=share#:~:text=keep%20this"
+      },
+      "expect": {
+        "kind": "excerpt",
+        "url": "https://example.com/article#:~:text=keep%20this",
+        "title": null,
+        "excerpt": "keep this",
+        "orig": "https://example.com/article?utm_source=share#:~:text=keep%20this"
+      }
+    },
+    {
+      "name": "Rule 3: text without a URL is a note",
+      "input": {
+        "text": "Ideas for the weekend:\n- walk\n- read\n"
+      },
+      "expect": {
+        "kind": "note",
+        "url": null,
+        "title": null,
+        "excerpt": "Ideas for the weekend:\n- walk\n- read",
+        "orig": null
+      }
+    },
+    {
+      "name": "Nothing to send",
+      "input": {
+        "text": ""
+      },
+      "expect": {
+        "kind": "none",
+        "url": null,
+        "title": null,
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Only whitespace",
+      "input": {
+        "text": " \n\t "
+      },
+      "expect": {
+        "kind": "none",
+        "url": null,
+        "title": null,
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "A URL the web URL rule refuses, nothing else",
+      "input": {
+        "url": "ftp://example.com/file"
+      },
+      "expect": {
+        "kind": "none",
+        "url": null,
+        "title": null,
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Google AMP",
+      "input": {
+        "url": "https://www.google.com/amp/s/www.example.com/story.amp?x=1"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.example.com/story.amp?x=1",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://www.google.com/amp/s/www.example.com/story.amp?x=1"
+      }
+    },
+    {
+      "name": "Google AMP on google.co.uk",
+      "input": {
+        "url": "https://www.google.co.uk/amp/s/news.example.co.uk/a/b"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://news.example.co.uk/a/b",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://www.google.co.uk/amp/s/news.example.co.uk/a/b"
+      }
+    },
+    {
+      "name": "Google /url?q=",
+      "input": {
+        "url": "https://www.google.com/url?q=https%3A%2F%2Fexample.com%2Fpage%3Fid%3D7&sa=D&source=docs&ust=1&usg=AOv"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/page?id=7",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://www.google.com/url?q=https%3A%2F%2Fexample.com%2Fpage%3Fid%3D7&sa=D&source=docs&ust=1&usg=AOv"
+      }
+    },
+    {
+      "name": "Google /url?url=",
+      "input": {
+        "url": "https://google.com/url?sa=t&url=https%3A%2F%2Fexample.com%2Fpaper&ved=2ah"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/paper",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://google.com/url?sa=t&url=https%3A%2F%2Fexample.com%2Fpaper&ved=2ah"
+      }
+    },
+    {
+      "name": "Google /url with a bad q falls back to url",
+      "input": {
+        "url": "https://www.google.com/url?q=javascript%3Aalert(1)&url=https%3A%2F%2Fexample.com%2Fok"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/ok",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://www.google.com/url?q=javascript%3Aalert(1)&url=https%3A%2F%2Fexample.com%2Fok"
+      }
+    },
+    {
+      "name": "Google /url without a target stays",
+      "input": {
+        "url": "https://www.google.com/url?sa=t"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.google.com/url?sa=t",
+        "title": null,
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "AMP cache /c/s/",
+      "input": {
+        "url": "https://www-example-com.cdn.ampproject.org/c/s/www.example.com/a?utm_source=x"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.example.com/a",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://www-example-com.cdn.ampproject.org/c/s/www.example.com/a?utm_source=x"
+      }
+    },
+    {
+      "name": "AMP cache /v/s/",
+      "input": {
+        "url": "https://www-example-com.cdn.ampproject.org/v/s/www.example.com/amp/story?amp_js_v=0.1#ref"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.example.com/amp/story?amp_js_v=0.1#ref",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://www-example-com.cdn.ampproject.org/v/s/www.example.com/amp/story?amp_js_v=0.1#ref"
+      }
+    },
+    {
+      "name": "AMP cache /c/ (http)",
+      "input": {
+        "url": "https://example-org.cdn.ampproject.org/c/example.org/plain"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "http://example.org/plain",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://example-org.cdn.ampproject.org/c/example.org/plain"
+      }
+    },
+    {
+      "name": "Facebook l.php",
+      "input": {
+        "url": "https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.com%2Fa%3Fb%3D1%26fbclid%3Dzzz&h=AT0"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/a?b=1",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.com%2Fa%3Fb%3D1%26fbclid%3Dzzz&h=AT0"
+      }
+    },
+    {
+      "name": "Facebook lm.facebook.com",
+      "input": {
+        "url": "https://lm.facebook.com/l.php?u=https%3A%2F%2Fexample.com%2Fm&h=x"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/m",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://lm.facebook.com/l.php?u=https%3A%2F%2Fexample.com%2Fm&h=x"
+      }
+    },
+    {
+      "name": "Facebook l.php with a broken escape stays (only fbclid-free)",
+      "input": {
+        "url": "https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.com%2F%E0%A4%A&h=AT0"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.com%2F%E0%A4%A&h=AT0",
+        "title": null,
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Instagram l.instagram.com",
+      "input": {
+        "url": "https://l.instagram.com/?u=https%3A%2F%2Fexample.com%2Fbio%3Figsh%3Dabc&e=AT1"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/bio",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://l.instagram.com/?u=https%3A%2F%2Fexample.com%2Fbio%3Figsh%3Dabc&e=AT1"
+      }
+    },
+    {
+      "name": "LinkedIn safety/go",
+      "input": {
+        "url": "https://www.linkedin.com/safety/go?url=https%3A%2F%2Fexample.com%2Fjob&trk=flagship-messaging-web"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/job",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://www.linkedin.com/safety/go?url=https%3A%2F%2Fexample.com%2Fjob&trk=flagship-messaging-web"
+      }
+    },
+    {
+      "name": "open.substack.com without tracking",
+      "input": {
+        "url": "https://open.substack.com/pub/someone/p/a-post-title"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://someone.substack.com/p/a-post-title",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://open.substack.com/pub/someone/p/a-post-title"
+      }
+    },
+    {
+      "name": "Nested: Google /url around Facebook around a tracked link",
+      "input": {
+        "url": "https://www.google.com/url?q=https%3A%2F%2Fl.facebook.com%2Fl.php%3Fu%3Dhttps%253A%252F%252Fexample.com%252Fdeep%253Futm_source%253Dfb"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/deep",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://www.google.com/url?q=https%3A%2F%2Fl.facebook.com%2Fl.php%3Fu%3Dhttps%253A%252F%252Fexample.com%252Fdeep%253Futm_source%253Dfb"
+      }
+    },
+    {
+      "name": "utm_* go, other parameters keep their order",
+      "input": {
+        "url": "https://example.com/p?a=1&utm_source=x&b=2&utm_medium=y&c"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/p?a=1&b=2&c",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://example.com/p?a=1&utm_source=x&b=2&utm_medium=y&c"
+      }
+    },
+    {
+      "name": "Only tracking: the ? goes",
+      "input": {
+        "url": "https://example.com/p?utm_source=x&gclid=1&fbclid=2"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/p",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://example.com/p?utm_source=x&gclid=1&fbclid=2"
+      }
+    },
+    {
+      "name": "The fragment stays",
+      "input": {
+        "url": "https://example.com/p?fbclid=1#section-2"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/p#section-2",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://example.com/p?fbclid=1#section-2"
+      }
+    },
+    {
+      "name": "Names compare exactly: UTM_source stays (byte-identical)",
+      "input": {
+        "url": "https://example.com/p?UTM_source=x&Fbclid=y"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/p?UTM_source=x&Fbclid=y",
+        "title": null,
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Empty pieces go when something is removed",
+      "input": {
+        "url": "https://example.com/?a=1&&utm_source=x&"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/?a=1",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://example.com/?a=1&&utm_source=x&"
+      }
+    },
+    {
+      "name": "Every listed name",
+      "input": {
+        "url": "https://example.com/?keep=1&fbclid=a&gclid=b&gbraid=c&wbraid=d&dclid=e&msclkid=f&mc_cid=g&mc_eid=h&igshid=i&igsh=j&yclid=k&twclid=l&ttclid=m&_hsenc=n&_hsmi=o&mkt_tok=p&ref_src=q&ref_url=r&__s=s&sr_share=t&utm_=u"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/?keep=1",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://example.com/?keep=1&fbclid=a&gclid=b&gbraid=c&wbraid=d&dclid=e&msclkid=f&mc_cid=g&mc_eid=h&igshid=i&igsh=j&yclid=k&twclid=l&ttclid=m&_hsenc=n&_hsmi=o&mkt_tok=p&ref_src=q&ref_url=r&__s=s&sr_share=t&utm_=u"
+      }
+    },
+    {
+      "name": "youtu.be: si goes, t stays",
+      "input": {
+        "url": "https://youtu.be/dQw4w9WgXcQ?si=AbCdEf&t=42"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://youtu.be/dQw4w9WgXcQ?t=42",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://youtu.be/dQw4w9WgXcQ?si=AbCdEf&t=42"
+      }
+    },
+    {
+      "name": "youtube.com watch: si goes",
+      "input": {
+        "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&si=AbCdEf"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&si=AbCdEf"
+      }
+    },
+    {
+      "name": "music.youtube.com: si goes",
+      "input": {
+        "url": "https://music.youtube.com/watch?v=x&si=y"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://music.youtube.com/watch?v=x",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://music.youtube.com/watch?v=x&si=y"
+      }
+    },
+    {
+      "name": "open.spotify.com: si goes",
+      "input": {
+        "url": "https://open.spotify.com/episode/4rOoJ6Egrf8K2IrywzwOMk?si=1a2b3c"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://open.spotify.com/episode/4rOoJ6Egrf8K2IrywzwOMk",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://open.spotify.com/episode/4rOoJ6Egrf8K2IrywzwOMk?si=1a2b3c"
+      }
+    },
+    {
+      "name": "si on another site stays",
+      "input": {
+        "url": "https://example.com/?si=1"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/?si=1",
+        "title": null,
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "x.com: s and t go",
+      "input": {
+        "url": "https://x.com/a/status/1?s=46&t=xyz&lang=en"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://x.com/a/status/1?lang=en",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://x.com/a/status/1?s=46&t=xyz&lang=en"
+      }
+    },
+    {
+      "name": "t on another site stays",
+      "input": {
+        "url": "https://vimeo.com/123?t=30s"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://vimeo.com/123?t=30s",
+        "title": null,
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "nytimes.com: smid and smtyp go",
+      "input": {
+        "url": "https://www.nytimes.com/2026/10/20/a.html?smid=nytcore-ios-share&smtyp=cur&action=click"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.nytimes.com/2026/10/20/a.html?action=click",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://www.nytimes.com/2026/10/20/a.html?smid=nytcore-ios-share&smtyp=cur&action=click"
+      }
+    },
+    {
+      "name": "substack.com subdomains: r, triedRedirect, showWelcome go",
+      "input": {
+        "url": "https://someone.substack.com/p/x?r=abc&triedRedirect=true&showWelcome=true&keep=1"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://someone.substack.com/p/x?keep=1",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://someone.substack.com/p/x?r=abc&triedRedirect=true&showWelcome=true&keep=1"
+      }
+    },
+    {
+      "name": "r on another site stays",
+      "input": {
+        "url": "https://example.com/search?r=1"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/search?r=1",
+        "title": null,
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Case of host and path kept",
+      "input": {
+        "url": "https://Example.COM/Path/To?Q=1&gclid=x"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://Example.COM/Path/To?Q=1",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://Example.COM/Path/To?Q=1&gclid=x"
+      }
+    },
+    {
+      "name": "No query: unchanged",
+      "input": {
+        "url": "https://example.com/plain/path"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/plain/path",
+        "title": null,
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Parentheses around a Wikipedia link",
+      "input": {
+        "text": "See (https://en.wikipedia.org/wiki/Foo_(bar))."
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://en.wikipedia.org/wiki/Foo_(bar)",
+        "title": "See",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Trailing full stop",
+      "input": {
+        "text": "Look at this: https://example.com/a/b."
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/a/b",
+        "title": "Look at this",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Trailing ! and ?",
+      "input": {
+        "text": "Wow https://example.com/wow!?"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/wow",
+        "title": "Wow",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Curly quotes around",
+      "input": {
+        "text": "He said “https://example.com/q”"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/q",
+        "title": "He said",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Single curly quotes and »",
+      "input": {
+        "text": "Link: ‘https://example.com/s’ and «https://example.com/t»"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/s",
+        "title": "Link: and «https://example.com/t",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Brackets",
+      "input": {
+        "text": "[https://example.com/x]"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/x",
+        "title": null,
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Angle brackets",
+      "input": {
+        "text": "Mail-style <https://example.com/angle>"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/angle",
+        "title": "Mail-style",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Two URLs: the first wins, the second stays in the title",
+      "input": {
+        "text": "Compare https://example.com/one and https://example.com/two"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/one",
+        "title": "Compare and https://example.com/two",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Upper-case scheme",
+      "input": {
+        "text": "HTTPS://EXAMPLE.COM/A"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "HTTPS://EXAMPLE.COM/A",
+        "title": null,
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "An invalid url field: the text’s URL",
+      "input": {
+        "url": "example.com/not-a-url",
+        "text": "Story https://example.com/real"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/real",
+        "title": "Story",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "A comma inside the path stays",
+      "input": {
+        "text": "https://example.com/a,b/c, and more"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/a,b/c",
+        "title": "and more",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "x-orig at 1,024 characters is kept",
+      "input": {
+        "url": "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?utm_source=x"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?utm_source=x"
+      }
+    },
+    {
+      "name": "x-orig over 1,024 characters is left out",
+      "input": {
+        "url": "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?utm_source=x"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "title": null,
+        "excerpt": null,
+        "orig": null
+      }
+    }
+  ],
+  "xOrigFrames": [
+    {
+      "name": "a short link keeps x-orig",
+      "item": {
+        "kind": "url",
+        "url": "https://example.com/story",
+        "title": "Story"
+      },
+      "extras": {
+        "x-orig": "https://example.com/story?utm_source=x"
+      },
+      "expect": {
+        "fields": {
+          "x-orig": "https://example.com/story?utm_source=x"
+        },
+        "small": true
+      }
+    },
+    {
+      "name": "x-orig and x-cap together",
+      "item": {
+        "kind": "url",
+        "url": "https://example.com/story",
+        "title": "Story"
+      },
+      "extras": {
+        "x-cap": "clean",
+        "x-orig": "https://example.com/story?fbclid=1"
+      },
+      "expect": {
+        "fields": {
+          "x-cap": "clean",
+          "x-orig": "https://example.com/story?fbclid=1"
+        },
+        "small": true
+      }
+    },
+    {
+      "name": "x-orig would make the frame large: left out",
+      "item": {
+        "kind": "url",
+        "url": "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "title": "A long link"
+      },
+      "extras": {
+        "x-orig": "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expect": {
+        "fields": {},
+        "small": true
+      }
+    },
+    {
+      "name": "the frame is large anyway: x-orig stays",
+      "item": {
+        "kind": "file",
+        "url": "https://example.com/doc",
+        "name": "doc.bin",
+        "mime": "application/octet-stream",
+        "contentHex": "a28784eddc01a8afd57374e9a9fa9231231a03f6c7edbfa15b5ac28ff75ec3ce9325c326b7c94f02bdb9e6185db3d766dd9ef477454a532b5845f3c9e2144373a9b2a5cfa8e0d8271f0b3cd2b83c89142c40ef7b4d1c692f5903d7face71ae4652456d7633a3e07d461636ecee782edb63c061c7b93485cfba5b63b9a6f6a11f1fd37cc14408a98f0dd5a9e9e4adc4503de01449da02ce132d3328e0d871df23c5df4276776e21cfe5fe391e369b5aa900956344db1f695b7c690f5addb78eb9a3ae646164e69c56269fa291c161665526354d4a3aee72c9f35d1c3df71238e80f3f019d9b1e354bcee2a5f1b20d1b8364a1f0adfad315ed44c5d4d4790e85969c418085fa465eddabccfa9131329adb11e8ecd06c96cc1ae11cb1a62f9c346e1b7bea6051d3a522f166b6ffb8ade115dcfba871cf80cb0a64d68be9b0dea20f3861de6a1e5557e3fa34e3952bd82d1bf4c2f5c28bb58cdf443ef8e402d96daaaa7915bdf8214b11f7756da5bb732075931d6de3a82a452bb575541e14fca528991b2e34b2c5ba4e132dbcfab25bccac01c5d38ee2d1d5b87df86c414736eb9c508aa0af36fd381bd673ec2e574c4ce5d260f550c4089c19e9fb068bd098281450c2220639fb385c51053596edcf32aa3f4750ecde61c06fbe31001126e8fecd1639b1024bfa3d6709dc5fdc09af5bcdc17f7bfad190a3a7a955a449de71101d98edb5da1bc0b9380a18b1c4c18c5da0af84b844500cf586a6e3c459919c9b110822240c5806c29e8c0a0110852f968ae391d815c357de4ea5630cbc7464f91a27a4f0301cbe4131c1c3cd99fdc57e9068ee27f9d2273741dc742f1308ab28ddff5e24f59e275d1de7b942f13da5e1664dbce5452e49f8ab3ff7577231a1ea436c03b397c2a246183836cc60d867ee19659355da100b5b42b5859bf13e5b44b2f2e18df9365cf976379abad8c14acf86177722bacffb756cc9e3188a07636499d561c89a1dd489ee107e80e1b7fffc6d6ed0f2a96f80b4ed7460b0f3c7826eea3aa486b89db114c7a031ac510ca8b5e350202cd883c04287eb1f2ee93444a4a3b66bd5c403b50bf83d686d01558221744e0d5d940b1a22871e6c3a85d446f45299a1386f9ec4533d1248482994c04cfb0d5a00ff40b98c581bdf9ba56c9b7fddfb4d7dd71f54090cee807d22d8e876cf9ff54c659953e90f33e8f4bb349dc2b2181b5dc0fb0e05be06ddb6e07ebb69446486ea3e8e7fac021ce94b41aceedaa86c0c915708418df2342a88e7af36e79282064760e6a6d91a455761ade5288b7a82ac8c0b77a610d7d1d507181dd1b5586480f88d15c1031d0ef39bc7151695f78ded4c4fe01e3d5dc6b6ce79389cd384a316faea8e3ee102581d08a93e08b747ca3eb339c4bc898779590317c7cf480be1f37c5ff4bdf8656dc55b6c25e00dd550fc12654eaefe3a111cd04f545c34124898e1cc69a323ebb8d106ac79b23b68c26a1b270dc1d7c138b2a96ffdb230911358935293dd66d0b72d9867b053bd677be2aa96324bf8819067f4e31988d7c31a293e1c884dcb6cb95750a5b590e01afa51e1ae192292694f69dc96b5cb952610cd63ac62357b7a096d5b0c365c1cc4c8002ee2eec1b0af63d922c0ed9efcffb678c4e1b7ecbe079c18b66c21678422f5f73d72329c61e824c36afeeb42881788a72898b80958c5509479bfe0562c5539b68c2ba15386cad353e9a594d18a579d7e836dc5d0d43b2fc4b33949d63abd0ee0f2180e994c9563b25e1fb9beb6547903e52b4fc3b39ece7ae6b8fd27683ef7fcd3569116095c7439576ac00a6c15e4d640655a4dc11fdc0d9a0f0ac6ee8893ed6f4dffbfbcca2dd7e51c973e22325d3dca506e05179e05ab330dd0b01544ff17ae7bff084fbf17a765623b8582ae590e572f3cc0064834c993832b81009380278a22d5d3a7a1c880fbff41677b900f9c8cccd023a4155082615e73ce7c6623c492c54469d59f42a79625689772cb53fd91555582f3b01e835cfac68cc84c0e5b3a1e7dad215f1fabaccf86d5116baf7a071eca95421230bbc76dbbf0dd88e7a381fa7e4c873cdb26e15daabf429bc5d16169ae36a55415e9228848965b3f847719452af14792d7dea4d0da49b5a2f959b4bcdee087df49ad5967f561436dba332715bfaa15ae7ebe8d6102962aa496d68b62b4979235831823f8fa6fc0d0bb71a6bf017dacacc3a2fa131be8b251774434f88edd0b7577abd29a616ccf371fc0a443f24248f352bd6697cb2c42bad16146a973d36483d535d3375e2f2a9ae78becd0efc9222f54bbffb3c092ba3ff45dba968a9a8f2966eb01ccb974400b679d33926c01e0e6f12934dfad892b70be6d919af7f91fcb5ade38de944d6fd468b71c595ee21a030c817af639346264b9e6b8f63c4bdd7c3082e1f672042c53be1a61b55239f932de30a95b4b2fb9b910614568a2bae2716c69ddea8b5fc7671aeb7a974c9fdb108803737bda88476466f0bce620db840c0798d8b1430d1d4fad647452a3e2c0908bc76462a380d987bd2a62bdfad8c6249f300679499e1f0c61f0a1cae7aaa806fd4f68fdc01e2cbc1cb7c3bd12a55a083f655682371e0e4b9183f5b9915fd7df3ab43e27ff5715d7fae945a480f6241f2d111b24128170f31070a9a8a3cdad257e3e3b5f682a2efb5407ce1607b90fb04c3c342c779bd3b11ebf0c0075b709302c0cce87e1b6032275231e1ec05dec6dce01ca5e27de7e1c34734dad98bcf1e5a433787bb7e32b8562f3c1d6d6966ba23828805289e8d4666876cca0a3f432b20aadc49a9807edaec1e07e0c9e88d834d0e7e4d5d26c2c413c12fec72021935f253297dbb453930edebabb3c6e9c3c4f0ec6acf051731e5af5a4d3740bc7c96495f9e92ca83b8fa528700f537dc610da2ba5be2c0aa64cc321cce22f826088ab7fee9f4aa34261312e267844b9597324699b08cc6ade80aee8772c1b4aa59c60af80ba3f987cd02162d0fd3eed7aecdb4e8566513de37b8ab55a74811a578dc344b51423c216b589748c7f29436d2d89c76641f414df318e0135af81e86efd0fc7f00629ffcbd98f342024b1acdff406b3243954b25f2239f973018a6b2694fa78325152e3c88784f2027df78ff3b75b9f8280a45fbde2c44a77cf6549ed94723470b275ffb30fd5ef13ca72cbf1d9a046becd9925877077123af64173b1b513aa2c9dae661a65a05c27e8c8764ba32574818e599300a0b8c93ac407d1c7ad28c7e3e687643cf244f74300652e6431b3261decd02067b3df2546a406d7335244eab253a2039aaa50d2af571478f4e6d407ae2709bf3337a31fceb7bb6a0b664220622896612d684c6348258ff9c6c169127116ca5b31ee2a53c3513fc2e902d45c291c75682eb9c3716cb5f99f87c0631ea12431949b3c9a162394ef915de62de04a9626f444e20c7143214d842175da933c06c7139013375272e2822cf4926d5071b9886fbdf21bfb735aed36f463eb7b697684c056883fdd658f478912710e21462ea8bca4239a6af18196236c1ef8fc01baf2588a08bdfdf4627316f41a81c5d5d63bf15856381515c7bb38107b336bfc53a4903fb3a2534f2a551e9b7862e77a69f92eedaedc6785f227c8f599076b91e23061b0fe0b45324847ca61d73f48b0ab80a529cd21a0228c83404c0fe5af0c48667fc1a74a6b5c9c7c34359e8b1a7055a78499b18887fd2c84f050298c1bacd03970b1a6d67c361cc54653f0577f98b2fbaf6d2a2ca2514007f032382aad2a0f87a4e95d1468bcd8400d17f91debde99d653a324dbd76dbab6823aeec2532415fe8f1b038fe6490cb6a6b3960a6ac0ce861f424a8b242db116fdfff1e6839232171ce83fa89bfeddab676888ff702da498beff615b83a294327fc77ac06d594af46b679c589d8ac76014d871b267ac23098c8db6eafb03cc9dcb71cd5bd1377de988320cf38e1fa914254552b297fd704925ccd410bfc4477a84a07e4630d346e7eb698b38c8193c8c12d9efd491b6a1ad5464391ff6eec62189f7012ed6d77b34151028d064334ede641e90abdac464cf42ea3b9d29608e9624286d3a1c39fc8a3faa19f1a35c52d5f75ce20fbf3fa9d838aceaf717e5726fad3940524807b021f8cab867fc0d69aa75d706bdcc56b6cab586ae2bf0199e4704bdead0869f49410423cd4deb14202cea0bad228c6f6beab44cf2873842e9393aa50ac4"
+      },
+      "extras": {
+        "x-orig": "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expect": {
+        "fields": {
+          "x-orig": "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "small": false
+      }
+    },
+    {
+      "name": "x-orig over 1,024 characters: left out",
+      "item": {
+        "kind": "url",
+        "url": "https://example.com/s"
+      },
+      "extras": {
+        "x-orig": "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expect": {
+        "fields": {},
+        "small": true
+      }
+    },
+    {
+      "name": "x-orig that fails the web URL rule: left out",
+      "item": {
+        "kind": "url",
+        "url": "https://example.com/s"
+      },
+      "extras": {
+        "x-orig": "javascript:alert(1)"
+      },
+      "expect": {
+        "fields": {},
+        "small": true
+      }
+    },
+    {
+      "name": "an unknown x-cap: left out",
+      "item": {
+        "kind": "url",
+        "url": "https://example.com/s"
+      },
+      "extras": {
+        "x-cap": "bogus"
+      },
+      "expect": {
+        "fields": {},
+        "small": true
+      }
+    },
+    {
+      "name": "x-cap test on a page",
+      "item": {
+        "kind": "page",
+        "url": "https://daylight.invalid/test/e3c6eeb3bc8944a38bcb85c582f8cd60",
+        "contentText": "<!doctype html><p>hi</p>"
+      },
+      "extras": {
+        "x-cap": "test"
+      },
+      "expect": {
+        "fields": {
+          "x-cap": "test"
+        },
+        "small": true
+      }
+    }
+  ],
+  "appleNews": [
+    {
+      "name": "redirectToUrlAfterTimeout with escaped slashes",
+      "html": "<html><head><script>function redirectToUrlAfterTimeout(url, t) {}\nredirectToUrlAfterTimeout(\"https:\\/\\/www.theatlantic.com\\/ideas\\/archive\\/2026\\/10\\/fed\\/680000\\/?x=1\\u0026y=2\", 0);</script></head><body><a href=\"https://apple.news/AJk\">Open in News</a></body></html>",
+      "expect": "https://www.theatlantic.com/ideas/archive/2026/10/fed/680000/?x=1&y=2"
+    },
+    {
+      "name": "redirect in single quotes",
+      "html": "<script>redirectToUrlAfterTimeout('https://www.example.com/a', 1000)</script>",
+      "expect": "https://www.example.com/a"
+    },
+    {
+      "name": "no redirect: the first link in the body",
+      "html": "<html><head><link href=\"https://cdn.apple.news/x.css\"></head><body class=\"c\"><span>Click <a class=\"click-here\" href=\"https://www.cnn.com/2026/10/20/a.html?a=1&amp;b=2\">here</a></span></body></html>",
+      "expect": "https://www.cnn.com/2026/10/20/a.html?a=1&b=2"
+    },
+    {
+      "name": "a relative link first, then an absolute one",
+      "html": "<html><body><a href=\"/relative\">x</a><a href='https://example.org/b'>y</a></body></html>",
+      "expect": "https://example.org/b"
+    },
+    {
+      "name": "links only in head: null",
+      "html": "<html><head><a href=\"https://example.com/head\">x</a></head><body><p>No links</p></body></html>",
+      "expect": null
+    },
+    {
+      "name": "a redirect that fails the web URL rule: the body link",
+      "html": "<script>redirectToUrlAfterTimeout(\"javascript:void(0)\", 0)</script><body><a href=\"https://example.net/c\">c</a></body>",
+      "expect": "https://example.net/c"
+    },
+    {
+      "name": "an unquoted href",
+      "html": "<body><A HREF=https://example.com/unquoted>u</A></body>",
+      "expect": "https://example.com/unquoted"
+    },
+    {
+      "name": "nothing at all",
+      "html": "Not found",
+      "expect": null
+    }
+  ]
+}

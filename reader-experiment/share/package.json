@@ -3,11 +3,16 @@
   "version": "1.1.0",
   "private": true,
   "type": "module",
-  "description": "Daylight Share protocol v1 (revision 1.1) and its Lab additions: JavaScript reference implementation, mock ntfy relay and test vectors",
+  "description": "Daylight Share protocol v1 (revision 1.1) and its Lab additions: JavaScript reference implementation, mock ntfy relay, test vectors, the capture code and the daylight-send command line",
   "scripts": {
     "test": "node --test js/test/*.test.mjs",
     "vectors": "node vectors/generate.mjs && node vectors/generate-lab.mjs",
+    "build": "node js/bin/build.mjs",
+    "capture:check": "node js/capture/sync.mjs --check js/capture/clean-html.js js/capture/Readability.js",
     "relay": "node js/mock-relay.mjs",
     "live": "node js/live-ntfy.mjs"
+  },
+  "devDependencies": {
+    "linkedom": "0.18.14"
   }
 }

@@ -56,6 +56,8 @@ export const LAB_STORAGE_KEYS = ['lab/inbox', 'lab/heard', 'lab/states', 'lab/ou
 
 /** The values of the `x-cap` item header field (LAB-PROTOCOL 2.3). */
 export const X_CAP_VALUES = ['seen', 'clean', 'excerpt', 'test'];
+/** The longest `x-orig` a sender writes (LAB-PROTOCOL 2.3); receivers do not apply it. */
+export const X_ORIG_MAX = 1024;
 
 const LABEL_KEY = 'dlshare/v1/key';
 const LABEL_INBOX = 'dlshare/v1/inbox';
@@ -520,9 +522,12 @@ const shouldCompress = (mime) => TEXT_MIMES.test(mime || '');
 
 /**
  * Builds the frames for one item.
- * item: {kind: 'url'|'page'|'file', url?, title?, name?, mime?, content?: Uint8Array|string, from?, app?, id?, sent?}
+ * item: {kind: 'url'|'page'|'file', url?, title?, name?, mime?, content?: Uint8Array|string, from?, app?, id?, sent?,
+ *        extras?: {'x-cap'?, 'x-orig'?}}
  * opts: {compress?: boolean (default: text types only), chunkSize? (tests), nonces?: Uint8Array[] (tests)}
- * -> {id, header (of part 0), frames: Uint8Array[], encodedLength, attachment: boolean}
+ * -> {id, header (of part 0, without the Lab fields), frames: Uint8Array[], encodedLength, attachment: boolean,
+ *     extras (the Lab fields part 0 carries: labHeaderFields)}
+ * Lab senders pass `extras` only with Lab on (LAB-PROTOCOL 2.3); without it the frames are exactly v1.1's.
  * Throws ShareError('too-large', tooBigMessage(size)) for content over MAX_ITEM bytes (before compression).
  */
 export async function buildItemFrames(keys, item, opts = {}) {
@@ -568,16 +573,46 @@ export async function buildItemFrames(keys, item, opts = {}) {
   const chunkSize = opts.chunkSize ?? CHUNK;
   const parts = Math.max(1, Math.ceil(encoded.length / chunkSize));
   if (parts > MAX_PARTS) throw new ShareError('too-large', 'That file is too large to send.');
+  const extras = labHeaderFields(item.extras);
   const frames = [];
   let attachment = false;
   for (let i = 0; i < parts; i++) {
     const h = parts > 1 ? { ...header, part: i, parts } : header;
     const chunk = encoded.subarray(i * chunkSize, Math.min(encoded.length, (i + 1) * chunkSize));
-    const frame = await encryptFrame(keys, PURPOSE_INBOX, h, chunk, opts.nonces?.[i]);
+    let frame;
+    if (i === 0 && (extras['x-cap'] || extras['x-orig'])) {
+      // The Lab fields ride on part 0 only, where receivers read them. x-orig is left out when it alone would turn a
+      // small frame into a large one (an attachment: kept 3 h, re-sent at 185 minutes).
+      frame = await encryptFrame(keys, PURPOSE_INBOX, { ...h, ...extras }, chunk, opts.nonces?.[i]);
+      if (extras['x-orig'] && !isSmallFrame(frame)) {
+        const { 'x-orig': _orig, ...rest } = extras;
+        const without = await encryptFrame(keys, PURPOSE_INBOX, { ...h, ...rest }, chunk, opts.nonces?.[i]);
+        if (isSmallFrame(without)) { delete extras['x-orig']; frame = without; }
+      }
+    } else {
+      frame = await encryptFrame(keys, PURPOSE_INBOX, h, chunk, opts.nonces?.[i]);
+    }
     if (!isSmallFrame(frame)) attachment = true;
     frames.push(frame);
   }
-  return { id, header, frames, encodedLength: encoded.length, attachment };
+  return { id, header, frames, encodedLength: encoded.length, attachment, extras };
+}
+
+/**
+ * The Lab item header fields a sender may write (LAB-PROTOCOL 2.3), from a request {'x-cap'?, 'x-orig'?}: `x-cap`
+ * when it is one of X_CAP_VALUES; `x-orig` when it passes the web URL rule (the trimmed value) and is at most
+ * X_ORIG_MAX characters. Anything else is left out. -> {} or {'x-cap'?, 'x-orig'?}. buildItemFrames also leaves
+ * x-orig out when it would make a small frame large.
+ */
+export function labHeaderFields(extras) {
+  const out = {};
+  if (!extras || typeof extras !== 'object') return out;
+  if (typeof extras['x-cap'] === 'string' && X_CAP_VALUES.includes(extras['x-cap'])) out['x-cap'] = extras['x-cap'];
+  if (typeof extras['x-orig'] === 'string') {
+    const u = webUrl(extras['x-orig']);
+    if (u && u.length <= X_ORIG_MAX) out['x-orig'] = u;
+  }
+  return out;
 }
 
 /** An ack frame for at most MAX_ACK_IDS ids (the rest are cut: callers slice into frames of MAX_ACK_IDS). */
@@ -974,9 +1009,10 @@ function normRow(r) {
  * The outbox lives in storage under 'outbox' (a list of small rows, newest first), 'outbox/<id>' (the content, base64,
  * kept until delivered, removed or 14 days after the share) and 'ackSince' (the ack cursor).
  * Row: {id, kind, title, url, name, mime, size, sent, created, status, errorCode, attempts, slowFails, lastPublish,
- *       attemptStarted, attachment, error, delivered}
+ *       attemptStarted, attachment, error, delivered, extras?}
  * status: sending | sent | delivered | failed | expired. errorCode, for failed and expired: '' | 'network' | 'full' |
- * 'refused' | 'too-large' | 'gone'. `error` is technical detail for logs; show describeRow(row) instead.
+ * 'refused' | 'too-large' | 'gone'. `error` is technical detail for logs; show describeRow(row) instead. `extras`
+ * (only on rows shared with Lab header fields, item.extras) is what every attempt writes: labHeaderFields.
  * Every public method runs under a lock shared by all Senders on the same storage object.
  *
  * onAckHeader(header, {time, msgId}): called for every ack-topic frame that decrypts and whose `kind` is "ack" (acks
@@ -1044,6 +1080,8 @@ export class Sender {
       sent: built.header.sent, created: now, status: 'sending', errorCode: '', attempts: 0, slowFails: 0,
       lastPublish: 0, attemptStarted: now, attachment: built.attachment, error: '', delivered: 0,
     };
+    const extras = labHeaderFields(item.extras);
+    if (extras['x-cap'] || extras['x-orig']) row.extras = extras; // re-sends carry the same Lab fields (LAB-PLAN 1.3)
     if (defer) Object.assign(row, { status: 'failed', errorCode: 'network', lastPublish: now, error: 'deferred while offline' });
     await this._saveRow(row);
     if (row.kind !== 'url') {
@@ -1105,7 +1143,7 @@ export class Sender {
     try {
       const built = await buildItemFrames(await this.keys(), {
         id: row.id, kind: row.kind, url: row.url || undefined, title: row.title, name: row.name, mime: row.mime,
-        content, sent: row.sent, from: this.from, app: this.app,
+        content, sent: row.sent, from: this.from, app: this.app, extras: row.extras,
       }, { chunkSize: this.chunkSize });
       return { built, ended: false };
     } catch (e) {

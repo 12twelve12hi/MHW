@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import * as ds from '../js/daylight-share.js';
 import * as lab from '../js/daylight-lab.js';
+import { buildW1 } from './lab-w1-cases.mjs';
 
 const h = (s) => createHash('sha256').update(s).digest();
 const secretFrom = (label) => new Uint8Array(h(label).subarray(0, 16));
@@ -544,9 +545,13 @@ const serverSection = {
     [0, 3], [0.227, 3], [2.5, 10], [2.999, 3], [0.004, 3], [1.005, 3], [0.015, 3], [12.345, 10], [3, 3], [null, 3], [-1, 3], ['0.5', 3],
   ].map(([used, cap]) => ({ used, cap, expect: lab.aiTodayText(used, cap) })),
 };
+const w1 = await buildW1();
 const labText = {
   strings: flatten(lab.LAB_TEXT), messages, checkedIn, inboxHeader, serverRow, serverFeature, serverSection,
   features: [...lab.LAB_TEXT.featureOrder, ...lab.LAB_TEXT.serverFeatureOrder].map((id) => ({ id, ...lab.LAB_TEXT.features[id] })),
+  // W1 (L1)
+  kindLines: w1.kindLines, cleanedFrom: w1.cleanedFrom, use: w1.use,
+  useFeatures: lab.USE_FEATURES.map((id) => ({ id, footer: lab.LAB_TEXT.use.footers[id], a11y: lab.fillText(lab.LAB_TEXT.use.a11y, { feature: lab.LAB_TEXT.features[id].name }) })),
 };
 assert.equal(serverRow.find((c) => c.state === 'needs-server').subtitle, 'Optional · Not set up', 'plan 1.1');
 assert.equal(serverRow.find((c) => c.state === 'needs-key').subtitle, 'Optional · Needs a Claude key');
@@ -573,7 +578,11 @@ const constants = Object.fromEntries(['LAB_LEVEL', 'MAX_ST_PER_FRAME', 'MAX_ST_R
   'HELLO_EVERY_MS', 'STATE_DIGEST_WINDOW_MS', 'STATE_DIGEST_MAX', 'INBOX_STALE_MS', 'PENDING_MAX', 'LEDGER_STATES_MAX',
   'LAB_FRAME_GAP_MS', 'LAB_FRAMES_PER_DAY', 'LAB_YIELD_MS', 'LAB_OFF_REPEAT_MS', 'LAB_OFF_REPEATS', 'LAB_FLUSH_DELAY_MS',
   'GATE_DEADLINE_MS', 'FAST_CHECK_MS', 'FAST_CHECK_WINDOW_MS', 'STATE_RANK', 'LAB_STATES', 'CAPS', 'FEATURE_CAPS',
-  'SERVER_FEATURES', 'SERVER_KEYS'].map((k) => [k, lab[k]]));
+  'SERVER_FEATURES', 'SERVER_KEYS',
+  // W1 (L1)
+  'USE_FEATURES', 'EXCERPT_MAX_CHARS', 'EXCERPT_LINE_MAX', 'EXCERPT_NAME_WORDS', 'TEXT_FRAGMENT_WORDS', 'ACTIVITY_MAX',
+  'DIAGNOSTICS_EVENTS', 'TEST_URL_PREFIX', 'EXCERPT_TAGS', 'EXCERPT_AS_P', 'EXCERPT_DROP', 'TRACKING_PARAMS',
+  'TRACKING_BY_SITE'].map((k) => [k, lab[k]]));
 
 const out = {
   protocol: 'Daylight Share Lab (reader-experiment/share/LAB-PROTOCOL.md) on protocol v1, revision 1.1',
@@ -591,10 +600,19 @@ const out = {
     'labRowText: describeLabRow(row, now, ctx) (LabRowText) must equal expect.label, sentence, action (null, "retry-now" or "try-again"), stepLine (null for v1.1 rows) and final; expect.a11y is the row\'s accessibility label ("{label}. {sentence}"). ctx.hasCap is the list of tokens for which hasCap is true; ctx.state is {s, t}, a bare token or null; ctx.online false means offline.',
     'labText: strings is LAB_TEXT flattened to dotted ids (arrays joined with ","); every app shows exactly these. messages: needsMessage(state, {platform, feature, short, heading, message}) -> expect (null = no text of its own: the server module\'s text is used). checkedIn: checkedInText(ms, now). inboxHeader: the What\'s in Lab header line. features: the name and sentence of each Lab feature, in list order (the four server features last). serverRow: the server\'s state for the whole server -> heading (serverHeadingShort: the line under What\'s in Lab\'s server heading; needs-server is "Not set up"; an unknown state is error) and subtitle (serverRowSubtitle: the "Daylight server ›" row, "Optional · {short}" with that heading form). serverFeature: serverFeatureShort(state, headingState) -> a server feature row\'s own short state, or null when its state equals the heading\'s (unknown states count as error). serverSection (2.6, the Daylight server section): moved: serverMovedText(moved) fills {host} with discover()\'s new origin minus its scheme and any path, as text (the port stays); labInboxSeen: labInboxSeenText(lastSeen, now) with GET /v1/status\'s inbox.lastSeen (an ISO time read by rule D, or ms; anything else is the not-yet line); aiToday: aiTodayText(used, cap), where an amount is n × 100 in double precision rounded half up to cents (so 1.005 is "1" and 0.015 is "0.02"; never printf or toFixed), ".00" left out, and anything but a finite number above 0 is "0".',
     'v1Safety: each labFrames frame as a v1.0 or v1.1 ack reader sees it: it opens as an ack whose ids are [], so it acks nothing and no row changes. Kotlin\'s AckHeader.idsOf and Swift\'s AckHeader.ids(in:) must return [] for each.',
+    'W1 (L1; LAB-PROTOCOL 2.9). normalise.json holds smart intake (F16). labText also has: kindLines (inboxKindLine: the line under an Inbox row, F03), cleanedFrom (cleanedFromText(orig): "Cleaned from {host}" or null), use (labUseOn(settings, feature): Lab on and the feature\'s Use switch not off; a missing key is on) and useFeatures (the features with a Use switch, their footers and the switch\'s accessibility label).',
+    'labExcerpt (F11): items: excerptItem(input) -> the item to send ({kind, mime, name, url?, title, content, extras}) or null; sanitize: sanitizeExcerptHtml(html, maxChars) -> {html, trimmed}; textHtml: excerptTextHtml(text, maxChars); fragments: textFragment(url, text) (null for a URL that fails the web URL rule); dates: excerptDate(date) ("" when the date is not a valid YYYY-MM-DD); fileNames: excerptFileName(text, {note}); classify: classifyShare(input) -> {kind, url, text} (6.5 Q1 = b: rules 1-3 only); limits: the input text is textRepeat repeated `times` times, then trimmed; excerptItem (text alone, and with html "<p>" + text + "</p>") and excerptMarkdown must give a content of `length` UTF-16 units with that SHA-256 (of its UTF-8) and that ending.',
+    'diagnostics (F26): redact: redactDiagnostics(text) -> expect; activity: activityEvent(input) -> event, activityLine(event) -> line; reports: diagnosticsReport(input) -> expect (input.now is the clock for the check-in\'s relative time).',
+    'testArticle (F26): testArticle({id, device}) -> the item to send ({id, kind, url, title, content, extras}).',
   ],
   constants, labTopics, labFrames, labParse, labLedger, labGate, labHeaderExtras, labRowText, labText, v1Safety,
+  labExcerpt: w1.labExcerpt, diagnostics: w1.diagnostics, testArticle: w1.testArticle,
 };
 writeFileSync(new URL('./lab-vectors.json', import.meta.url), JSON.stringify(out, null, 2) + '\n');
+writeFileSync(new URL('./normalise.json', import.meta.url), JSON.stringify(w1.normalise, null, 2) + '\n');
 console.log(`wrote lab-vectors.json: ${labFrames.length} labFrames, ${labParse.length} labParse, ${labLedger.length} labLedger, `
   + `${labGate.length} labGate, ${labHeaderExtras.length} labHeaderExtras, ${labRowText.length} labRowText, `
-  + `${Object.keys(labText.strings).length} strings and ${messages.length} messages, ${v1Safety.length} v1Safety`);
+  + `${Object.keys(labText.strings).length} strings and ${messages.length} messages, ${v1Safety.length} v1Safety, `
+  + `${w1.labExcerpt.items.length} excerpt items, ${w1.labExcerpt.sanitize.length} sanitize, ${w1.labExcerpt.classify.length} classify, `
+  + `${w1.diagnostics.redact.length} redact`);
+console.log(`wrote normalise.json: ${w1.normalise.cases.length} cases, ${w1.normalise.xOrigFrames.length} xOrigFrames, ${w1.normalise.appleNews.length} appleNews`);

@@ -15,11 +15,16 @@ How the "Send to Daylight" apps get links, pages and files to a Daylight through
 | `js/daylight-lab.js` | The Lab reference (one module; it imports only `daylight-share.js`): parser, ledger, timeline text, `LAB_TEXT`, `labGate`, `LabInbox` |
 | `vectors/lab-vectors.json` | The Lab vectors every port must pass, made by `vectors/generate-lab.mjs` (deterministic: CI requires no diff) |
 | `js/test/fixtures/` | The v1.0 (b48752b) and v1.1 (bb8ccfa) references as they shipped: the old peers of the skew suite. Never edited |
+| `vectors/normalise.json` | Smart intake (F16): `normaliseShare` cases, the `x-orig` frame rule and Apple News pages, also made by `vectors/generate-lab.mjs` |
+| `js/capture/` | The one source of the capture code every sender copies: `clean-html.js`, Mozilla Readability 0.6.0 and `sync.mjs` (its README) |
+| `js/bin/daylight-send.mjs` | The command line (F09); `js/bin/build.mjs` makes the one file CI publishes to the release. `SEND-API.md` is its manual and the list of every entry point |
 
 ```sh
+npm ci                           # linkedom, the DOM of the capture tests (nothing else needs it)
 node --test js/test/*.test.mjs   # unit, mock-relay, Lab, skew and soak tests (the soak takes about 40 s)
 node vectors/generate.mjs        # regenerate the vectors after changing the library
-node vectors/generate-lab.mjs    # regenerate the Lab vectors after changing daylight-lab.js
+node vectors/generate-lab.mjs    # regenerate the Lab vectors (lab-vectors.json, normalise.json) after changing daylight-lab.js
+node js/bin/build.mjs            # dist/daylight-send.mjs, the one-file command line
 node js/live-ntfy.mjs            # needs network access to ntfy.sh
 ```
 
@@ -88,6 +93,57 @@ a single `export const|function|class`, which their classic bundle needs (a test
 message and bandwidth buckets; `state.publishLog` and `state.limited` record what passed and what got a 429.
 `LabInboxSim` is a Lab Daylight for tests (`reader` for links and pages, `handed` for files unless `stateFor` says
 otherwise). The soak (`lab-skew.test.mjs`) prints its daily message counts; CI copies them to the run summary.
+
+## Lab (L1)
+
+W1's JavaScript reference (LAB-PROTOCOL 2.9, normative for A3 and K3). Still wire-neutral: `test-vectors.json` did not
+change, and an item sent without Lab extras is byte for byte v1.1's.
+
+**`daylight-share.js`, backward compatible:** `buildItemFrames` and `Sender.send` take `item.extras`
+(`labHeaderFields`: `x-cap` of the four values, `x-orig` that passes `webUrl` and is at most `X_ORIG_MAX` = 1,024
+characters). They ride on part 0 only, `x-orig` is left out when it alone would make a small frame large, and
+`built.extras` says what went. The row keeps them (`row.extras`, only when there are any), so re-sends write the same
+fields (LAB-PLAN 1.3: queued items go out as stored).
+
+**`daylight-lab.js` (W1 list):** `normaliseShare`, `classifyShare`, `cleanShareUrl`, `findShareUrl`, `shareTitle`,
+`hasTextFragment`, `withoutTextFragment`, `textFragmentText`, `isAppleNewsUrl`, `extractAppleNewsTarget` (F16, F11);
+`excerptItem`, `excerptHtml`, `excerptMarkdown`, `excerptTextHtml`, `sanitizeExcerptHtml`, `excerptFileName`,
+`excerptFirstLine`, `excerptTitle`, `excerptDate`, `textFragment` (F11); `testArticle`, `redactDiagnostics`,
+`activityEvent`, `appendActivity`, `activityLine`, `diagnosticsReport` (F26); `inboxKindLine`, `cleanedFromText` (F03,
+2.3); `USE_FEATURES`, `labUseOn` (6.5 Q5); `fillText`; and the W1 strings in `LAB_TEXT` (184 new ids: the Use switches
+and their footers, share in place, the queue, automation and the command line, Send as, excerpts, arrival notices and
+Inbox health, Setup check with its checks and steps, the test article, diagnostics, the copied link and the
+right-click menu).
+
+**Choices L1 made where the plan leaves room** (the vectors pin them):
+
+- **6.5 Q1 = (b):** `classifyShare` has no word-count rule. An excerpt needs `source: 'selection'` (the context menu,
+  Selection mode, a Safari selection, "Send as excerpt") or a text-fragment URL (Chrome on Android shares a highlighted
+  passage that way: it is a selection the user made). Text with no URL at all is a note (there is nothing else to
+  send). Everything else, however long, is a link with the text as its title.
+- **6.5 Q5 = yes:** Use switches on F03 (the link-only hint), F04, F08, F10, F16 and F33. Footers start "When it’s off,
+  …". Store keys next to `lab`: `dls.labUse.<id>`, `labUse.<id>`, `settings.labUse[<id>]`; a missing key is on.
+- `normaliseShare` also returns `kind` (`link`, `excerpt`, `note`, `none`), and `orig` is null over 1,024 characters
+  (it would never be sent). Unwrapping runs at most 5 steps; LinkedIn's bare `linkedin.com` counts too. Titles lose the
+  empty `()` `[]` `""` … a removed URL leaves, and a stray `. , ; ! ?` at their edges.
+- Excerpts: block tags (`div`, `section`, …, `tr`) become paragraphs so their text does not run together; `script`,
+  `style`, `svg`, `button` and the like go with their content; stray closing tags (`</blockquote>`) are dropped, so a
+  selection can never close the excerpt's own elements. The 50,000-character limit counts the text of the sanitised
+  HTML (a character reference is one). The date reads "22 October 2026"; a note's footer is "— shared from {app} on
+  {date}". Notes carry `x-cap: excerpt` too.
+- The test article is about 375 words in six paragraphs (`LAB_TEXT.testArticle`), so ports produce it byte for byte.
+- `redactDiagnostics` also redacts any `scheme://…` (pairing links included) and `www.…`; `SERVER-` is matched
+  case-sensitively so state names such as `server-outdated` stay readable.
+- `clean-html.js` did not exist in `extension/src/` when L1 started, so it was written from F03's rules; it also
+  clears `javascript:` from `<area>` and works on a clone when handed the live element. The extension removes its own
+  copy in X1.
+
+**Command line (F09).** `daylight-send` (manual: `SEND-API.md`). The outbox is a `FileStorage` (one JSON file per key,
+atomic rename) under a `FileLock` (`O_EXCL` lock file, touched every 10 s, stale after 60 s), one outbox per pairing.
+Every run does `tick()` first. Two runs at once lose no rows; `cli.test.mjs` runs eight at once, three times, with one
+of them in `--wait` (without the lock the same run loses one or two rows of eight). The command line is always Lab:
+smart intake, `x-orig`, and a Lab ledger fed from the ack topic. `--wait-for reader` ends on `reader`, `queued` or
+`handed` (documents).
 
 ## Changelog
 
