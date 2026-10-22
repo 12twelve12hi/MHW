@@ -26,25 +26,48 @@ import * as ds from './daylight-share.js';
 import {
   LAB_TEXT, LabLedger, labHook, labGate, needsMessage, inboxLabText, featureName, serverHeadingShort,
   serverRowSubtitle, serverFeatureShort, labInboxSeenText, aiTodayText, setupConfirmText, serverMovedText,
-  GATE_DEADLINE_MS, SERVER_FEATURES, SERVER_KEYS,
+  GATE_DEADLINE_MS, SERVER_FEATURES, SERVER_KEYS, USE_FEATURES, labUseOn, appendActivity, activityLine,
+  diagnosticsReport, describeLabRow, checkedInText, fillText,
 } from './daylight-lab.js';
+import { MENU_ENTRIES, COMMANDS } from './lab-send.js';
 import {
   DaylightServer, localMessage, stateFromStatus, showFingerprint, noticeText, parseSetupLink, RERUN_HELP,
   SERVER_API, SERVER_API_MIN, STATUS_REFRESH_MS,
 } from './daylight-server.js';
 import { originPattern } from './logic.js';
 
-/** The one-time note (1.2) needs F01 or F04 in this build: from X1 (W1) on. W0 shows none. */
-export const LAB_NOTE_ENABLED = false;
+/** The one-time note (1.2) needs F01 or F04 in this build: this one (X1, Wave 1) has both. */
+export const LAB_NOTE_ENABLED = true;
+
+/** The extension's Wave 1 features (LAB-PLAN 3.1, Chrome and Safari), in What's in Lab's order (LAB_TEXT.featureOrder). */
+const W1 = ['F01', 'F03', 'F04', 'F07', 'F10', 'F11', 'F16', 'F26', 'F33', 'F34'];
 
 /**
  * What's in Lab (1.4), per browser: the Lab features this build has, then the server features (listed from W0 as
- * LAB-DECISIONS asks; Safari has only F37 of the four). W1 (X1) adds F01, F03, F04, F07, F10, F11, F16, F26, F33 and F34.
+ * LAB-DECISIONS asks; Safari has only F37 of the four). Safari for iPhone has no right-click menu or shortcuts: F34's
+ * row still lists them for the Mac, and Selection mode covers the iPhone (F11).
  */
-export const LAB_FEATURES = { chrome: [], safari: [] };
+export const LAB_FEATURES = {
+  chrome: LAB_TEXT.featureOrder.filter((f) => W1.includes(f)),
+  safari: LAB_TEXT.featureOrder.filter((f) => W1.includes(f)),
+};
 export const LAB_SERVER_FEATURES = { chrome: ['F02', 'F37', 'F19', 'F36'], safari: ['F37'] };
 /** The Lab features this build runs (labGate's `built`). A server feature that is ready but not built is `later`. */
-export const BUILT_FEATURES = [];
+export const BUILT_FEATURES = [...W1];
+
+/**
+ * The Use switches this build shows (6.5 Q5; LAB-PROTOCOL 2.9.6): the USE_FEATURES the extension has. F03's switch
+ * gates only the share sheet's "Only the link came through" line, which the extension never shows (it always reads
+ * the page, and says so itself when it can't), so its row has none; F08 is Android's.
+ */
+export const EXT_USE_FEATURES = USE_FEATURES.filter((f) => ['F04', 'F10', 'F16', 'F33'].includes(f));
+
+/** A feature's settings view in lab.html (3.4: a feature's own settings live inside it). */
+export const FEATURE_VIEWS = { F04: 'f04', F10: 'f10', F34: 'f34', F26: 'setup' };
+
+/** Lab's settings with a yes/no value (the Use switches and the menu boxes are maps of them). Off by default. */
+export const LAB_OPTIONS = ['labClickSend', 'labAlwaysOptions', 'labReview'];
+const ACTIVITY_KEY = 'lab/activity';
 
 /** The storage key of the re-pairing follow-up (2.6): {at}. Under lab/, so the next pairing change removes it. */
 export const REPAIRED_KEY = 'lab/repaired';
@@ -272,7 +295,13 @@ export function createLab({
     return out;
   }
 
-  const row = (id, short) => ({ id, name: featureName(id), sentence: LAB_TEXT.features[id].sentence, short });
+  /** A row of What's in Lab; a feature with a Use switch (EXT_USE_FEATURES) carries its state: use {on}. */
+  const rowOf = (s) => (id, short) => {
+    const r = { id, name: featureName(id), sentence: LAB_TEXT.features[id].sentence, short };
+    if (EXT_USE_FEATURES.includes(id)) r.use = { on: labUseOn(s, id) };
+    if (FEATURE_VIEWS[id]) r.view = FEATURE_VIEWS[id];
+    return r;
+  };
 
   /**
    * The server's last answer as a probe result, read from storage without asking anyone (1.5: What's in Lab uses
@@ -298,6 +327,7 @@ export function createLab({
   async function overview({ refresh = true } = {}) {
     const s = await settings();
     if (!on(s)) return { lab: false };
+    const row = rowOf(s);
     const pairing = await getPairing();
     const acks = pairing && refresh && refreshAcks ? withDeadline(refreshAcks().catch(() => {}), gateDeadlineMs, () => {}) : null;
     const asked = pairing && refresh ? probeInTime({ force: true }) : null;
@@ -308,16 +338,18 @@ export function createLab({
     if (!pairing) p = { state: 'needs-pairing' };
     else if (asked) p = await asked;
     else p = await cachedProbe();
+    // The features that don't run on the server get their short state here and now, server answer or not (W1).
+    const features = [];
+    for (const id of LAB_FEATURES[platform]) {
+      features.push(row(id, (await gate(id, { probeResult: p ?? { state: 'ready' } })).short ?? LAB_TEXT.ready));
+    }
     if (!p) {
       return {
-        lab: true, header, fresh: false, cached: false,
-        features: LAB_FEATURES[platform].map((id) => row(id, null)),
+        lab: true, header, fresh: false, cached: false, features,
         server: { state: null, short: null, features: LAB_SERVER_FEATURES[platform].map((id) => row(id, null)) },
       };
     }
     const heading = SERVER_WIDE.includes(p.state) ? p.state : 'ready';
-    const features = [];
-    for (const id of LAB_FEATURES[platform]) features.push(row(id, (await gate(id, { probeResult: p })).short ?? LAB_TEXT.ready));
     const serverRows = [];
     for (const id of LAB_SERVER_FEATURES[platform]) {
       const g = await gate(id, { probeResult: p });
@@ -541,6 +573,168 @@ export function createLab({
     } catch (e) { log.warn?.('Send to Daylight: Lab ledger prune failed', e); }
   }
 
+  // --- Wave 1: the settings of Lab's features, the timeline's data, Setup check and the activity log -----------------
+
+  /** Writes settings under core's lock (every settings write is), with Lab on. -> the new settings */
+  async function patchSettings(fn) {
+    let out = null;
+    await run(async () => {
+      const s = await settings();
+      out = fn({ ...s }) ?? s;
+      await storage.set('settings', out);
+    });
+    return out;
+  }
+
+  /** A feature's Use switch (6.5 Q5): settings.labUse[feature]; a missing key is on. -> {feature, on} */
+  async function setUse(feature, want) {
+    if (!built || !EXT_USE_FEATURES.includes(feature)) return { feature, on: false };
+    const s = await patchSettings((x) => ({ ...x, labUse: { ...(x.labUse ?? {}), [feature]: !!want } }));
+    return { feature, on: labUseOn(s, feature) };
+  }
+
+  /**
+   * A feature's own setting (3.4): labClickSend and labAlwaysOptions (F04), labReview (F10), or labMenus.<entry>
+   * (F34's "Show in the right-click menu", shown unless false). -> the feature's settings (featureSettings)
+   */
+  async function setOption(key, value) {
+    if (!built) return featureSettings({});
+    const k = String(key ?? '');
+    const entry = k.startsWith('labMenus.') ? k.slice(9) : null;
+    if (!LAB_OPTIONS.includes(k) && !MENU_ENTRIES.includes(entry)) throw new ds.ShareError('setting', `unknown Lab setting ${k}`);
+    const s = await patchSettings((x) => (entry
+      ? { ...x, labMenus: { ...(x.labMenus ?? {}), [entry]: !!value } }
+      : { ...x, [k]: !!value }));
+    return featureSettings(s);
+  }
+
+  /** The Lab features' own settings as the screens show them. */
+  function featureSettings(s) {
+    return {
+      clickSend: !!s.labClickSend, alwaysOptions: !!s.labAlwaysOptions, review: !!s.labReview,
+      menus: Object.fromEntries(MENU_ENTRIES.map((e) => [e, s.labMenus?.[e] !== false])),
+    };
+  }
+
+  /** F34's view: the menu boxes and the shortcuts as the browser lists them (commands.getAll). */
+  async function featureView() {
+    const s = await settings();
+    let commands = [];
+    try {
+      const all = (await api.commands?.getAll?.()) ?? [];
+      const order = [COMMANDS.page, COMMANDS.selection, COMMANDS.clean, COMMANDS.link];
+      commands = order.map((name) => all.find((c) => c.name === name)).filter(Boolean)
+        .map((c) => ({ name: c.name, description: c.description ?? '', shortcut: c.shortcut ?? '' }));
+    } catch { /* none */ }
+    return { lab: on(s), ...featureSettings(s), commands, shortcutsPage: platform === 'chrome' };
+  }
+
+  /** The ledger's view for F01's rows and check-in header (2.5): {inboxLab, caps, states, checkedIn, checkedInText}. */
+  async function timeline() {
+    const snap = await ledger.snapshot();
+    return { inboxLab: snap.inboxLab, caps: snap.caps, states: snap.states, checkedIn: snap.checkedIn, checkedInText: checkedInText(snap.checkedIn, now()) };
+  }
+
+  /**
+   * What the popup needs from Lab when it opens: the switch, the one-time note (1.2), the Use switches, F04's and F10's
+   * settings, and the timeline. -> {lab, ...} ({lab: false} with Lab off)
+   */
+  async function popup() {
+    const s = await settings();
+    if (!on(s)) return { lab: false };
+    return {
+      lab: true, noteEnabled: LAB_NOTE_ENABLED, labNoteShown: !!s.labNoteShown, excerptNoteShown: !!s.labExcerptNoteShown,
+      use: Object.fromEntries(EXT_USE_FEATURES.map((f) => [f, labUseOn(s, f)])), comfort: !!s.comfort,
+      ...featureSettings(s), paired: !!(await getPairing()), timeline: await timeline(),
+    };
+  }
+
+  /** Marks a once-only line as seen: the one-time note (labNoteShown) or the excerpt line (labExcerptNoteShown). */
+  async function seen(key) {
+    if (!['labNoteShown', 'labExcerptNoteShown'].includes(key)) return {};
+    await patchSettings((x) => ({ ...x, [key]: true }));
+    return {};
+  }
+
+  let logChain = Promise.resolve();
+  /** F26's activity log (lab/activity, the last 200 events; no title, URL or name ever goes in), with Lab on. */
+  function logEvent(event) {
+    const p = logChain.then(async () => {
+      if (!on(await settings())) return;
+      const log = (await storage.get(ACTIVITY_KEY)) ?? [];
+      await storage.set(ACTIVITY_KEY, appendActivity(log, { time: now(), ...event }));
+    }).catch((e) => log?.warn?.('Send to Daylight: activity not logged', e));
+    logChain = p;
+    return p;
+  }
+
+  /** -> {lines}: the activity log, oldest first (activityLine). */
+  async function activity() {
+    const log = (await storage.get(ACTIVITY_KEY)) ?? [];
+    return { lines: log.map(activityLine) };
+  }
+
+  /** F26's Copy diagnostics: diagnosticsReport, redacted. -> {text} */
+  async function diagnostics() {
+    const s = await settings();
+    const pairing = await getPairing();
+    const snap = await ledger.snapshot();
+    const version = String(appId).split('/')[1] ?? '';
+    const text = diagnosticsReport({
+      app: app, version, platform, lab: on(s), caps: snap.caps, checkedIn: snap.checkedIn,
+      rows: (await storage.get('outbox')) ?? [], relay: pairing?.relay ?? ds.DEFAULT_RELAY,
+      log: (await storage.get(ACTIVITY_KEY)) ?? [], now: now(),
+    });
+    return { text };
+  }
+
+  /**
+   * F26's Setup check (Chrome, Safari): the pairing; the toolbar button (Chrome: action.getUserSettings's isOnToolbar);
+   * the keyboard shortcut (commands.getAll; Chrome, which can set one); site access (permissions.contains for every
+   * site); then the test article along its way. Each check: {id, name, ok, line ("✓ …" or "! …"), button, action}.
+   * -> {lab, checks, test: null | {id, label, delivered, reader, lines}}
+   */
+  async function checks() {
+    const s = await settings();
+    if (!on(s)) return { lab: false };
+    const C = LAB_TEXT.setup.checks;
+    const out = [];
+    const add = (id, name, ok, button = null, action = null) => out.push({
+      id, name, ok, line: fillText(ok ? LAB_TEXT.setup.ok : LAB_TEXT.setup.notOk, { check: name }),
+      button: ok ? null : button, action: ok ? null : action,
+    });
+    const pairing = await getPairing();
+    add('paired', C.paired, !!pairing, LAB_TEXT.buttons['needs-quick-sends'], 'pair');
+    if (platform === 'chrome' && typeof api.action?.getUserSettings === 'function') {
+      try { add('toolbarButton', C.toolbarButton, !!(await api.action.getUserSettings())?.isOnToolbar); } catch { /* not told */ }
+    }
+    if (platform === 'chrome' && api.commands?.getAll) {
+      let key = '';
+      try { key = (await api.commands.getAll()).find((c) => c.name === COMMANDS.page)?.shortcut ?? ''; } catch { key = ''; }
+      add('shortcut', C.shortcut, !!key, LAB_TEXT.buttons['needs-quick-sends'], 'shortcuts');
+    }
+    let sites = false;
+    try { sites = !!(await api.permissions?.contains?.({ origins: ['<all_urls>'] })); } catch { sites = false; }
+    add('siteAccess', C.siteAccess, sites, LAB_TEXT.buttons['needs-site-access'], 'sites');
+    return { lab: true, checks: out, test: await testProgress() };
+  }
+
+  /** The test article along the timeline (F26): its row's Lab label, and whether it was delivered and is in the Reader. */
+  async function testProgress() {
+    let id = null;
+    try { id = await storage.get('lab/testId'); } catch { id = null; }
+    const row = id ? ((await storage.get('outbox')) ?? []).find((r) => r.id === id) : null;
+    if (!row) return null;
+    const snap = await ledger.snapshot();
+    const st = snap.states[row.id] ?? null;
+    const d = describeLabRow(row, now(), { lab: true, inboxLab: snap.inboxLab, hasCap: snap.caps, state: st });
+    const delivered = row.status === 'delivered';
+    const reader = delivered && st?.s === 'reader';
+    const L = LAB_TEXT.setup;
+    const line = (ok, name) => (ok ? fillText(L.ok, { check: name }) : name);
+    return { id: row.id, label: d.label, delivered, reader, lines: [line(delivered, L.delivered), line(reader, L.inReader)] };
+  }
+
   /** The Lab messages of runtime.onMessage (core.js passes them on). */
   async function onMessage(msg) {
     switch (msg?.type) {
@@ -555,6 +749,16 @@ export function createLab({
       case 'labSetup': return setupServer(String(msg.link ?? ''));
       case 'labRepaired': return repaired();
       case 'labRepairSeen': await storage.remove(REPAIRED_KEY); return {};
+      // Wave 1
+      case 'labPopup': return popup();
+      case 'labTimeline': return timeline();
+      case 'labSeen': return seen(String(msg.key ?? ''));
+      case 'labSetUse': return setUse(String(msg.feature ?? ''), msg.on);
+      case 'labSetOption': return setOption(msg.key, msg.value);
+      case 'labFeatureView': return featureView();
+      case 'labChecks': return checks();
+      case 'labActivity': return activity();
+      case 'labDiagnostics': return diagnostics();
       default: return undefined;
     }
   }
@@ -563,5 +767,7 @@ export function createLab({
     ledger, hook, built, ensureDefault, setLab, labOn: async () => built && labOn(storage), state, overview, gate, serverView,
     setServerAddress, confirmMove, checkSetupLink, setupServer, beforeRepair, beforeUnpair, afterRepair, repaired, prune,
     probe, onMessage,
+    // Wave 1
+    setUse, setOption, featureView, timeline, popup, logEvent, activity, diagnostics, checks,
   };
 }

@@ -1,6 +1,12 @@
 // A fake of the extension APIs Send to Daylight uses, for node tests. scripting.executeScript runs the real injected
 // function against a stubbed page (document, location, fetch and the extension's isolated-world globals), and passes
 // arguments and results through JSON like Chrome does.
+//
+// Lab's capture code (executeScript({files: ['clean-html.js', 'Readability.js']})) has stand-ins here, since the stubbed
+// page has no DOM: cleanHtml drops <script> elements (JSON-LD aside) and on* attributes from the page's HTML and marks
+// the result (data-fake-clean), and Readability answers the page's `article` ({title, byline, siteName, content,
+// textContent}, or null). The real code runs in Chromium (test/e2e). A page's `selection` ({text, html}) is what
+// window.getSelection() holds, and `text` its visible text.
 
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 
@@ -17,7 +23,16 @@ function event(list) {
   return { addListener: (fn) => list.push(fn), removeListener: (fn) => { const i = list.indexOf(fn); if (i >= 0) list.splice(i, 1); }, hasListeners: () => list.length > 0 };
 }
 
-export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenus = true, commands = true } = {}) {
+/** The stand-in for clean-html.js's cleanHtml: the page's HTML without scripts (JSON-LD aside) or on* attributes. */
+function fakeCleanHtml(root) {
+  const html = String(root?.outerHTML ?? '')
+    .replace(/<script\b(?![^>]*application\/ld\+json)[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/^<html/i, '<html data-fake-clean="1"');
+  return '<!doctype html>\n' + html;
+}
+
+export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenus = true, commands = true, omnibox = false } = {}) {
   const local = new Map();
   const tabs = new Map();
   const granted = new Set();
@@ -25,7 +40,7 @@ export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenu
   const menus = new Map();
   const opened = [];
   const badge = { text: '', history: [] };
-  const listeners = { message: [], installed: [], startup: [], menu: [], command: [], alarm: [], permAdded: [], changed: [] };
+  const listeners = { message: [], installed: [], startup: [], menu: [], command: [], alarm: [], permAdded: [], changed: [], omnibox: [] };
   let nextTab = 100;
   let activeTab = null;
   let requestAnswer = async () => false;
@@ -41,13 +56,37 @@ export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenu
     const page = t.page;
     if (page.scriptable === false) throw new Error('Cannot access contents of the page. Extension manifest must request permission to access the respective host.');
     const isPdf = page.contentType === 'application/pdf';
-    const saved = { document: globalThis.document, location: globalThis.location, pdf: globalThis.__daylightPdf, FileReader: globalThis.FileReader, fetch: globalThis.fetch };
+    const keys = ['document', 'location', '__daylightPdf', 'FileReader', 'fetch', 'window', 'cleanHtml', 'Readability'];
+    const saved = Object.fromEntries(keys.map((k) => [k, globalThis[k]]));
+    const outer = isPdf ? '<html><head></head><body><embed type="application/pdf" src="about:blank"></body></html>' : page.html;
     globalThis.location = { href: page.url };
+    const sel = page.selection ?? null;
+    globalThis.window = {
+      getSelection: () => (sel?.text ? {
+        rangeCount: 1, isCollapsed: false, toString: () => sel.text, getRangeAt: () => ({ cloneContents: () => ({ html: sel.html ?? '' }) }),
+      } : { rangeCount: 0, isCollapsed: true, toString: () => '' }),
+    };
     globalThis.document = {
       contentType: page.contentType ?? 'text/html',
       title: page.docTitle ?? (isPdf ? '' : page.title ?? ''),
-      documentElement: { outerHTML: isPdf ? '<html><head></head><body><embed type="application/pdf" src="about:blank"></body></html>' : page.html },
+      documentElement: { outerHTML: outer, cloneNode: () => ({ outerHTML: outer, fake: true }) },
       doctype: !isPdf && page.doctype !== null ? { name: page.doctype ?? 'html', publicId: '', systemId: '' } : null,
+      body: { innerText: page.text ?? '', textContent: page.text ?? '' },
+      cloneNode: () => ({ fake: true }),
+      activeElement: null,
+      implementation: {
+        createHTMLDocument: () => {
+          const body = { innerHTML: '', fake: true, get outerHTML() { return `<body>${this.innerHTML}</body>`; } };
+          return {
+            body,
+            importNode: (n) => n,
+            createElement: () => {
+              const parts = [];
+              return { appendChild: (n) => parts.push(n.html ?? ''), get innerHTML() { return parts.join(''); } };
+            },
+          };
+        },
+      },
       querySelectorAll: () => (page.links ?? []).map((l) => ({
         href: l.href, innerText: l.text, textContent: l.text, title: '', getAttribute: () => null, querySelector: () => null,
       })),
@@ -55,18 +94,30 @@ export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenu
     globalThis.__daylightPdf = t.world.pdf;
     globalThis.FileReader = FakeFileReader;
     globalThis.fetch = page.fetch ?? realFetch;
+    if (t.world.cleanHtml) globalThis.cleanHtml = fakeCleanHtml;
+    if (t.world.readability) globalThis.Readability = function Readability() { this.parse = () => clone(page.article ?? null); };
     try {
       const result = await func(...clone(args));
       t.world.pdf = globalThis.__daylightPdf;
       t.calls.push(func.name);
       return [{ frameId: 0, documentId: `doc-${target.tabId}`, result: result === undefined ? null : clone(result) }];
     } finally {
-      globalThis.document = saved.document;
-      globalThis.location = saved.location;
-      globalThis.__daylightPdf = saved.pdf;
-      globalThis.FileReader = saved.FileReader;
-      globalThis.fetch = saved.fetch;
+      for (const k of keys) { if (saved[k] === undefined) delete globalThis[k]; else globalThis[k] = saved[k]; }
     }
+  }
+
+  /** executeScript({files}): Lab's capture code loads into the tab's extension world (stand-ins, see above). */
+  async function loadFiles(target, files) {
+    const t = tabs.get(target.tabId);
+    if (!t) throw new Error(`No tab with id: ${target.tabId}.`);
+    if (t.page.scriptable === false) throw new Error('Cannot access contents of the page. Extension manifest must request permission to access the respective host.');
+    for (const f of files) {
+      if (f === 'clean-html.js') t.world.cleanHtml = true;
+      else if (f === 'Readability.js') t.world.readability = true;
+      else throw new Error(`Could not load file: '${f}'.`);
+      t.files.push(f);
+    }
+    return [{ frameId: 0, documentId: `doc-${target.tabId}`, result: null }];
   }
 
   const api = {
@@ -127,10 +178,11 @@ export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenu
       async query() { return activeTab != null ? [{ ...tabs.get(activeTab).tab }] : []; },
       async create(p) { opened.push(p.url); return { id: 9999, url: p.url }; },
     },
-    scripting: { executeScript: async ({ target, func, args = [] }) => runInPage(target, func, args) },
+    scripting: { executeScript: async ({ target, func, args = [], files }) => (files ? loadFiles(target, files) : runInPage(target, func, args)) },
     permissions: {
       async contains({ origins = [] }) { return origins.every((o) => granted.has(o)); },
-      async request({ origins = [] }) {
+      async request({ origins = [], permissions = [] }) {
+        if (!origins.length && permissions.length) return true;
         const ok = await requestAnswer(origins);
         if (ok) { origins.forEach((o) => granted.add(o)); for (const fn of listeners.permAdded) fn({ origins }); }
         return ok;
@@ -140,6 +192,7 @@ export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenu
     alarms: {
       create(name, info) { alarms.set(name, { name, ...info }); },
       async get(name) { return alarms.get(name); },
+      async clear(name) { return alarms.delete(name); },
       onAlarm: event(listeners.alarm),
     },
   };
@@ -151,19 +204,24 @@ export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenu
     };
   }
   if (commands) {
-    api.commands = { async getAll() { return [{ name: 'send-page', shortcut: 'Alt+Shift+D' }]; }, onCommand: event(listeners.command) };
+    const list = commands === true ? [{ name: 'send-page', shortcut: 'Alt+Shift+D' }] : commands;
+    api.commands = { async getAll() { return clone(list); }, onCommand: event(listeners.command) };
   }
+  if (omnibox) api.omnibox = { onInputEntered: event(listeners.omnibox) };
 
   return {
     api, local, granted, alarms, menus, opened, badge, listeners,
     /** page: {url, title, html?, contentType?, scriptable?, links?, fetch?, docTitle?} -> tab id */
     addTab(page, { active = true, title } = {}) {
       const id = nextTab++;
-      tabs.set(id, { tab: { id, url: page.url, title: title ?? page.title ?? page.url, active }, page, world: {}, calls: [] });
+      tabs.set(id, { tab: { id, url: page.url, title: title ?? page.title ?? page.url, active }, page, world: {}, calls: [], files: [] });
       if (active) activeTab = id;
       return id;
     },
     tabCalls: (id) => tabs.get(id).calls,
+    tabFiles: (id) => tabs.get(id).files,
+    /** Changes a tab's page (its selection, its article, …). */
+    setPage: (id, patch) => Object.assign(tabs.get(id).page, patch),
     grant: (origin) => granted.add(origin),
     onRequest: (fn) => { requestAnswer = fn; },
   };

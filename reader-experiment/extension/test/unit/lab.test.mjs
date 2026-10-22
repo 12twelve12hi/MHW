@@ -95,11 +95,15 @@ test('Lab is on by default: the first start writes settings.lab = true, a stored
     assert.deepEqual(await s.settings(), { lab: false, comfort: true, from: 'Renamed' });
     await s.msg({ type: 'setLab', lab: true });
     assert.equal((await s.settings()).comfort, true, 'Comfort stays when Lab changes');
-    // W0 shows no one-time note (1.2: only from a build with F01 or F04).
-    assert.equal(labMod.LAB_NOTE_ENABLED, false);
+    // W1 has F01 and F04, so it shows the one-time note (1.2), once.
+    assert.equal(labMod.LAB_NOTE_ENABLED, true);
     const st = await s.msg({ type: 'labState' });
     assert.equal(st.lab, true);
-    assert.equal(st.noteEnabled, false);
+    assert.equal(st.noteEnabled, true);
+    assert.deepEqual([(await s.msg({ type: 'labPopup' })).noteEnabled, (await s.msg({ type: 'labPopup' })).labNoteShown], [true, false]);
+    await s.msg({ type: 'labSeen', key: 'labNoteShown' });
+    assert.equal((await s.msg({ type: 'labPopup' })).labNoteShown, true);
+    assert.equal((await s.settings()).labNoteShown, true);
   } finally { await s.close(); }
 });
 
@@ -163,13 +167,21 @@ test('Lab off: no discovery and no server call; the gate says how to turn it on;
 
 // --- What's in Lab (1.4) and the gate (1.5, 2.6) -------------------------------------------------------------------------
 
-test('What’s in Lab: Chrome lists the four server features and Safari one, under the server’s short state', async () => {
+test('What’s in Lab: the W1 features, then Chrome’s four server features and Safari’s one, under the server’s short state', async () => {
   for (const target of ['chrome', 'safari']) {
     const s = await setup({ target, paired: false });
     try {
       let o = await s.msg({ type: 'labOverview' });
       const ids = target === 'chrome' ? ['F02', 'F37', 'F19', 'F36'] : ['F37'];
-      assert.deepEqual(o.features, [], 'W0: no Lab feature of its own yet');
+      // W1 (X1): the extension's features in LAB_TEXT.featureOrder; not paired, each says "Pair first" (1.5).
+      const w1 = ['F01', 'F03', 'F04', 'F07', 'F10', 'F11', 'F16', 'F26', 'F33', 'F34'];
+      assert.deepEqual(o.features.map((f) => f.id), w1);
+      assert.deepEqual(o.features.map((f) => [f.name, f.sentence]), w1.map((id) => [L.LAB_TEXT.features[id].name, L.LAB_TEXT.features[id].sentence]));
+      assert.ok(o.features.every((f) => f.short === 'Pair first'));
+      // The Use switches (6.5 Q5) on the rows that change how sharing behaves, on by default; the rows with settings
+      // of their own open them (3.4).
+      assert.deepEqual(o.features.filter((f) => f.use).map((f) => [f.id, f.use.on]), [['F04', true], ['F10', true], ['F16', true], ['F33', true]]);
+      assert.deepEqual(Object.fromEntries(o.features.filter((f) => f.view).map((f) => [f.id, f.view])), { F04: 'f04', F10: 'f10', F26: 'setup', F34: 'f34' });
       assert.deepEqual(o.server.features.map((f) => f.id), ids);
       assert.deepEqual(o.server.features.map((f) => [f.name, f.sentence]), ids.map((id) => [L.LAB_TEXT.features[id].name, L.LAB_TEXT.features[id].sentence]));
       assert.equal(o.header, 'Needs Lab on your Daylight', 'never heard from the Daylight (F17.2)');
@@ -180,6 +192,8 @@ test('What’s in Lab: Chrome lists the four server features and Safari one, und
       o = await s.msg({ type: 'labOverview' });
       assert.deepEqual([o.server.state, o.server.short], ['needs-server', 'Not set up']);
       assert.ok(o.server.features.every((f) => f.short === null));
+      // Paired: ready, but the timeline (F01) needs a Lab Inbox's hello with the `st` cap (F17).
+      assert.deepEqual(o.features.map((f) => f.short), ['Needs Lab on your Daylight', ...Array(9).fill('Ready')]);
       // Opened again: the last answer at once, from storage (1.5), and nothing on the network.
       const asked = s.log.length;
       let cached = await s.msg({ type: 'labOverview', refresh: false });
@@ -191,6 +205,8 @@ test('What’s in Lab: Chrome lists the four server features and Safari one, und
       cached = await s.msg({ type: 'labOverview', refresh: false });
       assert.deepEqual([cached.fresh, cached.cached, cached.server.state, cached.server.short], [false, false, null, null]);
       assert.ok(cached.server.features.every((f) => f.short === null));
+      assert.equal(cached.features.length, 10, 'the features that don’t run on the server have their states all the same');
+      assert.equal(cached.features[1].short, 'Ready');
     } finally { await s.close(); }
   }
 });

@@ -2,6 +2,8 @@
 // automation can't click the toolbar button that grants activeTab), the mock ntfy relay, a local site with an article
 // and a PDF, and a Receiver from daylight-share.js playing the Daylight.
 //
+// It runs with Lab off: the plain app (Lab's Wave 1 is lab-w1.e2e.mjs).
+//
 //   PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node --test test/e2e/extension.e2e.mjs      (HEADED=1 to watch)
 
 import { test, before, after } from 'node:test';
@@ -14,6 +16,7 @@ import { built } from '../helpers/built.mjs';
 import { startSite } from '../helpers/server.mjs';
 import { makePdf } from '../helpers/pdf.mjs';
 import { startMockRelay } from '../../../share/js/mock-relay.mjs';
+import { labDefaultWritten } from '../helpers/lab-off.mjs';
 
 const OUT = path.join(path.dirname(new URL(import.meta.url).pathname), '..', '..', 'test-results');
 const PDF = makePdf({ pages: 4, fillerBytes: 300_000 }); // over one ntfy message: travels as an attachment
@@ -69,6 +72,10 @@ before(async () => {
     if (await sw.evaluate(() => !!globalThis.chrome?.runtime?.id && !!globalThis.sendToDaylight).catch(() => false)) break;
     await new Promise((r) => setTimeout(r, 100));
   }
+  // These are v1.1's tests: the plain app, with Lab off (LAB-PLAN 1.3; the chrome-test build reads a seeded
+  // settings.lab, 1.7). Lab's Wave 1 is lab-w1.e2e.mjs.
+  await labDefaultWritten(sw);
+  await sw.evaluate(() => chrome.storage.local.set({ settings: { lab: false } }));
   secret = ds.generateSecret();
   receiver = new ds.Receiver({ pairing: { secret, relay: relay.url }, storage: new ds.MemoryStorage() });
 });

@@ -1,6 +1,7 @@
 // Builds the Send to Daylight extension (no npm dependencies):
 //
-//   dist/chrome/                      unpacked Chrome extension (Manifest V3, module service worker)
+//   dist/chrome/                      unpacked Chrome extension (Manifest V3, module service worker; with Lab, the
+//                                     capture code clean-html.js and Readability.js from ../share/js/capture/)
 //   dist/safari/                      Safari Web Extension resources (Manifest V3, non-persistent background page)
 //   dist/chrome-test/                 dist/chrome plus host access to 127.0.0.1 and localhost, for the end-to-end test
 //   dist/send-to-daylight-chrome.zip  dist/chrome zipped (files at the root, as the Chrome Web Store expects)
@@ -31,6 +32,15 @@ const DIST = path.join(here, 'dist');
 const SHARE_LIB = path.join(here, '..', 'share', 'js', 'daylight-share.js');
 const LAB_LIB = path.join(here, '..', 'share', 'js', 'daylight-lab.js');
 const SERVER_LIB = path.join(here, '..', 'server', 'client', 'daylight-server.js');
+/**
+ * Lab's capture code (LAB-PLAN F03, F10; 6.3): share/js/capture/ is the one source. A Lab build copies the two files as
+ * they are (`node ../share/js/capture/sync.mjs --check dist/<target>/clean-html.js …` checks the copies in CI); a
+ * build without Lab has neither.
+ */
+export const CAPTURE = path.join(here, '..', 'share', 'js', 'capture');
+export const CAPTURE_FILES = ['clean-html.js', 'Readability.js'];
+/** What the manifest has only for Lab (F34's commands and omnibox, F33's clipboard): a build without Lab leaves it out. */
+export const LAB_COMMANDS = ['send-selection', 'send-clean', 'send-link'];
 const SERVER_IMPORT = "from '../../share/js/daylight-share.js';";
 const TARGETS = ['chrome', 'safari', 'chrome-test'];
 
@@ -42,14 +52,27 @@ export function version() {
   return base;
 }
 
-export function manifestFor(target, base = JSON.parse(fs.readFileSync(path.join(SRC, 'manifest.json'), 'utf8'))) {
+/**
+ * A target's manifest. lab: false for a build without Lab (6.2): v1.1's manifest, without F34's commands and omnibox
+ * or F33's clipboard permission. Safari has no omnibox (F34) and reads the clipboard through its own Paste button,
+ * not a permission. chrome-test reads the clipboard without asking (automation can't answer the prompt).
+ */
+export function manifestFor(target, base = JSON.parse(fs.readFileSync(path.join(SRC, 'manifest.json'), 'utf8')), { lab = true } = {}) {
   const m = structuredClone(base);
   m.version = version();
+  if (!lab) {
+    for (const c of LAB_COMMANDS) delete m.commands?.[c];
+    delete m.omnibox;
+    delete m.optional_permissions;
+  }
   if (target === 'chrome-test') {
     m.name += ' (test build)';
     m.host_permissions = [...m.host_permissions, 'http://127.0.0.1/*', 'http://localhost/*'];
+    if (lab) m.permissions = [...m.permissions, 'clipboardRead'];
   }
   if (target === 'safari') {
+    delete m.omnibox;
+    delete m.optional_permissions;
     delete m.minimum_chrome_version;
     // A non-persistent background page with one classic script works on every Safari with Manifest V3 (macOS and
     // iOS); module service workers came later and behave less predictably there.
@@ -138,8 +161,11 @@ export function labFor(target, { lab, gate = releaseGate } = {}) {
   };
 }
 
-/** The pages a build without Lab leaves out: nothing links to them there. lab-ui.js stays (the popup imports it). */
-export const LAB_PAGES = ['lab.html', 'lab-page.js'];
+/**
+ * The pages a build without Lab leaves out: nothing links to them there. lab-ui.js, lab-popup.js and lab-send.js stay
+ * (the popup and the background import them).
+ */
+export const LAB_PAGES = ['lab.html', 'lab-page.js', 'review.html', 'review.js'];
 
 function copyDir(from, to) {
   fs.mkdirSync(to, { recursive: true });
@@ -163,7 +189,8 @@ export function buildTarget(target, distRoot = DIST, opts = {}) {
   const browser = target === 'safari' ? 'safari' : 'chrome';
   fs.writeFileSync(path.join(out, 'target.js'), `// Written by build.mjs.\nexport const TARGET = '${browser}';\nexport const LAB_BUILT = ${lab};\n`);
   if (!lab) for (const f of LAB_PAGES) fs.rmSync(path.join(out, f), { force: true });
-  fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify(manifestFor(target), null, 2) + '\n');
+  else for (const f of CAPTURE_FILES) fs.copyFileSync(path.join(CAPTURE, f), path.join(out, f));
+  fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify(manifestFor(target, undefined, { lab }), null, 2) + '\n');
   if (target === 'safari') {
     fs.writeFileSync(path.join(out, 'background.js'), bundleClassic(path.join(out, 'background.js')));
   }

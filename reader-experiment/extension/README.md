@@ -123,12 +123,16 @@ While Lab is on, two rows under the switch open the page `lab.html` in a tab:
 - **What’s in Lab ›**: the features this build has, each with a short state ("Ready", "Not set up", "In a later
   update", …). The header line says whether your Daylight has confirmed Lab ("Your Daylight: Lab on · checked in 4 min
   ago"), from what it says on its confirmation channel; opening the page reads that channel once, while it asks the
-  server. The states the server gave in the last 10 minutes show at once, and its new answer replaces them. In this
-  first Lab build (Wave 0) the list holds only the features that run on your own **Daylight server** (Files over 9 MB,
-  Summaries with Claude, Email-in address, Feeds and daily digest; Safari: Summaries with Claude). They are always shown and
-  never greyed out: tapping one that isn't set up shows one sentence under it, saying what's missing, with at most one
-  button that fixes it from here (**Copy Server code**, or **Allow** for the server's site) and **OK**. Screen readers
-  hear it. A ready server answers "comes to this app in a later Lab update" until the feature is built here.
+  server. The states the server gave in the last 10 minutes show at once, and its new answer replaces them. The list
+  holds this build's Lab features (Wave 1, below: Delivery timeline, Pages as you see them, Share in place, Works
+  offline, Send as, Send a selection, Clean links, Setup check, Send copied link, More right-click choices), then,
+  under *With your Daylight server (optional)*, the features that run on your own **Daylight server** (Files over 9
+  MB, Summaries with Claude, Email-in address, Feeds and daily digest; Safari: Summaries with Claude). They are always
+  shown and never greyed out: tapping one that isn't set up shows one sentence under it, saying what's missing, with at
+  most one button that fixes it from here (**Copy Server code**, or **Allow** for the server's site) and **OK**. Screen
+  readers hear it. A ready server answers "comes to this app in a later Lab update" until the feature is built here.
+  Share in place, Send as, More right-click choices and Setup check open their own settings when tapped; the features
+  that change how sharing behaves have a **Use** switch (below).
 - **Daylight server ›** (*Optional · Not set up*): where setup happens. It shows the server's state in full (with the
   exact GitHub secret names); while the server isn't set up, **Turn it on** with the five steps, numbered (the last of
   them points to the server's README for every click); **Your server**, the server's host (with its port) and
@@ -163,6 +167,78 @@ address (the old server's) is forgotten. **Unpair** forgets a typed Server addre
 Daylight may come back). Afterwards, while Lab is on, the popup shows the locked text with the new
 **Server code**, **Copy** and how to re-run the deploy, under *Daylight server*, until **OK** (or until the new server
 answers).
+
+### Lab, Wave 1 (card X1)
+
+What Lab adds to sending (LAB-PLAN 3.3). With Lab off none of it shows or runs, and the popup equals the plain app's.
+
+- **Delivery timeline** (F01). History rows say how far each item got, in the words every Lab app uses
+  (`describeLabRow`): *Sent* → *On your Daylight ✓* → *In your Reader ✓*, or *Waiting for a tap on your Daylight*,
+  *Kept for later on your Daylight*, *Handed to the Reader* (the Reader doesn't confirm documents yet), *In your Reader's
+  queue*, *Not added to the Reader*. The newest row and every row still under way show their sentence and the step line
+  (*Sent ✓ · On your Daylight ✓ · In the Reader …*); a settled row keeps them behind its title (click it). Screen
+  readers hear "{label}. {sentence}", never the step line. Above the history: *Your Daylight checked in 4 min ago.* A
+  Daylight without Lab gives exactly the plain rows (*Delivered ✓*). While a delivered row's state is still on its way,
+  the open popup reads the confirmation channel every 30 s, and the background every 15 minutes for 48 hours. The
+  toolbar badge shows the most recent row: **…** on its way, **✓** on your Daylight (for 6 s), **⌛** waiting for a tap
+  there, **!** not on its way.
+- **Pages as you see them** (F03). The page goes through `clean-html.js` (the one copy in
+  [`../share/js/capture/`](../share/js/capture/), which the build copies): no scripts (JSON-LD stays), no `on…`
+  attributes, no form contents, hidden or password fields, `javascript:` links or `srcdoc`; the logged-in text stays.
+  It is marked `x-cap: "seen"`. Pages over 8 MB after cleaning go as links, as before; PDFs are untouched.
+- **Share in place** (F04). With **Send when I click the toolbar button** (What's in Lab › Share in place, off by
+  default) the popup opens as a card, *Sending to {your Daylight}*, and the page goes 1.5 s later with the last choices;
+  the background owns the timer, so closing the popup still sends. **Options** stops it and shows Send as, **Review
+  before sending**, **Send** and **Send the link instead**. With Comfort or **Always show Options before sending** on,
+  the card opens with the choices and nothing goes before **Send** (an extension can't tell whether a screen reader or
+  switch access is on, so those two cover it). A page the extension can't read says its link will be sent.
+- **Works offline** (F07). Shared while the browser is offline, an item waits (*Waiting for connection*) in **Waiting
+  to send (n)** above the history, each with **Cancel**; the `dls-offline` alarm (every minute, only while something
+  waits) and the popup's `online` event send them once the network is back (oldest first, at most 30 messages and 18 MB
+  a pass, passes 3 minutes apart). A relay that fails while the browser is online is the plain app's *Waiting to send*
+  with its own back-off.
+- **Send as** (F10). "Send as: Page ▾" above **Send this page**: Page as you see it, Clean article, Link only,
+  Selection. It switches to Selection by itself when text is selected, a PDF tab sends the file, and otherwise it starts
+  with the mode last used on that site (`lab/sendAs`, the 500 most recent sites). **Clean article** runs Mozilla
+  Readability 0.6.0 (copied from `share/js/capture/` too) on a copy of the page and sends the article as a page marked
+  `x-cap: "clean"`; under 150 words it asks *This page looks thin (n words). Send the full page instead?*
+  (**Send full page**, **Send anyway**); a menu, a shortcut or the card can't ask, so they send the full page then.
+  **Review before sending** (What's in Lab › Send as) opens `review.html`: the page with JavaScript off and in greys,
+  its word count and size, and its title to edit, with **Send** and **Cancel**.
+- **Send a selection** (F11), from Selection mode, the right-click menu or Alt+Shift+S: the selected passage as an
+  excerpt document (HTML, "Excerpt - {first words}.html", titled "“{first line}” · {page title}", with the page's link
+  and the date, `x-cap: "excerpt"`), never the whole article. The first one says once: *Excerpts wait for a tap on your
+  Daylight for now.* Only these explicit paths make excerpts (LAB-DECISIONS Q1).
+- **Clean links** (F16). Links and page addresses lose tracking parameters and redirect wrappers (`normaliseShare`);
+  the address as shared goes along as `x-orig`.
+- **Setup check** (F26), What's in Lab › Setup check: ✓ or ! for the pairing, the toolbar button (Chrome), the keyboard
+  shortcut (Chrome) and site access, each unmet one with a button where there is one to press; **Send a test article**
+  (a page of about 400 words at `https://daylight.invalid/test/…`, `x-cap: "test"`), followed until *✓ Delivered* and
+  *✓ In your Reader* (or *Waiting for a tap on your Daylight* meanwhile); the **Activity log** (the last 200 events,
+  without titles or addresses) and **Copy diagnostics** (redacted: no address, title, code or topic).
+- **Send copied link** (F33): **Paste and send** reads the clipboard only when clicked (Chrome asks for the clipboard
+  permission the first time; Safari shows its Paste button), then asks *Send {host}?* (**Send**, **Cancel**), or says
+  *No link on the clipboard.*
+- **More right-click choices** (F34): Send page, Send clean article, Send link, Send selection, Send this image's page
+  (the page, not the image) and Send PDF link to Daylight, each with a box in What's in Lab › More right-click choices;
+  shortcuts `send-page` (Alt+Shift+D), `send-selection` (Alt+Shift+S), `send-clean` and `send-link` (set them at
+  `chrome://extensions/shortcuts`); Chrome's address bar: type **dl**, a space and an address. With Lab off the menu is
+  the plain three and the keyword opens Lab's page with *Turn on Lab in Send to Daylight to use this.* Safari has no
+  keyword, and iPhone Safari no right-click menu (Selection mode covers it).
+- **Use switches** (LAB-DECISIONS Q5): Share in place, Send as, Clean links and Send copied link have **Use** (on by
+  default) in What's in Lab, each with what turning it off does; the one Lab switch still turns everything off. Pages
+  as you see them has none here: its switch only hides a share sheet's "Only the link came through" line, which the
+  extension never shows (it reads the page itself, and says so when it can't).
+- **The one-time note** (1.2): *Lab is on. New features to try are in Settings › Lab, where you can turn it off.*,
+  once, with **OK**.
+- **Files over 9 MB ›** (the F02 entry point, Chrome): under *The PDF is over 9 MB, so its link was sent.*, it runs the
+  big-files feature's gate: *Needs your Daylight server …* until there is one, then *comes to this app in a later Lab
+  update*.
+
+Settings (all in `storage.local`'s `settings`, never synced, kept when Lab or a Use switch is off): `labUse` (the Use
+switches), `labClickSend`, `labAlwaysOptions`, `labReview`, `labMenus` (the menu boxes), `labNoteShown` and
+`labExcerptNoteShown`. Lab's own keys (`lab/sendAs`, `lab/activity`, `lab/badge`, `lab/review`, `lab/testId`,
+`lab/flushAt`, `lab/offlineAt`) go with a pairing change, like the ledger.
 
 The Safari extension inside the iPhone and Mac apps gets Lab only once the iPhone and Mac apps have this wave's Lab
 (below, *Lab release gate*); until then it is the plain extension, with no Lab switch.
@@ -235,7 +311,7 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   `lab/server` and the cached status while they are 10 minutes old or less (`cached: true`), without the network. `src/lab.html` and `src/lab-page.js` are the page; `src/lab-ui.js` builds its parts (the note,
   What's in Lab, the server section) from data alone, so the web sender's build can copy it (B0). Every word is
   `LAB_TEXT`'s or the server module's. `LAB_FEATURES`, `LAB_SERVER_FEATURES` and `BUILT_FEATURES` in `lab.js` say what
-  this build lists and runs; `LAB_NOTE_ENABLED` is `false` until a build has F01 or F04 (X1). A fresh What's in Lab
+  this build lists and runs; `LAB_NOTE_ENABLED` is `true` from X1 (the first build with F01 and F04). A fresh What's in Lab
   answer updates the rows' short states in place (`updateWhatsInLab`), so a note opened meanwhile stays. Tests:
   `test/unit/lab.test.mjs` (node, against the mock relay, a stand-in server in `test/helpers/fake-worker.mjs` and Lab
   Daylights from `daylight-lab.js`) and `test/e2e/lab.e2e.mjs` (Chromium: the popup's row and `lab.html`, Lab on and
@@ -244,7 +320,32 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   forgetting a typed Server address).
   **Test hook** (LAB-PLAN 1.7): every build, the `chrome-test` one included, reads `settings.lab` from
   `storage.local` and never overwrites a stored value, so a test seeds `{settings: {lab: false}}` (after the first
-  start wrote its default: `labDefaultWritten()` in `test/helpers/lab-off.mjs`) to run with Lab off.
+  start wrote its default: `labDefaultWritten()` in `test/helpers/lab-off.mjs`) to run with Lab off. The plain app's
+  own suites (`test/unit/core.test.mjs`, `test/e2e/extension.e2e.mjs`) run that way.
+- **Lab, Wave 1** (LAB-PLAN 3.3, card X1): `src/lab-send.js` holds the rules as pure functions (the menus with Lab on
+  and off, Send as's default and the mode kept per site, the clean article's page, the badge mark, who gets no
+  countdown, the queue, the omnibox's address); `core.js` sends with them (`labSendTab`: the capture through
+  `clean-html.js`, Clean article through `Readability.js`, both injected with `scripting.executeScript({files})` before
+  the capture; `labSendSelection`; `normaliseShare` on every link and page address; `Sender.send(…, {defer})` offline,
+  the `dls-offline` alarm and `flushNetwork`; the countdown, `scheduleSend` and `cancelScheduled`; Review's
+  `lab/review`; the badge from the most recent row; menus, commands and the omnibox), and `lab.js` keeps the Use
+  switches, the features' own settings, the timeline's data, Setup check, the activity log and diagnostics. Its
+  messages: `labPopup`, `labTimeline`, `labSeen`, `labSetUse`, `labSetOption`, `labFeatureView`, `labChecks`,
+  `labActivity`, `labDiagnostics`, `labTabInfo`, `labScheduleSend`, `labCancelScheduled`, `labSendCopied`,
+  `labTestSend`, `labCheckAcks`, `labOnline`, `labReviewGet`, `labReviewSend`, `labReviewCancel`, `labOmnibox`, and
+  `sendTab` with `mode` and `force`. The popup's pieces are `src/lab-popup.js` (DOM only, from data: the timeline's
+  rows, the check-in header, the queue, Send as, the thin question, the F02 entry point, the card, Paste and send, the
+  one-time note), so the web sender's build can copy it (B1); `src/review.html` with `src/review.js` is Review.
+  `build.mjs` copies `clean-html.js` and `Readability.js` from `../share/js/capture/` into every Lab build (a build
+  without Lab has neither), and the ext job runs `node ../share/js/capture/sync.mjs --check` on the copies; there is
+  no copy of its own in `src/`. Tests: `test/unit/lab-send.test.mjs` (node, with the fake browser's stand-ins for the
+  capture code: `executeScript({files})`, a page's `selection` and `article`) and `test/e2e/lab-w1.e2e.mjs`
+  (Chromium, the real capture code and Readability: the one-time note; F03.1 and F03.2 on a page shown only with a
+  login cookie; the timeline with a Lab Daylight and a v1.1 one; F02e.1 with a 14 MB PDF; Send as, Selection by
+  itself, Send selection, Clean article, the thin question and the mode kept across a browser restart; Review of a 1 MB
+  page within 1 s; the card, Options and Comfort; offline with `context.setOffline`; Paste and send; the menu entries,
+  commands and the omnibox; the Use switches and the features' settings; Setup check with the test article; axe,
+  light and dark, Comfort, nothing clipped).
 - `test/e2e/a11y.e2e.mjs` is the accessibility baseline (LAB-PLAN F27) for the popup and the web sender: axe-core
   finds no violations in any view (pairing, the pairing question, sending with a row in every state, settings), light
   and dark, Comfort off and on (F27.1); with Comfort on at 360 px no text is clipped (`scrollWidth <= clientWidth`,
@@ -276,7 +377,7 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
 - **Lab release gate** (LAB-PLAN 6.2): the extension's and the web sender's Lab builds reach people only after the
   iPhone and Mac builds of the same wave. `lab-wave.json` here (and `../web/lab-wave.json`) names the Lab wave of the
   folder's code: `null` until X0 (B0 for the web sender) sets `"w0"`, then `"w1"` from X1 (B1). The extension's says
-  `"w0"` since X0. `scripts/lab-wave.mjs` reads the wave from the code too, so a `lab-wave.json` left behind can't open
+  `"w1"` since X1. `scripts/lab-wave.mjs` reads the wave from the code too, so a `lab-wave.json` left behind can't open
   the gate: `src/lab.js` or anything naming `daylight-lab` is W0; a W1 export of `daylight-lab.js` (the ones under its
   `// W1 (L1)` heading, `fillText` among them), `describeLabRow`, the Sender's F07 calls, `LAB_NOTE_ENABLED = true` or
   a quoted id of one of the extension's W1 features (`'F01'`, `'F03'`, … in `LAB_FEATURES`) is W1; a Lab feature of a
@@ -292,6 +393,44 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
     the non-Lab baselines with nothing left out. The build's log line (a notice in CI) says why. `--lab` builds it with
     Lab anyway (the unit tests, a local Xcode run), `--no-lab` without. Once the gate opens the wave, the next Apple
     build carries the extension's Lab.
+
+## Still to check on a device
+
+For the W1 device round on the lab tablet **Rooted 2** (JP4R01422; LAB-PLAN 6.4), with the real ntfy.sh relay. CI
+covers everything else above with the mock relay, Chromium and Daylights simulated in node; these need a real DC-1, a
+real browser or a person. Nothing here is ever installed on JP4R03005. The Safari items wait until the gate opens W1
+for the extension (its Safari build is the plain one until then).
+
+- [ ] **F01.1** A link sent from Chrome (and from Safari on the Mac and on the iPhone) shows *In your Reader ✓* within
+  45 s of *On your Daylight ✓*, with the popup open: Daylight Share in front; in the background with the Reader in
+  front and "Display over other apps" on; the same with it off (*Waiting for a tap on your Daylight* until the notice is
+  tapped, then *In your Reader ✓*); the screen off with Instant delivery on. Note the times in DEVICE-CHECKS.md.
+- [ ] **F01.2** With Documents = Ask, a PDF reads *Waiting for a tap on your Daylight* (badge ⌛), then, after the
+  tap, *Handed to the Reader* and *The Reader doesn’t confirm documents yet.* at the next check.
+- [ ] **F01.3** The header reads *Your Daylight checked in N min ago*; with the Daylight off, sends still go out.
+- [ ] **F03.1** A page that needs a login (a subscribed news site) arrives whole from Chrome and from Safari on the Mac
+  and the iPhone, and the Reader shows the logged-in text.
+- [ ] **F04** On Safari (Mac and iPhone; the background page is not persistent) the card's page still goes when the
+  popup closes at once; Options stops it; with VoiceOver on and Comfort on, nothing goes before **Send** (one VoiceOver
+  run, F04.5).
+- [ ] **F07.1** Chrome on a laptop with Wi-Fi off, and Safari on the iPhone in flight mode: the share reads *Waiting
+  for connection*; with the network back it goes within a minute while the browser runs (and on the iPhone, when iOS
+  next lets the extension run).
+- [ ] **F10.1, F10.4** Clean article on five real news sites keeps the body and drops navigation; Review renders a 1 MB
+  page within 1 s on the lab iPhone (record its model in DEVICE-CHECKS.md).
+- [ ] **F11.1, F11.4** A selection sent from the right-click menu (Chrome, Mac Safari) and from Selection mode (iPhone
+  Safari) shows the quote, the source link and the date in the Reader; an excerpt of a page already in the Reader
+  arrives as a new document.
+- [ ] **F26.1** Setup check's test article reaches the Reader and ticks *✓ Delivered* and *✓ In your Reader*, in each
+  condition of F01.1 (*Waiting for a tap on your Daylight* meanwhile where the Inbox asks).
+- [ ] **F26.3** Each unmet check's button opens the right place: the shortcuts page (Chrome), site access (Allow),
+  pairing. The toolbar-pin check has no button: LAB_TEXT has no steps for pinning (reported to the share lane).
+- [ ] **F33** Chrome asks for the clipboard permission on the first **Paste and send**, and Safari shows its Paste
+  button; the host shows before anything is sent.
+- [ ] **F34.2** The four shortcuts at `chrome://extensions/shortcuts`; "dl example.com/story" in Chrome's address bar
+  sends the link; right-click entries in Chrome and Mac Safari, and unticking one removes it.
+- [ ] **F27.3** A VoiceOver run (Safari, Mac and iPhone) and a screen-reader run in Chrome of pair → send → delivered
+  → in the Reader announce each state change, with no step count.
 
 ## Limits
 

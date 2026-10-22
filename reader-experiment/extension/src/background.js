@@ -15,6 +15,10 @@ api.runtime.onMessage.addListener(app.handleMessage);
 api.commands?.onCommand?.addListener((command, tab) => { app.onCommand(command, tab); });
 api.alarms?.onAlarm?.addListener((alarm) => { app.onAlarm(alarm); });
 api.permissions?.onAdded?.addListener((perms) => { app.onPermissionsAdded(perms); });
+// Lab (F34): Chrome's omnibox keyword "dl" (the manifest's omnibox; Safari has none). The menus follow the Lab switch
+// and their boxes, wherever those change.
+api.omnibox?.onInputEntered?.addListener((text) => { app.onOmnibox(text); });
+api.storage?.onChanged?.addListener((changes, area) => { app.onStorageChanged(changes, area); });
 
 // Every wake-up: make sure the 15-minute alarm exists (browsers may drop alarms on restart), and that the Lab switch
 // has its default (on, LAB-PLAN 1.2; a stored value stays). Safari's background page is not told about installs

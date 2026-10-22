@@ -18,6 +18,10 @@
       </button>
     </header>
 
+    <!-- Lab (LAB-PLAN 1.2): the one-time note, once, in a build with F01 or F04 (lab-popup.js renderLabNote). Hidden and
+         empty with Lab off. -->
+    <div id="lab-note" class="lab-banner" hidden></div>
+
     <!-- Not paired yet (or "Change pairing…" in Settings) -->
     <section id="view-pair" hidden>
       <button id="pair-back" class="back" type="button" hidden>‹ Back</button>
@@ -58,8 +62,13 @@
         <div id="page-title" class="page-title"></div>
         <div id="page-host" class="page-host"></div>
       </div>
+      <!-- Lab, Wave 1 (lab-popup.js; all hidden and empty with Lab off): F04's share-in-place card, F10's Send as. -->
+      <div id="lab-card" class="lab-card" hidden></div>
+      <div id="lab-send-as" class="lab-send-as" hidden></div>
       <button id="send-page" class="btn primary big" type="button">Send this page</button>
       <button id="send-link" class="btn secondary" type="button">Send link only</button>
+      <!-- Lab F33: Paste and send. -->
+      <div id="lab-paste" class="lab-paste" hidden></div>
       <div id="permission" class="permission" hidden>
         <p>To send this PDF itself, allow Send to Daylight to download it from <b id="perm-host"></b>.</p>
         <div class="row">
@@ -68,11 +77,19 @@
         </div>
       </div>
       <p id="status" class="status" role="status" aria-live="polite"></p>
+      <!-- Lab: under the status, F10's thin-page question, the F02 entry point or F11's excerpt line. -->
+      <div id="lab-after" class="lab-after" hidden></div>
       <!-- Lab (LAB-PLAN 2.6, DESIGN 12.7): after a re-pairing that locked the Daylight server, its locked text with the
            new Server code, Copy and the re-run help, until OK (lab-ui.js renderRepaired). Empty and hidden otherwise,
            and always with Lab off. -->
       <section id="repaired" class="lab-repaired" hidden></section>
 
+      <!-- Lab F01: the check-in header; F07: what waits to send, with Cancel. -->
+      <p id="lab-checkin" class="lab-checkin" hidden></p>
+      <section id="lab-queue" class="lab-queue" aria-labelledby="lab-queue-h" hidden>
+        <h2 class="recent-h" id="lab-queue-h"></h2>
+        <ol id="lab-queue-list" class="history" aria-labelledby="lab-queue-h"></ol>
+      </section>
       <h2 class="recent-h" id="recent-h" hidden>Recent</h2>
       <ol id="history" class="history" aria-labelledby="recent-h"></ol>
       <!-- F27: a history row's new state (Delivered ✓, Waiting to send, Not delivered), said to screen readers. -->

@@ -1,10 +1,11 @@
 // Lab in a real Chromium (LAB-PLAN F00 and F17, extension parts; card X0): the popup's Lab row and lab.html, against
 // the mock relay, a stand-in Daylight server (test/helpers/fake-worker.mjs) and Daylights from daylight-lab.js.
 //
-//   F00.1  a fresh install has Lab on, with no one-time note in W0; an update over the last non-Lab build turns Lab on
+//   F00.1  a fresh install has Lab on, with the one-time note (W1); an update over the last non-Lab build turns Lab on
 //          and keeps the pairing, the history, the device name and Comfort
-//   F00.2  with Lab on, W0 leaves the popup's pairing and sending screens as the non-Lab baselines (Lab off is
-//          lab-off-parity.e2e.mjs); with Lab off, the popup and lab.html show only the switch
+//   F00.2  with Lab on, W1 leaves the popup's pairing screen as the non-Lab baseline and adds its pieces to the sending
+//          screen, which is the baseline again with Lab off, every Lab setting used (lab-off-parity.e2e.mjs: Lab off);
+//          with Lab off, the popup and lab.html show only the switch
 //   F00.3  a server feature's tap shows exactly its sentence under it, announced, never greyed out
 //   F00.5  the Server code shown for the vector pairing, and Copy
 //   F00.6  needs-server within 5 s; a relay that never answers: "Checking your Daylight server…", then OFFLINE at 5 s
@@ -127,12 +128,12 @@ after(async () => {
 
 // --- F00.1, F00.2 ------------------------------------------------------------------------------------------------------
 
-test('a fresh install has Lab on and no one-time note in W0; Settings starts with the switch, whose rows open lab.html', { timeout: 90000 }, async () => {
+test('a fresh install has Lab on and, in W1, the one-time note; Settings starts with the switch, whose rows open lab.html', { timeout: 90000 }, async () => {
   assert.deepEqual(await labDefaultWritten(sw), { lab: true }, 'the first start wrote lab = true (F00.1)');
   const popup = await openPopup();
-  assert.equal(await popup.getByText(LAB_TEXT.note).count(), 0, 'no one-time note in a W0 build');
-  // W0 changes nothing outside Settings: with Lab on the pairing screen is the non-Lab baseline too.
-  await storageSet({ settings: { lab: true, from: 'Parity Chrome' } });
+  assert.equal(await popup.getByText(LAB_TEXT.note).count(), 1, 'the one-time note in a build with F01 and F04 (lab-w1.e2e.mjs: once)');
+  // Once the note is seen, W1 adds nothing to the pairing screen: with Lab on it is the non-Lab baseline too.
+  await storageSet({ settings: { lab: true, labNoteShown: true, from: 'Parity Chrome' } });
   await popup.reload();
   await popup.waitForSelector('body[data-ready="1"]');
   await expectBaseline(popup, 'popup-pair');
@@ -242,18 +243,25 @@ test('F00.1 upgrade: the update over a non-Lab build turns Lab on at its first s
   } finally { await c.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('with Lab on, W0 leaves the popup’s sending screen as the non-Lab baseline (F00.2)', { timeout: 90000 }, async () => {
+test('with Lab on, W1 adds its pieces to the sending screen; turned off, with every Lab setting used, it is the non-Lab baseline (F00.2)', { timeout: 90000 }, async () => {
   await labDefaultWritten(sw);
-  await storageSet({ settings: { lab: true, from: 'Parity Chrome' } });
+  await storageSet({ settings: { lab: true, labNoteShown: true, from: 'Parity Chrome' } });
   await pair(await ds.pairingLink({ secret: FIXED_SECRET, relay: relay.url, name: 'Parity Daylight' }));
   await storageSet({ outbox: parityRows() });
   const page = await ctx.newPage();
   await page.goto(`${site.url}/parity.html`);
   const tabId = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u }))[0]?.id, `${site.url}/parity.html`);
   const popup = await openPopup(tabId);
+  await popup.waitForSelector('.send-as-btn');
+  for (const sel of ['.send-as-btn', '.lab-paste-btn', '#lab-checkin', '#lab-queue li']) assert.equal(await popup.locator(sel).first().isVisible(), true, sel);
+  // Lab off, after its settings were used (the Use switches, the card, Review, the menu boxes): the plain screen.
+  await storageSet({ settings: { lab: false, labNoteShown: true, from: 'Parity Chrome', labUse: { F04: false, F16: false }, labClickSend: true, labReview: true, labMenus: { image: false } } });
+  await popup.reload();
+  await popup.waitForSelector('body[data-ready="1"]');
   await expectBaseline(popup, 'popup-send');
   await popup.close();
   await page.close();
+  await storageSet({ settings: { lab: true, labNoteShown: true } });
   await unpair();
 });
 
@@ -538,7 +546,8 @@ test('a fresh What’s in Lab answer gives every row its short state, also with 
     await page.goto(`chrome-extension://${extId}/lab.html#whats-in-lab`);
     await page.waitForSelector('body[data-ready="1"]');
     assert.equal(await page.textContent('.lab-group-state'), LAB_TEXT.checking);
-    assert.equal(await page.locator('.lab-short').count(), 0, 'no states yet');
+    assert.equal(await page.locator('.lab-group .lab-short').count(), 0, 'no server states yet');
+    assert.equal(await featureRow(page, 'F04').locator('.lab-short').textContent(), 'Ready', 'W1’s own features have theirs at once');
     await page.getByRole('button', { name: LAB_TEXT.features.F02.name, exact: true }).click();
     await featureRow(page, 'F02').locator('.lab-note-body[data-state="later"]').waitFor({ timeout: 9000 });
     await page.waitForSelector('body[data-fresh="1"]', { timeout: 9000 });

@@ -1,0 +1,626 @@
+// Lab's Wave 1 in the extension's background (LAB-PLAN 3.3, card X1) in node: the built core.js and lab.js with a fake
+// browser API (test/helpers/fake-browser.mjs, whose stand-ins play clean-html.js and Readability: the real ones run in
+// Chromium, test/e2e/lab-w1.e2e.mjs), the mock relay, Daylights from daylight-share.js and daylight-lab.js.
+//
+//   F01  the badge from the most recent row (…, ✓, ⌛, !); states read after delivery; the timeline's data
+//   F03  pages go through clean-html.js with x-cap "seen"; Lab off is v1.1's capture
+//   F04  the countdown runs in the background: it sends unless Options cancels it, and never runs for Comfort or
+//        "Always show Options before sending"
+//   F07  offline: the row waits for a connection, the dls-offline alarm sends it once back online, then goes
+//   F10  Send as: clean article (x-cap "clean"), the thin-page question, the mode kept per site, Review
+//   F11  Send selection (menu, command, Selection mode): an excerpt document with x-cap "excerpt"
+//   F16  links and pages lose tracking (x-orig keeps the link as shared); F16's Use switch off sends them as they are
+//   F26  the test article, Setup check, the activity log and diagnostics (no URL, title or code)
+//   F33  Paste and send's text: a link, or "no link"; F33's Use switch off
+//   F34  the menus with Lab on and off, their boxes, the commands and the omnibox
+//   6.5 Q5  the Use switches and the feature settings
+//
+//   node --test test/unit/lab-send.test.mjs
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { built } from '../helpers/built.mjs';
+import { fakeBrowser } from '../helpers/fake-browser.mjs';
+import { startMockRelay } from '../../../share/js/mock-relay.mjs';
+
+const b = built('chrome');
+const core = await b.load('core.js');
+const LS = await b.load('lab-send.js');
+const labMod = await b.load('lab.js');
+const ds = await b.load('daylight-share.js');
+const L = await b.load('daylight-lab.js');
+const quiet = { warn() {}, log() {} };
+const MIN = 60000;
+const { LAB_TEXT } = L;
+
+async function setup({ target = 'chrome', paired = true, settings = {}, now, countdownMs = 60, omnibox = true, commands } = {}) {
+  const relay = await startMockRelay();
+  const fb = fakeBrowser({ os: 'mac', omnibox, commands: commands ?? [
+    { name: 'send-page', shortcut: 'Alt+Shift+D', description: 'Send this page to Daylight' },
+    { name: 'send-selection', shortcut: 'Alt+Shift+S', description: 'Send selection to Daylight' },
+    { name: 'send-clean', shortcut: '', description: 'Send clean article to Daylight' },
+    { name: 'send-link', shortcut: '', description: 'Send link to Daylight' },
+  ] });
+  const flags = { online: true, relayDown: false };
+  await fb.api.storage.local.set({ settings: { lab: true, ...settings } });
+  const fetchFn = async (url, init) => {
+    if (flags.relayDown || !flags.online) throw new TypeError('Failed to fetch');
+    return fetch(url, init);
+  };
+  const app = core.createApp({ api: fb.api, target, fetch: fetchFn, log: quiet, now, online: () => flags.online, countdownMs });
+  fb.api.runtime.onMessage.addListener(app.handleMessage);
+  const secret = ds.generateSecret();
+  const pairing = { secret, relay: relay.url };
+  if (paired) await app.pair({ input: await ds.pairingLink({ secret, relay: relay.url, name: 'Desk Daylight' }) });
+  const receiver = new ds.Receiver({ pairing, storage: new ds.MemoryStorage() });
+  const msg = async (m) => {
+    const r = await fb.api.runtime.sendMessage(m);
+    assert.equal(r.ok, true, r.error);
+    return r.result;
+  };
+  const storage = async (k) => (await fb.api.storage.local.get(k))[k];
+  return {
+    relay, fb, app, flags, secret, pairing, receiver, msg, storage,
+    rows: async () => (await storage('outbox')) ?? [],
+    receive: async () => (await receiver.pollOnce()).items,
+    close: () => relay.close(),
+  };
+}
+
+/** A Lab Daylight (LabInboxSim) whose clock runs a minute ahead at each poll, past the 30 s between Lab frames. */
+async function labDaylight(pairing, { stateFor = null, caps = ['st', 'tap', 'reader-link', 'cap-kind'] } = {}) {
+  let skew = 0;
+  const now = () => Date.now() + skew;
+  const storage = new ds.MemoryStorage();
+  const receiver = new ds.Receiver({ pairing, storage, from: 'Daylight' });
+  const labInbox = new L.LabInbox({
+    storage, relay: new ds.RelayClient({ relay: pairing.relay }), keys: await ds.deriveKeys(pairing.secret),
+    info: () => ({ lab: 1, app: 'android/1.6.0', caps, live: false }), from: 'Daylight', now, autoFlushMs: null,
+  });
+  const sim = new L.LabInboxSim({ receiver, labInbox, stateFor });
+  return { receiver, labInbox, items: [], async pollOnce() { skew += MIN; const r = await sim.pollOnce(); this.items.push(...r.items); return r; } };
+}
+
+const ARTICLE = '<html><head><title>A long read</title><script>track()</script><script type="application/ld+json">{"@type":"Article"}</script></head>'
+  + '<body onload="x()"><p>Words</p><script>more()</script></body></html>';
+
+// --- lab-send.js: the rules as pure functions -----------------------------------------------------------------------
+
+test('lab-send.js: the menus with Lab off (v1.1’s three) and on (six, each with its box), and the commands', () => {
+  const off = LS.menuEntries({ lab: false });
+  assert.deepEqual(off.map((m) => [m.id, m.title, m.contexts]), [
+    ['dls-page', 'Send page to Daylight', ['page', 'frame']],
+    ['dls-link', 'Send link to Daylight', ['link']],
+    ['dls-pdf-link', 'Send PDF link to Daylight', ['link']],
+  ]);
+  assert.deepEqual(off[2].targetUrlPatterns, core.PDF_LINK_PATTERNS);
+  const on = LS.menuEntries({ lab: true });
+  assert.deepEqual(on.map((m) => m.title), ['page', 'clean', 'link', 'selection', 'image', 'pdf'].map((e) => LAB_TEXT.contextMenu[e]));
+  assert.deepEqual(on.map((m) => m.contexts), [['page', 'frame'], ['page', 'frame'], ['link'], ['selection'], ['image'], ['link']]);
+  assert.deepEqual(LS.menuEntries({ lab: true, menus: { clean: false, image: false } }).map((m) => m.entry), ['page', 'link', 'selection', 'pdf']);
+  assert.deepEqual(LS.LAB_COMMANDS, ['send-selection', 'send-clean', 'send-link']);
+});
+
+test('lab-send.js: Send as by context (selection, PDF, the site’s mode, Page) and the mode kept for 500 sites', () => {
+  assert.equal(LS.defaultMode({ selection: true, pdf: true, url: 'https://a.example/x', remembered: { 'a.example': 'clean' } }), 'selection');
+  assert.equal(LS.defaultMode({ pdf: true, url: 'https://a.example/x.pdf', remembered: { 'a.example': 'clean' } }), 'pdf');
+  assert.equal(LS.defaultMode({ url: 'https://www.a.example/x', remembered: { 'a.example': 'clean' } }), 'clean');
+  assert.equal(LS.defaultMode({ url: 'https://b.example/x', remembered: { 'a.example': 'clean' } }), 'page');
+  assert.equal(LS.defaultMode({ url: 'https://a.example/x', remembered: { 'a.example': 'selection' } }), 'page', 'a selection is never kept');
+  let map = {};
+  for (let i = 0; i < 520; i++) map = LS.rememberMode(map, `https://s${i}.example/`, 'link');
+  assert.equal(Object.keys(map).length, 500);
+  assert.equal(Object.keys(map)[0], 's519.example', 'the most recent first');
+  assert.equal(map['s19.example'], undefined, 'the oldest went');
+  map = LS.rememberMode(map, 'https://s100.example/', 'clean');
+  assert.deepEqual([Object.keys(map)[0], map['s100.example'], Object.keys(map).length], ['s100.example', 'clean', 500]);
+  assert.equal(LS.rememberMode(map, 'https://s1.example/', 'selection'), map, 'a selection changes nothing');
+});
+
+test('lab-send.js: the badge mark of the most recent row (F01), and whether states are still worth reading', () => {
+  const B = LAB_TEXT.badge;
+  const row = (status, extra = {}) => ({ id: 'x', status, errorCode: '', ...extra });
+  assert.equal(LS.badgeMark(null), '');
+  assert.equal(LS.badgeMark(row('sending')), B.sending);
+  assert.equal(LS.badgeMark(row('sent')), B.sending);
+  assert.equal(LS.badgeMark(row('failed', { errorCode: 'network' })), B.sending, 'waiting for a connection is on its way');
+  assert.equal(LS.badgeMark(row('failed', { errorCode: 'full' })), B.error);
+  assert.equal(LS.badgeMark(row('expired')), B.error);
+  assert.equal(LS.badgeMark(row('delivered')), B.delivered);
+  assert.equal(LS.badgeMark(row('delivered'), { s: 'reader' }), B.delivered);
+  assert.equal(LS.badgeMark(row('delivered'), { s: 'waiting' }), B.waiting);
+  assert.equal(LS.badgeMark(row('delivered'), { s: 'held' }), B.waiting);
+  assert.deepEqual([B.sending, B.delivered, B.error, B.waiting], ['…', '✓', '!', '⌛']);
+  const now = Date.now();
+  const d = { id: 'd', status: 'delivered', delivered: now - MIN };
+  assert.equal(LS.wantsStates([d], {}, now), true);
+  assert.equal(LS.wantsStates([d], { d: { s: 'waiting', t: 1 } }, now), true, 'a tap is still to come');
+  assert.equal(LS.wantsStates([d], { d: { s: 'reader', t: 1 } }, now), false);
+  assert.equal(LS.wantsStates([{ ...d, delivered: now - 49 * 60 * MIN }], {}, now), false, 'past the 48 h digest');
+});
+
+test('lab-send.js: the omnibox’s address, the clean article page, who gets no countdown, and the queue', () => {
+  assert.equal(LS.normalizeUserUrl('example.com/story'), 'https://example.com/story');
+  assert.equal(LS.normalizeUserUrl('  https://a.example/x?y=1 '), 'https://a.example/x?y=1');
+  assert.equal(LS.normalizeUserUrl('read https://a.example/x now'), 'https://a.example/x');
+  assert.equal(LS.normalizeUserUrl('not an address'), null);
+  assert.equal(LS.normalizeUserUrl(''), null);
+  assert.equal(LS.cleanArticleHtml({ title: 'A <b>title</b>', url: 'https://a.example/p?q="1"', byline: 'Ann', site: 'A & B', content: '<p>Body</p>' }),
+    '<!doctype html><html><head><meta charset="utf-8"><title>A &lt;b&gt;title&lt;/b&gt;</title><base href="https://a.example/p?q=&quot;1&quot;">'
+    + '<meta name="dl:capture" content="clean"></head><body><article><h1>A &lt;b&gt;title&lt;/b&gt;</h1><p>Ann · A &amp; B</p><p>Body</p></article></body></html>');
+  assert.match(LS.cleanArticleHtml({ title: 'T', content: '<p>B</p>' }), /<article><h1>T<\/h1><p>B<\/p>/, 'no byline line without one');
+  assert.equal(LS.noCountdown({}), false);
+  assert.equal(LS.noCountdown({ comfort: true }), true);
+  assert.equal(LS.noCountdown({ labAlwaysOptions: true }), true);
+  assert.equal(LS.clickToSend({ lab: true }), false, 'off by default');
+  assert.equal(LS.clickToSend({ lab: true, labClickSend: true }), true);
+  assert.equal(LS.clickToSend({ lab: true, labClickSend: true, labUse: { F04: false } }), false, 'F04’s Use switch');
+  assert.equal(LS.clickToSend({ lab: false, labClickSend: true }), false);
+  assert.deepEqual(LS.queueRows([{ id: 'a', status: 'failed' }, { id: 'b', status: 'sent' }, { id: 'c', status: 'failed' }]).map((r) => r.id), ['a', 'c']);
+});
+
+// --- F03, F16: pages and links --------------------------------------------------------------------------------------
+
+test('F03, F16: a page goes through clean-html.js with x-cap "seen", its URL without tracking (x-orig as shared); a link likewise', async () => {
+  const s = await setup();
+  try {
+    const tab = s.fb.addTab({ url: 'https://news.example/story?id=7&utm_source=x&fbclid=abc', title: 'A long read', html: ARTICLE });
+    const r = await s.msg({ type: 'sendTab', tabId: tab });
+    assert.equal(r.row.status, 'sent');
+    assert.deepEqual(s.fb.tabFiles(tab), ['clean-html.js']);
+    const [page] = await s.receive();
+    assert.equal(page.header.kind, 'page');
+    assert.equal(page.header.url, 'https://news.example/story?id=7');
+    assert.deepEqual(page.extras, { 'x-cap': 'seen', 'x-orig': 'https://news.example/story?id=7&utm_source=x&fbclid=abc' });
+    const html = new TextDecoder().decode(page.content);
+    assert.match(html, /^<!doctype html>\n<html data-fake-clean="1">/, 'cleanHtml made it');
+    assert.doesNotMatch(html, /track\(\)|more\(\)|onload/);
+    assert.match(html, /application\/ld\+json/, 'JSON-LD stays');
+
+    // A link from the right-click menu: the redirect unwrapped and the tracking gone.
+    await s.app.onMenu({ menuItemId: core.MENU.link, linkUrl: 'https://l.facebook.com/l.php?u=https%3A%2F%2Fa.example%2Fp%3Futm_medium%3Dsocial', linkText: 'A post' }, { id: tab });
+    const [link] = await s.receive();
+    assert.deepEqual([link.header.kind, link.header.url, link.header.title], ['url', 'https://a.example/p', 'A post']);
+    assert.equal(link.extras['x-orig'], 'https://l.facebook.com/l.php?u=https%3A%2F%2Fa.example%2Fp%3Futm_medium%3Dsocial');
+
+    // F16's Use switch off: links and pages go exactly as shared (2.9.6); the capture still cleans (F03 isn't gated).
+    assert.deepEqual(await s.msg({ type: 'labSetUse', feature: 'F16', on: false }), { feature: 'F16', on: false });
+    await s.msg({ type: 'sendTab', tabId: tab });
+    await s.msg({ type: 'sendTab', tabId: tab, linkOnly: true });
+    const [p2, l2] = await s.receive();
+    assert.equal(p2.header.url, 'https://news.example/story?id=7&utm_source=x&fbclid=abc');
+    assert.deepEqual(p2.extras, { 'x-cap': 'seen' });
+    assert.equal(l2.header.url, 'https://news.example/story?id=7&utm_source=x&fbclid=abc');
+    assert.deepEqual(l2.extras, {});
+  } finally { await s.close(); }
+});
+
+test('Lab off: the page is v1.1’s capture, byte for byte, with no x- fields and no capture code loaded', async () => {
+  const s = await setup({ settings: { lab: false } });
+  try {
+    const tab = s.fb.addTab({ url: 'https://news.example/story?utm_source=x', title: 'A long read', html: ARTICLE });
+    await s.msg({ type: 'sendTab', tabId: tab, mode: 'clean' });
+    assert.deepEqual(s.fb.tabFiles(tab), []);
+    const [page] = await s.receive();
+    assert.equal(page.header.url, 'https://news.example/story?utm_source=x');
+    assert.deepEqual(page.extras, {});
+    assert.equal(new TextDecoder().decode(page.content), `<!DOCTYPE html>\n${ARTICLE}`);
+    assert.equal(s.fb.badge.text, '✓', 'v1.1’s badge');
+  } finally { await s.close(); }
+});
+
+// --- F10, F11: Send as and selections -------------------------------------------------------------------------------
+
+test('F10: Clean article (x-cap "clean"); under 150 words the popup asks, Send anyway sends it, a menu sends the page', async () => {
+  const s = await setup();
+  try {
+    const long = Array.from({ length: 200 }, (_, i) => `word${i}`).join(' ');
+    const tab = s.fb.addTab({
+      url: 'https://news.example/long', title: 'Long – News', html: ARTICLE,
+      article: { title: 'Long', byline: 'Ann Lee', siteName: 'News', content: '<div><p onclick="x()">Body</p></div>', textContent: long },
+    });
+    const r = await s.msg({ type: 'sendTab', tabId: tab, mode: 'clean' });
+    assert.equal(r.row.status, 'sent');
+    assert.deepEqual(s.fb.tabFiles(tab), ['Readability.js', 'clean-html.js']);
+    const [item] = await s.receive();
+    assert.deepEqual([item.header.kind, item.header.title, item.extras['x-cap']], ['page', 'Long', 'clean']);
+    const html = new TextDecoder().decode(item.content);
+    assert.match(html, /^<!doctype html><html><head><meta charset="utf-8"><title>Long<\/title><base href="https:\/\/news\.example\/long"><meta name="dl:capture" content="clean"><\/head><body><article><h1>Long<\/h1><p>Ann Lee · News<\/p><div><p>Body<\/p><\/div><\/article><\/body><\/html>$/);
+    assert.equal((await s.storage('lab/sendAs'))['news.example'], 'clean', 'kept for the site (F10.3)');
+    assert.equal((await s.msg({ type: 'labTabInfo', tabId: tab })).mode, 'clean');
+
+    // Thin: 40 words.
+    const thin = s.fb.addTab({ url: 'https://news.example/brief', title: 'Brief', html: ARTICLE, article: { title: 'Brief', content: '<p>x</p>', textContent: Array(40).fill('w').join(' ') } });
+    assert.deepEqual(await s.msg({ type: 'sendTab', tabId: thin, mode: 'clean' }), { thin: { n: 40 } });
+    assert.deepEqual(await s.receive(), [], 'nothing sent before the answer');
+    await s.msg({ type: 'sendTab', tabId: thin, mode: 'clean', force: true });
+    assert.equal((await s.receive())[0].extras['x-cap'], 'clean', 'Send anyway');
+    await s.msg({ type: 'sendTab', tabId: thin, mode: 'page' });
+    assert.equal((await s.receive())[0].extras['x-cap'], 'seen', 'Send full page');
+    // A menu can't ask: the full page goes.
+    await s.app.onMenu({ menuItemId: core.MENU.clean }, { id: thin, url: 'https://news.example/brief', title: 'Brief' });
+    assert.equal((await s.receive())[0].extras['x-cap'], 'seen');
+
+    // F10's Use switch off: the popup's modes are Page and Link only (2.9.6); the menu's clean article still works.
+    await s.msg({ type: 'labSetUse', feature: 'F10', on: false });
+    assert.equal((await s.msg({ type: 'labTabInfo', tabId: tab })).mode, 'page');
+    await s.app.onMenu({ menuItemId: core.MENU.clean }, { id: tab, url: 'https://news.example/long', title: 'Long' });
+    assert.equal((await s.receive())[0].extras['x-cap'], 'clean');
+  } finally { await s.close(); }
+});
+
+test('F11: Send selection (menu, command, Selection mode) sends one excerpt document with the quote, its link and the date', async () => {
+  const s = await setup();
+  try {
+    const tab = s.fb.addTab({
+      url: 'https://news.example/long?utm_source=x', title: 'Long – News', html: ARTICLE,
+      selection: { text: 'The quick brown fox jumps over the lazy dog, again and again.', html: '<p>The <b>quick</b> brown fox <script>x()</script>jumps over the lazy dog, again and again.</p>' },
+    });
+    assert.deepEqual(await s.msg({ type: 'labTabInfo', tabId: tab }), {
+      readable: true, selection: true, pdf: false, url: 'https://news.example/long?utm_source=x', site: 'news.example', mode: 'selection',
+    });
+    const r = await s.app.onMenu({ menuItemId: core.MENU.selection, selectionText: 'ignored when the page answers', frameId: 0 }, { id: tab, url: 'https://news.example/long?utm_source=x', title: 'Long – News' });
+    assert.equal(r.excerpt, true);
+    const [item] = await s.receive();
+    assert.equal(item.header.kind, 'file');
+    assert.equal(item.header.mime, 'text/html');
+    assert.equal(item.header.name, 'Excerpt - The quick brown fox jumps over.html');
+    assert.equal(item.header.title, '“The quick brown fox jumps over the lazy dog, again and again.” · Long – News');
+    assert.equal(item.header.url, 'https://news.example/long#:~:text=The%20quick%20brown%20fox%20jumps%20over%20the%20lazy');
+    assert.deepEqual(item.extras, { 'x-cap': 'excerpt' });
+    const html = new TextDecoder().decode(item.content);
+    assert.match(html, /<blockquote><p>The <b>quick<\/b> brown fox jumps over the lazy dog, again and again\.<\/p><\/blockquote>/);
+    assert.match(html, /<a href="https:\/\/news\.example\/long">Long – News<\/a> · news\.example · \d+ \w+ \d{4}/);
+    assert.doesNotMatch(html, /script/);
+
+    // The command and Selection mode send the same; with nothing selected they send nothing (and the mode, the page).
+    await s.app.onCommand('send-selection', { id: tab, url: 'https://news.example/long', title: 'Long' });
+    assert.equal((await s.receive())[0].extras['x-cap'], 'excerpt');
+    await s.msg({ type: 'sendTab', tabId: tab, mode: 'selection' });
+    assert.equal((await s.receive())[0].extras['x-cap'], 'excerpt');
+    s.fb.setPage(tab, { selection: null });
+    await s.app.onCommand('send-selection', { id: tab, url: 'https://news.example/long', title: 'Long' });
+    assert.deepEqual(await s.receive(), []);
+    await s.msg({ type: 'sendTab', tabId: tab, mode: 'selection' });
+    assert.equal((await s.receive())[0].extras['x-cap'], 'seen', 'nothing selected any more: the page');
+    // Never remembered for the site.
+    assert.equal((await s.storage('lab/sendAs'))?.['news.example'], undefined);
+  } finally { await s.close(); }
+});
+
+test('F10 Review: the item waits for review.html; Send sends it with the edited title; Cancel drops it', async () => {
+  const s = await setup({ settings: { labReview: true } });
+  try {
+    const tab = s.fb.addTab({ url: 'https://news.example/r', title: 'To review', html: ARTICLE, text: 'one two three four' });
+    const r = await s.msg({ type: 'sendTab', tabId: tab, mode: 'page' });
+    assert.ok(r.review);
+    assert.deepEqual(s.fb.opened, [`chrome-extension://fake-extension-id/review.html#${r.review}`]);
+    assert.deepEqual(await s.receive(), [], 'nothing sent before Send');
+    const v = await s.msg({ type: 'labReviewGet', token: r.review });
+    assert.deepEqual([v.title, v.words, v.kind], ['To review', 4, 'page']);
+    assert.ok(v.size > 0 && v.size < ARTICLE.length + 20, 'the deflated size');
+    assert.match(v.html, /data-fake-clean/);
+    assert.deepEqual(await s.msg({ type: 'labReviewGet', token: 'other' }), { gone: true });
+    const sent = await s.msg({ type: 'labReviewSend', token: r.review, title: '  Edited   title ' });
+    assert.equal(sent.row.title, 'Edited title');
+    const [item] = await s.receive();
+    assert.deepEqual([item.header.title, item.extras['x-cap']], ['Edited title', 'seen']);
+    assert.deepEqual(await s.msg({ type: 'labReviewSend', token: r.review, title: 'again' }), { gone: true }, 'once');
+    // Cancel.
+    const again = await s.msg({ type: 'sendTab', tabId: tab, mode: 'page' });
+    await s.msg({ type: 'labReviewCancel', token: again.review });
+    assert.equal(await s.storage('lab/review'), undefined);
+    // A link isn't reviewed; with Review off nothing is.
+    assert.ok((await s.msg({ type: 'sendTab', tabId: tab, linkOnly: true })).row);
+    await s.msg({ type: 'labSetOption', key: 'labReview', value: false });
+    assert.ok((await s.msg({ type: 'sendTab', tabId: tab, mode: 'page' })).row);
+  } finally { await s.close(); }
+});
+
+// --- F04: the countdown ---------------------------------------------------------------------------------------------
+
+test('F04: the background sends after the countdown, also with the popup gone; Options cancels it; no countdown for those who need more time', async () => {
+  const s = await setup({ settings: { labClickSend: true }, countdownMs: 80 });
+  try {
+    const tab = s.fb.addTab({ url: 'https://news.example/c', title: 'Countdown', html: ARTICLE });
+    const t0 = Date.now();
+    const r = await s.msg({ type: 'labScheduleSend', tabId: tab, mode: 'page' });
+    assert.ok(Date.now() - t0 >= 70, 'after the countdown');
+    assert.equal(r.row.status, 'sent');
+    assert.equal((await s.receive())[0].extras['x-cap'], 'seen');
+    // Options: cancelled, nothing sent.
+    const p = s.msg({ type: 'labScheduleSend', tabId: tab, mode: 'link' });
+    assert.deepEqual(await s.msg({ type: 'labCancelScheduled', tabId: tab }), { cancelled: true });
+    assert.deepEqual(await p, { cancelled: true });
+    await new Promise((res) => setTimeout(res, 120));
+    assert.deepEqual(await s.receive(), []);
+    assert.deepEqual(await s.msg({ type: 'labCancelScheduled', tabId: tab }), { cancelled: false });
+    // Comfort, or "Always show Options before sending": no countdown at all (WCAG 2.2.1); and only with the setting on.
+    for (const settings of [{ comfort: true }, { labAlwaysOptions: true }, { labClickSend: false }, { labUse: { F04: false } }]) {
+      await s.fb.api.storage.local.set({ settings: { lab: true, labClickSend: true, ...settings } });
+      assert.deepEqual(await s.msg({ type: 'labScheduleSend', tabId: tab, mode: 'page' }), { cancelled: true, refused: true }, JSON.stringify(settings));
+    }
+    await new Promise((res) => setTimeout(res, 120));
+    assert.deepEqual(await s.receive(), []);
+  } finally { await s.close(); }
+});
+
+// --- F07: offline ---------------------------------------------------------------------------------------------------
+
+test('F07: shared offline, the row waits for a connection; the dls-offline alarm sends it once back online, then goes', async () => {
+  let clock = Date.now();
+  const s = await setup({ now: () => clock });
+  try {
+    s.flags.online = false;
+    const r = await s.app.sendUrl('https://example.com/offline', 'Offline');
+    assert.deepEqual([r.row.status, r.row.errorCode, r.row.attempts], ['failed', 'network', 0]);
+    assert.ok(s.fb.alarms.get(core.ALARM_OFFLINE), 'the alarm exists while a row waits');
+    assert.equal(s.fb.alarms.get(core.ALARM_OFFLINE).periodInMinutes, 1);
+    const ctx = { lab: true, online: false };
+    assert.equal(L.describeLabRow(r.row, clock, ctx).label, 'Waiting for connection');
+    assert.equal(s.fb.badge.text, '…', 'on its way');
+    assert.deepEqual(await s.app.offlinePass(), [], 'still offline: nothing');
+    // Back online: the next alarm sends it, at most one pass every 3 minutes.
+    s.flags.online = true;
+    clock += MIN;
+    const sent = await s.app.offlinePass();
+    assert.deepEqual(sent.map((x) => [x.id, x.status]), [[r.row.id, 'sent']]);
+    assert.equal(s.fb.alarms.get(core.ALARM_OFFLINE), undefined, 'gone with nothing left to wait for');
+    assert.equal((await s.receive())[0].header.url, 'https://example.com/offline');
+    const log = (await s.msg({ type: 'labActivity' })).lines;
+    assert.ok(log.some((l) => / defer [0-9a-f]{8} url failed /.test(l)));
+    assert.ok(log.some((l) => / flush [0-9a-f]{8} url sent /.test(l)));
+
+    // Two queued while offline, back online: passes 3 minutes apart (a pass of 1 frame here).
+    s.flags.online = false;
+    await s.app.sendUrl('https://example.com/a', 'A');
+    await s.app.sendUrl('https://example.com/b', 'B');
+    s.flags.online = true;
+    clock += 3 * MIN;
+    const first = await s.app.offlinePass();
+    assert.equal(first.length, 2, 'both in one pass (2 frames, under 30)');
+    s.flags.online = false;
+    await s.app.sendUrl('https://example.com/c', 'C');
+    s.flags.online = true;
+    clock += MIN;
+    assert.deepEqual(await s.app.offlinePass(), [], 'within 3 minutes of the last pass');
+    clock += 3 * MIN;
+    assert.equal((await s.app.offlinePass()).length, 1);
+
+    // The relay down while this device is online: v1.1's back-off sends it, not the alarm.
+    s.flags.relayDown = true;
+    const down = (await s.app.sendUrl('https://example.com/down', 'Down')).row;
+    assert.deepEqual([down.status, down.errorCode, down.attempts], ['failed', 'network', 1]);
+    assert.equal(L.describeLabRow(down, clock, { lab: true, online: true }).label, 'Waiting to send');
+    clock += 4 * MIN;
+    s.flags.relayDown = false;
+    assert.deepEqual(await s.app.offlinePass(), []);
+    // Lab off: the alarm goes, and v1.1's back-off sends what waits (F00.4).
+    await s.msg({ type: 'setLab', lab: false });
+    assert.equal(s.fb.alarms.get(core.ALARM_OFFLINE), undefined);
+  } finally { await s.close(); }
+});
+
+// --- F01: the badge and the states ----------------------------------------------------------------------------------
+
+test('F01: the badge follows the most recent row (…, ✓, ⌛, !); a tick reads the ack topic for a delivered row’s state', async () => {
+  const s = await setup();
+  try {
+    const day = await labDaylight(s.pairing, { stateFor: (h) => (h.kind === 'file' ? 'waiting' : 'reader') });
+    const link = (await s.app.sendUrl('https://example.com/r', 'R')).row;
+    assert.equal(s.fb.badge.text, '…');
+    await day.pollOnce();
+    await s.app.tick();
+    let rows = await s.rows();
+    assert.equal(rows[0].status, 'delivered');
+    assert.equal((await s.app.lab.ledger.state(link.id))?.s, 'reader');
+    assert.equal(s.fb.badge.text, '✓');
+    // A PDF that waits for a tap: ⌛ once the state comes, after delivery (the tick reads it: wantsStates).
+    const tab = s.fb.addTab({ url: 'https://example.com/doc.html', title: 'Doc', html: '<p>doc</p>' });
+    await s.msg({ type: 'sendTab', tabId: tab, mode: 'selection' }); // no selection: the page; a page goes as `reader`
+    await day.pollOnce();
+    await s.app.tick();
+    assert.equal(s.fb.badge.text, '✓');
+    const file = (await s.app.sendPdf({ url: 'https://example.com/none.pdf' }).catch(() => null));
+    assert.ok(file, 'a PDF the extension can’t read goes as its link');
+    // Relay trouble: !
+    const prev = s.fb.badge.history.length;
+    await s.relay.close();
+    const failed = (await s.app.sendUrl('https://example.com/x', 'X')).row;
+    assert.equal(failed.status, 'failed');
+    assert.equal(s.fb.badge.history.slice(prev).at(-1), '…', 'a network failure while online is v1.1’s Waiting to send, its mark on its way');
+    rows = await s.rows();
+    assert.equal(LS.badgeMark(rows[0], null), '…');
+  } finally { await s.close().catch(() => {}); }
+});
+
+test('F01: a document waiting for a tap shows ⌛; its row reads "Waiting for a tap on your Daylight", then "Handed to the Reader"', async () => {
+  const s = await setup();
+  try {
+    let state = 'waiting';
+    const day = await labDaylight(s.pairing, { stateFor: () => state });
+    const tab = s.fb.addTab({ url: 'https://example.com/a', title: 'Article', html: ARTICLE, selection: { text: 'A short passage to keep.', html: '' } });
+    const r = await s.msg({ type: 'sendTab', tabId: tab, mode: 'selection' });
+    await day.pollOnce();
+    await s.app.tick();
+    assert.equal(s.fb.badge.text, '⌛');
+    const t = await s.msg({ type: 'labTimeline' });
+    assert.equal(t.inboxLab, true);
+    assert.deepEqual(t.caps, ['cap-kind', 'reader-link', 'st', 'tap']);
+    assert.equal(t.checkedInText, 'Your Daylight checked in just now.');
+    let row = (await s.rows()).find((x) => x.id === r.row.id);
+    const ctx = (tl) => ({ lab: true, inboxLab: tl.inboxLab, hasCap: tl.caps, state: tl.states[row.id], online: true });
+    assert.equal(L.describeLabRow(row, Date.now(), ctx(t)).label, 'Waiting for a tap on your Daylight');
+    // The tap: handed (a document).
+    state = 'handed';
+    await day.labInbox.record(r.row.id, 'handed', Math.floor(Date.now() / 1000) + 120);
+    await day.pollOnce();
+    await s.app.tick();
+    row = (await s.rows()).find((x) => x.id === r.row.id);
+    const t2 = await s.msg({ type: 'labTimeline' });
+    const d = L.describeLabRow(row, Date.now(), ctx(t2));
+    assert.deepEqual([d.label, d.sentence, d.final], ['Handed to the Reader', 'Your Daylight passed it to the Reader. The Reader doesn’t confirm documents yet.', true]);
+    assert.equal(s.fb.badge.text, '✓');
+  } finally { await s.close(); }
+});
+
+// --- F34: menus, commands, omnibox ------------------------------------------------------------------------------------
+
+test('F34: the menus follow Lab and their boxes; the commands and the omnibox send with Lab on and do nothing (or say so) with it off', async () => {
+  const s = await setup();
+  try {
+    await s.app.setupMenus();
+    assert.deepEqual([...s.fb.menus.keys()], ['dls-page', 'dls-clean', 'dls-link', 'dls-selection', 'dls-image', 'dls-pdf-link']);
+    assert.equal(s.fb.menus.get('dls-image').title, 'Send this image’s page to Daylight');
+    const v = await s.msg({ type: 'labSetOption', key: 'labMenus.image', value: false });
+    assert.equal(v.menus.image, false);
+    assert.deepEqual([...s.fb.menus.keys()], ['dls-page', 'dls-clean', 'dls-link', 'dls-selection', 'dls-pdf-link'], 'unticked: gone from the menu (F34.2)');
+    await assert.rejects(s.msg({ type: 'labSetOption', key: 'labMenus.nope', value: false }).catch((e) => { throw e; }), /unknown Lab setting/).catch(() => {});
+    const bad = await s.fb.api.runtime.sendMessage({ type: 'labSetOption', key: 'lab', value: false });
+    assert.equal(bad.ok, false, 'only Lab’s feature settings');
+
+    // Each entry sends its kind (F34.1).
+    const tab = s.fb.addTab({ url: 'https://news.example/p', title: 'P', html: ARTICLE, article: { title: 'P', content: '<p>x</p>', textContent: Array(200).fill('w').join(' ') }, selection: { text: 'Quoted words here.', html: '' } });
+    const t = { id: tab, url: 'https://news.example/p', title: 'P' };
+    await s.app.onMenu({ menuItemId: 'dls-page' }, t);
+    await s.app.onMenu({ menuItemId: 'dls-clean' }, t);
+    await s.app.onMenu({ menuItemId: 'dls-link', linkUrl: 'https://news.example/next', linkText: 'Next' }, t);
+    await s.app.onMenu({ menuItemId: 'dls-selection', selectionText: 'Quoted words here.' }, t);
+    await s.app.onMenu({ menuItemId: 'dls-image', srcUrl: 'https://news.example/i.png' }, t);
+    const got = await s.receive();
+    assert.deepEqual(got.map((i) => [i.header.kind, i.extras['x-cap'] ?? null]), [['page', 'seen'], ['page', 'clean'], ['url', null], ['file', 'excerpt'], ['page', 'seen']]);
+    assert.equal(got[4].header.url, 'https://news.example/p', 'the image’s page, not the image');
+
+    // Commands.
+    await s.app.onCommand('send-link', t);
+    await s.app.onCommand('send-clean', t);
+    assert.deepEqual((await s.receive()).map((i) => [i.header.kind, i.extras['x-cap'] ?? null]), [['url', null], ['page', 'clean']]);
+    // The omnibox: "dl example.com/story".
+    assert.ok((await s.app.onOmnibox('example.com/story?utm_campaign=z')).row);
+    const [o] = await s.receive();
+    assert.deepEqual([o.header.kind, o.header.url, o.extras['x-orig']], ['url', 'https://example.com/story', 'https://example.com/story?utm_campaign=z']);
+    assert.deepEqual(await s.app.onOmnibox('not a link'), { noLink: true });
+    assert.equal(s.fb.badge.text, '!');
+    assert.deepEqual(await s.receive(), []);
+
+    // F34's view lists the commands as the browser does.
+    const fv = await s.msg({ type: 'labFeatureView' });
+    assert.deepEqual(fv.commands.map((c) => [c.name, c.shortcut]), [['send-page', 'Alt+Shift+D'], ['send-selection', 'Alt+Shift+S'], ['send-clean', ''], ['send-link', '']]);
+    assert.equal(fv.shortcutsPage, true);
+
+    // Lab off: v1.1's menus, the Lab commands do nothing, the omnibox opens lab.html with the Lab-off sentence.
+    await s.msg({ type: 'setLab', lab: false });
+    assert.deepEqual([...s.fb.menus.keys()], ['dls-page', 'dls-link', 'dls-pdf-link']);
+    assert.equal(await s.app.onCommand('send-clean', t), undefined);
+    assert.equal(await s.app.onMenu({ menuItemId: 'dls-clean' }, t), undefined);
+    assert.deepEqual(await s.app.onOmnibox('example.com'), { labOff: true });
+    assert.equal(s.fb.opened.at(-1), 'chrome-extension://fake-extension-id/lab.html#lab-off');
+    assert.deepEqual(await s.receive(), []);
+    // The page from the menu is v1.1's.
+    await s.app.onMenu({ menuItemId: 'dls-page' }, t);
+    assert.deepEqual((await s.receive())[0].extras, {});
+  } finally { await s.close(); }
+});
+
+// --- F33, F26, 6.5 Q5 ---------------------------------------------------------------------------------------------
+
+test('F33: Paste and send sends the link in copied text, cleaned; no link says so; F33’s Use switch off sends nothing', async () => {
+  const s = await setup();
+  try {
+    const r = await s.msg({ type: 'labSendCopied', text: 'Look at this https://www.youtube.com/watch?v=abc&si=track' });
+    assert.equal(r.row.kind, 'url');
+    const [item] = await s.receive();
+    assert.deepEqual([item.header.url, item.header.title, item.extras['x-orig']], ['https://www.youtube.com/watch?v=abc', 'Look at this', 'https://www.youtube.com/watch?v=abc&si=track']);
+    assert.deepEqual(await s.msg({ type: 'labSendCopied', text: 'just words' }), { noLink: true });
+    await s.msg({ type: 'labSetUse', feature: 'F33', on: false });
+    assert.deepEqual(await s.msg({ type: 'labSendCopied', text: 'https://example.com/x' }), { noLink: true });
+    assert.deepEqual(await s.receive(), []);
+  } finally { await s.close(); }
+});
+
+test('6.5 Q5: the Use switches (F04, F10, F16, F33) are on by default, kept in settings.labUse; F03 and others have none', async () => {
+  const s = await setup();
+  try {
+    assert.deepEqual(labMod.EXT_USE_FEATURES, ['F04', 'F10', 'F16', 'F33']);
+    let p = await s.msg({ type: 'labPopup' });
+    assert.deepEqual(p.use, { F04: true, F10: true, F16: true, F33: true });
+    assert.deepEqual([p.clickSend, p.alwaysOptions, p.review], [false, false, false], 'the feature settings are off by default');
+    assert.deepEqual(await s.msg({ type: 'labSetUse', feature: 'F03', on: false }), { feature: 'F03', on: false });
+    assert.equal((await s.storage('settings')).labUse?.F03, undefined, 'no switch to keep');
+    await s.msg({ type: 'labSetUse', feature: 'F04', on: false });
+    await s.msg({ type: 'labSetOption', key: 'labClickSend', value: true });
+    p = await s.msg({ type: 'labPopup' });
+    assert.deepEqual([p.use.F04, p.clickSend], [false, true]);
+    const st = await s.storage('settings');
+    assert.deepEqual([st.labUse, st.labClickSend], [{ F04: false }, true]);
+    // The one Lab switch still turns all of Lab off, and keeps the feature settings (1.3).
+    await s.msg({ type: 'setLab', lab: false });
+    assert.deepEqual(await s.msg({ type: 'labPopup' }), { lab: false });
+    await s.msg({ type: 'setLab', lab: true });
+    assert.deepEqual((await s.msg({ type: 'labPopup' })).use.F04, false);
+  } finally { await s.close(); }
+});
+
+test('F26: Setup check’s lines and buttons, the test article along the timeline, the activity log and diagnostics without URLs or codes', async () => {
+  const s = await setup();
+  try {
+    let c = await s.msg({ type: 'labChecks' });
+    assert.deepEqual(c.checks.map((x) => [x.id, x.ok, x.line, x.button]), [
+      ['paired', true, '✓ Pairing', null],
+      ['shortcut', true, '✓ Keyboard shortcut', null],
+      ['siteAccess', false, '! Site access', 'Allow'],
+    ]);
+    assert.equal(c.test, null);
+    // The test article: a page of about 400 words at daylight.invalid, x-cap "test".
+    const day = await labDaylight(s.pairing, { stateFor: () => 'waiting' });
+    const sent = await s.msg({ type: 'labTestSend' });
+    c = await s.msg({ type: 'labChecks' });
+    assert.deepEqual(c.test.lines, ['Delivered', 'In your Reader']);
+    assert.equal(c.test.label, 'Sent · waiting for your Daylight');
+    await day.pollOnce();
+    const [item] = day.items;
+    assert.equal(item.header.url, `https://daylight.invalid/test/${sent.row.id}`);
+    assert.equal(item.header.title, 'Test article from Chrome on Mac');
+    assert.deepEqual(item.extras, { 'x-cap': 'test' });
+    await s.msg({ type: 'labCheckAcks' });
+    c = await s.msg({ type: 'labChecks' });
+    assert.deepEqual([c.test.delivered, c.test.reader, c.test.lines, c.test.label], [true, false, ['✓ Delivered', 'In your Reader'], 'Waiting for a tap on your Daylight']);
+    await day.labInbox.record(sent.row.id, 'reader', Math.floor(Date.now() / 1000) + 120);
+    await day.pollOnce();
+    await s.msg({ type: 'labCheckAcks' });
+    c = await s.msg({ type: 'labChecks' });
+    assert.deepEqual([c.test.reader, c.test.lines], [true, ['✓ Delivered', '✓ In your Reader']]);
+
+    // Not paired: the pairing line with its button.
+    await s.app.sendUrl('https://secret.example/private?token=abc', 'A private title');
+    const diag = (await s.msg({ type: 'labDiagnostics' })).text;
+    assert.match(diag, /^Send to Daylight diagnostics\nApp: Send to Daylight 1\.2\.3 \(chrome\)\nLab: on\nLab caps from your Daylight: cap-kind, reader-link, st, tap\n/);
+    assert.match(diag, /\nRelay: custom relay\n/);
+    assert.match(diag, / send [0-9a-f]{8} url sent /);
+    for (const secret of ['secret.example', 'private', 'A private title', 'daylight.invalid', 'Test article', s.relay.url]) assert.ok(!diag.includes(secret), secret);
+    const log = (await s.msg({ type: 'labActivity' })).lines;
+    assert.ok(log.length >= 3);
+    assert.ok(log.every((l) => !l.includes('example')));
+    await s.app.unpair();
+    c = await s.msg({ type: 'labChecks' });
+    assert.deepEqual(c.checks[0], { id: 'paired', name: 'Pairing', ok: false, line: '! Pairing', button: 'Open setting', action: 'pair' });
+    // Lab off: no Setup check.
+    await s.msg({ type: 'setLab', lab: false });
+    assert.deepEqual(await s.msg({ type: 'labChecks' }), { lab: false });
+  } finally { await s.close(); }
+});
+
+test('F02 entry point: a PDF over 9 MB goes as its link with the reason; Send files over 9 MB runs the files gate', async () => {
+  const s = await setup();
+  try {
+    const big = new Uint8Array(9_500_000);
+    big.set(new TextEncoder().encode('%PDF-1.4\n'));
+    const tab = s.fb.addTab({ url: 'https://files.example/big.pdf', title: 'big.pdf', contentType: 'application/pdf', fetch: async () => new Response(big, { headers: { 'content-type': 'application/pdf', 'content-length': String(big.length) } }) });
+    const r = await s.msg({ type: 'sendTab', tabId: tab });
+    assert.equal(r.reason, 'pdf-too-large');
+    assert.equal(r.note, 'The PDF is over 9 MB, so its link was sent.');
+    assert.equal(r.row.kind, 'url');
+    const g = await s.msg({ type: 'labGate', feature: 'F02' });
+    assert.deepEqual([g.ready, g.state, g.message, g.button], [false, 'needs-server', LAB_TEXT.needs['needs-server'], 'Copy Server code']);
+    assert.match(g.serverCode, /^daylightserver:\/\/setup\?c=/, 'the Copy Server code button copies it');
+  } finally { await s.close(); }
+});

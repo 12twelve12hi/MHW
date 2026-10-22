@@ -1,5 +1,6 @@
 // A local web server for the tests: an article page, PDFs (with and without CORS), a page over 8 MiB, a link page.
-// A route can be served without Content-Length (chunked: true).
+// A route can be served without Content-Length (chunked: true), or made per request (dynamic: (req) => Buffer, which
+// sees the request's cookies).
 import http from 'node:http';
 
 export async function startSite({ pdf, bigPdf } = {}) {
@@ -24,8 +25,9 @@ export async function startSite({ pdf, bigPdf } = {}) {
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     hits.push(`${req.method} ${u.pathname}`);
-    const r = routes.get(u.pathname);
-    if (!r) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('not found'); }
+    const route = routes.get(u.pathname);
+    if (!route) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('not found'); }
+    const r = route.dynamic ? { ...route, body: route.dynamic(req) } : route;
     // chunked: no Content-Length (the body's size shows only while reading it).
     res.writeHead(200, { 'Content-Type': r.type, ...(r.chunked ? {} : { 'Content-Length': r.body.length }), ...(r.headers ?? {}) });
     if (req.method === 'HEAD') return res.end();

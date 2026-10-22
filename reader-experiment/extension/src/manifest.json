@@ -22,14 +22,45 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "permissions": ["activeTab", "scripting", "contextMenus", "storage", "unlimitedStorage", "alarms"],
-  "host_permissions": ["https://ntfy.sh/*"],
-  "optional_host_permissions": ["<all_urls>"],
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "contextMenus",
+    "storage",
+    "unlimitedStorage",
+    "alarms"
+  ],
+  "optional_permissions": [
+    "clipboardRead"
+  ],
+  "host_permissions": [
+    "https://ntfy.sh/*"
+  ],
+  "optional_host_permissions": [
+    "<all_urls>"
+  ],
   "commands": {
     "send-page": {
-      "suggested_key": { "default": "Alt+Shift+D" },
+      "suggested_key": {
+        "default": "Alt+Shift+D"
+      },
       "description": "Send this page to Daylight"
+    },
+    "send-selection": {
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
+      "description": "Send selection to Daylight"
+    },
+    "send-clean": {
+      "description": "Send clean article to Daylight"
+    },
+    "send-link": {
+      "description": "Send link to Daylight"
     }
+  },
+  "omnibox": {
+    "keyword": "dl"
   },
   "minimum_chrome_version": "116"
 }

@@ -2,20 +2,36 @@
 // globals, so the unit tests drive it with a fake one; background.js wires it to the real events.
 
 import * as ds from './daylight-share.js';
+import { LAB_TEXT, labUseOn, normaliseShare, cleanShareUrl, excerptItem, testArticle } from './daylight-lab.js';
 import { createLab } from './lab.js';
-import { capturePage, pdfStart, pdfChunk, pdfEnd, linkText } from './inject.js';
+import { capturePage, pdfStart, pdfChunk, pdfEnd, linkText, pageInfo, captureSelection, captureArticle } from './inject.js';
 import {
   PDF_MIME, PDF_CHUNK, MAX_PDF, NOTES, originPattern, pdfFileName, isPdfBytes, titleFromName,
-  planForCapture, defaultDeviceName, isTrouble, maintain, relayForInput,
+  planForCapture, defaultDeviceName, isTrouble, maintain, relayForInput, wantsAcks, looksLikePdfUrl,
 } from './logic.js';
+import {
+  MENU_IDS, PDF_LINK_PATTERNS as LINK_PDF_PATTERNS, COMMANDS, menuEntries, defaultMode, rememberMode, cleanArticleHtml,
+  THIN_WORDS, COUNTDOWN_MS, FLUSH_GAP_MS, ALARM_OFFLINE as OFFLINE_ALARM, badgeMark, wantsStates, waitingForConnection, normalizeUserUrl, clickToSend,
+  noCountdown, siteOf,
+} from './lab-send.js';
 
-export const MENU = { page: 'dls-page', link: 'dls-link', pdfLink: 'dls-pdf-link' };
+export const MENU = { page: MENU_IDS.page, link: MENU_IDS.link, pdfLink: MENU_IDS.pdf, clean: MENU_IDS.clean, selection: MENU_IDS.selection, image: MENU_IDS.image };
 export const ALARM_TICK = 'dls-tick';
 export const ALARM_SOON = 'dls-soon';
-export const COMMAND_SEND = 'send-page';
-// Match patterns compare against path + query, so these catch ".../paper.pdf" and ".../paper.pdf?download=1".
-export const PDF_LINK_PATTERNS = ['*://*/*.pdf', '*://*/*.PDF', '*://*/*.Pdf', '*://*/*.pdf?*', '*://*/*.PDF?*'];
+export const ALARM_OFFLINE = OFFLINE_ALARM;
+export const PDF_LINK_PATTERNS = LINK_PDF_PATTERNS;
+export const COMMAND_SEND = COMMANDS.page;
 const PENDING_PDF_MS = 5 * 60 * 1000;
+/** Lab's capture code (LAB-PLAN F03, F10): build.mjs copies them from share/js/capture/; injected before a capture. */
+export const CLEAN_FILES = ['clean-html.js'];
+export const ARTICLE_FILES = ['Readability.js', 'clean-html.js'];
+/** F10's Review: the one item waiting for Send or Cancel on review.html (lab/ goes with a pairing change). */
+const REVIEW_KEY = 'lab/review';
+const SEND_AS_KEY = 'lab/sendAs';
+const BADGE_KEY = 'lab/badge';
+const FLUSH_KEY = 'lab/flushAt';
+const OFFLINE_KEY = 'lab/offlineAt';
+const TEST_KEY = 'lab/testId';
 
 /**
  * A chrome.storage area as a daylight-share storage adapter. Every failed write is reported: the library keeps sending
@@ -101,6 +117,17 @@ function makeBadge(action) {
       else await set('');
     },
     async clear() { if (!busy) { clearTimeout(timer); await set(''); } },
+    /** Lab (F01): a send is over without v1.1's outcome mark; the most recent row's mark follows (show). */
+    release() { busy = Math.max(0, busy - 1); return busy === 0; },
+    busy: () => busy > 0,
+    /** Lab (F01): the most recent row's mark (LAB_TEXT.badge): ✓ for 6 s, the others until the next mark. */
+    async show(mark) {
+      if (busy) return;
+      clearTimeout(timer);
+      if (!mark) { await set(''); return; }
+      await set(mark, mark === LAB_TEXT.badge.error ? '#b3261e' : '#222222');
+      if (mark === LAB_TEXT.badge.delivered) timer = setTimeout(() => set(''), 6000);
+    },
   };
 }
 
@@ -110,7 +137,7 @@ function makeBadge(action) {
  */
 export function createApp({
   api, target = 'chrome', storage, fetch: fetchImpl, now = () => Date.now(), log = console, pdfChunkSize = PDF_CHUNK,
-  gateDeadlineMs, labBuilt = true,
+  gateDeadlineMs, labBuilt = true, online = () => globalThis.navigator?.onLine !== false, countdownMs = COUNTDOWN_MS,
 } = {}) {
   storage ??= areaStorage(api.storage.local);
   const fetchFn = fetchImpl ?? ((...a) => globalThis.fetch(...a));
@@ -278,6 +305,12 @@ export function createApp({
 
   // --- sending ------------------------------------------------------------------------------------------------------
 
+  /** Lab as this build reads it now: {on, s: the settings}. A build without Lab has it off. */
+  async function labCtx() {
+    const s = await getSettings();
+    return { on: labBuilt && s.lab !== false, s };
+  }
+
   async function patchRow(id, fields) {
     const rows = (await storage.get('outbox')) ?? [];
     const r = rows.find((x) => x.id === id);
@@ -290,24 +323,59 @@ export function createApp({
     try { api.alarms?.create(ALARM_SOON, { delayInMinutes: 0.5 }); } catch { /* ignore */ }
   }
 
-  async function sendItem(item, reason) {
+  /**
+   * Shares one item. With Lab on (F07): while this device is offline the row is stored to wait for a connection
+   * (Sender.send defer), and the dls-offline alarm sends it once the device is back online; every send goes into the
+   * activity log (F26).
+   */
+  async function sendItem(item, reason, { lab: c = null } = {}) {
     const sender = await requireSender();
     const note = NOTES[reason] ?? '';
+    c ??= await labCtx();
+    const defer = c.on && !online();
     const row = await run(async () => {
-      const r = await sender.send(item);
+      const r = await sender.send(item, { defer });
       if (note) { r.note = note; await patchRow(r.id, { note }); }
       return r;
     });
+    if (c.on) {
+      await lab.logEvent({ type: defer ? 'defer' : 'send', id: row.id, kind: row.kind, status: row.status });
+      if (defer) await markOffline();
+      if (waitingForConnection(row)) ensureOfflineAlarm();
+      await labBadge();
+    }
     scheduleSoon();
     // Check for acks right away (PROTOCOL 3.3); the Daylight may be listening live.
-    run(() => sender.checkAcks()).catch(() => {});
-    return { row, note };
+    if (!defer) run(() => sender.checkAcks()).catch(() => {});
+    return reason && c.on ? { row, note, reason } : { row, note };
   }
 
-  async function sendUrl(url, title, reason) {
+  /**
+   * Lab (F16): a link as Lab sends it: normaliseShare unwraps redirectors and drops tracking (unless F16's Use switch
+   * is off), and the link as shared goes as x-orig. -> the url item.
+   */
+  function labLinkItem(url, title, s) {
+    const n = normaliseShare({ url, subject: title ?? '', clean: labUseOn(s, 'F16') });
+    const u = n.url ?? url;
+    const t = n.title && n.title !== u && n.title !== url ? n.title : '';
+    const item = { kind: 'url', url: u, title: t };
+    if (n.orig) item.extras = { 'x-orig': n.orig };
+    return item;
+  }
+
+  /** Lab (F16): a page's URL, cleaned as a link's is; the URL as shared goes as x-orig. -> {url, extras} */
+  function labPageUrl(url, s) {
+    const cleaned = labUseOn(s, 'F16') ? cleanShareUrl(url) : null;
+    if (!cleaned || cleaned === url) return { url, extras: {} };
+    return { url: cleaned, extras: url.length <= ds.X_ORIG_MAX ? { 'x-orig': url } : {} };
+  }
+
+  async function sendUrl(url, title, reason, { lab: c = null } = {}) {
     const u = ds.webUrl(url);
     if (!u) throw new ds.ShareError('url', 'Only web pages (http and https) can be sent to the Daylight.');
-    return sendItem({ kind: 'url', url: u, title: title && title !== u ? title : '' }, reason);
+    c ??= await labCtx();
+    const item = c.on ? labLinkItem(u, title, c.s) : { kind: 'url', url: u, title: title && title !== u ? title : '' };
+    return sendItem(item, reason, { lab: c });
   }
 
   async function inject(tabId, func, args = [], frameId) {
@@ -318,6 +386,14 @@ export function createApp({
     if (!first) throw new Error('the script returned nothing');
     if (first.error) throw new Error(String(first.error?.message ?? first.error));
     return first.result;
+  }
+
+  /** Lab: loads the capture code (clean-html.js, Readability.js) into the tab's extension world, then runs func. */
+  async function injectWith(files, tabId, func, args = [], frameId) {
+    const t = { tabId };
+    if (frameId) t.frameIds = [frameId];
+    await api.scripting.executeScript({ target: t, files });
+    return inject(tabId, func, args, frameId);
   }
 
   async function pdfViaTab(tabId, url, frameId) {
@@ -410,13 +486,18 @@ export function createApp({
 
   /**
    * "Send this page": the page's HTML as a page item, a PDF as a file item, the link when the page can't be read.
-   * -> {row, note} | {needsPermission, ...}
+   * With Lab on, `mode` (F10's Send as: page, clean, link, selection; from the popup, a menu or a command) says how,
+   * and the page goes through clean-html.js (F03). -> {row, note} | {needsPermission, ...} | Lab: {thin: {n}} (F10's
+   * thin-page question, from the popup) | {review: token} (F10's Review opened)
    */
-  async function sendTab(tab, { linkOnly = false, prompt = false } = {}) {
+  async function sendTab(tab, opts = {}) {
     await requireSender();
+    const c = await labCtx();
+    if (c.on) return labSendTab(tab, opts, c);
+    const { linkOnly = false, prompt = false } = opts;
     const tabUrl = tab?.url || tab?.pendingUrl || '';
     const tabTitle = tab?.title || '';
-    if (linkOnly) return sendUrl(tabUrl, tabTitle);
+    if (linkOnly) return sendUrl(tabUrl, tabTitle, undefined, { lab: c });
     let cap = null;
     if (tab?.id != null) {
       try { cap = await inject(tab.id, capturePage, [ds.MAX_PAGE_HTML]); } catch { cap = null; }
@@ -428,19 +509,281 @@ export function createApp({
       case 'pdf':
         return sendPdf({ url: cap?.url || tabUrl, title: tabTitle || cap?.title, tabId: cap ? tab.id : null, prompt });
       case 'url':
-        return sendUrl(url, title, plan.reason);
+        return sendUrl(url, title, plan.reason, { lab: c });
       case 'none':
         throw new ds.ShareError('url', 'This page can’t be sent: only web pages (http and https) can.');
       case 'html-file': {
         const seg = decodeURIComponent((cap.url || tabUrl).split(/[?#]/)[0].split('/').pop() || '') || 'page.html';
-        return sendItem({ kind: 'file', name: seg, mime: 'text/html', title, content: cap.html });
+        return sendItem({ kind: 'file', name: seg, mime: 'text/html', title, content: cap.html }, undefined, { lab: c });
       }
       default: {
         const html = ds.utf8(cap.html);
-        if (html.length > ds.MAX_PAGE_HTML) return sendUrl(url, title, 'too-large');
-        return sendItem({ kind: 'page', url, title, content: html });
+        if (html.length > ds.MAX_PAGE_HTML) return sendUrl(url, title, 'too-large', { lab: c });
+        return sendItem({ kind: 'page', url, title, content: html }, undefined, { lab: c });
       }
     }
+  }
+
+  /**
+   * sendTab with Lab on. opts: {linkOnly, prompt (may ask for a PDF's site), mode (F10: page | clean | link |
+   * selection; F10's Use switch off leaves page and link), force (F10: send a thin article anyway), thin ('ask': return
+   * {thin} under 150 words; 'page': send the full page instead, for menus, commands and the card), remember (F10: keep
+   * the mode for the site), review (F10: open Review first when "Review before sending" is on)}.
+   */
+  async function labSendTab(tab, opts, c) {
+    const { linkOnly = false, prompt = false, force = false, thin = 'page', remember = false, review = false } = opts;
+    const sendAs = labUseOn(c.s, 'F10');
+    let mode = opts.mode ?? 'page';
+    if (!sendAs && (mode === 'clean' || mode === 'selection') && !opts.explicit) mode = 'page';
+    if (linkOnly) mode = 'link';
+    const tabUrl = tab?.url || tab?.pendingUrl || '';
+    const tabTitle = tab?.title || '';
+    if (remember && sendAs) await rememberSendAs(tabUrl, mode);
+    if (mode === 'link') return sendUrl(tabUrl, tabTitle, undefined, { lab: c });
+    if (mode === 'selection') {
+      const r = await labSendSelection(tab, { lab: c, review: review && sendAs });
+      if (r) return r;
+      mode = 'page'; // nothing selected any more: the page
+    }
+    if (mode === 'clean' && tab?.id != null && !looksLikePdfUrl(tabUrl)) {
+      const r = await labSendClean(tab, { lab: c, force, thin, review: review && sendAs });
+      if (r) return r;
+    }
+    let cap = null;
+    if (tab?.id != null) {
+      const words = review && sendAs && !!c.s.labReview; // Review shows the word count
+      try { cap = await injectWith(CLEAN_FILES, tab.id, capturePage, [ds.MAX_PAGE_HTML, { clean: true, words }]); } catch { cap = null; }
+      if (cap?.error) cap = null;
+    }
+    const plan = planForCapture(cap, tabUrl);
+    const url = cap && ds.webUrl(cap.url) ? cap.url : tabUrl;
+    const title = cap?.title || tabTitle;
+    switch (plan.kind) {
+      case 'pdf':
+        return sendPdf({ url: cap?.url || tabUrl, title: tabTitle || cap?.title, tabId: cap ? tab.id : null, prompt });
+      case 'url':
+        return sendUrl(url, title, plan.reason, { lab: c });
+      case 'none':
+        throw new ds.ShareError('url', 'This page can’t be sent: only web pages (http and https) can.');
+      case 'html-file': {
+        const seg = decodeURIComponent((cap.url || tabUrl).split(/[?#]/)[0].split('/').pop() || '') || 'page.html';
+        return sendItem({ kind: 'file', name: seg, mime: 'text/html', title, content: cap.html, extras: { 'x-cap': 'seen' } }, undefined, { lab: c });
+      }
+      default: {
+        const html = ds.utf8(cap.html);
+        if (html.length > ds.MAX_PAGE_HTML) return sendUrl(url, title, 'too-large', { lab: c });
+        const clean = labPageUrl(url, c.s);
+        const item = { kind: 'page', url: clean.url, title, content: html, extras: { 'x-cap': 'seen', ...clean.extras } };
+        if (review && sendAs && c.s.labReview) return openReview(item, cap.words ?? null);
+        return sendItem(item, undefined, { lab: c });
+      }
+    }
+  }
+
+  /**
+   * F10's Clean article: Readability in the tab, cleaned, wrapped as the page sent with x-cap "clean". Under 150 words
+   * it is thin: {thin: {n}} for the popup's question (thin 'ask', unless force), else (menus, commands, the card) the
+   * full page goes instead (null). null too when nothing could be extracted (the full page goes).
+   */
+  async function labSendClean(tab, { lab: c, force, thin, review }) {
+    let a = null;
+    try { a = await injectWith(ARTICLE_FILES, tab.id, captureArticle, []); } catch { a = null; }
+    if (!a || a.error || a.empty || !a.content) {
+      if (thin === 'ask' && !force) return { thin: { n: 0 } };
+      return null;
+    }
+    if (!force && a.words < THIN_WORDS) {
+      if (thin === 'ask') return { thin: { n: a.words } };
+      return null;
+    }
+    const url = ds.webUrl(a.url) ?? ds.webUrl(tab.url);
+    if (!url) return null; // a page item needs its web address (a file:// page goes as the page)
+    const title = ds.cleanTitle(a.articleTitle) || ds.cleanTitle(a.title) || tab.title || '';
+    const html = cleanArticleHtml({ title, url, byline: a.byline, site: a.site, content: a.content });
+    if (ds.utf8(html).length > ds.MAX_PAGE_HTML) return null;
+    const clean = labPageUrl(url, c.s);
+    const item = { kind: 'page', url: clean.url, title, content: html, extras: { 'x-cap': 'clean', ...clean.extras } };
+    if (review && c.s.labReview) return openReview(item, a.words);
+    return sendItem(item, undefined, { lab: c });
+  }
+
+  /**
+   * F11's explicit paths (and F10's Selection mode): the selection as an excerpt document (excerptItem: the quote, its
+   * source link and the date; x-cap "excerpt"). info: a context-menu click (its frame, its selectionText).
+   * -> {row, note, excerpt: true} | {review} | null when nothing is selected.
+   */
+  async function labSendSelection(tab, { lab: c, info = null, review = false } = {}) {
+    let cap = null;
+    if (tab?.id != null) {
+      try { cap = await inject(tab.id, captureSelection, [], info?.frameId); } catch { cap = null; }
+    }
+    const text = String(cap?.text || info?.selectionText || '').trim();
+    if (!text) return null;
+    const pageUrl = ds.webUrl(cap?.url) ?? ds.webUrl(info?.frameUrl) ?? ds.webUrl(info?.pageUrl) ?? ds.webUrl(tab?.url) ?? '';
+    const n = normaliseShare({ text, url: pageUrl, source: 'selection', clean: labUseOn(c.s, 'F16') });
+    const item = excerptItem({
+      text: n.excerpt ?? text, html: cap?.text ? cap.html : '', url: n.url ?? pageUrl, pageTitle: cap?.title || tab?.title || '', date: now(),
+    });
+    if (!item) return null;
+    if (review && c.s.labReview) return openReview(item, text.split(/\s+/).filter(Boolean).length);
+    return { ...(await sendItem(item, undefined, { lab: c })), excerpt: true };
+  }
+
+  async function rememberSendAs(url, mode) {
+    try {
+      await run(async () => {
+        const map = (await storage.get(SEND_AS_KEY)) ?? {};
+        const next = rememberMode(map, url, mode);
+        if (next !== map) await storage.set(SEND_AS_KEY, next);
+      });
+    } catch (e) { log.warn?.('Send to Daylight: Send as not remembered', e); }
+  }
+
+  // --- F10's Review ---------------------------------------------------------------------------------------------------
+
+  /** Keeps the item for review.html and opens it in a tab. -> {review: token} */
+  async function openReview(item, words) {
+    const token = ds.newItemId();
+    const content = typeof item.content === 'string' ? item.content : ds.fromUtf8(item.content);
+    let size = 0;
+    try { size = (await ds.deflateRaw(ds.utf8(content))).length; } catch { size = ds.utf8(content).length; }
+    await storage.set(REVIEW_KEY, { token, item: { ...item, content }, words: words ?? null, size, at: now() });
+    try { await api.tabs.create({ url: api.runtime.getURL(`review.html#${token}`) }); } catch (e) { log.warn?.('Send to Daylight: Review not opened', e); }
+    return { review: token };
+  }
+
+  /** -> {token, title, html, words, size, kind} for review.html, or {gone: true} when that review was sent or dropped. */
+  async function reviewGet(token) {
+    const r = await storage.get(REVIEW_KEY);
+    if (!r || r.token !== token) return { gone: true };
+    return { token, title: r.item.title ?? '', html: r.item.content, words: r.words, size: r.size, kind: r.item.kind };
+  }
+
+  /** Review's Send: the item with the edited title. -> {row, note} | {gone: true} */
+  async function reviewSend(token, title) {
+    const r = await storage.get(REVIEW_KEY);
+    if (!r || r.token !== token) return { gone: true };
+    await storage.remove(REVIEW_KEY);
+    const t = ds.cleanTitle(title);
+    return sendItem({ ...r.item, title: t || r.item.title });
+  }
+
+  async function reviewCancel(token) {
+    const r = await storage.get(REVIEW_KEY);
+    if (r?.token === token) await storage.remove(REVIEW_KEY);
+    return {};
+  }
+
+  // --- F04's share in place: the countdown runs here, so closing the popup still sends --------------------------------
+
+  const scheduled = new Map(); // tabId -> {timer, resolve}
+
+  /**
+   * F04: sends the tab after `ms` (1.5 s) unless Options cancels it (cancelScheduled). Only with Lab on, F04 in use and
+   * "Send when I click the toolbar button" ticked, and never for someone who needs more time (noCountdown).
+   * -> the send's answer, or {cancelled: true}
+   */
+  async function scheduleSend(tabId, { mode = 'page', ms = countdownMs } = {}) {
+    cancelScheduled(tabId);
+    // Registered at once, so an Options tap that comes before the settings are read still cancels it.
+    const entry = { timer: null, resolve: null, cancelled: false };
+    scheduled.set(tabId, entry);
+    const c = await labCtx();
+    if (entry.cancelled) return { cancelled: true };
+    if (!c.on || !clickToSend(c.s) || noCountdown(c.s)) {
+      if (scheduled.get(tabId) === entry) scheduled.delete(tabId);
+      return { cancelled: true, refused: true };
+    }
+    return new Promise((resolve, reject) => {
+      entry.resolve = resolve;
+      entry.timer = setTimeout(async () => {
+        if (scheduled.get(tabId) === entry) scheduled.delete(tabId);
+        try {
+          const tab = await api.tabs.get(tabId);
+          resolve(await withBadge(() => sendTab(tab, { mode, thin: 'page', prompt: false })));
+        } catch (e) { reject(e); }
+      }, ms);
+    });
+  }
+
+  /** F04's Options: stops the countdown. -> {cancelled: true when one was running} */
+  function cancelScheduled(tabId) {
+    const s = scheduled.get(tabId);
+    if (!s) return { cancelled: false };
+    clearTimeout(s.timer);
+    scheduled.delete(tabId);
+    s.cancelled = true;
+    s.resolve?.({ cancelled: true });
+    return { cancelled: true };
+  }
+
+  // --- F07: offline ---------------------------------------------------------------------------------------------------
+
+  async function markOffline() {
+    try { if (!(await storage.get(OFFLINE_KEY))) await storage.set(OFFLINE_KEY, now()); } catch { /* the alarm still runs */ }
+  }
+
+  function ensureOfflineAlarm() {
+    try { api.alarms?.create(OFFLINE_ALARM, { delayInMinutes: 1, periodInMinutes: 1 }); } catch { /* ignore */ }
+  }
+
+  async function clearOfflineAlarm() {
+    try { await api.alarms?.clear?.(OFFLINE_ALARM); } catch { /* ignore */ }
+  }
+
+  /**
+   * The dls-offline alarm (F07), every minute while a row waits for a connection: offline, it notes that; back online,
+   * it sends the waiting rows (flushNetwork: oldest first, at most 30 frames and 18 MB of attachments a pass, passes
+   * at least 3 minutes apart) until a pass has tried them all. Gone when no row waits, and with Lab off (v1.1's
+   * back-off then sends them). -> the rows a pass attempted, or [].
+   */
+  async function offlinePass() {
+    const c = await labCtx();
+    const sender = await getSender();
+    const rows = sender ? await sender.list() : [];
+    const waiting = rows.filter(waitingForConnection);
+    if (!c.on || !sender || !waiting.length) {
+      await clearOfflineAlarm();
+      if (!waiting.length) await storage.remove(OFFLINE_KEY).catch(() => {});
+      return [];
+    }
+    ensureOfflineAlarm();
+    if (!online()) { await markOffline(); return []; }
+    const since = await storage.get(OFFLINE_KEY);
+    const fresh = waiting.some((r) => (r.attempts ?? 0) === 0);
+    if (!since && !fresh) return []; // the relay, not this device, failed: v1.1's back-off sends these
+    if (now() - ((await storage.get(FLUSH_KEY)) ?? 0) < FLUSH_GAP_MS) return [];
+    await storage.set(FLUSH_KEY, now());
+    const attempted = await run(() => sender.flushNetwork());
+    for (const r of attempted) await lab.logEvent({ type: 'flush', id: r.id, kind: r.kind, status: r.status });
+    if (attempted.length >= waiting.length) await storage.remove(OFFLINE_KEY);
+    if (!(await sender.list()).some(waitingForConnection)) await clearOfflineAlarm();
+    await labBadge();
+    return attempted;
+  }
+
+  // --- F01's badge ----------------------------------------------------------------------------------------------------
+
+  /**
+   * With Lab on, the toolbar badge shows the most recent row's state (F01): … on its way, ✓ on your Daylight, ⌛
+   * waiting for a tap, ! not on its way. A mark shows when it changes (lab/badge keeps the last one, so a wake-up
+   * doesn't show it again); force: after a send, whatever was shown before.
+   */
+  async function labBadge({ force = false } = {}) {
+    if (badge.busy()) return; // a send is on its way: "…" stays until it ends (withBadge)
+    const c = await labCtx();
+    if (!c.on) return;
+    try {
+      const rows = (await storage.get('outbox')) ?? [];
+      let newest = null;
+      for (const r of rows) if (!newest || (r.created ?? 0) > (newest.created ?? 0)) newest = r;
+      const state = newest?.status === 'delivered' ? await lab.ledger.state(newest.id) : null;
+      const mark = badgeMark(newest, state);
+      const key = `${newest?.id ?? ''}|${mark}`;
+      if (!force && key === (await storage.get(BADGE_KEY))) return;
+      await storage.set(BADGE_KEY, key);
+      await badge.show(mark);
+    } catch (e) { log.warn?.('Send to Daylight: badge not updated', e); }
   }
 
   /** "Retry now" (a failed row) and "Try again" (an expired one), as the library allows. -> {row} */
@@ -448,39 +791,129 @@ export function createApp({
     const s = await requireSender();
     const row = await run(() => s.retry(id));
     scheduleSoon();
+    if ((await labCtx()).on && row) await lab.logEvent({ type: 'retry', id: row.id, kind: row.kind, status: row.status });
     return { row };
   }
 
   /** "Remove": the row and its stored content. -> {removed} */
   async function remove(id) {
     const s = await getSender();
-    return { removed: s ? await run(() => s.remove(id)) : false };
+    const removed = s ? await run(() => s.remove(id)) : false;
+    if (removed && (await labCtx()).on) await lab.logEvent({ type: 'remove', id });
+    return { removed };
   }
 
   /**
    * Acks and re-sends (PROTOCOL 3.3, logic.maintain): the local re-send pass always runs (it ends week-old rows and
-   * drops expired rows' content after 14 days); the ack topic is read only while a row could still be acked.
+   * drops expired rows' content after 14 days); the ack topic is read only while a row could still be acked. With Lab
+   * on it is also read while a row delivered in the last 48 hours has no settled Lab state (F01), and what changed goes
+   * into the activity log (F26).
    */
   async function tick() {
     const s = await getSender();
     if (!s) return { delivered: 0, resent: 0 };
+    const c = await labCtx();
+    const before = c.on ? await s.list() : null;
     const r = await run(async () => {
-      try { return await maintain(s, now()); } catch (e) { log.warn?.('Send to Daylight: tick failed', e); return { delivered: 0, resent: 0 }; }
+      try {
+        const out = await maintain(s, now());
+        if (c.on) {
+          const rows = await s.list();
+          if (!wantsAcks(rows, now()) && wantsStates(rows, (await storage.get('lab/states')) ?? {}, now())) await s.checkAcks().catch(() => {});
+        }
+        return out;
+      } catch (e) { log.warn?.('Send to Daylight: tick failed', e); return { delivered: 0, resent: 0 }; }
     });
     await lab.prune();
+    if (c.on) {
+      await logChanges(before, await s.list());
+      await labBadge();
+    }
     return r;
+  }
+
+  /** F26's activity log: each row whose status changed between two reads of the outbox. */
+  async function logChanges(before, after) {
+    const was = new Map((before ?? []).map((x) => [x.id, x]));
+    for (const row of after ?? []) {
+      const old = was.get(row.id);
+      if (old && (old.status !== row.status || old.lastPublish !== row.lastPublish)) {
+        await lab.logEvent({ type: old.status !== row.status ? row.status : 'resend', id: row.id, kind: row.kind, status: row.status });
+      }
+    }
+  }
+
+  /** F01's faster checks (2.5): the popup asks every 30 s while a delivered row's state is still on its way. */
+  async function checkAcksNow() {
+    const s = await getSender();
+    if (!s) return { delivered: 0 };
+    const c = await labCtx();
+    const before = c.on ? await s.list() : null;
+    let delivered = 0;
+    try { delivered = await run(() => s.checkAcks()); } catch { /* offline */ }
+    if (c.on) { await logChanges(before, await s.list()); await labBadge(); }
+    return { delivered };
   }
 
   async function withBadge(fn) {
     await badge.start();
     let outcome = 'error';
+    let r;
     try {
-      const r = await fn();
-      outcome = r?.needsPermission ? 'idle' : isTrouble(r?.row) ? 'error' : 'ok';
+      r = await fn();
+      outcome = r?.needsPermission || r?.thin || r?.review || r?.cancelled ? 'idle' : isTrouble(r?.row) ? 'error' : 'ok';
       return r;
     } finally {
-      await badge.done(outcome);
+      // With Lab on, the most recent row's mark replaces the "…" the send showed (shown again, whatever it was).
+      if ((await labCtx()).on) {
+        if (badge.release()) await labBadge({ force: true });
+      } else await badge.done(outcome);
     }
+  }
+
+  // --- Lab's other ways to send (F11, F26, F33, F34) ------------------------------------------------------------------
+
+  /** F33's "Paste and send": text read from the clipboard. -> {row, note} | {noLink: true} */
+  async function sendCopied(text) {
+    const c = await labCtx();
+    if (!c.on || !labUseOn(c.s, 'F33')) return { noLink: true };
+    const n = normaliseShare({ text: String(text ?? ''), clean: labUseOn(c.s, 'F16') });
+    if (n.kind !== 'link' || !n.url) return { noLink: true };
+    const item = { kind: 'url', url: n.url, title: n.title && n.title !== n.url ? n.title : '' };
+    if (n.orig) item.extras = { 'x-orig': n.orig };
+    return sendItem(item, undefined, { lab: c });
+  }
+
+  /** F26's "Send a test article": testArticle() as a page with x-cap "test", followed by Setup check. -> {row} */
+  async function sendTest() {
+    const c = await labCtx();
+    if (!c.on) throw new ds.ShareError('lab', LAB_TEXT.labOff.replace('{app}', LAB_TEXT.appName[target === 'safari' ? 'safari' : 'chrome']));
+    const item = testArticle({ device: await deviceName() });
+    const r = await sendItem(item, undefined, { lab: c });
+    await storage.set(TEST_KEY, r.row.id);
+    return r;
+  }
+
+  /**
+   * What the popup needs about its tab before it offers anything (F04, F10): whether the extension can read it,
+   * whether text is selected, and the Send as mode by context. -> {readable, selection, pdf, mode, url}
+   */
+  async function tabInfo(tabId) {
+    const c = await labCtx();
+    let tab = null;
+    try { tab = await api.tabs.get(tabId); } catch { tab = null; }
+    const url = tab?.url || tab?.pendingUrl || '';
+    let info = null;
+    if (tab) { try { info = await inject(tab.id, pageInfo, []); } catch { info = null; } }
+    const pdf = looksLikePdfUrl(url) || info?.contentType === 'application/pdf';
+    const selection = !!info?.selection;
+    let remembered = {};
+    try { remembered = (await storage.get(SEND_AS_KEY)) ?? {}; } catch { /* none */ }
+    const sendAs = c.on && labUseOn(c.s, 'F10');
+    return {
+      readable: !!info, selection: sendAs && selection, pdf, url, site: siteOf(url),
+      mode: sendAs ? defaultMode({ selection, pdf, url, remembered }) : (pdf ? 'pdf' : 'page'),
+    };
   }
 
   // --- events -------------------------------------------------------------------------------------------------------
@@ -498,9 +931,14 @@ export function createApp({
     try { return (await withTimeout(inject(tab.id, linkText, [info.linkUrl], info.frameId), 1500)) || info.selectionText || ''; } catch { return info.selectionText ?? ''; }
   }
 
+  /**
+   * The right-click menu. With Lab off: v1.1's three entries. With Lab on (F34): page (as you see it), clean article,
+   * link, selection (F11), an image's page (the page, not the image) and PDF link; links go through normaliseShare.
+   */
   async function onMenu(info, tab) {
     try {
       if (!(await getPairing())) return await openPairing();
+      const c = await labCtx();
       if (info.menuItemId === MENU.page) return await withBadge(() => sendTab(tab, { prompt: true }));
       if (info.menuItemId === MENU.link) {
         const title = await titleOfLink(tab, info);
@@ -510,18 +948,49 @@ export function createApp({
         const title = await titleOfLink(tab, info);
         return await withBadge(() => sendPdf({ url: info.linkUrl, title, tabId: tab?.id ?? null, frameId: info.frameId, prompt: true }));
       }
+      if (!c.on) return undefined; // Lab's entries do nothing with Lab off (they are gone from the menu)
+      if (info.menuItemId === MENU.clean) return await withBadge(() => sendTab(tab, { mode: 'clean', explicit: true, prompt: true, thin: 'page' }));
+      if (info.menuItemId === MENU.image) return await withBadge(() => sendTab(tab, { mode: 'page', prompt: true }));
+      if (info.menuItemId === MENU.selection) return await withBadge(async () => (await labSendSelection(tab, { lab: c, info })) ?? {});
     } catch (e) {
       log.warn?.('Send to Daylight:', e?.message ?? e);
     }
     return undefined;
   }
 
+  /** Keyboard shortcuts: send-page in every build; with Lab on (F34) also send-selection, send-clean and send-link. */
   async function onCommand(command, tab) {
-    if (command !== COMMAND_SEND) return undefined;
+    const lab = { [COMMANDS.selection]: 'selection', [COMMANDS.clean]: 'clean', [COMMANDS.link]: 'link' }[command];
+    if (command !== COMMAND_SEND && !lab) return undefined;
     try {
+      const c = await labCtx();
+      if (lab && !c.on) return undefined;
       if (!tab) [tab] = await api.tabs.query({ active: true, currentWindow: true });
       if (!(await getPairing())) return await openPairing();
+      if (lab === 'selection') return await withBadge(async () => (await labSendSelection(tab, { lab: c })) ?? {});
+      if (lab) return await withBadge(() => sendTab(tab, { mode: lab, explicit: true, prompt: true, thin: 'page' }));
       return await withBadge(() => sendTab(tab, { prompt: true }));
+    } catch (e) {
+      log.warn?.('Send to Daylight:', e?.message ?? e);
+      return undefined;
+    }
+  }
+
+  /**
+   * Chrome's omnibox (F34): "dl example.com/story" sends that link (normalizeUserUrl, then normaliseShare). With Lab off
+   * it opens lab.html with the Lab-off sentence; a text that isn't a web address sends nothing and shows "!".
+   */
+  async function onOmnibox(text) {
+    try {
+      const c = await labCtx();
+      if (!c.on) {
+        await api.tabs.create({ url: api.runtime.getURL('lab.html#lab-off') });
+        return { labOff: true };
+      }
+      if (!(await getPairing())) { await openPairing(); return { paired: false }; }
+      const url = normalizeUserUrl(text);
+      if (!url) { await badge.show(LAB_TEXT.badge.error); return { noLink: true }; }
+      return await withBadge(() => sendUrl(url, ''));
     } catch (e) {
       log.warn?.('Send to Daylight:', e?.message ?? e);
       return undefined;
@@ -530,6 +999,7 @@ export function createApp({
 
   async function onAlarm(alarm) {
     if (alarm?.name === ALARM_TICK || alarm?.name === ALARM_SOON) await tick();
+    if (alarm?.name === OFFLINE_ALARM) await offlinePass();
   }
 
   /** The user granted a site from the popup's prompt; if the popup closed meanwhile, send the PDF from here. */
@@ -541,6 +1011,7 @@ export function createApp({
     if (claim(p.token)) await withBadge(() => sendPdf({ url: p.url, title: p.title, asked: true })).catch(() => {});
   }
 
+  /** The right-click menu for the Lab switch and F34's "Show in the right-click menu" boxes (settings.labMenus). */
   async function setupMenus() {
     const menus = api.contextMenus ?? api.menus;
     if (!menus?.create) return;
@@ -548,9 +1019,12 @@ export function createApp({
     const create = (props) => new Promise((resolve) => {
       try { menus.create(props, () => { void api.runtime.lastError; resolve(); }); } catch { resolve(); }
     });
-    await create({ id: MENU.page, title: 'Send page to Daylight', contexts: ['page', 'frame'] });
-    await create({ id: MENU.link, title: 'Send link to Daylight', contexts: ['link'] });
-    await create({ id: MENU.pdfLink, title: 'Send PDF link to Daylight', contexts: ['link'], targetUrlPatterns: PDF_LINK_PATTERNS });
+    const c = await labCtx();
+    for (const m of menuEntries({ lab: c.on, menus: c.s.labMenus })) {
+      const props = { id: m.id, title: m.title, contexts: m.contexts };
+      if (m.targetUrlPatterns) props.targetUrlPatterns = m.targetUrlPatterns;
+      await create(props);
+    }
   }
 
   async function ensureAlarms() {
@@ -567,6 +1041,27 @@ export function createApp({
     await ensureAlarms();
     await pairFromApp();
     await tick().catch(() => {});
+    if ((await labCtx()).on) await offlinePass().catch(() => {});
+  }
+
+  /**
+   * storage.onChanged in the background: the Lab switch or F34's menu boxes changed, wherever that happened (lab.html,
+   * the popup, a test's seeded settings), so the menus and the alarms follow.
+   */
+  function onStorageChanged(changes, area) {
+    if (area !== 'local' || !changes?.settings || !labBuilt) return;
+    const was = changes.settings.oldValue ?? {}, is = changes.settings.newValue ?? {};
+    if ((was.lab !== false) !== (is.lab !== false) || JSON.stringify(was.labMenus ?? {}) !== JSON.stringify(is.labMenus ?? {})) {
+      labSettingsChanged().catch(() => {});
+    }
+  }
+
+  /** Lab settings that change what the background does: the switch and the menus. */
+  async function labSettingsChanged() {
+    await setupMenus();
+    const c = await labCtx();
+    if (!c.on) { await clearOfflineAlarm(); for (const id of [...scheduled.keys()]) cancelScheduled(id); return; }
+    await offlinePass().catch(() => {});
   }
 
   async function onMessage(msg) {
@@ -578,7 +1073,12 @@ export function createApp({
       case 'setComfort': return setComfort(msg.comfort);
       case 'sendTab': {
         const tab = await api.tabs.get(msg.tabId);
-        return withBadge(() => sendTab(tab, { linkOnly: !!msg.linkOnly }));
+        if (!(await labCtx()).on) return withBadge(() => sendTab(tab, { linkOnly: !!msg.linkOnly }));
+        // The popup (Lab): F10's mode, the thin-page question, the mode kept for the site, Review.
+        return withBadge(() => sendTab(tab, {
+          linkOnly: !!msg.linkOnly, mode: msg.mode ?? 'page', explicit: !!msg.mode, force: !!msg.force, thin: 'ask',
+          remember: !!msg.mode && !msg.linkOnly, review: !msg.linkOnly && msg.review !== false,
+        }));
       }
       case 'sendPdf':
         if (!claim(msg.token)) return { handled: true }; // permissions.onAdded already sent it
@@ -587,9 +1087,23 @@ export function createApp({
       case 'remove': return remove(msg.id);
       case 'tick': return tick();
       case 'clearBadge': await badge.clear(); return {};
+      // Lab, Wave 1 (each one refuses or does nothing with Lab off)
+      case 'labTabInfo': return tabInfo(msg.tabId);
+      case 'labScheduleSend': return scheduleSend(msg.tabId, { mode: msg.mode });
+      case 'labCancelScheduled': return cancelScheduled(msg.tabId);
+      case 'labSendCopied': return withBadge(() => sendCopied(msg.text));
+      case 'labTestSend': return withBadge(() => sendTest());
+      case 'labCheckAcks': return checkAcksNow();
+      case 'labOnline': return { attempted: (await offlinePass()).length };
+      case 'labReviewGet': return reviewGet(String(msg.token ?? ''));
+      case 'labReviewSend': return withBadge(() => reviewSend(String(msg.token ?? ''), msg.title));
+      case 'labReviewCancel': return reviewCancel(String(msg.token ?? ''));
+      case 'labOmnibox': return onOmnibox(msg.text);
       default: {
         const r = await lab.onMessage(msg);
         if (r === undefined) throw new ds.ShareError('message', `unknown message ${msg?.type}`);
+        // (storage.onChanged follows the switch and the menu boxes too; this makes the answer wait for it.)
+        if (msg?.type === 'setLab' || msg?.type === 'labSetOption') await labSettingsChanged();
         return r;
       }
     }
@@ -609,5 +1123,8 @@ export function createApp({
     storage, state, pair, unpair, setDeviceName, setComfort, pairFromApp, sendTab, sendPdf, sendUrl, retry, remove, tick, start,
     setupMenus, ensureAlarms, onMenu, onCommand, onAlarm, onPermissionsAdded, onMessage, handleMessage,
     getSender, getPairing, claim, lab,
+    // Lab, Wave 1
+    onOmnibox, scheduleSend, cancelScheduled, offlinePass, labBadge, sendCopied, sendTest, tabInfo, checkAcksNow,
+    labSettingsChanged, onStorageChanged,
   };
 }

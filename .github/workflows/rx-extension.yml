@@ -67,6 +67,9 @@ jobs:
       - name: Build the extension (Chrome, Safari, test build; Safari without Lab while its wave is closed)
         run: node build.mjs
 
+      - name: The capture code in the builds equals its one source, share/js/capture/ (LAB-PLAN F03, F10, 6.3)
+        run: node ../share/js/capture/sync.mjs --check dist/chrome/clean-html.js dist/chrome/Readability.js dist/chrome-test/clean-html.js dist/chrome-test/Readability.js
+
       - name: Unit tests (Lab and the Safari background bundle included)
         run: node --test $(ls test/unit/*.test.mjs | grep -v '/web')
 

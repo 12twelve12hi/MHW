@@ -46,6 +46,10 @@ test('the Safari background script pairs from the app, sends, and runs Lab', asy
     assert.equal(items[0].header.app, 'safari/1.2.3');
     assert.equal(items[0].header.from, 'Safari on iPhone');
     assert.match(new TextDecoder().decode(items[0].content), /Safari page/);
+    // Lab's Wave 1 in the bundle (X1): the page went through clean-html.js (F03), copied next to the bundle.
+    assert.deepEqual(items[0].extras, { 'x-cap': 'seen' });
+    assert.deepEqual(fb.tabFiles(tabId), ['clean-html.js']);
+    for (const f of ['clean-html.js', 'Readability.js', 'review.html', 'review.js']) assert.ok(fs.existsSync(path.join(b.dir, f)), f);
 
     await fb.api.runtime.sendMessage({ type: 'tick' });
     const rows = (await fb.api.storage.local.get('outbox')).outbox;
@@ -71,6 +75,15 @@ test('the Safari background script pairs from the app, sends, and runs Lab', asy
     const o = (await fb.api.runtime.sendMessage({ type: 'labOverview' })).result;
     assert.deepEqual(o.server.features.map((f) => f.id), ['F37']);
     assert.equal(o.header, 'Needs Lab on your Daylight · checked in just now');
+    // W1's features come first; Safari has no F02, and its Lab has no omnibox (F34; manifest and background alike).
+    assert.deepEqual(o.features.map((f) => f.id), ['F01', 'F03', 'F04', 'F07', 'F10', 'F11', 'F16', 'F26', 'F33', 'F34']);
+    const manifest = JSON.parse(fs.readFileSync(path.join(b.dir, 'manifest.json'), 'utf8'));
+    assert.equal(manifest.omnibox, undefined, 'no omnibox in Safari (F34)');
+    assert.equal(manifest.optional_permissions, undefined, 'Safari reads the clipboard with its own Paste button');
+    assert.deepEqual(Object.keys(manifest.commands), ['send-page', 'send-selection', 'send-clean', 'send-link']);
+    assert.equal(fb.listeners.omnibox.length, 0);
+    const checks = (await fb.api.runtime.sendMessage({ type: 'labChecks' })).result;
+    assert.deepEqual(checks.checks.map((c) => c.id), ['paired', 'siteAccess'], 'Safari: no toolbar pin or shortcut to check');
     const g = (await fb.api.runtime.sendMessage({ type: 'labGate', feature: 'F37' })).result;
     assert.deepEqual([g.state, g.message, g.button], ['needs-server', L.LAB_TEXT.needs['needs-server'], 'Copy Server code']);
     assert.match(g.serverCode, /^daylightserver:\/\/setup\?c=/);
@@ -120,6 +133,13 @@ test('a Safari build without Lab (its wave closed) is the last non-Lab build: no
     assert.equal((await fb.api.storage.local.get('outbox')).outbox[0].status, 'delivered');
     assert.deepEqual(Object.keys(await fb.api.storage.local.get(null)).filter((k) => k.startsWith('lab/')), []);
     assert.equal(fs.existsSync(path.join(b.dir, 'lab.html')), false, 'no Lab page');
+    // The page went as v1.1's capture: no capture code, no x- field (LAB-PLAN 1.3).
+    assert.deepEqual(fb.tabFiles(tabId), []);
+    const { items } = await new ds.Receiver({ pairing, storage: new ds.MemoryStorage() }).pollOnce();
+    assert.deepEqual(items.map((i) => i.extras), [{}]);
+    for (const f of ['clean-html.js', 'Readability.js', 'review.html']) assert.equal(fs.existsSync(path.join(b.dir, f)), false, f);
+    const manifest = JSON.parse(fs.readFileSync(path.join(b.dir, 'manifest.json'), 'utf8'));
+    assert.deepEqual([Object.keys(manifest.commands), manifest.omnibox], [['send-page'], undefined]);
   } finally {
     await relay.close();
     delete globalThis.browser;

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Send to Daylight</title>
+  <link rel="stylesheet" href="popup.css">
+  <script type="module" src="review.js"></script>
+</head>
+<!-- F10's Review (LAB-PLAN 3.3, Lab setting "Review before sending"): what is about to be sent, as a preview with
+     JavaScript off (a sandboxed frame) and in greys, its word count and size, and its title to edit; Send or Cancel.
+     review.html#<token> (the background keeps the item, lab/review). Every word is LAB_TEXT's (review.js). -->
+<body>
+  <main id="app" aria-busy="true">
+    <header class="top">
+      <img class="mark" src="icons/icon-32.png" alt="" width="22" height="22">
+      <h1>Send to Daylight</h1>
+    </header>
+    <section id="view-review" aria-labelledby="review-h">
+      <h2 id="review-h"></h2>
+      <label id="review-title-label" for="review-title"></label>
+      <input id="review-title" type="text" maxlength="300" autocomplete="off">
+      <p id="review-stats" class="hint small review-stats"></p>
+      <iframe id="review-frame" class="review-frame" sandbox="" referrerpolicy="no-referrer"></iframe>
+      <div class="row review-acts">
+        <button id="review-send" class="btn primary" type="button"></button>
+        <button id="review-cancel" class="btn secondary" type="button"></button>
+      </div>
+      <p id="review-said" class="status" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+</body>
+</html>

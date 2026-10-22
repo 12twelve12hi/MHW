@@ -33,6 +33,9 @@ async function setup({ target = 'chrome', native, pdfChunkSize, paired = true, c
   const relay = await startMockRelay(relayNow ? { now: relayNow } : {});
   const site = await startSite({ pdf: PDF, bigPdf: BIG_PDF });
   const fb = fakeBrowser({ native, contextMenus });
+  // These are v1.1's tests: the plain app, with Lab off (LAB-PLAN 1.3; the test hook of 1.7 seeds settings.lab). Lab's
+  // sending is lab-send.test.mjs.
+  await fb.api.storage.local.set({ settings: { lab: false } });
   const flags = { relayStatus: 0 };
   const app = core.createApp({ api: fb.api, target, fetch: extensionFetch(fb, site, flags), pdfChunkSize, log: quiet, now, storage });
   const secret = ds.generateSecret();
@@ -623,13 +626,13 @@ test('Comfort (F27, not Lab): off by default, saved in settings, kept through re
     assert.equal((await st()).comfort, true, 'before pairing too');
     await s.app.pair({ input: s.link, from: 'Kitchen Chrome' });
     await s.app.onMessage({ type: 'setName', from: 'Desk Chrome' });
-    assert.deepEqual((await s.fb.api.storage.local.get('settings')).settings, { from: 'Desk Chrome', comfort: true });
+    assert.deepEqual((await s.fb.api.storage.local.get('settings')).settings, { lab: false, from: 'Desk Chrome', comfort: true });
     await s.app.pair({ input: await ds.pairingLink({ secret: ds.generateSecret(), relay: s.relay.url }), confirm: true });
     await s.app.unpair();
     assert.equal((await st()).comfort, true, 'pairing changes and unpairing leave it');
     // Saved together, neither change is lost.
     await Promise.all([s.app.onMessage({ type: 'setName', from: 'Laptop Chrome' }), s.app.onMessage({ type: 'setComfort', comfort: false })]);
-    assert.deepEqual((await s.fb.api.storage.local.get('settings')).settings, { from: 'Laptop Chrome', comfort: false });
+    assert.deepEqual((await s.fb.api.storage.local.get('settings')).settings, { lab: false, from: 'Laptop Chrome', comfort: false });
     assert.equal((await st()).comfort, false);
   } finally { await s.close(); }
 });

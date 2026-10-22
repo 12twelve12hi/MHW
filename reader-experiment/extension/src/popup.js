@@ -4,7 +4,13 @@
 import { api } from './api.js';
 import { TARGET, LAB_BUILT } from './target.js';
 import { webUrl } from './daylight-share.js';
-import { copyText, renderRepaired } from './lab-ui.js';
+import { LAB_TEXT, normaliseShare, wantsFastChecks, FAST_CHECK_MS } from './daylight-lab.js';
+import { copyText, renderRepaired, noteFollowUp } from './lab-ui.js';
+import {
+  renderLabNote, renderLabRow, labRowText, rowAnnouncement, renderCheckIn, renderSendAs, renderThin, renderBigFiles,
+  renderLine, renderCard, renderPaste,
+} from './lab-popup.js';
+import { queueRows } from './lab-send.js';
 import {
   statusInfo, rowMessage, kindLabel, displayTitle, relativeTime, hostOf, isPending, looksLikePdfUrl,
 } from './logic.js';
@@ -24,6 +30,15 @@ let pendingPair = null; // a pairing waiting for the user's answer: {input, from
 let unpairArmed = null;
 let backTo = 'view-send'; // the view Settings' Back returns to
 const lastStatus = new Map(); // row id -> the status last shown, to announce changes (F27)
+// Lab, Wave 1 (LAB-PLAN 3.3): what the background says when the popup opens (labPopup: the Use switches, F04's and
+// F10's settings, the one-time note), the tab as Lab sees it (labTabInfo), the timeline's data, and the Send as line.
+let labw = null;
+let tabLab = null;
+let timeline = null;
+let sendAs = null;
+let card = null;
+let fastTimer = null;
+const lastLabel = new Map(); // row id -> the Lab label last shown, to announce changes (2.5)
 
 const isTouchApple = /iPhone|iPad|iPod/.test(navigator.userAgent)
   || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
@@ -98,7 +113,36 @@ function announce(text) {
  * popup is its last non-Lab build's.
  */
 function removeLab() {
-  for (const id of ['lab-row', 'lab-rows', 'lab-footer']) $(id)?.remove();
+  for (const id of ['lab-row', 'lab-rows', 'lab-footer', 'lab-note', 'lab-card', 'lab-send-as', 'lab-paste', 'lab-after', 'lab-checkin', 'lab-queue']) $(id)?.remove();
+}
+
+/** Lab is on and this build has it: the popup shows Wave 1's pieces. */
+const labOnNow = () => LAB_BUILT && !!labw?.lab;
+
+/** The background's Lab answer for the popup (labPopup), or null with Lab off. */
+async function loadLab() {
+  labw = null;
+  timeline = null;
+  if (!LAB_BUILT || !st?.lab) return;
+  try { labw = await call('labPopup'); } catch { labw = null; }
+  if (!labw?.lab) { labw = null; return; }
+  timeline = labw.timeline ?? null;
+}
+
+/** The one-time note (1.2), until OK. */
+function showLabNote() {
+  const box = $('lab-note');
+  if (!box) return;
+  if (!labOnNow() || !labw.noteEnabled || labw.labNoteShown) { box.hidden = true; box.textContent = ''; return; }
+  renderLabNote(box, {
+    onOk: async () => {
+      box.hidden = true;
+      box.textContent = '';
+      labw.labNoteShown = true;
+      try { await call('labSeen', { key: 'labNoteShown' }); } catch { /* shown again next time */ }
+      ($('view-send').hidden ? $('code') : $('send-page').hidden ? $('open-settings') : $('send-page'))?.focus();
+    },
+  });
 }
 
 /** The Lab switch, and the two rows under it while Lab is on. */
@@ -286,11 +330,173 @@ function renderTab() {
   if (sendPage.disabled) setStatus(`${TARGET === 'safari' ? 'Safari’s' : 'The browser’s'} own pages can’t be sent. Open a web page first.`);
 }
 
-/** After a share (CHANGES-v1.1 2.5): why its link went instead, if it did; then the row's label and sentence. */
+/**
+ * After a share (CHANGES-v1.1 2.5): why its link went instead, if it did; then the row's label and sentence. With Lab
+ * on, the timeline's (2.5): "Waiting for connection" while offline, the Lab Inbox's states once delivered.
+ */
 function resultMessage(r) {
   const row = r?.row;
   if (!row) return { text: '' }; // {handled}: the background sent it already; the history shows it
+  if (labOnNow()) {
+    const d = labRowText(row, { ...(timeline ?? {}), online: navigator.onLine });
+    const label = /[.…✓]$/.test(d.label) ? d.label : `${d.label}.`;
+    return { text: [r.note, d.sentence ? `${label} ${d.sentence}` : label].filter(Boolean).join(' '), bad: row.status === 'expired' };
+  }
   return { text: [r.note, rowMessage(row)].filter(Boolean).join(' '), bad: row.status === 'expired' };
+}
+
+/** A send's answer in the popup: the status line, then what Lab adds under it (labAfter). */
+function showResult(r) {
+  if (!r) return;
+  const m = resultMessage(r);
+  if (m.text) setStatus(m.text, m.bad);
+  labAfter(r);
+}
+
+// --- Lab, Wave 1: what the send view adds (LAB-PLAN 3.3) ---------------------------------------------------------------
+
+/** F10's mode for the next send: the Send as line's, else the tab's default (labTabInfo), else Page. */
+function currentMode() {
+  const m = sendAs?.get() ?? tabLab?.mode;
+  return m && m !== 'pdf' ? m : 'page';
+}
+
+/**
+ * The tab as Lab sees it, then Send as (F10), Paste and send (F33) and, when "Send when I click the toolbar button" is
+ * ticked, the share-in-place card (F04).
+ */
+async function renderTabLab() {
+  for (const id of ['lab-card', 'lab-send-as', 'lab-paste', 'lab-after']) {
+    const box = $(id);
+    if (box) { box.hidden = true; box.textContent = ''; }
+  }
+  sendAs = null;
+  card = null;
+  tabLab = null;
+  const target = document.querySelector('#view-send .target');
+  if (target) target.hidden = false;
+  if (!labOnNow() || !st?.paired) return;
+  if (labw.use?.F33) renderPaste($('lab-paste'), { read: readClipboard, parse: parseCopied, send: sendCopiedLink });
+  if (!tab || !webUrl(tab.url || tab.pendingUrl || '')) return;
+  try { tabLab = await call('labTabInfo', { tabId: tab.id }); } catch { tabLab = null; }
+  if (!tabLab || !labOnNow()) return;
+  if (labw.use?.F10 && !tabLab.pdf) sendAs = renderSendAs($('lab-send-as'), { mode: currentMode() });
+  if (labw.use?.F04 && labw.clickSend) startCard(); // F04: "Send when I click the toolbar button" (lab-send.js clickToSend)
+}
+
+/**
+ * F04's card: "Sending to {name}", and the send 1.5 s later by the background (which owns the timer, so closing the
+ * popup still sends) unless Options stops it; for someone who needs more time (Comfort, "Always show Options before
+ * sending"), the choices and Send at once, and nothing goes before Send.
+ */
+function startCard() {
+  const linkOnly = !tabLab.readable && !tabLab.pdf;
+  const choices = !!labw.comfort || !!labw.alwaysOptions; // no countdown for those who need more time (noCountdown)
+  for (const id of ['send-page', 'send-link', 'lab-send-as', 'lab-paste']) $(id).hidden = true;
+  const target = document.querySelector('#view-send .target');
+  if (target) target.hidden = true;
+  const mode = linkOnly ? 'link' : currentMode();
+  card = renderCard($('lab-card'), {
+    name: st.name, linkOnly, choices,
+    on: {
+      options: () => { call('labCancelScheduled', { tabId: tab.id }).catch(() => {}); },
+      choices: (box) => {
+        if (labw.use?.F10 && !tabLab.pdf && !linkOnly) {
+          const line = document.createElement('div');
+          line.className = 'lab-send-as';
+          box.append(line);
+          sendAs = renderSendAs(line, { mode });
+          box.append(reviewSwitch());
+        }
+      },
+      send: () => cardSend(linkOnly),
+      sendLink: () => cardSend(true),
+    },
+  });
+  if (choices) return;
+  call('labScheduleSend', { tabId: tab.id, mode }).then((r) => {
+    if (r?.cancelled) return;
+    card?.done();
+    showResult(r);
+    startPolling();
+  }, (e) => { card?.done(); setStatus(e.message, true); });
+}
+
+/** F10's "Review before sending" as a switch among the card's choices (the setting itself, as in What's in Lab). */
+function reviewSwitch() {
+  const row = document.createElement('div');
+  row.className = 'switch-row';
+  const label = el('label', 'switch-label', LAB_TEXT.sendAs.review);
+  const input = document.createElement('input');
+  Object.assign(input, { type: 'checkbox', className: 'switch', id: 'lab-card-review', checked: !!labw.review });
+  input.setAttribute('role', 'switch');
+  label.htmlFor = input.id;
+  input.addEventListener('change', async () => {
+    try { labw.review = (await call('labSetOption', { key: 'labReview', value: input.checked })).review; } catch { input.checked = !!labw.review; }
+  });
+  row.append(label, input);
+  return row;
+}
+
+async function cardSend(link) {
+  card?.done();
+  await send(link);
+}
+
+/** What Lab adds under the status: the F02 entry point (Chrome), or F11's excerpt line once. */
+function labAfter(r, error = null) {
+  const box = $('lab-after');
+  if (!box || !labOnNow()) return;
+  box.hidden = true;
+  box.textContent = '';
+  if (TARGET === 'chrome' && (r?.reason === 'pdf-too-large' || error?.code === 'too-large')) {
+    renderBigFiles(box, { gate: () => call('labGate', { feature: 'F02' }).catch((e) => ({ ready: false, state: 'error', message: e.message })), fix: bigFilesFix });
+    return;
+  }
+  if (r?.excerpt && !labw.excerptNoteShown) {
+    renderLine(box, LAB_TEXT.excerpt.waitsOnce);
+    labw.excerptNoteShown = true;
+    call('labSeen', { key: 'labExcerptNoteShown' }).catch(() => {});
+  }
+}
+
+/** The F02 note's one button: Copy Server code, or Allow for the server's site. */
+async function bigFilesFix(r, note, btn) {
+  if (r.state === 'needs-site-access') {
+    try { await api.permissions.request({ origins: r.origins }); } catch { /* asked again on the next tap */ }
+  } else if (r.state === 'needs-server' && (await copyText(r.serverCode ?? ''))) {
+    noteFollowUp(note, LAB_TEXT.setup.copied);
+  }
+  btn?.focus?.();
+}
+
+/** F33: the clipboard, read on the click (Chrome asks for the clipboardRead permission the first time). */
+async function readClipboard() {
+  if (TARGET === 'chrome') {
+    try { await api.permissions.request({ permissions: ['clipboardRead'] }); } catch { /* the read says */ }
+  }
+  return navigator.clipboard.readText();
+}
+
+/** F33: a link in copied text (normaliseShare), with the host the question shows; null for no link. */
+function parseCopied(text) {
+  const n = normaliseShare({ text: String(text ?? ''), clean: labw?.use?.F16 !== false });
+  if (n.kind !== 'link' || !n.url) return null;
+  return { url: n.url, host: hostOf(n.url) || n.url };
+}
+
+async function sendCopiedLink(text) {
+  setBusy(true);
+  setStatus('Sending the link…');
+  try {
+    const r = await call('labSendCopied', { text });
+    if (r.noLink) setStatus(LAB_TEXT.copiedLink.noLink); else showResult(r);
+  } catch (e) {
+    setStatus(e.message, true);
+  } finally {
+    setBusy(false);
+    startPolling();
+  }
 }
 
 function setBusy(busy) {
@@ -299,18 +505,35 @@ function setBusy(busy) {
   $('app').setAttribute('aria-busy', busy ? 'true' : 'false');
 }
 
-async function send(linkOnly) {
+/**
+ * "Send this page" and "Send link only". With Lab on: F10's mode (Send as), and its answers: the thin-page question
+ * ({thin}: Send full page or Send anyway), Review opened in a tab ({review}), or the row.
+ */
+async function send(linkOnly, { mode = null, force = false } = {}) {
   if (!tab) return;
   $('permission').hidden = true;
+  const lab = labOnNow();
+  if (lab && $('lab-after')) { $('lab-after').hidden = true; $('lab-after').textContent = ''; }
   setBusy(true);
   const pdf = looksLikePdfUrl(tab.url || '');
-  setStatus(linkOnly ? 'Sending the link…' : pdf ? 'Getting the PDF…' : 'Getting the page…');
+  // A PDF tab sends the file: no mode (and nothing kept for its site).
+  const m = lab && !tabLab?.pdf ? (mode ?? currentMode()) : null;
+  setStatus(linkOnly || m === 'link' ? 'Sending the link…' : pdf ? 'Getting the PDF…' : 'Getting the page…');
   try {
-    let r = await call('sendTab', { tabId: tab.id, linkOnly });
+    const req = { tabId: tab.id, linkOnly };
+    if (m) Object.assign(req, { mode: m, force });
+    let r = await call('sendTab', req);
     if (r.needsPermission) r = await askPermission(r);
-    if (r) { const m = resultMessage(r); setStatus(m.text, m.bad); }
+    if (r?.thin) {
+      setStatus('');
+      renderThin($('lab-after'), r.thin.n, { full: () => send(false, { mode: 'page' }), anyway: () => send(false, { mode: m, force: true }) });
+      return;
+    }
+    if (r?.review) { setStatus(''); return; }
+    if (r) showResult(r);
   } catch (e) {
     setStatus(e.message, true);
+    labAfter(null, e);
   } finally {
     setBusy(false);
     startPolling();
@@ -378,6 +601,7 @@ async function loadRows() {
 }
 
 function renderHistory() {
+  if (labOnNow()) { renderLabHistory(); return; }
   const list = $('history');
   list.textContent = '';
   const shown = rows.slice(0, HISTORY_SHOWN);
@@ -421,6 +645,56 @@ function renderHistory() {
     if (info.hint) li.append(el('p', `note sentence${info.tone === 'bad' ? ' bad' : ''}`, info.hint));
     list.append(li);
   }
+}
+
+/**
+ * The history with Lab on (2.5, F07): "Waiting to send ({n})" with Cancel on each row, then Recent, in the timeline's
+ * words; the check-in header above them; a row whose label changes is announced.
+ */
+function renderLabHistory() {
+  const ctx = { ...(timeline ?? {}), online: navigator.onLine };
+  const now = Date.now();
+  const changed = [];
+  for (const row of rows) {
+    const label = labRowText(row, ctx, now).label;
+    const was = lastLabel.get(row.id);
+    if (was && was !== label && row.status !== 'sending') changed.push(rowAnnouncement(row, ctx, now));
+    lastLabel.set(row.id, label);
+    lastStatus.set(row.id, row.status);
+  }
+  if (changed.length) announce(changed.join('. '));
+  const waiting = queueRows(rows);
+  const rest = rows.filter((r) => !waiting.includes(r));
+  const newestId = rows[0]?.id;
+  const on = { retry, remove };
+  const queueList = $('lab-queue-list');
+  queueList.textContent = '';
+  $('lab-queue').hidden = waiting.length === 0;
+  $('lab-queue-h').textContent = LAB_TEXT.queue.heading.replace('{n}', String(waiting.length));
+  for (const row of waiting) queueList.append(renderLabRow(row, ctx, { newest: row.id === newestId, now, on, cancel: true }));
+  const list = $('history');
+  list.textContent = '';
+  const shown = rest.slice(0, HISTORY_SHOWN);
+  $('recent-h').hidden = shown.length === 0;
+  for (const row of shown) list.append(renderLabRow(row, ctx, { newest: row.id === newestId, now, on }));
+  renderCheckIn($('lab-checkin'), timeline);
+  startFastChecks();
+}
+
+/** F01's faster checks (2.5): every 30 s while a delivered row of the last 10 minutes has no settled state. */
+function startFastChecks() {
+  if (fastTimer || !labOnNow() || !wantsFastChecks(rows, Date.now(), timeline?.states ?? {})) return;
+  fastTimer = setInterval(async () => {
+    if (!labOnNow() || !wantsFastChecks(rows, Date.now(), timeline?.states ?? {})) { clearInterval(fastTimer); fastTimer = null; return; }
+    try { await call('labCheckAcks'); } catch { /* offline */ }
+  }, FAST_CHECK_MS);
+}
+
+/** The ledger learnt something (lab/states, lab/inbox, lab/heard): the rows and the header follow. */
+async function refreshTimeline() {
+  if (!labOnNow()) return;
+  try { timeline = await call('labTimeline'); } catch { return; }
+  if (!$('view-send').hidden) renderHistory();
 }
 
 /** While the popup is open and something is on its way, look for acks every few seconds. */
@@ -491,6 +765,7 @@ async function renderSend({ say = false } = {}) {
   $('daylight-name').textContent = st.name || 'your Daylight';
   await loadTab();
   renderTab();
+  if (LAB_BUILT) await renderTabLab();
   await loadRepaired({ say });
   await loadRows();
 }
@@ -526,11 +801,20 @@ async function init() {
         applyLab(lab);
         if (lab) loadServerSubtitle(false);
         if (!$('view-send').hidden) loadRepaired();
+        // Wave 1's pieces come and go with the switch.
+        loadLab().then(() => { showLabNote(); if (!$('view-send').hidden) renderSend(); else renderHistory(); });
+      } else if (st?.lab && labw) {
+        // A Lab setting changed elsewhere (lab.html): the next popup shows it; the Use switches apply to the next send.
+        call('labPopup').then((r) => { if (r?.lab) labw = r; }, () => {});
       }
     }
     if (changes['lab/server'] && st?.lab) loadServerSubtitle(false);
     if (changes['lab/repaired'] && st?.lab && !$('view-send').hidden) loadRepaired();
+    if (changes['lab/states'] || changes['lab/inbox'] || changes['lab/heard']) refreshTimeline();
   });
+  // F07: the timeline says "Waiting for connection" while offline; back online, the waiting rows go now.
+  window.addEventListener('online', () => { if (labOnNow()) { call('labOnline').catch(() => {}); renderHistory(); } });
+  window.addEventListener('offline', () => { if (labOnNow()) renderHistory(); });
   // Comfort first, so the popup opens at its size.
   try { applyComfort((await api.storage.local.get('settings'))?.settings?.comfort); } catch { /* the background says */ }
 
@@ -544,6 +828,8 @@ async function init() {
   }
   call('clearBadge').catch(() => {});
   applyComfort(st.comfort);
+  await loadLab();
+  showLabNote();
   if (!st.paired) renderPair({ fresh: true });
   else {
     await renderSend();

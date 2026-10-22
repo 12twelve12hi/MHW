@@ -157,7 +157,10 @@ test('popup, paired, every history state: no axe violations, light and dark, Com
     const popup = await openPopup(tabId);
     const tag = comfort ? ', Comfort' : '';
     assert.equal(await popup.evaluate(() => document.body.classList.contains('comfort')), comfort);
-    assert.equal(await popup.locator('#history li').count(), 5);
+    // Lab is on (W1): the two rows waiting to send are in their own list above Recent (F07), which shows the other
+    // four (of five at most).
+    assert.equal(await popup.locator('#lab-queue-list li').count(), 2);
+    assert.equal(await popup.locator('#history li').count(), 4);
     await axeBoth(popup, `popup: send${tag}`);
     if (comfort) await assertNotClipped(popup, 'popup: send, Comfort');
     await shot(popup, `popup-send${comfort ? '-comfort' : ''}`);

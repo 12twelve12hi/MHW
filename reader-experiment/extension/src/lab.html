@@ -21,6 +21,8 @@
 
     <section id="view-lab" hidden aria-labelledby="lab-h">
       <h2 id="lab-h">Lab</h2>
+      <!-- The omnibox (F34) with Lab off opens lab.html#lab-off: "Turn on Lab in Send to Daylight to use this." -->
+      <p id="lab-off-said" class="note lab-off-said" hidden></p>
       <div class="switch-row">
         <label for="lab" class="switch-label">Lab</label>
         <input id="lab" class="switch" type="checkbox" role="switch" aria-describedby="lab-footer">
@@ -36,6 +38,32 @@
       <button class="back" type="button" data-back>‹ Back</button>
       <h2 id="whats-h">What’s in Lab</h2>
       <div id="whats"></div>
+    </section>
+
+    <!-- Wave 1 (X1): a feature's own settings (3.4), opened from its row in What's in Lab; lab-page.js fills them with
+         LAB_TEXT's words. -->
+    <section id="view-f04" hidden aria-labelledby="f04-h">
+      <button class="back" type="button" data-back-to="whats-in-lab">‹ Back</button>
+      <h2 id="f04-h"></h2>
+      <div id="f04"></div>
+    </section>
+
+    <section id="view-f10" hidden aria-labelledby="f10-h">
+      <button class="back" type="button" data-back-to="whats-in-lab">‹ Back</button>
+      <h2 id="f10-h"></h2>
+      <div id="f10"></div>
+    </section>
+
+    <section id="view-f34" hidden aria-labelledby="f34-h">
+      <button class="back" type="button" data-back-to="whats-in-lab">‹ Back</button>
+      <h2 id="f34-h"></h2>
+      <div id="f34"></div>
+    </section>
+
+    <section id="view-setup" hidden aria-labelledby="setup-h">
+      <button class="back" type="button" data-back-to="whats-in-lab">‹ Back</button>
+      <h2 id="setup-h"></h2>
+      <div id="setup"></div>
     </section>
 
     <section id="view-server" hidden aria-labelledby="server-h">

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { built } from '../helpers/built.mjs';
-import { manifestFor, bundleClassic, version, serverModule, labFor, LAB_PAGES } from '../../build.mjs';
+import { manifestFor, bundleClassic, version, serverModule, labFor, LAB_PAGES, CAPTURE, CAPTURE_FILES, LAB_COMMANDS } from '../../build.mjs';
 import { zipDir, unzip, listFiles } from '../../scripts/zip.mjs';
 import {
   LAB_LIB, W1_FEATURES, codeWave, holdFor, laterWave, releaseGate, w1Names, waveRank,
@@ -60,10 +60,48 @@ test('the Safari manifest', () => {
   assert.match(fs.readFileSync(path.join(targets.safari.dir, 'target.js'), 'utf8'), /'safari'/);
 });
 
-test('the test build only adds local host access', () => {
+test('the test build only adds local host access, and reads the clipboard without asking (automation can’t answer)', () => {
   const a = manifest('chrome'), b = manifest('chrome-test');
   assert.deepEqual(b.host_permissions, [...a.host_permissions, 'http://127.0.0.1/*', 'http://localhost/*']);
-  assert.deepEqual({ ...b, host_permissions: 0, name: 0 }, { ...a, host_permissions: 0, name: 0 });
+  assert.deepEqual(b.permissions, [...a.permissions, 'clipboardRead']);
+  assert.deepEqual({ ...b, host_permissions: 0, permissions: 0, name: 0 }, { ...a, host_permissions: 0, permissions: 0, name: 0 });
+});
+
+test('Lab’s manifest parts (F34, F33): the commands and the omnibox in Chrome; no omnibox in Safari; none without Lab', () => {
+  const c = manifest('chrome');
+  assert.deepEqual(Object.keys(c.commands), ['send-page', 'send-selection', 'send-clean', 'send-link']);
+  assert.equal(c.commands['send-selection'].suggested_key.default, 'Alt+Shift+S');
+  assert.equal(c.commands['send-clean'].suggested_key, undefined, 'no default key');
+  assert.equal(c.commands['send-link'].suggested_key, undefined, 'no default key');
+  assert.deepEqual(c.omnibox, { keyword: 'dl' });
+  assert.deepEqual(c.optional_permissions, ['clipboardRead'], 'asked for on the first Paste and send');
+  assert.ok(!c.permissions.includes('clipboardRead'));
+  const sf = manifest('safari');
+  assert.equal(sf.omnibox, undefined, 'Safari has no omnibox (F34)');
+  assert.equal(sf.optional_permissions, undefined);
+  assert.deepEqual(Object.keys(sf.commands), ['send-page', ...LAB_COMMANDS]);
+  // A build without Lab has v1.1's manifest: send-page alone, no omnibox, no clipboard.
+  const held = manifest('safari-held');
+  assert.deepEqual(Object.keys(held.commands), ['send-page']);
+  assert.equal(held.omnibox, undefined);
+  assert.equal(held.optional_permissions, undefined);
+  const noLab = manifestFor('chrome', undefined, { lab: false });
+  assert.deepEqual([Object.keys(noLab.commands), noLab.omnibox, noLab.optional_permissions], [['send-page'], undefined, undefined]);
+  assert.ok(!manifestFor('chrome-test', undefined, { lab: false }).permissions.includes('clipboardRead'));
+});
+
+test('a Lab build carries share/js/capture/’s files as they are (F03, F10; 6.3), and sync.mjs --check agrees; a build without Lab has none', () => {
+  for (const t of ['chrome', 'safari', 'chrome-test']) {
+    for (const f of CAPTURE_FILES) {
+      assert.ok(fs.readFileSync(path.join(targets[t].dir, f)).equals(fs.readFileSync(path.join(CAPTURE, f))), `${t}/${f}`);
+    }
+  }
+  for (const f of CAPTURE_FILES) assert.equal(fs.existsSync(path.join(targets['safari-held'].dir, f)), false, f);
+  assert.equal(fs.existsSync(path.join(here, '..', '..', 'src', 'clean-html.js')), false, 'no copy of its own in src/ (the build copies the one source)');
+  const sync = path.join(CAPTURE, 'sync.mjs');
+  const out = execFileSync(process.execPath, [sync, '--check', ...CAPTURE_FILES.map((f) => path.join(targets.chrome.dir, f))], { encoding: 'utf8' });
+  assert.match(out, /clean-html is up to date/);
+  assert.match(out, /Readability is up to date/);
 });
 
 test('every build carries unmodified copies of daylight-share.js and daylight-lab.js, the server module, and no remote code', () => {
@@ -83,8 +121,8 @@ test('every build carries unmodified copies of daylight-share.js and daylight-la
       const s = fs.readFileSync(path.join(dir, f), 'utf8');
       assert.doesNotMatch(s, /\beval\(|new Function\(|<script[^>]+src="https?:|importScripts\(/, `${t}/${f}`);
     }
-    for (const page of ['popup.html', 'lab.html']) {
-      if (page === 'lab.html' && t === 'safari-held') continue; // a build without Lab has no lab.html
+    for (const page of ['popup.html', 'lab.html', 'review.html']) {
+      if (page !== 'popup.html' && t === 'safari-held') continue; // a build without Lab has no Lab pages
       const html = fs.readFileSync(path.join(dir, page), 'utf8');
       for (const ref of html.matchAll(/(?:src|href)="([^"]+)"/g)) assert.ok(fs.existsSync(path.join(dir, ref[1])), `${t}: ${page}: ${ref[1]} exists`);
     }
@@ -176,7 +214,7 @@ test('lab-wave.json names the Lab wave of this code (not behind it), one the rel
   assert.equal(declared, wave);
   assert.ok(waveRank(wave) >= waveRank(code), `extension/lab-wave.json says ${wave}, but the code is ${code} (${why.join('; ')}): set "wave": "${code}"`);
   assert.equal(hold, wave);
-  assert.equal(code, 'w0', 'X0 is Wave 0');
+  assert.equal(code, 'w1', 'X1 is Wave 1');
   const g = releaseGate();
   assert.deepEqual([g.hold, g.open], [hold, gate[hold] === true]);
   // The publish job holds the Chrome zip for the code's own wave too (the script), and uploads nothing when it can't

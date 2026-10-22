@@ -249,6 +249,62 @@ input.switch:checked::before { left: calc(100% - 1.23em); background: var(--btn-
 .lab-repaired-text { margin: 0; font-size: .9333em; overflow-wrap: anywhere; }
 .lab-repaired .lab-server-rerun { margin-top: 10px; }
 
+/* Lab, Wave 1 (LAB-PLAN 3.3; lab-popup.js, lab-page.js, review.html). Nothing here is greyed out, and every state is
+   said in words and glyphs (2.5), never colour alone. */
+.lab-banner { margin: 0 0 10px; }
+.lab-banner .lab-note-body { margin: 0; }
+.lab-checkin { margin: 14px 0 0; color: var(--muted); font-size: .9333em; overflow-wrap: anywhere; }
+.lab-checkin + .lab-queue .recent-h, .lab-checkin + .lab-queue[hidden] + .recent-h { margin-top: 8px; }
+.lab-steps { margin: 3px 0 0; font-size: .8333em; color: var(--muted); overflow-wrap: anywhere; }
+.item-title.item-open {
+  font: inherit; font-weight: 500; color: var(--ink); background: none; border: 0; padding: 0; text-align: left;
+  cursor: pointer; text-decoration: underline; text-decoration-color: var(--rule-strong); text-underline-offset: 2px;
+}
+.lab-send-as { margin-top: 10px; }
+.send-as-btn {
+  font: inherit; font-weight: 600; color: var(--ink); background: transparent; border: 1px solid var(--rule-strong);
+  border-radius: 8px; padding: 6px 10px; cursor: pointer; overflow-wrap: anywhere; text-align: left; max-width: 100%;
+}
+.send-as-menu { margin-top: 6px; padding: 4px 8px; border: 1px solid var(--rule-strong); border-radius: 8px; background: var(--card); }
+.send-as-item { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 1em; font-weight: 400; cursor: pointer; overflow-wrap: anywhere; }
+.send-as-item input { width: auto; margin: 0; }
+.lab-paste { margin-top: 0; }
+.lab-paste-said:empty { display: none; }
+.lab-paste-said .lab-note-body { margin-top: 8px; }
+.lab-after { margin-top: 8px; }
+.lab-after .nav-row { margin-top: 2px; }
+.lab-line { margin: 4px 0 0; }
+.lab-card { margin: 10px 0 0; padding: 10px 12px; border: 1px solid var(--rule-strong); border-radius: 10px; background: var(--card); }
+.lab-card-title { margin: 0; font-weight: 650; overflow-wrap: anywhere; }
+.lab-card-link { margin-top: 4px; }
+.lab-card-acts .btn { width: auto; }
+.lab-card-extra .switch-row { margin-top: 6px; }
+.lab-use { margin: -2px 0 4px 2px; }
+.lab-use .switch-row { margin: 0; min-height: 32px; }
+.lab-use .switch-label { font-size: .9333em; }
+.lab-use .switch-footer { margin: 0 0 4px; }
+.lab-checks { list-style: none; margin: 0 0 6px; padding: 0; }
+.lab-check-item { border-top: 1px solid var(--rule); padding: 8px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.lab-check-item:last-child { border-bottom: 1px solid var(--rule); }
+.lab-check-line { margin: 0; flex: 1 1 12em; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.lab-check-fix { width: auto; margin-top: 0; }
+.lab-test { margin: 14px 0 6px; }
+.lab-test-footer { margin: 6px 0 4px; }
+.lab-test-progress p { margin: 4px 0 0; }
+.lab-activity { margin: 12px 0 0; }
+.lab-activity-lines { margin: 6px 0 0; padding: 8px; max-height: 14em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8em; border: 1px solid var(--rule); border-radius: 8px; background: var(--card); }
+.lab-diagnostics { width: auto; }
+.lab-diagnostics-copied:empty { display: none; }
+.lab-menus { margin: 6px 0 8px; padding: 6px 10px 8px; border: 1px solid var(--rule-strong); border-radius: 8px; }
+.lab-menus legend { padding: 0 4px; font-size: .8667em; font-weight: 600; }
+.lab-check { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 1em; font-weight: 400; cursor: pointer; overflow-wrap: anywhere; }
+.lab-check input { width: auto; margin: 0; }
+.lab-shortcuts { margin-top: 10px; }
+.lab-off-said { margin: 0 0 8px; }
+.review-stats { margin: 6px 0 8px; }
+.review-frame { width: 100%; height: 60vh; min-height: 240px; border: 1px solid var(--rule-strong); border-radius: 8px; background: #ffffff; filter: grayscale(1); }
+.review-acts .btn { flex: 1; }
+
 /* Comfort (F27, not Lab): larger text and buttons, more contrast, no motion. */
 body.comfort { font-size: 125%; --muted: var(--ink); --rule: var(--rule-strong); }
 body.comfort *, body.comfort *::before, body.comfort *::after { transition: none !important; animation: none !important; }
@@ -258,7 +314,8 @@ body.comfort :is(button, summary, .switch-row) { min-height: 48px; }
 body.comfort summary { display: flex; align-items: center; }
 body.comfort :is(.back, .remove) { display: inline-flex; align-items: center; }
 body.comfort .icon-btn { min-width: 48px; display: inline-flex; align-items: center; justify-content: center; border: 2px solid var(--rule-strong); }
-body.comfort :is(.btn, .retry, input, textarea, .page-card, .permission, .kind, .nav-row, .lab-note-body, .lab-repaired) { border-width: 2px; }
+body.comfort :is(.btn, .retry, input, textarea, .page-card, .permission, .kind, .nav-row, .lab-note-body, .lab-repaired, .lab-card, .send-as-btn, .send-as-menu, .lab-menus, .review-frame) { border-width: 2px; }
+body.comfort :is(.send-as-item, .lab-check) { min-height: 48px; }
 body.comfort :is(.lab-feature, .history li) { border-top-width: 2px; }
 body.comfort .lab-feature:last-child { border-bottom-width: 2px; }
 body.comfort input.switch { border-width: 2px; }
