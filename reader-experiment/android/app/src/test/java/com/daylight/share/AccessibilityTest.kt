@@ -78,6 +78,7 @@ class AccessibilityTest {
     @Test fun inboxSettings() = checkScreen(MainScreen.INBOX_SETTINGS)
 
     private fun checkScreen(screen: MainScreen) {
+        ScreenKit.screenReaderOn(app)
         screen.prepare(app)
         screen.open(compose)
         compose.enableAccessibilityChecks()
@@ -103,6 +104,7 @@ class AccessibilityTest {
     /** The Accessibility Test Framework really runs here: an unlabelled 20 dp button fails its checks. */
     @Test
     fun theAccessibilityChecksRunHere() {
+        ScreenKit.screenReaderOn(app)
         compose.runOnUiThread {
             compose.activity.setContent {
                 androidx.compose.foundation.layout.Box(

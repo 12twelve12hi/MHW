@@ -1,8 +1,10 @@
 package com.daylight.share
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ComponentName
 import android.content.Intent
 import android.content.IntentFilter
+import android.view.accessibility.AccessibilityManager
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -165,6 +167,19 @@ object ScreenKit {
             addCategory(Intent.CATEGORY_DEFAULT)
             for (t in listOf("text/plain", "application/pdf", "application/epub+zip")) addDataType(t)
         })
+    }
+
+    /**
+     * Has the system report a screen reader running (an enabled service, touch exploration), as on a phone with TalkBack:
+     * Compose builds its accessibility nodes, which the Accessibility Test Framework's checks read, only then.
+     */
+    fun screenReaderOn(app: App) {
+        val am = shadowOf(app.getSystemService(AccessibilityManager::class.java))
+        val talkBack = AccessibilityServiceInfo().apply { feedbackType = AccessibilityServiceInfo.FEEDBACK_SPOKEN }
+        am.setInstalledAccessibilityServiceList(listOf(talkBack))
+        am.setEnabledAccessibilityServiceList(listOf(talkBack))
+        am.setEnabled(true)
+        am.setTouchExplorationEnabled(true)
     }
 
     /** Shows the app at the largest system font scale (linear: stricter than Android 14's non-linear scaling). */
