@@ -109,8 +109,9 @@ With or without Comfort:
 - states are written out in words (and ✓), never shown by colour alone;
 - status lines wrap instead of being cut off, also at the narrowest window and at twice the text size (Windows'
   *Settings › Accessibility › Text size*); with Comfort, titles wrap too instead of ending in "…", and nothing is cut
-  off up to Windows' largest text size (225%): the pairing code and relay fields grow to show all you typed, and
-  side-by-side buttons go one under the other when their words no longer fit;
+  off up to Windows' largest text size (225%): the pairing code and relay fields grow to show all you typed, a
+  Daylight's name wraps even when it has no spaces (as in the *Pair with …?* question), and side-by-side buttons go
+  one under the other when their words no longer fit;
 - the pairing code can always be typed (no QR code needed), also while paired (**Change pairing…**).
 
 ## Uninstall
@@ -232,7 +233,8 @@ links' real path.
   text in every view above; at 200% and 225% (Windows' largest text size) in every view too: the pairing screen with a
   typed code and relay, a pasted pairing link and its error, Settings before and after pairing, the send view with a
   row in every state, the hotkey recorder, Change pairing… with a typed code, and both questions (a link's *Pair*, a
-  code's *Switch*). A self-test shows the check catches a field that doesn't grow (its code, then its placeholder), an
+  code's *Switch*), also for a Daylight whose name has no spaces (16 characters, and the longest, 60: a link's *Pair*,
+  and *Switch* to a pasted link while paired with one). A self-test shows the check catches a field that doesn't grow (its code, then its placeholder), an
   input's placeholder and two buttons that can't wrap. Without Comfort, status text still wraps at 200%;
 - **announcements**: a row that the first tick ends as Not delivered, and one the Daylight acks (a real ack on the mock
   relay, read when Rust's tick event fires), are said through the polite live region.

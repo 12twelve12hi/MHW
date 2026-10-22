@@ -218,6 +218,8 @@ test('the F27.4 check sees a text field that cuts off its code or placeholder, a
 const BIG_TEXT = [2, 2.25];
 const SELF_HOSTED = 'https://ntfy.example.org/a-self-hosted-relay';
 const LONG_NAME = 'The Daylight on the kitchen table upstairs';
+/** Names are the user's own (up to MAX_NAME characters), so some have no spaces to wrap at: a short one, and the longest. */
+const ONE_WORD_NAMES = ['MikesDaylightDC1', 'KitchenDaylightUpstairs'.repeat(3).slice(0, ds.MAX_NAME)];
 
 for (const scale of BIG_TEXT) {
   const pct = `${Math.round(scale * 100)}%`;
@@ -258,13 +260,24 @@ for (const scale of BIG_TEXT) {
     await shot(page, `confirm-link-${pct.replace('%', '')}-comfort`);
     await page.getByRole('button', { name: 'Cancel' }).click();
     await page.waitForSelector('#view-pair:not([hidden])');
+    // A name without spaces wraps in the question's heading too.
+    for (const name of ONE_WORD_NAMES) {
+      await page.evaluate((l) => window.__fake.queue({ type: 'pair', link: l }), await ds.pairingLink({ secret: OTHER_SECRET, relay: SELF_HOSTED, name }));
+      await page.waitForSelector('#view-confirm:not([hidden])');
+      assert.equal(await page.textContent('#confirm-h'), `Pair with ${name}?`);
+      await check(`pair with ${name}? (a link)`);
+      await page.getByRole('button', { name: 'Cancel' }).click();
+      await page.waitForSelector('#view-pair:not([hidden])');
+    }
     assert.equal(await stored(page, 'pairing'), undefined, 'Cancel pairs nothing');
     assert.deepEqual(page.errors, []);
     await page.context().close();
   });
 
   test(`with Comfort at ${pct} text, nothing is clipped at the narrowest window while paired: sending, Settings, the hotkey, Change pairing… and its Switch question`, { timeout: 120000 }, async () => {
-    const page = await ui.open({ kv: await paired({ outbox: historyRows(), settings: { comfort: true } }) });
+    // Paired with a Daylight whose name has no spaces, as it shows in "Sending to" and in "This replaces".
+    const kv = kvOf({ pairing: await pairingValue({ relay: relay.url, name: ONE_WORD_NAMES[1] }), outbox: historyRows(), settings: { comfort: true } });
+    const page = await ui.open({ kv });
     await scaleText(page, scale);
     const check = (what) => assertNotClipped(page, `${what}, Comfort, ${pct} text`);
     await page.evaluate(() => {
@@ -294,6 +307,20 @@ for (const scale of BIG_TEXT) {
     await shot(page, `confirm-${pct.replace('%', '')}-comfort`);
     await page.getByRole('button', { name: 'Cancel' }).click();
     await page.waitForSelector('#view-send:not([hidden])');
+    // A pasted link to a Daylight whose name has no spaces: its Switch question's heading wraps too.
+    for (const name of ONE_WORD_NAMES) {
+      await openSettings(page);
+      await page.getByRole('button', { name: 'Change pairing…' }).click();
+      await page.waitForSelector('#view-pair:not([hidden])');
+      await page.getByLabel('Pairing code or link').fill(await ds.pairingLink({ secret: OTHER_SECRET, relay: SELF_HOSTED, name }));
+      await page.click('#pair-btn');
+      await page.waitForSelector('#view-confirm:not([hidden])');
+      assert.equal(await page.textContent('#confirm-yes'), 'Switch');
+      assert.equal(await page.textContent('#confirm-h'), `Pair with ${name}?`);
+      await check(`replace the pairing with ${name}? (Switch)`);
+      await page.getByRole('button', { name: 'Cancel' }).click();
+      await page.waitForSelector('#view-send:not([hidden])');
+    }
     assert.equal((await stored(page, 'pairing')).code, await ds.formatCode(FIXED_SECRET), 'Cancel keeps the pairing');
     assert.deepEqual(page.errors, []);
     await page.context().close();

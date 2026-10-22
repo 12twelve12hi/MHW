@@ -52,7 +52,8 @@ main { padding: 16px 18px 22px; max-width: 560px; margin: 0 auto; }
 .top { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .top .mark { flex: none; border-radius: 6px; }
 h1 { font-size: 1.1333em; font-weight: 650; margin: 0; flex: 1; min-width: 0; letter-spacing: .01em; }
-h2 { font-size: 1.0667em; font-weight: 650; margin: 4px 0 8px; }
+/* A heading can hold a Daylight's name ("Pair with <name>?"), which is the user's own and may have no spaces (F27.4). */
+h2 { font-size: 1.0667em; font-weight: 650; margin: 4px 0 8px; overflow-wrap: anywhere; }
 h3 { font-size: .8667em; font-weight: 650; margin: 18px 0 6px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
 .hint { color: var(--muted); margin: 0 0 12px; }
 .small { font-size: .8667em; }
