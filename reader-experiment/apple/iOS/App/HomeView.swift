@@ -13,6 +13,9 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             List {
+                // The one-time Lab note (LAB-PLAN 1.6) at the top, only in builds whose app has F01 or F04
+                // (`LabBuild.LAB_NOTE_ENABLED`; never in this Wave 0 build, so Home is the P0 baseline's, Lab on or off).
+                LabNoteSection(lab: model.lab)
                 Section {
                     HStack {
                         // More lines rather than cut the link at large text sizes; Return sends.
@@ -122,6 +125,20 @@ struct HomeView: View {
     }
 }
 
+/// Home's first section while the one-time Lab note shows (`LabModel.shouldShowNote`: Lab on, not dismissed, in a build
+/// with `LAB_NOTE_ENABLED`), with OK; nothing at all otherwise.
+struct LabNoteSection: View {
+    @ObservedObject var lab: LabModel
+
+    var body: some View {
+        if lab.shouldShowNote {
+            Section {
+                LabFirstRunNote(lab: lab)
+            }
+        }
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -133,6 +150,11 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                // Lab first (LAB-PLAN 1.1): the switch with its footer and, while Lab is on, the re-pairing follow-up when
+                // there is one, "What’s in Lab ›" and "Daylight server ›" (Optional · its short state). With Lab off only
+                // the switch and its footer show; nothing is deleted (1.3). The share sheet item follows this switch
+                // through the shared storage (`ShareExtensionModel.lab`).
+                LabSettingsSection(lab: model.lab)
                 Section {
                     InfoRow("Name", value: model.daylightName)
                     VStack(alignment: .leading) {

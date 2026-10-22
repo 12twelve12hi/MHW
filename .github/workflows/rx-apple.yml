@@ -96,6 +96,8 @@ jobs:
         working-directory: reader-experiment/apple
     env:
       RELAY_PORT: 8787
+      # A relay that takes connections and never answers (the Lab UI tests' F00.6).
+      HANG_PORT: 8789
     steps:
       - uses: actions/checkout@v4
 
@@ -185,20 +187,39 @@ jobs:
           LINK=$(node scripts/ci-pairing-link.mjs "http://127.0.0.1:$RELAY_PORT" "CI Daylight")
           CODE=$(echo "$LINK" | sed -E 's/.*[?&]c=([A-Z2-7]+).*/\1/')
           SENT_URL="https://example.com/from-the-iphone-app"
+          # Lab as the status file says it (LAB-PLAN 1.7: lab, caps, labStates): lab_is <true|false>.
+          lab_is() {
+            python3 - "$STATUS" "$1" <<'PY' || failed ios-lab-status
+          import json, sys
+          s = json.load(open(sys.argv[1]))
+          want = sys.argv[2] == "true"
+          missing = [k for k in ("lab", "caps", "labStates") if k not in s]
+          if missing:
+              sys.exit(f"::error::the status file has no {', '.join(missing)} (LAB-PLAN 1.7)")
+          if s["lab"] is not want or not isinstance(s["caps"], list) or not isinstance(s["labStates"], dict):
+              sys.exit(f"::error::expected lab {want}, caps a list and labStates an object; got lab {s['lab']!r}, "
+                       f"caps {s['caps']!r}, labStates {s['labStates']!r}")
+          print(f"Lab {s['lab']}, caps {s['caps']}, {len(s['labStates'])} item states")
+          PY
+          }
           xcrun simctl launch "$IOS_DEVICE" com.daylight.share -DLSStatusDump -DLSPairLink "$LINK" -DLSSendLink "$SENT_URL"
-          # 1. The app renders and its main thread keeps running (a first launch on a simulator can be slow).
+          # 1. The app renders and its main thread keeps running (a first launch on a simulator can be slow). A fresh
+          # install has Lab on (LAB-PLAN F00.1), and has heard no hello: no capabilities, no item states.
           node scripts/ci-app-status.mjs render "$STATUS" 120 || failed ios-not-rendered
+          lab_is true
           # 2. Paired and sent (the relay has it); the JS receiver gets it intact and acks it.
           node scripts/ci-app-status.mjs row "$STATUS" "$SENT_URL" sent,delivered 120 || failed ios-not-sent
           shot ios-sent || true
           node scripts/e2e-receiver.mjs "http://127.0.0.1:$RELAY_PORT" "$CODE" | tee build/ios-received.json
           grep -q "\"url\":\"$SENT_URL\"" build/ios-received.json \
             || { echo "::error::the link sent by the iPhone app did not reach the JS receiver"; failed ios-not-received; }
-          # 3. Launched again, the app reads the ack as it becomes active: the history shows "Delivered ✓".
+          # 3. Launched again, now with Lab off (-DLSLab 0, LAB-PLAN 1.7: Lab off never stops what was sent, 1.3), the app
+          # reads the ack as it becomes active: the history shows "Delivered ✓".
           xcrun simctl terminate "$IOS_DEVICE" com.daylight.share || true
           rm -f "$STATUS"
-          xcrun simctl launch "$IOS_DEVICE" com.daylight.share -DLSStatusDump
+          xcrun simctl launch "$IOS_DEVICE" com.daylight.share -DLSStatusDump -DLSLab 0
           node scripts/ci-app-status.mjs row "$STATUS" "$SENT_URL" delivered 120 || failed ios-not-delivered
+          lab_is false
           shot ios-delivered || true
           xcrun simctl terminate "$IOS_DEVICE" com.daylight.share || true
 
@@ -211,15 +232,27 @@ jobs:
       # truncation and Dynamic Type audit hosted in the app (F27.4). The apps run on their own empty storage
       # (-DLSTestStorage, with -DLSSampleHistory for the history) and a relay nobody listens on. Tests are not re-run: each of those test classes must pass first time and none may be
       # skipped (an iOS older than 17 skips the audits), which ci-test-summary.sh checks.
-      - name: iPhone UI tests and truncation audit (F27.2, F27.4, F00.2)
+      # Lab W0 (A1): LabAppTests (hosted: an update turns Lab on and keeps the pairing and history, the share sheet
+      # follows the switch, an item queued offline goes after Lab is turned off, the status dump's Lab fields),
+      # LabFirstRunTests (F00.1, F00.7; Home and the share card with Lab on are the Lab-off baselines in W0),
+      # LabNoteTests (F00.3, F00.5, F00.6, F17.2) and LabAccessibilityAuditTests (F27.2 with Lab on). They pair on the
+      # mock relay (DLS_RELAY: it answers, with no Daylight server on it, so needs-server) and on a relay that takes
+      # connections and never answers (DLS_HANG_RELAY: OFFLINE at the gate's 5 s).
+      - name: iPhone UI tests and truncation audit (F27.2, F27.4, F00.2, Lab F00, F17.2)
         run: |
           # The simulator picked and started above, so the first UI test does not meet a simulator whose accessibility
           # server is still coming up.
           DEVICE="$IOS_DEVICE"
           xcrun simctl bootstatus "$DEVICE" -b > /dev/null
           mkdir -p build/shots build/baselines
+          curl -fsS "http://127.0.0.1:$RELAY_PORT/v1/health" >/dev/null 2>&1 \
+            || { node ../share/js/mock-relay.mjs --port "$RELAY_PORT" > "$RUNNER_TEMP/mock-relay-3.log" 2>&1 & sleep 2; }
+          curl -fsS "http://127.0.0.1:$RELAY_PORT/v1/health" >/dev/null || { echo "::error::the mock relay did not start"; exit 1; }
+          node -e "require('net').createServer((s) => s.on('error', () => {})).listen($HANG_PORT, '127.0.0.1')" &
+          sleep 1
           run_tests() {
             rm -rf build/ios-tests.xcresult
+            TEST_RUNNER_DLS_RELAY="http://127.0.0.1:$RELAY_PORT" TEST_RUNNER_DLS_HANG_RELAY="http://127.0.0.1:$HANG_PORT" \
             TEST_RUNNER_DLS_SHOTS="$PWD/build/shots" TEST_RUNNER_DLS_BASELINE_OUT="$PWD/build/baselines" \
               xcodebuild test -project SendToDaylight.xcodeproj -scheme SendToDaylight-iOS -configuration Debug \
               -destination "platform=iOS Simulator,id=$DEVICE" -derivedDataPath build/dd-sim \
@@ -244,7 +277,8 @@ jobs:
           xcrun xcresulttool export attachments --path build/ios-tests.xcresult --output-path build/shots/attachments \
             > /dev/null 2>&1 || echo "::warning::could not export the result bundle's attachments"
           bash scripts/ci-test-summary.sh build/ios-tests.log build/baselines "$status" \
-            AccessibilityAuditTests BaselineTests LabOffParityTests TreeWalkTests TruncationAuditTests
+            AccessibilityAuditTests BaselineTests LabOffParityTests TreeWalkTests TruncationAuditTests \
+            LabAppTests LabFirstRunTests ScrolledWalkTests LabNoteTests LabAccessibilityAuditTests
 
       - uses: actions/upload-artifact@v4
         if: always()

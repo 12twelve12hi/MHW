@@ -2,7 +2,8 @@
 import XCTest
 
 /// LAB-PLAN F27.4: with Comfort on, at the narrowest width (an iPad's one-third split, 320 pt) and text at
-/// accessibility3, no text on the iPhone app's main screens or on the share sheet's card (each of its states) is
+/// accessibility3, no text on the iPhone app's main screens (Settings with its Lab section), its Lab screens (What's in
+/// Lab, the Daylight server section, the needs-setup notes) or on the share sheet's card (each of its states) is
 /// truncated or clipped (`AuditScreens`, which hosts each screen in the app). Screenshots go to $DLS_SHOTS when it is
 /// set (CI uploads them).
 final class TruncationAuditTests: XCTestCase {
@@ -28,7 +29,7 @@ final class TruncationAuditTests: XCTestCase {
     @MainActor
     func testEveryTextGrowsWithTheTextSize() async throws {
         let screens = await AuditScreens.scaling()
-        XCTAssertEqual(screens.map(\.screen), ["home", "home-empty", "settings", "pair"]
+        XCTAssertEqual(screens.map(\.screen), ["home", "home-empty", "settings", "pair"] + AuditScreens.labScreenNames
                        + AuditScreens.shareCardNames)
         var grown = Set<String>()
         for screen in screens {
@@ -50,7 +51,7 @@ final class TruncationAuditTests: XCTestCase {
     @MainActor
     func testNoTextIsCutWithComfortAtTheNarrowestWidth() async throws {
         let reports = await AuditScreens.reports(shots: Self.shots)
-        XCTAssertEqual(reports.map(\.screen), ["home", "settings", "pair"]
+        XCTAssertEqual(reports.map(\.screen), ["home", "settings", "pair"] + AuditScreens.labScreenNames
                        + AuditScreens.shareCardNames)
         for report in reports {
             print("TruncationAudit iOS \(report.screen): \(report.measured) texts measured, \(report.problems.count) cut")

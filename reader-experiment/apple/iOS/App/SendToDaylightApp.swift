@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 struct SendToDaylightApp: App {
     nonisolated static let refreshTask = "com.daylight.share.refresh"
 
-    @StateObject private var model = AppModel.shared
+    @StateObject private var model = SendToDaylightApp.makeModel()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -42,6 +42,17 @@ struct SendToDaylightApp: App {
         }
     }
 
+    /// The app's model, with this build's Lab constant (`LabBuild`) set before the first render, and in Debug builds
+    /// the UI tests' announcement log (`-DLSAnnounceLog`).
+    @MainActor static func makeModel() -> AppModel {
+        let model = AppModel.shared
+        model.lab.noteEnabled = LabBuild.LAB_NOTE_ENABLED
+        #if DEBUG
+        LabBuild.logAnnouncements()
+        #endif
+        return model
+    }
+
     /// `-DLSSampleHistory` with `-DLSTestStorage` (Debug builds only, for the UI tests' walks and audits): the history
     /// shows `HistorySample`'s rows, a row in every state, and keeps them as they are.
     nonisolated static var sampleHistory: Bool {
@@ -62,6 +73,40 @@ struct SendToDaylightApp: App {
             try? BGTaskScheduler.shared.submit(request)
         }
     }
+}
+
+/// This build's Lab (LAB-PLAN 1.2, 3.2 F00; card A1, the iPhone's Wave 0). Settings › Lab, What's in Lab and the Daylight
+/// server section come from DaylightShareUI (`LabSettingsSection`); `-DLSLab 0|1` and the status dump's `lab`, `caps` and
+/// `labStates` (1.7) from the kit's `LabModel` and `AppModel`.
+enum LabBuild {
+    /// `LAB_NOTE_ENABLED` (1.2): the one-time note ("Lab is on. …", 1.6) shows only in builds whose app has F01 or F04.
+    /// This is a Wave 0 build, which has neither: no note. The iPhone's Wave 1 (A4) turns it on.
+    static let LAB_NOTE_ENABLED = false
+
+    #if DEBUG
+    /// `-DLSAnnounceLog <path>` (Debug builds, the UI tests; LAB-PLAN F00.3 and F27): every VoiceOver announcement is
+    /// also appended to that file, one line each, so a test can check what a screen reader is told. The announcement
+    /// itself is posted as always.
+    static func logAnnouncements(_ arguments: [String] = ProcessInfo.processInfo.arguments) {
+        guard let i = arguments.firstIndex(of: "-DLSAnnounceLog"), i + 1 < arguments.count else { return }
+        let url = URL(fileURLWithPath: arguments[i + 1])
+        let queue = DispatchQueue(label: "com.daylight.share.announce-log")
+        let post = Announcer.post
+        Announcer.post = { text in
+            post(text)
+            let line = Data((text.replacingOccurrences(of: "\n", with: " ") + "\n").utf8)
+            queue.async {
+                if let handle = try? FileHandle(forWritingTo: url) {
+                    _ = try? handle.seekToEnd()
+                    try? handle.write(contentsOf: line)
+                    try? handle.close()
+                } else {
+                    try? line.write(to: url)
+                }
+            }
+        }
+    }
+    #endif
 }
 
 struct RootView: View {

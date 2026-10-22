@@ -13,6 +13,10 @@ import XCTest
 /// The Lab switch row (`AXTree.labSwitchID`) is the one thing Lab off adds, and on the iPhone only in Settings: it is
 /// left out of the compared tree and checked to hold only the switch, off (LAB-PLAN 1.1). The share sheet follows the
 /// app's switch and has none of its own, so its cards may show no Lab switch at all.
+///
+/// Settings starts with that Lab section (A1), which pushes its last rows below the screen, and a form holds only the
+/// rows on screen: Settings is walked to its end and the steps put together (`LabUI.checkScrolledBaseline`), so it is
+/// compared whole, as the P0 build showed it on one screen.
 final class LabOffParityTests: XCTestCase {
     @MainActor
     func testHomeWithARowInEveryStateMatchesTheLabOffBaseline() throws {
@@ -40,7 +44,8 @@ final class LabOffParityTests: XCTestCase {
         settings.tap()
         XCTAssertTrue(app.switches["comfort"].waitForExistence(timeout: 10), "Settings did not open")
         UITestSupport.screenshot(app, "ios-lab-off-settings", in: self)
-        try UITestSupport.checkBaseline(app, screen: "settings", labSwitch: true)
+        XCTAssertEqual(UITestSupport.text(LabUI.element(LabUI.labSwitch, in: app).value), "0", "-DLSLab 0 turns Lab off")
+        try LabUI.checkScrolledBaseline(app, screen: "settings", labSwitch: true)
     }
 
     @MainActor

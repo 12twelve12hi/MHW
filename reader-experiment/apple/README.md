@@ -114,6 +114,31 @@ Every build, with Lab on or off, has the same accessibility baseline (LAB-PLAN F
 - **Typing the pairing code is always offered**, next to the QR code on the iPhone, as the way to pair on the Mac,
   and in the share sheet.
 
+## Lab on the iPhone and iPad (Wave 0)
+
+The iPhone app has the Lab switch (LAB-PLAN 1, card A1), **on by default**. This build is Lab's Wave 0: it adds the
+switch and the Daylight server's setup, and changes nothing about sending yet. Wave 1 (A4) brings the features.
+
+- **Settings › Lab**, the first section: the switch, its footer (*New features we’re trying out. Turn Lab off for
+  the plain app; nothing you sent is lost.*) and, while Lab is on, **What’s in Lab ›** and **Daylight server ›**
+  (*Optional · Not set up*, or the server's short state). Turning Lab off hides them and deletes nothing: the pairing,
+  the history, the Lab ledger and the server's pin stay, and Comfort is not part of Lab. The share sheet item follows
+  the app's switch through the App Group; it has no switch of its own (a sideloaded build without the group starts on).
+- **What’s in Lab** lists the server features from the start, as LAB-DECISIONS asks: *Files over 9 MB*, *Summaries
+  with Claude*, *Email-in address*, *Feeds and daily digest*, under *With your Daylight server (optional)*, with the
+  server's short state. Its first line is your Daylight's Lab state (*Needs Lab on your Daylight* until Daylight Share
+  on the DC-1 says hello with Lab on, then *Your Daylight: Lab on · checked in 4 min ago*). Nothing there says how to
+  set anything up until you tap a feature: then its one sentence shows under it (*Needs your Daylight server. Add the
+  Cloudflare secrets to turn this on (Lab › Daylight server shows how).*, with **Copy Server code**), and is read out by
+  VoiceOver. With no server reachable it says so within 5 seconds.
+- **Daylight server** is where setup happens: the state in full (with the secrets' names), *Set up with a link*, the
+  steps, the **Server code** with **Copy** (the `daylightserver://` link form when the relay isn't ntfy.sh), the
+  optional *Server address* and the deploy's re-run help. Every word is LAB_TEXT's (`share/js/daylight-lab.js`) or the
+  server module's, through `DaylightShareUI` (`LabSettingsSection`, `WhatsInLabView`, `ServerSettingsView`).
+- **No one-time note** in this build: `LabBuild.LAB_NOTE_ENABLED` (`iOS/App/SendToDaylightApp.swift`) is false
+  until the app has F01 or F04 (LAB-PLAN 1.2). Home's note slot (`LabNoteSection`) shows nothing until then.
+- With Lab off, every screen is the last non-Lab build's (the Lab-off baselines, below), but for the switch itself.
+
 ## Lab on the Mac
 
 Lab (LAB-PLAN 1, card A2: Wave 0, F00 and F17) is a switch at the top of Settings, **on by default**, in the main
@@ -447,7 +472,8 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
 | `-DLSComfort 0\|1` | Turns Comfort off or on before the first render (and saves it), LAB-PLAN 1.7. |
 | `-DLSTestStorage` | Runs on fresh, empty storage of its own (`DaylightShare-UITest` next to the app's own folder, a separate defaults suite, no App Group), emptied at every launch: the UI tests never see or touch a real pairing or history. |
 | `-DLSSampleHistory [n,…]` | Debug builds only, and only with `-DLSTestStorage`: once the launch's pairing is in place, the history holds the sample rows (or only those numbered after it, 1 the newest: `-DLSSampleHistory 3,4`) (`HistorySample`: a row in every state, newest first — *Sending…*; *Waiting to send* with *Retry now*; *Not delivered* as too large; *Delivered ✓*; *Sent · waiting for your Daylight* a day on; *Not delivered* within a week, with *Try again*), and the app reads no acks and re-sends nothing, so each row stays in its state. For the UI tests' walks and audits. |
-| `-DLSLab 0\|1` | Turns Lab off or on before the first render, and saves it (LAB-PLAN 1.7; `LabSettings.launchValue`). The share card samples (`-DLSShareCard`) take it too. The Lab-off walks pass `-DLSLab 0`; without it a start on `-DLSTestStorage` is a first start, Lab on. |
+| `-DLSLab 0\|1` | Turns Lab off or on before the first render, and saves it (LAB-PLAN 1.7; `LabSettings.launchValue`). The share card samples (`-DLSShareCard`) take it too. The Lab-off walks pass `-DLSLab 0`; without it a start on `-DLSTestStorage` is a first start, Lab on. The iPhone smoke test checks the status file's `lab`, `caps` and `labStates` on a fresh install (Lab on) and again launched with `-DLSLab 0`. |
+| `-DLSAnnounceLog <path>` | iPhone, Debug builds only: every VoiceOver announcement is also appended to that file, one per line (`LabBuild.logAnnouncements`), so the UI tests can check that a needs-setup note is said (LAB-PLAN F00.3). |
 | `-DLSShareCard <name>` | Debug builds only: shows the share card (`ShareExtensionView`) in one of its states in place of the window, with sample words and its own empty storage, for the UI tests' walk: `reading`, `sent`, `sent-note`, `result-note`, `needs-pairing` (a card without an App Group, with its own Comfort switch) or `confirm-pairing` (`ShareCardSample`). |
 
 ### UI tests, the truncation audit and the Lab-off baselines
@@ -496,6 +522,24 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     shot …=====` markers, at most six a run), since the result bundle's screenshots cannot be read from the log.
   - `BaselineTests`: Comfort is in Settings, off by default, named, with its footer, and switches on; the share card
     without an App Group has its own Comfort switch; typing the code pairs.
+  - Lab on the iPhone (Wave 0, card A1), on the relays the `ios` job runs (the mock relay with no Daylight server on
+    it, `DLS_RELAY`; one that never answers, `DLS_HANG_RELAY`; and nothing at all, `127.0.0.1:9`), each passed as
+    `TEST_RUNNER_…`:
+    - `LabFirstRunTests` (F00.1, F00.7): a fresh install has Lab on and no note; Settings starts with Lab and its rows,
+      which turning Lab off hides (and Comfort stays); Home with the sample history and the share card in each state
+      are, with Lab on, exactly the Lab-off baselines (Wave 0 changes nothing there; "Delivered ✓" without a hello,
+      F17.2); and no screen before a tap (pairing, Home, Settings, What's in Lab) names a secret or says how to set
+      something up (LAB_TEXT's needs-setup sentences, the server module's state messages and the re-run help, from the
+      vectors), while the server section does. `ScrolledWalkTests` checks the walk merge below.
+    - `LabNoteTests` (F00.3, F00.5, F00.6, F17.2): *Summaries with Claude* (and each server feature) says the
+      needs-server sentence under itself within 5 s, enabled, said to VoiceOver (`-DLSAnnounceLog`), with Copy Server
+      code and OK; offline it says the OFFLINE sentence, and with a relay that never answers *Checking your Daylight
+      server…* and then OFFLINE at 5 s; the Server code is `server-vectors.json` › `derived` in the link form, and both
+      Copy buttons put it on the clipboard (read back with Home's Paste button); with no hello, *Delivered ✓* and the
+      needs-inbox header line.
+    - `LabAccessibilityAuditTests` (F27.2 with Lab on): Settings with its Lab section, What's in Lab, a needs-setup note
+      and the server section, at the default size and with Comfort at the largest, without Dynamic Type (these screens
+      run past one screen; the truncation test measures each of their texts growing instead).
   - `LabOffParityTests` (F00.2): an explicit walk of the accessibility tree (element type, label or title, and value,
     in order; never `debugDescription`) compared with `iOS/UITests/lab-off-baseline/*.json` and
     `macOS/UITests/lab-off-baseline/*.json`: Home with the sample history in three parts that each show whole at
@@ -508,7 +552,9 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     at 1:05 PM*), which depends on when the test runs, is written `<when>`, as Android's walk does: on the Mac the age's own text
     (`history-row-time`, `HistoryRowView.timeID`), on the iPhone the value of the row's one element (`history-row`,
     `HistoryRowView.rowID`). The baselines were recorded from the P0 close-out (protocol 1.1 and this
-    accessibility baseline) and are re-recorded only with a matching non-Lab change.
+    accessibility baseline) and are re-recorded only with a matching non-Lab change. The iPhone's Settings now starts
+    with the Lab section, which pushes its last rows below the screen (a form holds only the rows on screen), so it is
+    walked to its end and the steps put together where they overlap (`LabUI.checkScrolledBaseline`), and compared whole.
     The walk keeps every element that has a label, title or value, whatever its type, and every control even without
     one; it leaves out only containers without words and the system's scroll bars, and writes what depends on the
     build or the runner in fixed words: the app's version as `<version>` (a version bump is not a screen change) and
@@ -538,7 +584,13 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
   summary). A history row's time, whose words depend on when it is measured, is probed under a fixed name per row
   (`HistoryRowView.timeProbe`). Not measured: the system's own texts (confirmation dialogs, the menu bar item's menu).
   The audit checks itself on a deliberately cut text first. On the iPhone, `testEveryTextGrowsWithTheTextSize` also measures every text of those screens (and of an
-  empty Home) at the default size and at accessibility3, and fails on one that does not grow. The menu bar item's
+  empty Home) at the default size and at accessibility3, and fails on one that does not grow. On the iPhone both also
+  host the Lab screens as a fresh install sees them (no Daylight server): Settings with Lab on, What's in Lab, the
+  server section (its longest form) and the needs-setup notes (`AuditScreens.labScreens`). `LabAppTests` (iPhone,
+  `LabChecks` in the app) checks the rules no screen shows: an update from the non-Lab build turns Lab on and keeps
+  the pairing and history (F00.1), `LAB_NOTE_ENABLED` is off, a stored switch and `-DLSLab` at the next start, the share
+  sheet following the app's switch, and F00.4 (an item queued offline, then Lab off, goes once the relay is back; the
+  history, pairing and server pin stay; the status dump's `lab`, `caps` and `labStates`). The menu bar item's
   menu is drawn by the system at the width its items need, so it is not measured.
 
 The UI tests run the app on its own storage (`-DLSTestStorage`) paired with the vectors' code and a relay nobody
@@ -547,7 +599,8 @@ windows) are uploaded as the `rx-apple-ios-screenshots` and `rx-apple-mac-screen
 never compared. A runner image that changes the iOS or macOS version can change a tree: the test then prints the new
 one, ready to copy. Each launch waits until the app answers accessibility queries (a simulator that has just started
 can take a while; CI also starts it before the tests). CI does not re-run failed tests, and `scripts/ci-test-summary.sh` fails the job unless
-`AccessibilityAuditTests`, `BaselineTests`, `LabOffParityTests`, `TreeWalkTests` and `TruncationAuditTests` (on the Mac
+`AccessibilityAuditTests`, `BaselineTests`, `LabOffParityTests`, `TreeWalkTests` and `TruncationAuditTests` (on the
+iPhone also `LabAppTests`, `LabFirstRunTests`, `ScrolledWalkTests`, `LabNoteTests` and `LabAccessibilityAuditTests`; on the Mac
 also `LabFirstRunTests`, `LabNoteTests`, `LabServerNoteTests` and `LabAccessibilityAuditTests`, [Lab on the
 Mac](#lab-on-the-mac)) each ran with every test passed and none skipped (so a runner whose simulator is older than iOS 17, or a macOS older than 14,
 cannot turn the audits into skips).

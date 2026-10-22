@@ -28,14 +28,44 @@ enum AuditScreens {
         }
     }
 
-    /// Home (with a history row in every state), Settings, the pairing screen and the share card in each state.
+    /// The Lab screens (LAB-PLAN 1.4, 1.5, 2.6), by report name, after the main screens: What's in Lab, the Daylight
+    /// server section and the needs-setup notes, each with the words a fresh install sees: no Daylight server yet
+    /// (`labSampleModel`).
+    static let labScreenNames = ["whats-in-lab", "server", "lab-notes"]
+
+    static func labScreens(_ model: AppModel) -> [(String, AnyView)] {
+        [
+            ("whats-in-lab", AnyView(NavigationStack { WhatsInLabView(lab: model.lab) })),
+            ("server", AnyView(NavigationStack { ServerSettingsView(lab: model.lab) })),
+            ("lab-notes", AnyView(labNotes)),
+        ]
+    }
+
+    /// The needs-setup notes (1.5) as they show under a tapped control: the longest (needs-server, with its button and
+    /// OK), the server out of reach, not paired, and "Checking your Daylight server…".
+    static var labNotes: some View {
+        List {
+            LabNote(LabText.needsMessage("needs-server", platform: "iphone") ?? "", button: LabText.button("needs-server"),
+                    onButton: {}, onOK: {})
+            LabNote(ServerMessages.localMessage("OFFLINE"), onOK: {})
+            LabNote(LabText.needsMessage("needs-pairing", platform: "iphone") ?? "", onOK: {})
+            LabNote(LabText.checking)
+        }
+    }
+
+    /// Home (with a history row in every state), Settings (with Lab on, as a fresh install has it), the pairing screen,
+    /// the Lab screens and the share card in each state.
     static func reports(shots: URL?) async -> [Report] {
         let paired = await sampleModel(paired: true)
         let unpaired = await sampleModel(paired: false)
+        let lab = await labSampleModel()
         var out: [Report] = []
         out.append(await measure("home", AnyView(HomeView().environmentObject(paired)), height: 6000, shots: shots))
         out.append(await measure("settings", AnyView(SettingsView().environmentObject(paired)), height: 3000, shots: shots))
         out.append(await measure("pair", AnyView(PairView().environmentObject(unpaired)), height: 3000, shots: shots))
+        for (name, view) in labScreens(lab) {
+            out.append(await measure(name, view, height: 4000, shots: shots))
+        }
         for (name, view) in shareCards(comfort: true) {
             out.append(await measure(name, view, height: 2400, shots: shots))
         }
@@ -59,12 +89,13 @@ enum AuditScreens {
         let paired = await sampleModel(paired: true)
         let empty = await sampleModel(paired: true, rows: false)
         let unpaired = await sampleModel(paired: false)
+        let lab = await labSampleModel()
         let screens: [(String, AnyView)] = [
             ("home", AnyView(HomeView().environmentObject(paired))),
             ("home-empty", AnyView(HomeView().environmentObject(empty))),
             ("settings", AnyView(SettingsView().environmentObject(paired))),
             ("pair", AnyView(PairView().environmentObject(unpaired))),
-        ] + shareCards(comfort: false)
+        ] + labScreens(lab) + shareCards(comfort: false)
         var out: [Scaling] = []
         for (name, view) in screens {
             let small = await host(view, comfort: false, typeSize: .large, height: 6000).neededSizes
@@ -116,6 +147,39 @@ enum AuditScreens {
         let model = AppModel(store: store, arguments: [])
         await model.reloadNow()
         return model
+    }
+
+    /// A paired model whose Daylight server lookups answer as a relay with nothing on the server's config topic: no
+    /// server deployed (needs-server), as on a fresh install, so the server section shows its longest form (the state's
+    /// long text, Set up with a link, the steps). Nothing goes on the network for the server; What's in Lab and the
+    /// section are worked out before the screens are hosted.
+    static func labSampleModel() async -> AppModel {
+        let id = UUID().uuidString
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dls-audit-lab-\(id)", isDirectory: true)
+        let defaults = UserDefaults(suiteName: "dls-audit-lab-\(id)") ?? .standard
+        let store = SharedStore(defaults: defaults, directory: directory)
+        if let pairing = try? Pairing(secret: Data(repeating: 7, count: 16), relay: "http://127.0.0.1:9",
+                                      name: "The Daylight in the reading room upstairs") {
+            _ = await store.pair(pairing)
+        }
+        let center = LabCenter(store: store, fetch: Self.noServer)
+        let lab = LabModel(center: center, arguments: [])
+        let model = AppModel(store: store, lab: lab, arguments: [])
+        await model.reloadNow()
+        await lab.reloadNow()
+        await lab.openOverview()
+        await lab.loadServerView()
+        return model
+    }
+
+    /// The Daylight server's lookups when no server was deployed: every request answers 200 with nothing in it (the
+    /// relay's config topic holds no message).
+    static let noServer: DaylightServer.Fetch = { request in
+        guard let url = request.url, let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+                                                                    headerFields: ["Content-Type": "application/x-ndjson"]) else {
+            throw URLError(.badURL)
+        }
+        return (Data(), response)
     }
 
     /// Hosts `view` in a window `narrowestWidth` wide with Comfort on and text at accessibility3, lets it settle, and
