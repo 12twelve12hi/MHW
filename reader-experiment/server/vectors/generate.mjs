@@ -289,6 +289,30 @@ export async function generate() {
     },
     publicUrl: { accepted: accepted.map(([input, output]) => ({ input, output })), refused },
     serverState: await serverStateVectors(secret),
+    setupLinks: await setupLinkVectors(),
+  };
+}
+
+/** 3.5: the deploy's one-time setup link and its bearer token (the ports need these once they offer "Set up with a link"). */
+async function setupLinkVectors() {
+  const secret = (await ds.sha256(ds.utf8('server-vector-setup-secret'))).slice(0, 16);
+  const server = 'https://daylight-0123456789ab.example.workers.dev';
+  const link = await srv.formatSetupLink(server, secret);
+  const frag = link.split('#')[1];
+  const otherCheck = 'SETUP-' + (frag[6] === 'A' ? 'B' : 'A') + frag.slice(7); // one data character changed: the check fails
+  const code = await srv.formatServerCode(await srv.deriveServerSeed(ds.fromHex(SECRET_HEX)));
+  const parse = async (input) => {
+    try { const r = await srv.parseSetupLink(input); return { input, server: r.server, secretHex: hex(r.secret) }; } catch (e) { return { input, error: e.reason }; }
+  };
+  return {
+    note: 'formatSetupLink(server, secret) = server origin + "/setup#SETUP-" + base32(secret ‖ check) in groups of 4, check = SHA-256("dlshare/v1/server-setup-check" ‖ 0x00 ‖ secret)[0]. setupToken = hex(SHA-256("dlshare/v1/server-setup-auth" ‖ 0x00 ‖ secret)), sent as Authorization: Bearer on POST /v1/setup with {"code": <the Server code>}. parseSetupLink ignores case, spaces, dashes, dots and underscores in the fragment and reads 0, 1 and 8 as O, I and B; error reasons: format, checksum, server-code, pairing-code.',
+    secretHex: hex(secret), server, link, setupToken: await srv.deriveSetupToken(secret),
+    parsing: await Promise.all([
+      link, link.replace('https://daylight-', 'HTTPS://DAYLIGHT-'), `${server}/setup/#${frag.toLowerCase().replace(/-/g, ' ')}`,
+      `  ${link}\n`, `${server}/setup#${otherCheck}`, `http://daylight-0123456789ab.example.workers.dev/setup#${frag}`,
+      `${server}/other#${frag}`, `${server}/setup?x=1#${frag}`, `${server}/setup#SETUP-ABCD`, `${server}/setup`, code,
+      await ds.formatCode(ds.fromHex(SECRET_HEX)), 'hello',
+    ].map(parse)),
   };
 }
 

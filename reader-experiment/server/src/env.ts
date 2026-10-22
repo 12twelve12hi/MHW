@@ -13,6 +13,8 @@ export interface Env {
   AI_MAX_USD_DAY?: string;
   AI_MAX_REQ_DAY?: string;
   DAYLIGHT_SERVER_CODE?: string;
+  /** While a setup link waits to be used (3.5): hex(SHA-256("dlshare/v1/server-setup-auth\0" ‖ secret)), set by the deploy. */
+  DAYLIGHT_SETUP_TOKEN?: string;
   DAYLIGHT_PAIRING?: string;
   ANTHROPIC_API_KEY?: string;
   DAYLIGHT_EMAIL_DOMAIN?: string;

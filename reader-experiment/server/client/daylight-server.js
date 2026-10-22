@@ -47,11 +47,11 @@ const subtle = () => globalThis.crypto.subtle;
 export const RERUN_HELP = 'In GitHub › Actions, open the latest ‘Reader experiment - Daylight server’ run and choose Re-run all jobs.';
 
 export const STATE_MESSAGES = {
-  'needs-server': 'Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on.',
-  'pairing-mismatch': 'The Daylight server still has your previous pairing. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy.',
+  'needs-server': 'Needs the Daylight server. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in GitHub › Settings › Secrets, then paste the setup link the deploy makes in Lab settings › Daylight server.',
+  'pairing-mismatch': 'The Daylight server still has your previous pairing. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or copy the new Server code into DAYLIGHT_SERVER_CODE.',
   'server-outdated': 'Update the Daylight server to use this: open the latest “Reader experiment - Daylight server” run in GitHub › Actions and choose Re-run all jobs.',
   'app-outdated': 'Update this app to use the Daylight server.',
-  locked: 'The Daylight server was locked when this device was re-paired. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy.',
+  locked: 'The Daylight server was locked when this device was re-paired. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or copy the new Server code into DAYLIGHT_SERVER_CODE.',
   'needs-key': 'Needs a Claude API key. Add ANTHROPIC_API_KEY to the Daylight server (GitHub › Settings › Secrets), then re-run the deploy, to turn this on.',
   'needs-domain': 'Needs an email domain. Add DAYLIGHT_EMAIL_DOMAIN (a domain on your Cloudflare account) in GitHub › Settings › Secrets, then re-run the deploy.',
   'needs-r2': 'Needs R2 storage on your Cloudflare account. Turn on R2 in the Cloudflare dashboard (it asks for a card; the free tier isn’t charged), then re-run the deploy.',
@@ -90,7 +90,9 @@ export const ERROR_MESSAGES = {
   STORAGE_FULL: () => 'The Daylight server’s storage is full. Try again once your Daylight has picked up waiting files.',
   GONE: () => 'That file has expired on the Daylight server. Send it again.',
   RATE_LIMITED: () => 'Too many requests. Try again in a minute.',
-  BAD_AUTH: () => 'The Daylight server doesn’t recognise this device’s pairing. Check DAYLIGHT_SERVER_CODE, then re-run the deploy.',
+  BAD_AUTH: () => 'The Daylight server doesn’t recognise this device’s pairing. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or check DAYLIGHT_SERVER_CODE.',
+  SETUP_USED: () => 'That setup link was already used for another pairing. Run the deploy with “New setup link” for a fresh one.',
+  SETUP_INVALID: () => 'That setup link isn’t current. Copy it again: the deploy’s summary in GitHub › Actions says where to find it.',
   SERVER_LIMIT: () => 'This was too big for the Daylight server on Cloudflare’s Free plan. It works on the Workers Paid plan.',
   NEEDS_KEY: () => STATE_MESSAGES['needs-key'],
   NOT_CONFIGURED: (x) => STATE_MESSAGES[notConfiguredState(x.missing)],
@@ -105,7 +107,7 @@ export const ERROR_CODES = [
   'GONE', 'LENGTH_REQUIRED', 'TOO_LARGE', 'AI_TOO_LARGE', 'UNSUPPORTED_TYPE', 'FEED_INVALID', 'URL_BLOCKED', 'AI_REFUSED',
   'AI_BAD_INPUT', 'LOCKED', 'RATE_LIMITED', 'AI_DAILY_LIMIT', 'AI_QUEUE_FULL', 'FEED_LIMIT', 'FETCH_FAILED',
   'AI_INCOMPLETE', 'AI_BUSY', 'AI_KEY_INVALID', 'AI_BILLING', 'AI_TIMEOUT', 'STORAGE_FULL', 'SERVER_LIMIT', 'BAD_EMAIL',
-  'FEED_FLOOD', 'SERVER_ERROR',
+  'FEED_FLOOD', 'SERVER_ERROR', 'SETUP_USED',
 ];
 
 /** The message for an error code (14.2); unknown codes get the generic sentence. */
@@ -203,7 +205,7 @@ export class ServerError extends Error {
     this.name = 'ServerError';
     this.code = code;
     this.status = extra.status ?? 0;
-    for (const k of ['feature', 'missing', 'retryAfter', 'limit', 'resetAt', 'missingParts', 'tokens', 'estimateUsd', 'needUsd']) {
+    for (const k of ['feature', 'missing', 'retryAfter', 'limit', 'resetAt', 'missingParts', 'tokens', 'estimateUsd', 'needUsd', 'reason']) {
       if (extra[k] !== undefined) this[k] = extra[k];
     }
   }
@@ -299,6 +301,70 @@ export async function serverItemId(seed, origin) {
 
 /** "3f9a1c2e" -> "3f9a-1c2e", as Lab settings and the deploy summary show it. */
 export const showFingerprint = (fp) => `${String(fp).slice(0, 4)}-${String(fp).slice(4, 8)}`;
+
+// ---------------------------------------------------------------------------------------------------------------
+// The setup link (3.5): the deploy's one-time link that lets one app give a new server its Server code
+
+const SETUP_PATH = '/setup';
+async function setupCheck(secret) { return (await sha256(concat(label('server-setup-check'), secret)))[0]; }
+
+function setupOrigin(server) {
+  const u = new URL(String(server));
+  const local = u.protocol === 'http:' && /^(localhost|127\.0\.0\.1)$/.test(u.hostname);
+  if ((u.protocol !== 'https:' && !local) || u.username || u.password) throw new ShareError('setup-link', 'A setup link starts with https://.', 'format');
+  return u.origin;
+}
+
+/**
+ * The deploy: the server's origin and a 16-byte random secret -> "https://<worker host>/setup#SETUP-XXXX-…-XXXX"
+ * (28 base32 characters of secret ‖ check, check = SHA-256("dlshare/v1/server-setup-check" ‖ 0x00 ‖ secret)[0]).
+ */
+export async function formatSetupLink(server, secret) {
+  if (!(secret instanceof Uint8Array) || secret.length !== 16) throw new ShareError('secret', 'secret must be 16 bytes');
+  const c = toBase32(concat(secret, Uint8Array.of(await setupCheck(secret))));
+  return `${setupOrigin(server)}${SETUP_PATH}#SETUP-${c.match(/.{1,4}/g).join('-')}`;
+}
+
+const SETUP_FORMAT = 'A setup link starts with https://daylight- and ends with #SETUP- and 28 letters and digits. Copy it again: the deploy’s summary in GitHub › Actions says where to find it.';
+
+/**
+ * A setup link -> {server (origin), secret (16 bytes)}. Throws ShareError('setup-link') with a user-facing message and
+ * a reason: 'format', 'checksum', 'server-code' (the Server code was pasted) or 'pairing-code'.
+ */
+export async function parseSetupLink(input) {
+  const s = String(input ?? '').trim();
+  const compact = s.toUpperCase().replace(/[\s\-_.]/g, '');
+  if (s.toLowerCase().startsWith(SERVER_SCHEME) || compact.startsWith('SERVER')) {
+    throw new ShareError('setup-link', 'That is the Server code. Paste the setup link here instead: it starts with https:// and ends with #SETUP-….', 'server-code');
+  }
+  if (s.toLowerCase().startsWith(PAIR_SCHEME)) throw new ShareError('setup-link', 'That is your pairing code. Paste the setup link here instead: it starts with https:// and ends with #SETUP-….', 'pairing-code');
+  let u;
+  try { u = new URL(s); } catch {
+    let isPairing = false;
+    try { await parseCode(s); isPairing = true; } catch { /* not a pairing code either */ }
+    if (isPairing) throw new ShareError('setup-link', 'That is your pairing code. Paste the setup link here instead: it starts with https:// and ends with #SETUP-….', 'pairing-code');
+    throw new ShareError('setup-link', SETUP_FORMAT, 'format');
+  }
+  let server;
+  try { server = setupOrigin(u.href); } catch { throw new ShareError('setup-link', SETUP_FORMAT, 'format'); }
+  if (u.search || (u.pathname !== SETUP_PATH && u.pathname !== `${SETUP_PATH}/`)) throw new ShareError('setup-link', SETUP_FORMAT, 'format');
+  let chars = decodeURIComponent(u.hash.slice(1)).toUpperCase().replace(/[\s\-_.]/g, '');
+  if (!chars.startsWith('SETUP')) throw new ShareError('setup-link', SETUP_FORMAT, 'format');
+  chars = chars.slice(5).replace(/0/g, 'O').replace(/1/g, 'I').replace(/8/g, 'B');
+  if (chars.length !== 28 || !/^[A-Z2-7]+$/.test(chars)) throw new ShareError('setup-link', SETUP_FORMAT, 'format');
+  const bytes = fromBase32(chars);
+  const secret = bytes.slice(0, 16);
+  if ((await setupCheck(secret)) !== bytes[16]) {
+    throw new ShareError('setup-link', 'That setup link doesn’t check out. Copy it again: the deploy’s summary in GitHub › Actions says where to find it.', 'checksum');
+  }
+  return { server, secret };
+}
+
+/** The setup link's bearer token for POST /v1/setup: hex(SHA-256("dlshare/v1/server-setup-auth" ‖ 0x00 ‖ secret)). */
+export async function deriveSetupToken(secret) {
+  if (!(secret instanceof Uint8Array) || secret.length !== 16) throw new ShareError('secret', 'secret must be 16 bytes');
+  return hexOf('server-setup-auth', secret);
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // Frames under the server's box key (3.2). Never through the protocol's sealFrame, which maps unknown purposes to the
@@ -718,6 +784,57 @@ export class DaylightServer {
     await this.storage.remove(KEY.pendingMove);
     await this.storage.remove(KEY.status);
     return true;
+  }
+
+  /**
+   * Lab settings › Daylight server › Set up with a link (3.5): sends this pairing's Server code to a newly deployed
+   * server with the deploy's one-time setup link, then pins the server's origin (the user gave it) and caches its
+   * config. The server announces itself on the config topic, so the other apps and the Daylight find it as usual.
+   * token: the pairing's ntfy access token, if any (it goes into the Server code link). -> {server, fingerprint,
+   * delivery}. Throws ServerError: BAD_REQUEST (not a setup link; `message` says why), SETUP_INVALID (an old or
+   * wrong link), SETUP_USED (used for another pairing), OFFLINE, or the server's own error.
+   */
+  async setup(link, { token } = {}) {
+    let parsed;
+    try { parsed = await parseSetupLink(link); } catch (e) {
+      throw new ServerError('BAD_REQUEST', { message: e?.message || SETUP_FORMAT, reason: e?.reason });
+    }
+    const values = await this.values();
+    let res;
+    try {
+      res = await this.fetch(`${parsed.server}/v1/setup`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${await deriveSetupToken(parsed.secret)}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: await this.serverCode({ token }) }),
+      });
+    } catch {
+      throw new ServerError('OFFLINE');
+    }
+    const text = await res.text().catch(() => '');
+    let data = null;
+    if (text.trim()) { try { data = JSON.parse(text); } catch { data = null; } }
+    const err = data && typeof data === 'object' ? data.error : null;
+    if (!res.ok || err) {
+      // 401 (a wrong or replaced link) and 404 (no server, or no setup pending there) both mean: not the current link.
+      if (res.status === 401 || res.status === 404) throw new ServerError('SETUP_INVALID', { status: res.status });
+      if (err && typeof err === 'object' && isServerCode(err.code)) {
+        const extra = { ...err, status: res.status };
+        if (typeof extra.message !== 'string') delete extra.message;
+        throw new ServerError(err.code, extra);
+      }
+      throw new ServerError('SERVER_ERROR', { status: res.status });
+    }
+    const config = checkConfig({ v: 1, kind: 'config', id: '', sent: new Date(this.now()).toISOString(), ...(data ?? {}) }, { now: this.now() });
+    if (!config || config.server !== parsed.server || config.fingerprint !== values.fingerprint) {
+      throw new ServerError('SERVER_ERROR', { status: res.status, message: 'The Daylight server answered for another pairing. Run the deploy with “New setup link” and try again.' });
+    }
+    if (config.api < SERVER_API_MIN) throw new ServerError('server-outdated', { message: localMessage('server-outdated') });
+    if (config.api > SERVER_API) throw new ServerError('app-outdated', { message: localMessage('app-outdated') });
+    await this.storage.set(KEY.config, config);
+    await this.storage.set(KEY.configAt, this.now());
+    await this.storage.set(KEY.pin, { origin: config.server, fingerprint: config.fingerprint });
+    for (const k of [KEY.pendingMove, KEY.status, KEY.statusAt, KEY.badAuthAt, KEY.manualUrl]) await this.storage.remove(k);
+    return { server: config.server, fingerprint: config.fingerprint, delivery: config.delivery };
   }
 
   /** Lab settings › Daylight server › Server address: validates with GET /v1/hello, then /v1/status. */

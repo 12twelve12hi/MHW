@@ -45,8 +45,8 @@ export function dropRatelimit(toml) {
  * account, including the Daylight server's own address that the apps pinned and hosted /f/ and /o/ links.
  * -> {subdomain, created}. `fetchFn` and `sleep` are injectable for tests.
  */
-export async function ensureSubdomain({ account, token, fetchFn = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), random, tries = 4 } = {}) {
-  const url = `${API}/accounts/${account}/workers/subdomain`;
+export async function ensureSubdomain({ account, token, fetchFn = fetch, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), random, tries = 4, api = API } = {}) {
+  const url = `${api}/accounts/${account}/workers/subdomain`;
   const headers = { Authorization: `Bearer ${token}` };
   let last = '';
   for (let attempt = 1; attempt <= tries; attempt++) {

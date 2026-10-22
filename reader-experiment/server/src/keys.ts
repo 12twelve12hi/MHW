@@ -1,5 +1,6 @@
-// The server's identity: the seed from DAYLIGHT_SERVER_CODE (or, for v1 delivery, from DAYLIGHT_PAIRING), the values
-// derived from it, and the delivery mode (DESIGN.md 3.1, 3.2, 5.1).
+// The server's identity: the seed from DAYLIGHT_SERVER_CODE (or, for v1 delivery, from DAYLIGHT_PAIRING; or, without the
+// secret, from the Server code an app sent with the setup link, kept in D1), the values derived from it, and the
+// delivery mode (DESIGN.md 3.1, 3.2, 3.5, 5.1).
 
 import { parsePairing, deriveKeys, encryptFrame, decryptFrame, normalizeRelay } from '../../share/js/daylight-share.js';
 import {
@@ -48,7 +49,7 @@ export function emailAddressFor(env: Env, values: Values): string | null {
   return `${name}@${domain}`;
 }
 
-async function build(env: Env): Promise<Identity> {
+async function build(env: Env, serverCode: string): Promise<Identity> {
   const wantsV1 = (env.DELIVERY ?? 'lab') === 'v1' && !!env.DAYLIGHT_PAIRING;
   let seed: Uint8Array;
   let relay: string;
@@ -60,17 +61,17 @@ async function build(env: Env): Promise<Identity> {
     seed = await deriveServerSeed(pairing.secret);
     relay = pairing.relay;
     pairingKeys = await deriveKeys(pairing.secret);
-    if (env.DAYLIGHT_SERVER_CODE) {
+    if (serverCode) {
       try {
-        const sc = await parseServerCode(env.DAYLIGHT_SERVER_CODE);
+        const sc = await parseServerCode(serverCode);
         if (sc.seed.some((b: number, i: number) => b !== seed[i])) warning = 'DAYLIGHT_PAIRING and DAYLIGHT_SERVER_CODE belong to different pairings';
         if (!relayToken && sc.token) relayToken = sc.token;
       } catch { warning = 'DAYLIGHT_SERVER_CODE does not parse'; }
     }
   } else {
-    if (!env.DAYLIGHT_SERVER_CODE) throw new ServerError(503, 'NOT_CONFIGURED', { missing: ['DAYLIGHT_SERVER_CODE'] });
+    if (!serverCode) throw new ServerError(503, 'NOT_CONFIGURED', { missing: ['DAYLIGHT_SERVER_CODE'] });
     let sc;
-    try { sc = await parseServerCode(env.DAYLIGHT_SERVER_CODE); } catch {
+    try { sc = await parseServerCode(serverCode); } catch {
       throw new ServerError(503, 'NOT_CONFIGURED', { missing: ['DAYLIGHT_SERVER_CODE'] });
     }
     seed = sc.seed;
@@ -101,12 +102,40 @@ async function build(env: Env): Promise<Identity> {
   };
 }
 
-/** The identity for this env, built once per isolate (and again when a secret changes). */
-export function identity(env: Env): Promise<Identity> {
-  const key = [env.DAYLIGHT_SERVER_CODE, env.DAYLIGHT_PAIRING, env.DELIVERY, env.DAYLIGHT_EMAIL_DOMAIN, env.DAYLIGHT_EMAIL_LOCAL,
+// The Server code kept in D1 by POST /v1/setup (3.5), read at most every 5 minutes per isolate (10 seconds while there
+// is none): it changes only from none to a code, and a new setup link comes with a new Worker.
+let stored: { at: number; code: string | null } | null = null;
+const STORED_TTL_MS = 300_000;
+const STORED_NONE_TTL_MS = 10_000;
+
+/** The Server code an app sent with the setup link, or null. A D1 failure is a 503, never "not configured". */
+export async function storedServerCode(env: Env, now = Date.now()): Promise<string | null> {
+  if (stored && now - stored.at < (stored.code ? STORED_TTL_MS : STORED_NONE_TTL_MS)) return stored.code;
+  let code: string | null;
+  try {
+    const row = await env.DB.prepare('SELECT code FROM setup WHERE id = 1').first<{ code: string | null }>();
+    code = typeof row?.code === 'string' && row.code ? row.code : null;
+  } catch {
+    throw new ServerError(503, 'SERVER_ERROR', { retryAfter: 30 });
+  }
+  stored = { at: now, code };
+  return code;
+}
+
+/** After POST /v1/setup stored a code in this isolate. */
+export function forgetStoredServerCode() { stored = null; }
+
+/**
+ * The identity for this env, built once per isolate (and again when a secret or the stored Server code changes). The
+ * secret DAYLIGHT_SERVER_CODE wins; v1 delivery derives the seed from DAYLIGHT_PAIRING; otherwise the code is D1's.
+ */
+export async function identity(env: Env): Promise<Identity> {
+  const wantsV1 = (env.DELIVERY ?? 'lab') === 'v1' && !!env.DAYLIGHT_PAIRING;
+  const serverCode = env.DAYLIGHT_SERVER_CODE || (wantsV1 ? '' : (await storedServerCode(env)) ?? '');
+  const key = [serverCode, env.DAYLIGHT_PAIRING, env.DELIVERY, env.DAYLIGHT_EMAIL_DOMAIN, env.DAYLIGHT_EMAIL_LOCAL,
     env.DAYLIGHT_EMAIL_SALT, env.NTFY_TOKEN, env.SERVER_URL].join('\u0001');
   if (!cache || cache.key !== key) {
-    const id = build(env);
+    const id = build(env, serverCode);
     cache = { key, id };
     id.catch(() => { if (cache?.id === id) cache = null; });
   }

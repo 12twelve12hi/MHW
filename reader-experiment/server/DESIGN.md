@@ -33,13 +33,21 @@ was done with it is in the Critique log at the end. The big changes:
 - **Email, feeds and AI are cut to a first release.** Email has an open policy plus a block list. Feeds have one digest
   time. AI has one endpoint and one user setting (7–9).
 
+**Revision 3 (Oct 22, 2026)** makes the first deploy one step and readies the server for Wave S:
+
+- **Two secrets are enough.** With only `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, the deploy creates
+  everything, smoke-tests the live Worker and makes a one-time **setup link**, kept in the user's Cloudflare account.
+  Pasted into one app, it lets that app give the server its Server code; every other device and the Daylight then
+  find the server as before (3.5). `DAYLIGHT_SERVER_CODE` stays as the alternative.
+- **Presence ends with `lab: 0`** (5.5, S0), and the AI cost guard reserves for a fallback attempt (9.3).
+
 ---
 
 ## 0. Decisions at a glance
 
 | Question | Decision |
 |---|---|
-| What the server knows | Repo secret **`DAYLIGHT_SERVER_CODE`**: a 16-byte seed derived one-way from the pairing secret, copied from Lab settings in the iPhone/Mac app. All of the server's keys, topics and tokens come from it. It cannot decrypt anything apps send to the Daylight (3.1). |
+| What the server knows | The **Server code**: a 16-byte seed derived one-way from the pairing secret. All of the server's keys, topics and tokens come from it. It cannot decrypt anything apps send to the Daylight (3.1). An app sends it once with the deploy's one-time **setup link** (3.5), or the user copies it from Lab settings into the repo secret **`DAYLIGHT_SERVER_CODE`**. |
 | Delivery of server-made items | **Lab delivery** (default): on the server's own item topic, under a seed-derived key, read by the DC-1 Lab Inbox. **v1 delivery** (opt-in, repo variable `DAYLIGHT_DELIVERY=v1` plus secret `DAYLIGHT_PAIRING`): on the inbox topic under the pairing key, read by any Inbox, with the honest warning that the server can then read everything sent to the Daylight (5.1). |
 | How apps authenticate | `Authorization: Bearer <authToken>`, a 64-hex token derived from the seed. It is compared in constant time before the body is read. No signatures, nonces or clock checks (3.3). |
 | How apps find the server | An encrypted **config frame** `{server, api, fingerprint, delivery, sent}` on the server's config topic. It is published at deploy (by the GitHub runner and by the Worker) and every 6 h. Apps pin the server's origin on first sight (TOFU). Feature states come from `GET /v1/status` (4). |
@@ -48,7 +56,7 @@ was done with it is in the Critique log at the end. The big changes:
 | Feeds | Stored in D1, checked hourly. Each feed is set to `each` (every new article as a `url` item) or `digest`. There is one daily digest at a chosen hour and time zone (8). |
 | AI | `POST /v1/ai` with `op`. `@anthropic-ai/sdk`, model `claude-opus-5-5`, `client.beta.messages.create` with `betas: ["server-side-fallback-2026-07-01"]`, `fallbacks: "default"`, explicit `output_config.effort`, structured outputs for JSON. PDFs are base64 `document` blocks spliced from validated R2 parts. Worst-case cost is reserved before each call, under deploy-time ceilings (9). |
 | Storage | **D1** for state and for the server's own item frames. **R2** (optional) for hosted large files, raw email and PDF sources. No KV (11). |
-| Deploy | GitHub Actions `rx-server.yml`: always test. Deploy when `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `DAYLIGHT_SERVER_CODE` (or, for v1 delivery, `DAYLIGHT_PAIRING`) exist. Secrets are given only to the steps that need them. New secrets apply when the user opens the latest run and chooses **Re-run all jobs** (12). |
+| Deploy | GitHub Actions `rx-server.yml`: always test. Deploy when `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` exist: D1, migrations, R2 when the account has it, the Worker, a smoke test of the live URL, and a setup link when there is no `DAYLIGHT_SERVER_CODE`. Secrets are given only to the steps that need them. New secrets apply when the user opens the latest run and chooses **Re-run all jobs**, or runs the workflow by hand (12). |
 | CPU budget | Large bodies stream; JavaScript never touches them. Each invocation has a D1-query and subrequest budget. One heavy step per Cron run, with attempt counting. A deploy-time CPU canary tells the user what needs Workers Paid (2). |
 
 ---
@@ -200,8 +208,10 @@ exactly the server's powers. It might come from the Cloudflare account, the API 
 Worker's secrets) or the deploy pipeline. It does not give the pairing key, so it cannot read what apps send to the
 Daylight.
 
-Why not a claim flow: a claim flow lets whoever claims an unclaimed Worker first own it. Gating the claim needs a
-secret anyway. It also needs the server URL in an app first, copied from an Actions log.
+Why not an open claim flow: it lets whoever claims an unclaimed Worker first own it. Gating the claim needs a secret,
+and the app needs the server URL first. Revision 3 adds exactly that, gated (3.5): the deploy's one-time setup link
+carries both the URL and a 128-bit secret, and lives in the user's Cloudflare account, never in an Actions log. The
+repo secret `DAYLIGHT_SERVER_CODE` remains the alternative.
 
 **v1 delivery (explicit opt-in).** The DC-1 Lab Inbox is last in LAB-DECISIONS' build order. Items the server makes
 under the Server code reach only a Lab Inbox. To deliver them to a v1 Inbox before then, the user can do both of these:
@@ -257,6 +267,13 @@ serverItemId(origin) = hex(SHA-256("dlshare/v1/server-item-id\0" ‖ seed ‖ 0x
 - `workerName` makes the Worker's address unguessable and rotates it with the pairing (12.7).
 - `DAYLIGHT_EMAIL_SALT` (optional) changes the email address without re-pairing (7.1).
 
+The setup link (3.5) has its own 16-byte random secret, made by the deploy, not derived from anything:
+
+```
+setupCheck    = SHA-256("dlshare/v1/server-setup-check\0" ‖ setupSecret)[0]          link: SETUP- + base32(setupSecret ‖ setupCheck)
+setupToken    = hex(SHA-256("dlshare/v1/server-setup-auth\0"  ‖ setupSecret))         Authorization: Bearer on POST /v1/setup
+```
+
 ### 3.3 Authentication
 
 Every endpoint except those in 10.3 needs `Authorization: Bearer <authToken>`.
@@ -286,16 +303,54 @@ derived, never typed, and rotates with the pairing.
 
 - **Re-pairing.** Before an app replaces a pairing while it knows a server, it sends `POST /v1/admin/lock` with the
   **old** token. This covers a new code scanned after "Reset pairing" on the Daylight. Whether the lock succeeds or
-  fails, the re-pair goes ahead. The app then shows: "Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run
-  the deploy."
+  fails, the re-pair goes ahead. The app then shows the `locked` text (14.1): re-run the deploy and paste its new setup
+  link, or copy the new Server code into DAYLIGHT_SERVER_CODE.
 - **Lock.** The server records `locked = {fingerprint, at}`. From then on every authenticated request gets
   `423 LOCKED`, hosted frames get `410`, and the Cron publishes and fetches nothing (cleanup still runs). A lock is
-  lifted only by deploying a different Server code. That deploys a new Worker under a new `workerName` and deletes the
-  old one (12.7). A lost phone holding the old token can lock the server, but nothing more, and the owner is
+  lifted only by a different Server code: a new `DAYLIGHT_SERVER_CODE`, or, without that secret, the next deploy,
+  which sees the lock, makes a new Worker name and a new setup link, and an app uses the link with the new pairing
+  (3.5). Either way a new Worker replaces the old one, which the deploy deletes (12.7). A lost phone holding the old token can lock the server, but nothing more, and the owner is
   re-pairing anyway.
 - **On the first run with a new fingerprint**, the Worker expires outbox rows, hosted files and AI sources made under
   the old one, because they are sealed for the old pairing. It keeps feeds, the digest time, the block list and
   usage.
+
+### 3.5 Setup without the Server code secret: the setup link
+
+LAB-DECISIONS asks for two secrets only: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. The Server code is
+derived from the pairing, which only the apps and the Daylight hold, so the deploy cannot make it. Instead the deploy
+makes a **setup link** that lets one app hand the server its Server code, once:
+
+1. **The deploy** (no `DAYLIGHT_SERVER_CODE`, no v1 delivery) keeps one row in the D1 table `setup` (11.1). The first
+   time, it picks a random Worker name `daylight-<12 hex>` and a random 16-byte setup secret, and stores the link
+   `https://<worker>.<subdomain>.workers.dev/setup#SETUP-XXXX-…-XXXX` (3.2). It uploads `setupToken` as the Worker
+   secret `DAYLIGHT_SETUP_TOKEN`. The link never appears in GitHub: the job summary says where to read it, from
+   Cloudflare's dashboard (D1 › `daylight-server` › Console: `SELECT link FROM setup;`) or with
+   `npx wrangler d1 execute daylight-server --remote --command "SELECT link FROM setup"`.
+2. **The user pastes the link into one app** (iPhone or Mac: Lab settings › Daylight server › Set up with a link).
+   `DaylightServer.setup(link)` sends `POST /v1/setup {"code": <its Server code>}` with `Authorization: Bearer
+   <setupToken>` to the link's origin.
+3. **The Worker** checks the token in constant time before reading the body (a wrong one is `401` and rate-limited,
+   3.3), checks that the setup row names this Worker, parses the code (a pairing code is refused, 3.1), and stores it
+   in the row: `code` set, `link` cleared. It then publishes the config frame at once and answers the config fields.
+   The same code again is answered as before (a retry); another pairing's code is `409 SETUP_USED`; a pairing that is
+   locked on this server is `423`.
+4. **The app** pins the origin it was given (the user gave it) and caches the config. Every other device and the Lab
+   Inbox derive the config topic from the pairing and find the server as usual (4.3).
+5. **From then on** the Worker reads its Server code from D1 when the secret is absent: once per isolate, cached for
+   5 minutes (10 seconds while there is none). The next deploy reads it too (for the announce, the smoke test with
+   the token and email routing), and deletes `DAYLIGHT_SETUP_TOKEN` from the Worker.
+
+**New links.** The deploy makes a new Worker name and link when there is no row, when the stored code's fingerprint is
+locked (a device re-paired, 3.4), or when the workflow is run by hand with **New setup link** (a link that leaked, or
+a re-pairing whose lock did not reach the server). The new Worker replaces the old one, which the deploy deletes, so
+the old link and the old address stop working. A link waiting to be used is kept from run to run.
+
+**Why this is safe.** The link is as secret as the Server code it unlocks and lives where the Server code lives
+already: in the user's Cloudflare account, which controls the Worker anyway (15.2). It works once: after use only the
+same code is accepted, and the next deploy removes the token. 128 bits of secret behind a constant-time compare and
+the per-IP failure limit cannot be guessed. The app never stores it. `DAYLIGHT_SERVER_CODE`, when set, always wins,
+and the link is then refused (`404`).
 
 ---
 
@@ -324,8 +379,9 @@ they come from `GET /v1/status` (10.5).
 
 ### 4.2 When it is published
 
-- **At deploy**, by the GitHub runner. It has `DAYLIGHT_SERVER_CODE`, and it reaches ntfy.sh from GitHub's
-  addresses, not Cloudflare's shared ones.
+- **At deploy**, by the GitHub runner, when it knows the Server code (the secret, or the one an app sent with the
+  setup link). It reaches ntfy.sh from GitHub's addresses, not Cloudflare's shared ones.
+- **When an app uses the setup link**, by the Worker, at once (3.5).
 - **At deploy and every 6 hours**, by the Worker (`POST /v1/admin/announce`, then the Cron run at 00:03, 06:03, 12:03
   and 18:03 UTC). ntfy.sh's 12-hour cache therefore always holds one. The announce call also polls the topic once and
   reports whether the frame is listed. That proves the Worker can reach the relay (12.4).
@@ -1231,6 +1287,8 @@ Access-Control-Max-Age: 86400
 | `GET /f/{fileId}/{i}` | A hosted file frame (6.5); `404` unknown (rate-limited), `410` expired or locked |
 | `GET /o/{token}/{i}` | A server item frame from D1 (5.2); same answers |
 | `GET /robots.txt` | `User-agent: *` / `Disallow: /` |
+| `GET /setup` | A static text page: what a setup link is for and where to paste it (3.5) |
+| `POST /v1/setup` | Not the Server code's token but the setup link's (3.5): `{"code"}` → `{server, api, fingerprint, delivery, published}`; `404` when no link waits for this Worker, `401` for a wrong token (rate-limited), `400`, `409 SETUP_USED`, `423` |
 | anything else | `404` (no lookup of any id) |
 
 ### 10.4 Errors
@@ -1263,9 +1321,10 @@ and `SERVER_ERROR` for any other status that is not 2xx, so no answer can pose a
 | 404 | `NOT_FOUND` | Unknown id or path |
 | 404 | `NEED_SOURCE` | AI source unknown or incomplete (`missingParts`) |
 | 409 | `NEEDS_KEY` | AI without `ANTHROPIC_API_KEY` |
-| 409 | `NOT_CONFIGURED` | A feature that needs setup (`missing`: `DAYLIGHT_EMAIL_DOMAIN`, `R2`). A Worker deployed without a valid `DAYLIGHT_SERVER_CODE` answers every authenticated route with `503` and `missing: ["DAYLIGHT_SERVER_CODE"]`. Apps read `missing` in this order: `DAYLIGHT_SERVER_CODE` → `needs-server`, `DAYLIGHT_EMAIL_DOMAIN` → `needs-domain`, `R2` → `needs-r2`, anything else → `needs-server` (`notConfiguredState`). |
+| 409 | `NOT_CONFIGURED` | A feature that needs setup (`missing`: `DAYLIGHT_EMAIL_DOMAIN`, `R2`). A Worker without a valid Server code (no `DAYLIGHT_SERVER_CODE`, and no app has used its setup link yet) answers every authenticated route with `503` and `missing: ["DAYLIGHT_SERVER_CODE"]`. Apps read `missing` in this order: `DAYLIGHT_SERVER_CODE` → `needs-server`, `DAYLIGHT_EMAIL_DOMAIN` → `needs-domain`, `R2` → `needs-r2`, anything else → `needs-server` (`notConfiguredState`). |
 | 409 | `NEEDS_LAB_INBOX` | Delivery to the Daylight before the Lab Inbox said hello (Lab delivery) |
 | 409 | `FEED_EXISTS` | Feed URL already added |
+| 409 | `SETUP_USED` | `POST /v1/setup`: another pairing already used this setup link (3.5) |
 | 410 | `GONE` | File or source expired |
 | 411 | `LENGTH_REQUIRED` | Body without `Content-Length` |
 | 413 | `TOO_LARGE` | Over a size cap (`limit`) |
@@ -1355,7 +1414,7 @@ All answer `409 NOT_CONFIGURED` without a domain or R2.
 
 ## 11. Storage
 
-### 11.1 D1 (`migrations/0001_init.sql`, `0002_bounded_reads.sql`)
+### 11.1 D1 (`migrations/0001_init.sql`, `0002_bounded_reads.sql`, `0003_setup.sql`)
 
 ```sql
 CREATE TABLE settings (k TEXT PRIMARY KEY, v TEXT NOT NULL);                 -- JSON values: digest, ai, lock, cursors, inbox
@@ -1409,6 +1468,11 @@ CREATE TABLE jobs (
   result TEXT, error TEXT, delivered TEXT, expires INTEGER NOT NULL);
 CREATE INDEX jobs_state ON jobs(state, created);
 CREATE TABLE log (t INTEGER NOT NULL, code TEXT NOT NULL);                    -- last 200 error codes, nothing else
+CREATE TABLE setup (                                                          -- 0003: the setup link (3.5), one row
+  id INTEGER PRIMARY KEY CHECK (id = 1), worker TEXT NOT NULL,                -- daylight-<12 hex>, random
+  link TEXT,                                                                  -- the waiting setup link; NULL once used
+  code TEXT,                                                                  -- the Server code an app sent with it
+  created INTEGER NOT NULL, claimed INTEGER);
 ```
 
 - **Claiming work.** Work items are claimed with a conditional update: `UPDATE … SET state='running', lease=?,
@@ -1450,16 +1514,18 @@ rules are the backstop. Server item frames live in D1 (11.1), so feeds, digests 
 | 1 | Create a Cloudflare account. | required, once |
 | 2 | Create an API token from the **"Edit Cloudflare Workers"** template and add **Account › D1 › Edit**. If you may ever want email-in, also add **Zone › Zone › Read**, **Zone › Email Routing Rules › Edit** and **Zone › DNS › Edit** for that domain's zone now, so the token never needs editing. Save it as the repo secret `CLOUDFLARE_API_TOKEN`. | required, once |
 | 3 | Copy the account ID (dashboard › Workers & Pages › right column) into `CLOUDFLARE_ACCOUNT_ID`. | required, once |
-| 4 | In the iPhone or Mac app: **Lab settings › Daylight server › Server code › Copy**, and paste it into `DAYLIGHT_SERVER_CODE`. | required; again after every re-pairing |
-| 5 | Optional: `ANTHROPIC_API_KEY` for AI. Make the key in a Console workspace with a monthly spend limit. | optional |
-| 6 | Optional: turn on **R2** in the Cloudflare dashboard (it asks for a card; the free tier is not charged). Needed for large files, email-in and PDF AI. | optional, once |
-| 7 | Optional: email-in needs a domain on Cloudflare and `DAYLIGHT_EMAIL_DOMAIN` (12.5). Workers Paid is recommended for it (2.2). | optional |
-| 8 | Recommended: in GitHub › Settings › Environments › `daylight-server` (created by the first run), limit deployment branches to `claude/sweet-goldberg-ej1nb0`, and move the secrets there. | recommended, once |
-| 9 | **Apply:** GitHub › Actions › "Reader experiment - Daylight server" › the latest run › **Re-run all jobs**. A re-run reads the current secrets. Pushing a change under `reader-experiment/server/` also deploys. ("Run workflow" appears only for workflows on the default branch, which this one is not.) | after every change of secrets or variables |
+| 4 | Optional: `ANTHROPIC_API_KEY` for AI. Make the key in a Console workspace with a monthly spend limit. Without it the AI features answer `NEEDS_KEY`. | optional |
+| 5 | Optional: turn on **R2** in the Cloudflare dashboard (it asks for a card; the free tier is not charged). Needed for large files, email-in and PDF AI. | optional, once |
+| 6 | **Deploy:** push a change under `reader-experiment/server/`, or open the latest "Reader experiment - Daylight server" run and choose **Re-run all jobs**, or run the workflow by hand. | after every change of secrets or variables |
+| 7 | **Set up:** the job summary says where to read the setup link (Cloudflare › D1 › `daylight-server` › Console: `SELECT link FROM setup;`). Paste it in the iPhone or Mac app: Lab settings › Daylight server › Set up with a link (3.5). Instead, an app without that button: copy Lab settings › Daylight server › Server code into the secret `DAYLIGHT_SERVER_CODE` and deploy again. | once; again after a re-pairing |
+| 8 | Optional: email-in needs a domain on Cloudflare and `DAYLIGHT_EMAIL_DOMAIN` (12.5). Workers Paid is recommended for it (2.2). | optional |
+| 9 | Recommended: in GitHub › Settings › Environments › `daylight-server` (created by the first run), limit deployment branches to `claude/sweet-goldberg-ej1nb0`, and move the secrets there. | recommended, once |
 
 The deploy checks the token first: it verifies the token, then reads Workers, D1 and (with a domain) the zone. A
 missing permission is named in plain words ("The API token can't edit D1 databases. Add Account › D1 › Edit to it.").
-The job summary always ends with **"Next: <the first missing step>"**.
+After deploying it smoke-tests the live Worker (12.4). The job summary always ends with **"Next: <the first thing
+still missing>"**. "Run workflow" appears in GitHub's Actions tab once the workflow is on the default branch; until
+then **Re-run all jobs**, or `gh workflow run rx-server.yml --ref claude/sweet-goldberg-ej1nb0`, runs it by hand.
 
 ### 12.1 Files in `reader-experiment/server/`
 
@@ -1468,13 +1534,15 @@ DESIGN.md                this file
 package.json             deps: @anthropic-ai/sdk 0.135.0, postal-mime 4.0.x; dev: wrangler 4.151.2,
                          miniflare (the version wrangler 4.151.2 depends on), typescript
 wrangler.toml
-migrations/0001_init.sql
+migrations/0001_init.sql, 0002_bounded_reads.sql, 0003_setup.sql
 src/index.ts             fetch / scheduled / email handlers and the router
-src/{auth,budget,config,outbox,files,email,feeds,feedparse,digest,ai,sources,safefetch,sanitize,html,errors}.ts
+src/{auth,budget,config,outbox,files,email,feeds,feedparse,digest,ai,claude,sources,safefetch,sanitize,html,errors}.ts
+src/setup.ts             POST /v1/setup and GET /setup (3.5)
 client/daylight-server.js  the app-side module (13)
-scripts/derive.mjs       CI helper: gate | email | announce <url>  (reads DAYLIGHT_SERVER_CODE / DAYLIGHT_PAIRING)
-scripts/cf-check.mjs     CI helper: token, permissions, R2 availability, rate-limit binding support
-scripts/secrets.mjs      CI helper: splits the optional secrets into put.json / delete.json
+scripts/derive.mjs       CI helper: gate | email <file> | announce <url> (the smoke test and the job summary)
+scripts/setup.mjs        CI helper: the Worker's name and address, and the setup link in D1 (3.5)
+scripts/cf-check.mjs     CI helper: token, permissions, R2 availability, rate-limit binding support, workers.dev
+scripts/secrets.mjs      CI helper: splits the Worker's secrets into put.json / delete.txt
 vectors/generate.mjs, vectors/server-vectors.json
 test/*.test.mjs, test/relay.mjs (share's mock relay plus `Attach:`), test/live/ntfy-attach.mjs
 ```
@@ -1534,13 +1602,16 @@ invocation_logs = false            # no request URLs or headers in Cloudflare's 
 |---|---|---|
 | `CLOUDFLARE_API_TOKEN` | Deploying at all | GitHub only |
 | `CLOUDFLARE_ACCOUNT_ID` | Deploying at all | GitHub only |
-| `DAYLIGHT_SERVER_CODE` | Everything (3.1); also carries the relay and ntfy token when not ntfy.sh | Worker secret |
-| `ANTHROPIC_API_KEY` | AI | Worker secret |
+| `DAYLIGHT_SERVER_CODE` | Optional: the alternative to the setup link (3.5). Carries the relay and ntfy token when not ntfy.sh. When set, it always wins | Worker secret |
+| `ANTHROPIC_API_KEY` | AI; without it the AI features answer `NEEDS_KEY` | Worker secret |
 | `DAYLIGHT_EMAIL_DOMAIN` | Email-in | Worker secret (+ routing rule) |
 | `DAYLIGHT_EMAIL_LOCAL` | Optional address that survives re-pairing (7.1) | Worker secret |
 | `DAYLIGHT_EMAIL_SALT` | Optional: change the address without re-pairing (7.1) | Worker secret |
 | `NTFY_TOKEN` | Optional ntfy access token, if not in the Server code link (5.3) | Worker secret |
 | `DAYLIGHT_PAIRING` | **Only** with the variable `DAYLIGHT_DELIVERY=v1` (3.1); otherwise never uploaded | Worker secret |
+
+The deploy manages one more Worker secret itself: `DAYLIGHT_SETUP_TOKEN`, the setup link's token, uploaded while a
+link waits and deleted once it is used or replaced (3.5). It is never a GitHub secret.
 
 | GitHub variable | Values |
 |---|---|
@@ -1554,256 +1625,45 @@ contain the test variable's name.
 
 ### 12.4 `.github/workflows/rx-server.yml`
 
-```yaml
-name: Reader experiment - Daylight server
+The workflow file is the reference; this is what it does. **Triggers:** a push to the branch that touches
+`reader-experiment/server/` (not only Markdown), `share/js/` or the workflow; **Re-run all jobs**; and
+`workflow_dispatch` with two inputs, **deploy** (default on; off only builds and tests) and **new setup link**
+(default off, 3.5). Never `pull_request`.
 
-# Tests the Daylight server (a Cloudflare Worker) on every push that touches it, and deploys it to the repo owner's
-# Cloudflare account when CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE exist.
-# To apply changed secrets or variables: open the latest run of this workflow and choose "Re-run all jobs".
-on:
-  push:
-    branches: [claude/sweet-goldberg-ej1nb0]
-    paths:
-      - 'reader-experiment/server/**'
-      - '!reader-experiment/server/**/*.md'
-      - 'reader-experiment/share/js/**'
-      - '.github/workflows/rx-server.yml'
-  workflow_dispatch:   # GitHub offers "Run workflow" only once this file is on the default branch
+**Job `test`** (always): `npm ci`, the type check, `npm test`, the vectors check (`npm run vectors` leaves no diff),
+and the bundle check (`wrangler deploy --dry-run`; under 3 MB gzipped; no test-only names). It also decides whether
+a push changed the server (a push that touches only `share/js/` is tested, not deployed).
 
-permissions:
-  contents: read
+**Job `deploy`**, in the Environment `daylight-server`, each step given only the secrets it needs:
 
-concurrency:
-  group: rx-server
-  cancel-in-progress: false
+| Step | What it does |
+|---|---|
+| No Cloudflare secrets | A notice and a summary naming `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; the job passes. |
+| Install | `npm ci`, with no secret in the environment. |
+| Check the secrets (`derive.mjs gate`) | Masks every form of any code first. A pairing code in `DAYLIGHT_SERVER_CODE` fails here. With a Server code (or v1 delivery): `mode=code` and the seed-derived Worker name; without: `mode=setup`. |
+| Token, permissions, R2 (`cf-check.mjs`) | Verifies the token and reads Workers, D1 and (with a domain) zones, naming a missing permission in plain words; `r2=on` when the account has R2 and the token can use it. |
+| D1 and migrations | Finds the database `daylight-server` or creates it, writes `wrangler.deploy.toml` with its id, and applies every migration (`wrangler d1 migrations apply --remote`; applied ones are skipped). |
+| Server code or setup link (`setup.mjs`) | The workers.dev subdomain (created only when the API says there is none). In setup mode, the D1 `setup` row (3.5): a new Worker name and link the first time, after a lock or on request; else the waiting link, or the Server code an app sent. Writes `WORKER_NAME` and `SERVER_URL`; hands the token or the code to later steps in `$RUNNER_TEMP` files (0600). |
+| R2 bucket | With R2: finds or creates the bucket and its lifecycle rules (14 days `f/`, 8 days `m/`, 1 day `a/`). A token that can't create it leaves R2 off with a warning instead of failing. |
+| Deploy config | The Worker name, the R2 binding when on, `cpu_ms = 60000` on Workers Paid. |
+| Deploy | `secrets.mjs` splits the Worker's secrets (GitHub's, plus `DAYLIGHT_SETUP_TOKEN` while a link waits) into the ones to upload and the ones to delete; `wrangler deploy --secrets-file` with `--var` for `SERVER_URL`, `GIT_SHA`, the plan, the delivery mode and the AI ceilings; without the rate-limit binding if the account refuses it; then deletes the secrets that are gone. |
+| Remove earlier Workers | Every `daylight-<12 hex>` Worker but this one (an earlier Server code or setup link). |
+| Email routing | With a domain and R2, once the Server code is known: the routing rule to this Worker. |
+| Smoke test and summary (`derive.mjs announce`) | Waits up to 5 minutes for `GET /v1/hello` (a new workers.dev address can take that long; if it never answers, a warning and "re-run in a few minutes"), then checks the CORS preflight, that `GET /v1/status` without a token and with a wrong one is refused (`401`, or `503 NOT_CONFIGURED` before setup), and that `POST /v1/setup` with a wrong token is refused. With a Server code it then publishes the config frame from the runner, calls `/v1/admin/announce` and the CPU canary, checks the token is accepted, and reads the feature states. It writes the job summary itself and fails the job when the live Worker fails a check. |
+| Remove the hand-over files | Always. |
 
-jobs:
-  test:
-    name: Build and test
-    runs-on: ubuntu-latest
-    outputs:
-      server_changed: ${{ steps.changes.outputs.server }}
-    defaults:
-      run:
-        working-directory: reader-experiment/server
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262      # v4.4.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020    # v4.4.0
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: reader-experiment/server/package-lock.json
-      - run: npm ci
-      - name: Type check
-        run: npx tsc --noEmit
-      - name: Tests (Miniflare, mock relay, mock Claude, D1 and subrequest counters)
-        run: npm test
-      - name: Bundle fits the Free plan (3 MB compressed) and carries no test hooks
-        run: |
-          npx wrangler deploy --dry-run --outdir .build
-          size=$(gzip -9c .build/index.js | wc -c); echo "Bundle: $size bytes gzipped"
-          test "$size" -lt 3000000
-          ! grep -q TEST_ANTHROPIC_BASE_URL .build/index.js
-      - name: Did this push change the server? (share/js-only pushes are tested, not deployed)
-        id: changes
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BEFORE: ${{ github.event.before }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" != push ] || [ -z "${BEFORE//0/}" ]; then echo server=true >> "$GITHUB_OUTPUT"; exit 0; fi
-          files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA" --jq '.files[].filename' || echo FAILED)
-          if echo "$files" | grep -v '\.md$' | grep -qE '^(FAILED$|reader-experiment/server/|\.github/workflows/rx-server\.yml$)'; then
-            echo server=true >> "$GITHUB_OUTPUT"; else echo server=false >> "$GITHUB_OUTPUT"; fi
+The summary before setup:
 
-  ntfy-attach:
-    name: ntfy.sh external attachments (informational, 6.4)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262      # v4.4.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020    # v4.4.0
-        with:
-          node-version: 22
-      - run: node reader-experiment/server/test/live/ntfy-attach.mjs >> "$GITHUB_STEP_SUMMARY"
-
-  deploy:
-    name: Deploy to Cloudflare
-    needs: test
-    # deploy on server changes, on "Re-run all jobs" and on a manual run; never on pull_request
-    if: needs.test.outputs.server_changed == 'true' || github.run_attempt > 1 || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    environment: daylight-server     # created on first use; protect it in Settings › Environments (12.0 step 8)
-    defaults:
-      run:
-        working-directory: reader-experiment/server
-    env:                             # no secrets at job level: each step gets only what it needs
-      WRANGLER_SEND_METRICS: 'false'
-      CF_API: https://api.cloudflare.com/client/v4
-      PLAN: ${{ vars.DAYLIGHT_WORKERS_PLAN || 'free' }}
-      DELIVERY: ${{ vars.DAYLIGHT_DELIVERY || 'lab' }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262      # v4.4.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020    # v4.4.0
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: reader-experiment/server/package-lock.json
-      - name: Install (no secret is in this step's environment)
-        run: npm ci
-
-      - name: Check the secrets
-        id: gate
-        env:
-          HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
-          HAS_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
-          DAYLIGHT_SERVER_CODE: ${{ secrets.DAYLIGHT_SERVER_CODE }}
-          DAYLIGHT_PAIRING: ${{ secrets.DAYLIGHT_PAIRING }}
-        # First prints ::add-mask:: for every form of the codes (raw, normalized, without dashes, the c= value) and
-        # every derived value (seed hex, authToken, topics, workerName); never echoes input, even on an error.
-        # Then validates (a pairing code in DAYLIGHT_SERVER_CODE fails; DAYLIGHT_PAIRING without DELIVERY=v1 warns).
-        # Missing secrets: a ::notice:: naming them and "then Re-run all jobs", ok=false, and the job still passes.
-        # Writes ok, fingerprint to $GITHUB_OUTPUT and WORKER_NAME to $GITHUB_ENV.
-        run: node scripts/derive.mjs gate
-
-      - name: Cloudflare token, permissions and R2
-        id: cf
-        if: steps.gate.outputs.ok == 'true'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          HAS_EMAIL: ${{ secrets.DAYLIGHT_EMAIL_DOMAIN != '' }}
-        run: node scripts/cf-check.mjs     # writes r2=on|off; fails naming a missing permission in plain words
-
-      - name: workers.dev address
-        if: steps.gate.outputs.ok == 'true'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        # Creates a subdomain only when the API says the account has none; any other error fails here (after retries)
-        # instead of renaming the account's existing workers.dev subdomain. Masks it and writes SERVER_URL.
-        run: node scripts/cf-check.mjs subdomain
-
-      - name: D1 database (create once), R2 bucket and deploy config
-        if: steps.gate.outputs.ok == 'true'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          R2: ${{ steps.cf.outputs.r2 }}
-        run: |
-          id=$(npx wrangler d1 list --json | jq -r '.[] | select(.name == "daylight-server") | .uuid')
-          if [ -z "$id" ]; then
-            npx wrangler d1 create daylight-server > /dev/null
-            id=$(npx wrangler d1 list --json | jq -r '.[] | select(.name == "daylight-server") | .uuid')
-          fi
-          sed -e "s/00000000-0000-0000-0000-000000000000/$id/" -e "s/^name = \"daylight-server\"/name = \"$WORKER_NAME\"/" \
-            wrangler.toml > wrangler.deploy.toml
-          if [ "$R2" = on ]; then
-            code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/daylight-server")
-            [ "$code" = 200 ] || npx wrangler r2 bucket create daylight-server
-            rules=$(npx wrangler r2 bucket lifecycle list daylight-server || true)
-            add() { echo "$rules" | grep -q "$1" || npx wrangler r2 bucket lifecycle add daylight-server "$1" "$2" --expire-days "$3" --force; }
-            add dls-files f/ 14; add dls-mail m/ 8; add dls-ai a/ 1
-            printf '\n[[r2_buckets]]\nbinding = "FILES"\nbucket_name = "daylight-server"\n' >> wrangler.deploy.toml
-          else
-            echo "::notice title=R2 is off::Large files, email-in and PDF AI need R2. Turn it on in the Cloudflare dashboard (R2; it asks for a card, the free tier isn't charged), then Re-run all jobs."
-          fi
-          if [ "$PLAN" = paid ]; then printf '\n[limits]\ncpu_ms = 60000\n' >> wrangler.deploy.toml; fi
-          npx wrangler d1 migrations apply daylight-server --remote -c wrangler.deploy.toml
-
-      - name: Deploy the Worker with its secrets
-        if: steps.gate.outputs.ok == 'true'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          DAYLIGHT_SERVER_CODE: ${{ secrets.DAYLIGHT_SERVER_CODE }}
-          DAYLIGHT_PAIRING: ${{ secrets.DAYLIGHT_PAIRING }}          # secrets.mjs uploads it only when DELIVERY=v1
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          DAYLIGHT_EMAIL_DOMAIN: ${{ secrets.DAYLIGHT_EMAIL_DOMAIN }}
-          DAYLIGHT_EMAIL_LOCAL: ${{ secrets.DAYLIGHT_EMAIL_LOCAL }}
-          DAYLIGHT_EMAIL_SALT: ${{ secrets.DAYLIGHT_EMAIL_SALT }}
-          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
-          AI_MAX_USD: ${{ vars.DAYLIGHT_AI_MAX_USD_DAY || '10' }}
-          AI_MAX_REQ: ${{ vars.DAYLIGHT_AI_MAX_REQ_DAY || '100' }}
-        run: |
-          umask 077
-          node scripts/secrets.mjs "$RUNNER_TEMP/put.json" "$RUNNER_TEMP/delete.json"
-          deploy() { npx wrangler deploy -c wrangler.deploy.toml --secrets-file "$RUNNER_TEMP/put.json" \
-            --var "SERVER_URL:$SERVER_URL" --var "GIT_SHA:${GITHUB_SHA::7}" --var "WORKERS_PLAN:$PLAN" \
-            --var "DELIVERY:$DELIVERY" --var "AI_MAX_USD_DAY:$AI_MAX_USD" --var "AI_MAX_REQ_DAY:$AI_MAX_REQ"; }
-          if ! deploy 2> "$RUNNER_TEMP/deploy.err"; then
-            grep -qi ratelimit "$RUNNER_TEMP/deploy.err" || { cat "$RUNNER_TEMP/deploy.err"; exit 1; }
-            echo "::warning::This account refused the rate-limiting binding; deploying without it (3.3)."
-            node scripts/cf-check.mjs drop-ratelimit wrangler.deploy.toml && deploy
-          fi
-          if [ "$(cat "$RUNNER_TEMP/delete.json")" != "{}" ]; then
-            npx wrangler secret bulk "$RUNNER_TEMP/delete.json" -c wrangler.deploy.toml
-          fi
-          rm -f "$RUNNER_TEMP/put.json" "$RUNNER_TEMP/delete.json" "$RUNNER_TEMP/deploy.err"
-
-      - name: Remove the Workers of earlier Server codes (12.7)
-        if: steps.gate.outputs.ok == 'true'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts" \
-            | jq -r '.result[].id' | grep -E '^daylight-[0-9a-f]{12}$' | grep -vx "$WORKER_NAME" \
-            | while read -r old; do echo "::add-mask::$old"; npx wrangler delete --name "$old" --force > /dev/null; done
-
-      - name: Email routing
-        if: steps.gate.outputs.ok == 'true' && steps.cf.outputs.r2 == 'on'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          DAYLIGHT_SERVER_CODE: ${{ secrets.DAYLIGHT_SERVER_CODE }}
-          DAYLIGHT_PAIRING: ${{ secrets.DAYLIGHT_PAIRING }}
-          DAYLIGHT_EMAIL_DOMAIN: ${{ secrets.DAYLIGHT_EMAIL_DOMAIN }}
-          DAYLIGHT_EMAIL_LOCAL: ${{ secrets.DAYLIGHT_EMAIL_LOCAL }}
-          DAYLIGHT_EMAIL_SALT: ${{ secrets.DAYLIGHT_EMAIL_SALT }}
-        run: |
-          [ -n "$DAYLIGHT_EMAIL_DOMAIN" ] || exit 0
-          addr=$(node scripts/derive.mjs email)          # masks the address itself before printing it
-          auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
-          d="$DAYLIGHT_EMAIL_DOMAIN"; zone=""            # the zone is the domain itself or its nearest parent on this account
-          while [ -z "$zone" ] && [ "${d#*.}" != "$d" ]; do
-            zone=$(curl -fsS -H "$auth" "$CF_API/zones?name=$d&account.id=$CLOUDFLARE_ACCOUNT_ID" | jq -r '.result[0].id // empty'); zname="$d"; d="${d#*.}"
-          done
-          [ -n "$zone" ] || { echo "::error::DAYLIGHT_EMAIL_DOMAIN is not a domain on this Cloudflare account."; exit 1; }
-          if [ "$zname" = "$DAYLIGHT_EMAIL_DOMAIN" ]; then
-            npx wrangler email routing enable "$zname" --zone-id "$zone" > /dev/null || echo "::warning::Turn on Email Routing for the domain in the Cloudflare dashboard (Email › Email Routing)."
-          else
-            echo "::notice::For a subdomain, add it once under Email › Email Routing › Settings › Subdomains in the Cloudflare dashboard."
-          fi
-          body=$(jq -n --arg a "$addr" --arg w "$WORKER_NAME" '{name: "daylight-server", enabled: true, priority: 0,
-            matchers: [{type: "literal", field: "to", value: $a}], actions: [{type: "worker", value: [$w]}]}')
-          rid=$(curl -fsS -H "$auth" "$CF_API/zones/$zone/email/routing/rules?per_page=50" | jq -r '.result[] | select(.name == "daylight-server") | .id' | head -1)
-          if [ -n "$rid" ]; then
-            curl -fsS -X PUT -H "$auth" -H 'Content-Type: application/json' --data "$body" "$CF_API/zones/$zone/email/routing/rules/$rid" > /dev/null
-          else
-            curl -fsS -X POST -H "$auth" -H 'Content-Type: application/json' --data "$body" "$CF_API/zones/$zone/email/routing/rules" > /dev/null
-          fi
-
-      - name: Announce, smoke test and CPU canary
-        if: steps.gate.outputs.ok == 'true'
-        env:
-          DAYLIGHT_SERVER_CODE: ${{ secrets.DAYLIGHT_SERVER_CODE }}
-          DAYLIGHT_PAIRING: ${{ secrets.DAYLIGHT_PAIRING }}
-        # Waits up to 5 min for /v1/hello (a new workers.dev subdomain can take minutes to resolve; on a first deploy a
-        # timeout is a warning, because the Cron run announces anyway). Publishes the config frame from the runner, then
-        # calls /v1/admin/announce (the Worker publishes and polls the config topic) and /v1/admin/selftest three times.
-        # The summary holds only the fingerprint, feature states and the next step, e.g.
-        #   "Daylight server is live. Server code fingerprint 3f9a-1c2e. Delivery: Lab. AI: ready. Email: needs
-        #    DAYLIGHT_EMAIL_DOMAIN. Feeds: ready. Large files: ready. Relay from the Worker: 200, listed. CPU canary: ok.
-        #    Next: add DAYLIGHT_EMAIL_DOMAIN for email-in (optional)."
-        run: node scripts/derive.mjs announce "$SERVER_URL" >> "$GITHUB_STEP_SUMMARY"
 ```
+### Daylight server is live: one step left
+Checks: hello ok · CORS ok · no token refused ok · wrong token refused ok · wrong setup token refused ok.
+Next: give the server your pairing, once. 1. Copy the setup link (… D1 › daylight-server › Console:
+SELECT link FROM setup; … or npx wrangler d1 execute …). 2. Paste it in the iPhone or Mac app: Lab settings ›
+Daylight server › Set up with a link. 3. Check: the next run says "Daylight server is live" with your fingerprint.
+```
+
+and after it: "Daylight server is live. Server code fingerprint 3f9a-1c2e … Checks: … Token accepted: yes. AI: ready.
+Email: needs DAYLIGHT_EMAIL_DOMAIN. Feeds: ready. Large files: ready. Lab Inbox: heard from. … Next: …".
 
 Public-repo hygiene (the repo is public, so Actions logs and summaries are world-readable):
 
@@ -1812,8 +1672,13 @@ Public-repo hygiene (the repo is public, so Actions logs and summaries are world
 - Every secret is given only to the steps that use it.
 - Actions are pinned by commit SHA, and `actions/checkout` does not keep the `GITHUB_TOKEN` in `.git/config`.
 - These are masked before they could be printed: the Server code and pairing code in every form, every derived value,
-  the workers.dev subdomain, the Worker name, the Worker URL and the email address.
-- Summaries never rely on masking: they contain only the fingerprint, the states and the next step.
+  the setup link, its secret and token, the workers.dev subdomain, the Worker name, the Worker URL and the email
+  address.
+- Workflow commands (`::add-mask::` first) are printed to stdout, which the runner reads; stdout is never redirected
+  into the summary or captured into a variable. The scripts write the summary, the email address and the hand-over
+  values to files instead (a test runs the scripts as the workflow does and checks this).
+- Summaries never rely on masking: they contain only the fingerprint, the checks, the states and the next step. The
+  setup link stays in D1; the summary says where to read it.
 
 ### 12.5 Adding an email domain later
 
@@ -1835,14 +1700,18 @@ processed on the next Cron runs.
 
 ### 12.7 After re-pairing
 
-1. The app that re-pairs locks the old server (3.4) and shows the new Server code with a Copy button.
-2. The user pastes it into `DAYLIGHT_SERVER_CODE` and re-runs the deploy.
-3. The deploy creates the Worker under the new `workerName` and deletes the old Worker. It points the email routing
-   rule at the new Worker and publishes the new config on the new config topic.
+1. The app that re-pairs locks the old server (3.4) and shows the `locked` text with the new Server code and Copy.
+2. **With a setup link** (no `DAYLIGHT_SERVER_CODE`): re-run the deploy. It sees the lock, makes a new Worker name and
+   a new setup link; paste the link in the app as the first time (3.5). If the lock did not reach the server (the app
+   was offline), run the workflow by hand with **New setup link**. **With the secret:** paste the new Server code into
+   `DAYLIGHT_SERVER_CODE` and re-run the deploy.
+3. The deploy creates the Worker under the new name and deletes the old Worker. It points the email routing rule at
+   the new Worker (with a setup link: on the run after the app used it) and the new Worker publishes the new config
+   on the new config topic.
 4. The apps find it there. They pin the new origin without asking, because they re-paired themselves: the pin is
    per fingerprint.
 5. D1 and R2 are kept. Feeds, the digest time, the block list and usage carry over. Data sealed for the old pairing is
-   expired (3.4).
+   expired, and the Lab Inbox says hello again on the new ack topic (3.4, 5.5).
 6. The email address changes unless `DAYLIGHT_EMAIL_LOCAL` is set (7.1).
 
 ---
@@ -1873,6 +1742,10 @@ export async function parseServerCode(input) {}
 /** -> {authToken, boxKey: CryptoKey, configTopic, itemTopic, ackTopic, emailToken, fingerprint, workerName} */
 export async function deriveServerValues(seed, { emailSalt = '' } = {}) {}
 export async function serverItemId(seed, origin) {}
+/** The setup link (3.5): the deploy formats it; the apps parse it and send setupToken with their Server code. */
+export async function formatSetupLink(server, secret) {}   // -> "https://<host>/setup#SETUP-XXXX-…"
+export async function parseSetupLink(input) {}             // -> {server, secret}; ShareError('setup-link'): format | checksum | server-code | pairing-code
+export async function deriveSetupToken(secret) {}
 
 /** Frames under boxKey with their own AADs ('config' | 'item' | 'ack'); never through share/js sealFrame (3.2). */
 export async function sealBox(values, aad, header, body = new Uint8Array(0), nonce) {}
@@ -1911,6 +1784,11 @@ export class DaylightServer {
   /** -> {config, source: 'relay' | 'manual' | 'cache'} or null; applies TOFU (4.3). */
   async discover({ force = false } = {}) {}
   async confirmMove() {}                 // accept a changed server origin after the user said yes
+  /** Lab settings › Daylight server › Set up with a link (3.5): POST /v1/setup with this pairing's Server code, then
+   *  pins the link's origin and caches the config. -> {server, fingerprint, delivery}. ServerError: BAD_REQUEST (not
+   *  a setup link: `message` and `reason` say why), SETUP_INVALID (401/404: an old or wrong link), SETUP_USED,
+   *  OFFLINE, LOCKED or the server's own error. */
+  async setup(link, { token } = {}) {}
   async setManualUrl(url) {}             // validates with GET /v1/hello, then /v1/status
   async clearManualUrl() {}
   /** From the cached config and status: 'ready' | 'needs-server' | 'pairing-mismatch' | 'server-outdated' |
@@ -1973,6 +1851,8 @@ With a page, send `text` extracted on the device, or else `url`.
   - the state (ready, or the message), the server's host and the fingerprint;
   - the delivery mode, with the v1 notice when it applies (14.3);
   - the **Server code** with Copy;
+  - **Set up with a link**: a field for the deploy's setup link (3.5), which calls `setup(link)` and shows its error
+    message on failure (iPhone and Mac first; any app can offer it);
   - the email address, AI usage today with the daily cap (editable up to the ceiling), and "Lab Inbox last seen";
   - the optional "Server address" field.
 - **Re-pairing** calls `lockBeforeRepair()` first. Afterwards the app shows the new Server code and the re-run
@@ -2017,6 +1897,8 @@ secret. It holds:
   of 41 characters, a message that is not a string), a second `BAD_AUTH` in one episode, status states that become
   `error` (the app's own states, Lab states, unknown states) and the states that stay ready (`RATE_LIMITED`,
   `AI_BUSY`, `AI_QUEUE_FULL`).
+- **`setupLinks`** (3.5): a setup secret, its link and token, and parsing cases (case, spaces, a trailing slash, a wrong
+  check, `http:`, a wrong path or query, a Server code or pairing code pasted instead) with the error reason.
 
 ---
 
@@ -2029,11 +1911,11 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
 
 | State | Decided by | Message |
 |---|---|---|
-| `needs-server` | app | Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on. |
-| `pairing-mismatch` | app | The Daylight server still has your previous pairing. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy. |
+| `needs-server` | app | Needs the Daylight server. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in GitHub › Settings › Secrets, then paste the setup link the deploy makes in Lab settings › Daylight server. |
+| `pairing-mismatch` | app | The Daylight server still has your previous pairing. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or copy the new Server code into DAYLIGHT_SERVER_CODE. |
 | `server-outdated` | app | Update the Daylight server to use this: open the latest "Reader experiment - Daylight server" run in GitHub › Actions and choose Re-run all jobs. |
 | `app-outdated` | app | Update this app to use the Daylight server. |
-| `locked` | server | The Daylight server was locked when this device was re-paired. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy. |
+| `locked` | server | The Daylight server was locked when this device was re-paired. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or copy the new Server code into DAYLIGHT_SERVER_CODE. |
 | `needs-key` | server | Needs a Claude API key. Add ANTHROPIC_API_KEY to the Daylight server (GitHub › Settings › Secrets), then re-run the deploy, to turn this on. |
 | `needs-domain` | server | Needs an email domain. Add DAYLIGHT_EMAIL_DOMAIN (a domain on your Cloudflare account) in GitHub › Settings › Secrets, then re-run the deploy. |
 | `needs-r2` | server | Needs R2 storage on your Cloudflare account. Turn on R2 in the Cloudflare dashboard (it asks for a card; the free tier isn't charged), then re-run the deploy. |
@@ -2069,7 +1951,9 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
 | `STORAGE_FULL` | The Daylight server's storage is full. Try again once your Daylight has picked up waiting files. |
 | `GONE` | That file has expired on the Daylight server. Send it again. |
 | `RATE_LIMITED` | Too many requests. Try again in a minute. |
-| `BAD_AUTH` | The Daylight server doesn't recognise this device's pairing. Check DAYLIGHT_SERVER_CODE, then re-run the deploy. |
+| `BAD_AUTH` | The Daylight server doesn't recognise this device's pairing. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or check DAYLIGHT_SERVER_CODE. |
+| `SETUP_USED` | That setup link was already used for another pairing. Run the deploy with "New setup link" for a fresh one. |
+| `SETUP_INVALID` (decided by `setup()` for a `401` or `404`) | That setup link isn't current. Copy it again: the deploy's summary in GitHub › Actions says where to find it. |
 | `SERVER_LIMIT` | This was too big for the Daylight server on Cloudflare's Free plan. It works on the Workers Paid plan. |
 | `NEEDS_KEY`, `NOT_CONFIGURED`, `NEEDS_LAB_INBOX`, `LOCKED` | The matching 14.1 message |
 | anything else | Something went wrong on the Daylight server ({code}). Try again later. |
@@ -2101,9 +1985,10 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
 | Threat | Mitigations |
 |---|---|
 | **A stranger finds or guesses the Worker URL** | The URL is not treated as a secret. It appears in `Attach:` URLs that the relay sees, and Workers are easy to enumerate. Every endpoint that reads or changes anything needs the bearer token. A wrong token is rejected after a constant-time compare, before the body is read or D1 is touched (3.3), and failures are rate-limited per IP. Unauthenticated routes are `hello` (no version), robots, and hosted frames behind 128-bit capability ids, which are ciphertext. There are no stub pages and no id lookups for unknown paths. The Worker name is derived from the seed and rotates with the pairing. Residual risk: a flood could use up the 100,000 requests a day and pause the server until 00:00 UTC. Nothing leaks. |
+| **A copy of the setup link** (it is in D1, and in the clipboard of the device it was pasted on) | Before use it lets one pairing claim the server, which is why it lives only in the user's Cloudflare account (never in GitHub's logs or summary) and is pasted, not stored, by the app. After use it is worth nothing: only the same Server code is accepted, the link is cleared from D1 and the next deploy deletes its token. The claim needs 128 bits behind a constant-time compare, failures are rate-limited per IP, and the body is not read before the token matches. A link that may have leaked before use is replaced by running the workflow with **New setup link**, which also moves the server to a new address (3.5). |
 | **A copy of the token or Server code** (lost phone, the web sender's storage, a Cloudflare compromise) | It gives the server's powers and no more. It cannot read what apps send to the Daylight under Lab delivery (3.1). Re-pairing locks the old server (3.4) and rotates every derived value. |
-| **Cloudflare account, API token or GitHub repo compromised** | **Lab delivery:** the attacker can deploy code that reads the Server code. That exposes the server-held plaintext (mail being processed, recent mail subjects, the feed list, AI inputs and results for 24 h), lets them forge server items (labelled "From your server" and still passed through the untrusted-input path) and spend within the AI ceilings. App shares and large files stay unreadable. **v1 delivery:** everything sent to the Daylight; the apps say so (14.3). |
-| **Deploy pipeline on a public repo** | 12.4: no secrets during `npm ci`, secrets per step, an Environment limited to the branch (recommended), actions pinned by SHA, no persisted credentials, every derived form masked before it could print, and summaries with no secret-derived values except the 32-bit fingerprint. |
+| **Cloudflare account, API token or GitHub repo compromised** | **Lab delivery:** the attacker can read the Server code (from the Worker's secret, or from D1 when it came with the setup link) or deploy code that reads it. That exposes the server-held plaintext (mail being processed, recent mail subjects, the feed list, AI inputs and results for 24 h), lets them forge server items (labelled "From your server" and still passed through the untrusted-input path) and spend within the AI ceilings. App shares and large files stay unreadable. **v1 delivery:** everything sent to the Daylight; the apps say so (14.3). |
+| **Deploy pipeline on a public repo** | 12.4: no secrets during `npm ci`, secrets per step, an Environment limited to the branch (recommended), actions pinned by SHA, no persisted credentials, every derived form masked before it could print, workflow commands never redirected into the summary, hand-over values in 0600 files, and summaries with no secret-derived values except the 32-bit fingerprint. The setup link is never in GitHub at all. |
 | **The relay (ntfy.sh), or anyone who knows a topic name** | It sees topic names, sizes, timing, the Worker's hostname and hosted file ids, never content. It cannot forge frames (AES-GCM). It can publish junk, including `Attach:` URLs pointing anywhere: the server and the apps ignore attachments on config and ack topics, cap poll answers at 256 KiB and 200 messages, and stop after 20 junk frames (4.3, 5.4). It can drop or delay messages; re-sends cover that. |
 | **Forged config frame** (by a holder of the pairing secret) | `sent` more than 5 minutes ahead is refused. The server origin is pinned on first sight, and a move needs the user's confirmation, with the new host shown (4.3). |
 | **JSON injection into the Claude request** | PDF parts containing `"` or `\` are refused at upload. Only parts flagged as validated are spliced, and on Paid they are re-scanned while splicing (9.2, 9.4). Tested with an injection payload. |
@@ -2133,6 +2018,8 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
   - linear time on 2 MiB of hostile input (unclosed tags, comments, DOCTYPE, PIs, CDATA) for every scanner;
   - the `From` parser (encoded-words, quoted names and comments never supply the address);
   - the deploy's workers.dev step creates a subdomain only on "none", never after a transient or auth error;
+  - the gate needs only the two Cloudflare secrets; the secrets split uploads the setup token from its file only;
+    the smoke test fails a live Worker that answers without the token or without CORS;
   - the DMARC header parser (spoofed extra `Authentication-Results`, `dmarc=none`);
   - every error code has a message.
 - **Worker integration**: Miniflare from the wrangler bundle built with `__TESTING__`, in-memory D1 and R2, and
@@ -2197,6 +2084,16 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
     without D1 room goes back to the queue without counting an attempt.
   - **Re-pairing** on the same D1: the old lock doesn't hold the new Server code, and the next Cron run publishes the
     new config.
+  - **Setup link and first deploy** (`e2e-setup.test.mjs`, the rehearsal of 3.5 and 12.4): with only the Cloudflare
+    secrets, the deploy's plan and setup row on the Worker's D1; the smoke test and the summary before setup (nothing
+    secret in either); a pasted Server code and an old link explained; the app's setup; a second device discovering the
+    server on the relay; the Lab Inbox's hello and presence; an AI summary sent to the Daylight reaching the lane,
+    acked and delivered; the next deploy reading the code, deleting the token and passing the full smoke test; a
+    lock and a requested link making a new Worker name. `POST /v1/setup`: no waiting link, a row for another
+    Worker, a wrong token (a 5 MB body is not read), a pairing code, a locked pairing, another pairing after use,
+    and the per-IP limit. The scripts run as the workflow runs them (`setup.mjs`, `secrets.mjs`, `derive.mjs
+    announce` in their own processes, against a stand-in for Cloudflare's API): outputs, 0600 files, masks, no
+    workflow command or secret in the summary, and a Worker that is not reachable yet.
 - **v1 safety**: hosted frames and server item frames through share/js's v1 `Receiver`. Hosted frames are received.
   Server items under Lab delivery are ignored: no item, no ack, no exception.
 - **Bundle**: under 3 MB gzipped, with no test variable names.

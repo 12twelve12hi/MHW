@@ -17,38 +17,60 @@ The full spec is [DESIGN.md](DESIGN.md). The app-side module is [client/daylight
 Until the Cloudflare secrets exist, GitHub Actions builds and tests the Worker on every push and the apps show its
 features with a one-line "Needs the Daylight server…" message when tapped.
 
-## Turning it on
+## Turn it on
 
-Everything below is done once in the browser. Nothing is typed into a terminal.
+Two GitHub secrets turn it on. Everything is done in the browser.
 
 | # | Where | What |
 |---|---|---|
 | 1 | [dash.cloudflare.com](https://dash.cloudflare.com) | Create a Cloudflare account (free). |
-| 2 | Cloudflare › My Profile › API Tokens › **Create Token** | Use the **Edit Cloudflare Workers** template. Under Permissions add **Account › D1 › Edit**. If you may want email-in later, also add **Zone › Zone › Read**, **Zone › Email Routing Rules › Edit** and **Zone › DNS › Edit** for that domain's zone now. Create it and copy the token. |
-| 3 | GitHub › this repo › Settings › Secrets and variables › Actions › **New repository secret** | `CLOUDFLARE_API_TOKEN` = the token from step 2. |
-| 4 | Cloudflare › Workers & Pages (the account ID is in the right-hand column) | Copy the **Account ID** into the secret `CLOUDFLARE_ACCOUNT_ID`. |
-| 5 | iPhone or Mac app › Lab settings › Daylight server › Server code › **Copy** | Paste it into the secret `DAYLIGHT_SERVER_CODE` (it starts with `SERVER-`, or `daylightserver://` when you use another relay). **Not** your pairing code: the deploy refuses a pairing code. Do this again after every re-pairing. |
-| 6 | (optional) [console.anthropic.com](https://console.anthropic.com) | Create an API key, ideally in a workspace with a monthly spend limit, and save it as the secret `ANTHROPIC_API_KEY`. |
-| 7 | (optional) Cloudflare › R2 | Turn on R2 (it asks for a card; the free tier is not charged). Needed for large files, email-in and PDF AI. |
-| 8 | (optional) GitHub › Settings › Secrets | `DAYLIGHT_EMAIL_DOMAIN` = a domain (or subdomain such as `read.example.com`) on your Cloudflare account, for email-in. For a subdomain, add it once under Cloudflare › Email › Email Routing › Settings › Subdomains. Workers Paid is recommended for email-in (see below). |
-| 9 | (recommended) GitHub › Settings › Environments › `daylight-server` (created by the first run) | Limit deployment branches to `claude/sweet-goldberg-ej1nb0` and move the secrets there. |
-| 10 | GitHub › Actions › **Reader experiment - Daylight server** › the latest run › **Re-run all jobs** | Applies the secrets. A re-run reads the current secrets; a push that changes `reader-experiment/server/` also deploys. ("Run workflow" appears only for workflows on the default branch.) |
+| 2 | Cloudflare › My Profile › API Tokens › **Create Token** | Use the **Edit Cloudflare Workers** template and add **Account › D1 › Edit**. For email-in later, also add **Zone › Zone › Read**, **Zone › Email Routing Rules › Edit** and **Zone › DNS › Edit** for that domain now. Copy the token. |
+| 3 | GitHub › this repo › Settings › Secrets and variables › Actions › **New repository secret** | `CLOUDFLARE_API_TOKEN` = the token, and `CLOUDFLARE_ACCOUNT_ID` = the Account ID (Cloudflare › Workers & Pages, right-hand column). |
+| 4 | (optional) [console.anthropic.com](https://console.anthropic.com) | An API key for AI, ideally in a workspace with a monthly spend limit, as the secret `ANTHROPIC_API_KEY`. Without it the AI features say they need it. |
+| 5 | GitHub › Actions › **Reader experiment - Daylight server** | Open the latest run and choose **Re-run all jobs** (or push a change under `reader-experiment/server/`, or **Run workflow** once this file is on the default branch). |
 
-The deploy job's summary ends with **"Next: …"**, the first thing still missing. It shows the Server code's
-fingerprint (e.g. `3f9a-1c2e`), which Lab settings also shows, so you can check the server has the current pairing.
+**What happens next.** The deploy job creates the D1 database, applies its migrations, uses R2 if your account has it,
+deploys the Worker, checks the live Worker (it answers, CORS works, requests without the right token are refused) and
+makes a one-time **setup link**. The job summary ends with **Next: …**:
+
+1. Read the setup link in Cloudflare: dashboard › Storage & Databases › D1 SQL Database › **daylight-server** ›
+   Console, run `SELECT link FROM setup;`. (Or, with Node.js: `npx wrangler d1 execute daylight-server --remote
+   --command "SELECT link FROM setup"`.) It is never shown in GitHub, whose logs are public.
+2. Paste it in the iPhone or Mac app: Lab settings › Daylight server › **Set up with a link**. The app gives the server
+   its Server code; your other devices and the Daylight then find the server by themselves.
+
+**Check it worked.** Run the workflow again (Re-run all jobs): its summary says **Daylight server is live** with your
+Server code's fingerprint (e.g. `3f9a-1c2e`), which Lab settings › Daylight server shows too, and the state of each
+feature. In the app, the server row says Ready.
+
+**No "Set up with a link" in your app yet?** Copy Lab settings › Daylight server › Server code into the secret
+`DAYLIGHT_SERVER_CODE` (it starts with `SERVER-`, or `daylightserver://` with another relay; **not** the pairing code,
+which the deploy refuses) and run the workflow again. When that secret is set it always wins.
+
+**After re-pairing** the app locks the old server; run the workflow again and paste the new setup link (if the summary
+still says the server is set up, run the workflow by hand with **New setup link**). With the secret, paste the new
+Server code into `DAYLIGHT_SERVER_CODE` instead.
+
+Recommended: GitHub › Settings › Environments › `daylight-server` (created by the first run): limit deployment
+branches to `claude/sweet-goldberg-ej1nb0` and move the secrets there.
 
 Optional settings:
 
 | GitHub secret or variable | What it does |
 |---|---|
+| `DAYLIGHT_EMAIL_DOMAIN` (secret) | A domain (or subdomain such as `read.example.com`) on your Cloudflare account, for email-in. For a subdomain, add it once under Cloudflare › Email › Email Routing › Settings › Subdomains. Needs R2; Workers Paid is recommended. |
 | `DAYLIGHT_EMAIL_LOCAL` (secret) | A fixed local part for the email address that survives re-pairing (at least 12 characters with a digit). |
 | `DAYLIGHT_EMAIL_SALT` (secret) | Change it to get a new email address without re-pairing (if the address leaked). |
 | `NTFY_TOKEN` (secret) | An ntfy access token, only useful with a paid ntfy.sh tier or a self-hosted relay that needs a login. |
 | `DAYLIGHT_WORKERS_PLAN` (variable) | `paid` after subscribing to Workers Paid (US$5/month): CPU limit 60 s, reliable email-in, larger digests. |
 | `DAYLIGHT_AI_MAX_USD_DAY`, `DAYLIGHT_AI_MAX_REQ_DAY` (variables) | Hard daily AI ceilings (default US$10 and 100 requests); the apps can only set lower caps. |
 | `DAYLIGHT_DELIVERY=v1` (variable) + `DAYLIGHT_PAIRING` (secret) | Opt-in: server-made items reach a v1 Daylight Inbox before the Lab Inbox exists. The server then holds your pairing code, so whoever controls your Cloudflare or GitHub account can read everything sent to this Daylight. Without the variable, `DAYLIGHT_PAIRING` is never uploaded. |
+| R2 (Cloudflare dashboard) | Turn it on (it asks for a card; the free tier is not charged) for large files, email-in and PDF AI. |
 
-After changing any of them: open the latest run and choose **Re-run all jobs**.
+After changing any of them: open the latest run and choose **Re-run all jobs**. A manual run (**Run workflow**, or
+`gh workflow run rx-server.yml --ref claude/sweet-goldberg-ej1nb0 -f new_setup_link=true`) has two boxes: **deploy**
+(off: only build and test) and **new setup link** (a link that may have leaked, or a re-pairing whose lock did not reach
+the server; the server moves to a new address).
 
 ## What the apps show
 
@@ -56,14 +78,14 @@ Every server feature is a normal, enabled control in Lab. Tapping one that is no
 
 | State | Message |
 |---|---|
-| needs-server | Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on. |
+| needs-server | Needs the Daylight server. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in GitHub › Settings › Secrets, then paste the setup link the deploy makes in Lab settings › Daylight server. |
 | needs-key | Needs a Claude API key. Add ANTHROPIC_API_KEY to the Daylight server (GitHub › Settings › Secrets), then re-run the deploy, to turn this on. |
 | needs-r2 | Needs R2 storage on your Cloudflare account. Turn on R2 in the Cloudflare dashboard (it asks for a card; the free tier isn't charged), then re-run the deploy. |
 | needs-domain | Needs an email domain. Add DAYLIGHT_EMAIL_DOMAIN (a domain on your Cloudflare account) in GitHub › Settings › Secrets, then re-run the deploy. |
 | needs-lab-inbox | Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on. |
 | needs-paid | Email-in needs Cloudflare's Workers Paid plan. Subscribe in the Cloudflare dashboard, set the variable DAYLIGHT_WORKERS_PLAN to paid in GitHub › Settings, then re-run the deploy. |
-| pairing-mismatch | The Daylight server still has your previous pairing. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy. |
-| locked | The Daylight server was locked when this device was re-paired. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy. |
+| pairing-mismatch | The Daylight server still has your previous pairing. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or copy the new Server code into DAYLIGHT_SERVER_CODE. |
+| locked | The Daylight server was locked when this device was re-paired. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or copy the new Server code into DAYLIGHT_SERVER_CODE. |
 
 "Re-run the deploy" means: in GitHub › Actions, open the latest "Reader experiment - Daylight server" run and choose
 Re-run all jobs. The first time a feature is used the app shows its notice (AI and email are not end-to-end
@@ -91,11 +113,13 @@ text for them. The full table is DESIGN.md section 14 and `ERROR_MESSAGES` in th
 ## HTTP API (summary)
 
 All authenticated routes take `Authorization: Bearer <authToken>` (derived from the Server code; apps derive it from the
-pairing). Apps find the server through an encrypted config frame on the server's config topic on the relay.
+pairing). Apps find the server through an encrypted config frame on the server's config topic on the relay; the first
+app is given it with the setup link (`DaylightServer.setup(link)`, DESIGN 3.5).
 
 | Route | Purpose |
 |---|---|
 | `GET /v1/hello` | `{"service": "daylight-server", "api": 1}` (unauthenticated) |
+| `POST /v1/setup`, `GET /setup` | The setup link: an app sends its Server code with the link's own token, once (DESIGN 3.5) |
 | `GET /f/<fileId>/<i>`, `GET /o/<token>/<i>` | Hosted frames for any Inbox (unauthenticated; ciphertext behind 128-bit capability ids) |
 | `GET /v1/status` | Config fields, feature states and messages, usage, storage, relay and CPU canary |
 | `GET`, `PATCH /v1/settings` | Daily AI cap (up to the ceiling), digest hour and time zone |
@@ -127,5 +151,8 @@ Test-only code is behind the build-time constant `__TESTING__`, which is `false`
 the bundle contains none of it.
 
 Layout: `src/` (the Worker), `client/` (the app module), `migrations/` (D1), `scripts/` (CI helpers: `derive.mjs`
-gate/email/announce, `cf-check.mjs`, `secrets.mjs`, `test.mjs`), `vectors/`, `test/` (with `test/live/ntfy-attach.mjs`,
-an informational probe of ntfy.sh's `Attach:` handling that runs on the GitHub runner).
+gate/email/announce with the smoke test, `setup.mjs` for the Worker's name, address and setup link, `cf-check.mjs`,
+`secrets.mjs`, `test.mjs`), `vectors/`, `test/` (with `test/live/ntfy-attach.mjs`, an informational probe of
+ntfy.sh's `Attach:` handling that runs on the GitHub runner). `test/e2e-setup.test.mjs` rehearses the first deploy:
+the scripts as the workflow runs them, the live Worker's checks, an app setting the server up, and a server-made item
+reaching the Lab Inbox's lane through the mock relay.

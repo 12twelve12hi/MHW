@@ -254,3 +254,19 @@ test('serverState › fromError › noteError: what it does to the cached status
     }
   }
 });
+
+test('setupLinks: the link format, its token and parsing (3.5)', async () => {
+  const L = V.setupLinks;
+  const secret = ds.fromHex(L.secretHex);
+  assert.equal(await srv.formatSetupLink(L.server, secret), L.link);
+  assert.equal(await srv.deriveSetupToken(secret), L.setupToken);
+  for (const c of L.parsing) {
+    if (c.error) {
+      await assert.rejects(srv.parseSetupLink(c.input), (e) => e.reason === c.error, JSON.stringify(c.input));
+    } else {
+      const r = await srv.parseSetupLink(c.input);
+      assert.equal(r.server, c.server);
+      assert.equal(ds.toHex(r.secret), c.secretHex);
+    }
+  }
+});

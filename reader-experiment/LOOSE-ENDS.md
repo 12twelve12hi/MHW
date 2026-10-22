@@ -26,8 +26,21 @@ the same secrets.
 
 ## Deploy the Daylight server (Cloudflare)
 
-`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, plus `ANTHROPIC_API_KEY` for the AI features. Optionally, a
-domain on Cloudflare for the email-in address. See `reader-experiment/server/README.md`.
+Two GitHub secrets (MHW › Settings › Secrets and variables › Actions) turn it on:
+
+| Secret | What it is |
+|---|---|
+| `CLOUDFLARE_API_TOKEN` | A Cloudflare API token from the "Edit Cloudflare Workers" template, plus Account › D1 › Edit |
+| `CLOUDFLARE_ACCOUNT_ID` | Your account ID (Cloudflare › Workers & Pages, right-hand column) |
+| `ANTHROPIC_API_KEY` (optional) | For the AI features; without it they say they need it |
+| `DAYLIGHT_EMAIL_DOMAIN` (optional) | A domain on Cloudflare for the email-in address (needs R2; Workers Paid recommended) |
+
+Then open the latest "Reader experiment - Daylight server" run in GitHub › Actions and choose Re-run all jobs. It
+creates the database, deploys the Worker, checks it, and its summary says where to read a one-time setup link in
+Cloudflare. Paste that link in the iPhone or Mac app (Lab settings › Daylight server › Set up with a link). Until the
+apps have that button, copy the app's Server code into the secret `DAYLIGHT_SERVER_CODE` instead. Turning on R2 in the
+Cloudflare dashboard (it asks for a card; the free tier isn't charged) adds large files, email-in and PDF AI. Details:
+`reader-experiment/server/README.md` › Turn it on.
 
 ## Turn on GitHub Pages for the web sender
 

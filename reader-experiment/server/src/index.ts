@@ -24,6 +24,7 @@ import { saveSettings } from './settings.ts';
 import { aiRequest, aiJobCreate, aiJobGet } from './ai.ts';
 import { putSourcePart } from './sources.ts';
 import { runCron } from './cron.ts';
+import { claimSetup, setupPage } from './setup.ts';
 import type { CronReport } from './cron.ts';
 import { SERVER_API } from '../client/daylight-server.js';
 
@@ -144,6 +145,9 @@ async function handle(ctx: Ctx, req: Request, env: Env, ectx: ExecutionContext):
     if (req.method === 'GET' && path === '/robots.txt') {
       return new Response('User-agent: *\nDisallow: /\n', { headers: baseHeaders(ctx.rid, { 'Content-Type': 'text/plain' }) });
     }
+    if (req.method === 'GET' && path === '/setup') return setupPage(ctx.rid);
+    // The setup link's own token, not the Server code's (3.5); it reads a body only after that token matches.
+    if (req.method === 'POST' && path === '/v1/setup') return await claimSetup(ctx, req);
     if (__TESTING__) {
       if (path.startsWith('/__test/')) return testRoute(ctx, req, path);
     }

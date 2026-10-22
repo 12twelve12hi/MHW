@@ -610,7 +610,7 @@
         },
         "expect": {
           "state": "locked",
-          "message": "The Daylight server was locked when this device was re-paired. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy."
+          "message": "The Daylight server was locked when this device was re-paired. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or copy the new Server code into DAYLIGHT_SERVER_CODE."
         }
       },
       {
@@ -958,7 +958,7 @@
           "features": {
             "ai": {
               "state": "needs-server",
-              "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on."
+              "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in GitHub › Settings › Secrets, then paste the setup link the deploy makes in Lab settings › Daylight server."
             },
             "pdf": {
               "state": "ready"
@@ -979,7 +979,7 @@
         },
         "expect": {
           "state": "error",
-          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on."
+          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in GitHub › Settings › Secrets, then paste the setup link the deploy makes in Lab settings › Daylight server."
         }
       },
       {
@@ -1675,7 +1675,7 @@
         },
         "expect": {
           "state": "needs-server",
-          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on."
+          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in GitHub › Settings › Secrets, then paste the setup link the deploy makes in Lab settings › Daylight server."
         },
         "noteError": {
           "cache": "dropped",
@@ -1688,7 +1688,7 @@
         "feature": "files",
         "response": {
           "status": 503,
-          "body": "{\"error\":{\"code\":\"NOT_CONFIGURED\",\"message\":\"Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on.\",\"missing\":[\"DAYLIGHT_SERVER_CODE\"]}}"
+          "body": "{\"error\":{\"code\":\"NOT_CONFIGURED\",\"message\":\"Needs the Daylight server. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in GitHub › Settings › Secrets, then paste the setup link the deploy makes in Lab settings › Daylight server.\",\"missing\":[\"DAYLIGHT_SERVER_CODE\"]}}"
         },
         "error": {
           "code": "NOT_CONFIGURED",
@@ -1699,7 +1699,7 @@
         },
         "expect": {
           "state": "needs-server",
-          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on."
+          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in GitHub › Settings › Secrets, then paste the setup link the deploy makes in Lab settings › Daylight server."
         },
         "noteError": {
           "cache": "dropped",
@@ -1721,7 +1721,7 @@
         },
         "expect": {
           "state": "needs-server",
-          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on."
+          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in GitHub › Settings › Secrets, then paste the setup link the deploy makes in Lab settings › Daylight server."
         },
         "noteError": {
           "cache": "dropped",
@@ -1743,7 +1743,7 @@
         },
         "expect": {
           "state": "needs-server",
-          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on."
+          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in GitHub › Settings › Secrets, then paste the setup link the deploy makes in Lab settings › Daylight server."
         },
         "noteError": {
           "cache": "dropped",
@@ -1799,7 +1799,7 @@
         "feature": "ai",
         "response": {
           "status": 423,
-          "body": "{\"error\":{\"code\":\"LOCKED\",\"message\":\"The Daylight server was locked when this device was re-paired. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy.\"}}"
+          "body": "{\"error\":{\"code\":\"LOCKED\",\"message\":\"The Daylight server was locked when this device was re-paired. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or copy the new Server code into DAYLIGHT_SERVER_CODE.\"}}"
         },
         "error": {
           "code": "LOCKED",
@@ -1807,7 +1807,7 @@
         },
         "expect": {
           "state": "locked",
-          "message": "The Daylight server was locked when this device was re-paired. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy."
+          "message": "The Daylight server was locked when this device was re-paired. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or copy the new Server code into DAYLIGHT_SERVER_CODE."
         },
         "noteError": {
           "cache": "dropped",
@@ -1828,7 +1828,7 @@
         },
         "expect": {
           "state": "error",
-          "message": "The Daylight server doesn’t recognise this device’s pairing. Check DAYLIGHT_SERVER_CODE, then re-run the deploy."
+          "message": "The Daylight server doesn’t recognise this device’s pairing. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or check DAYLIGHT_SERVER_CODE."
         },
         "noteError": {
           "cache": "dropped",
@@ -1849,7 +1849,7 @@
         },
         "expect": {
           "state": "error",
-          "message": "The Daylight server doesn’t recognise this device’s pairing. Check DAYLIGHT_SERVER_CODE, then re-run the deploy."
+          "message": "The Daylight server doesn’t recognise this device’s pairing. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or check DAYLIGHT_SERVER_CODE."
         },
         "noteError": {
           "cache": "dropped",
@@ -1873,7 +1873,7 @@
         },
         "expect": {
           "state": "error",
-          "message": "The Daylight server doesn’t recognise this device’s pairing. Check DAYLIGHT_SERVER_CODE, then re-run the deploy."
+          "message": "The Daylight server doesn’t recognise this device’s pairing. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or check DAYLIGHT_SERVER_CODE."
         },
         "noteError": {
           "cache": "dropped",
@@ -2128,7 +2128,7 @@
         },
         "expect": {
           "state": "error",
-          "message": "The Daylight server doesn’t recognise this device’s pairing. Check DAYLIGHT_SERVER_CODE, then re-run the deploy."
+          "message": "The Daylight server doesn’t recognise this device’s pairing. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or check DAYLIGHT_SERVER_CODE."
         },
         "noteError": {
           "cache": "dropped",
@@ -2273,7 +2273,7 @@
         },
         "expect": {
           "state": "needs-server",
-          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE (Lab settings › Daylight server › Server code) in GitHub › Settings › Secrets to turn this on."
+          "message": "Needs the Daylight server. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in GitHub › Settings › Secrets, then paste the setup link the deploy makes in Lab settings › Daylight server."
         },
         "noteError": {
           "cache": "kept"
@@ -2289,7 +2289,7 @@
         },
         "expect": {
           "state": "pairing-mismatch",
-          "message": "The Daylight server still has your previous pairing. Copy the new Server code into DAYLIGHT_SERVER_CODE, then re-run the deploy."
+          "message": "The Daylight server still has your previous pairing. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or copy the new Server code into DAYLIGHT_SERVER_CODE."
         },
         "noteError": {
           "cache": "kept"
@@ -2326,6 +2326,71 @@
         "noteError": {
           "cache": "kept"
         }
+      }
+    ]
+  },
+  "setupLinks": {
+    "note": "formatSetupLink(server, secret) = server origin + \"/setup#SETUP-\" + base32(secret ‖ check) in groups of 4, check = SHA-256(\"dlshare/v1/server-setup-check\" ‖ 0x00 ‖ secret)[0]. setupToken = hex(SHA-256(\"dlshare/v1/server-setup-auth\" ‖ 0x00 ‖ secret)), sent as Authorization: Bearer on POST /v1/setup with {\"code\": <the Server code>}. parseSetupLink ignores case, spaces, dashes, dots and underscores in the fragment and reads 0, 1 and 8 as O, I and B; error reasons: format, checksum, server-code, pairing-code.",
+    "secretHex": "4c66abcb15285b10c92f01928ca07290",
+    "server": "https://daylight-0123456789ab.example.workers.dev",
+    "link": "https://daylight-0123456789ab.example.workers.dev/setup#SETUP-JRTK-XSYV-FBNR-BSJP-AGJI-ZIDS-SD2A",
+    "setupToken": "3b34d8a7da87699bb99d10bc238f117ee33a7ab68cd506fb83373b25aad0f385",
+    "parsing": [
+      {
+        "input": "https://daylight-0123456789ab.example.workers.dev/setup#SETUP-JRTK-XSYV-FBNR-BSJP-AGJI-ZIDS-SD2A",
+        "server": "https://daylight-0123456789ab.example.workers.dev",
+        "secretHex": "4c66abcb15285b10c92f01928ca07290"
+      },
+      {
+        "input": "HTTPS://DAYLIGHT-0123456789ab.example.workers.dev/setup#SETUP-JRTK-XSYV-FBNR-BSJP-AGJI-ZIDS-SD2A",
+        "server": "https://daylight-0123456789ab.example.workers.dev",
+        "secretHex": "4c66abcb15285b10c92f01928ca07290"
+      },
+      {
+        "input": "https://daylight-0123456789ab.example.workers.dev/setup/#setup jrtk xsyv fbnr bsjp agji zids sd2a",
+        "server": "https://daylight-0123456789ab.example.workers.dev",
+        "secretHex": "4c66abcb15285b10c92f01928ca07290"
+      },
+      {
+        "input": "  https://daylight-0123456789ab.example.workers.dev/setup#SETUP-JRTK-XSYV-FBNR-BSJP-AGJI-ZIDS-SD2A\n",
+        "server": "https://daylight-0123456789ab.example.workers.dev",
+        "secretHex": "4c66abcb15285b10c92f01928ca07290"
+      },
+      {
+        "input": "https://daylight-0123456789ab.example.workers.dev/setup#SETUP-ARTK-XSYV-FBNR-BSJP-AGJI-ZIDS-SD2A",
+        "error": "checksum"
+      },
+      {
+        "input": "http://daylight-0123456789ab.example.workers.dev/setup#SETUP-JRTK-XSYV-FBNR-BSJP-AGJI-ZIDS-SD2A",
+        "error": "format"
+      },
+      {
+        "input": "https://daylight-0123456789ab.example.workers.dev/other#SETUP-JRTK-XSYV-FBNR-BSJP-AGJI-ZIDS-SD2A",
+        "error": "format"
+      },
+      {
+        "input": "https://daylight-0123456789ab.example.workers.dev/setup?x=1#SETUP-JRTK-XSYV-FBNR-BSJP-AGJI-ZIDS-SD2A",
+        "error": "format"
+      },
+      {
+        "input": "https://daylight-0123456789ab.example.workers.dev/setup#SETUP-ABCD",
+        "error": "format"
+      },
+      {
+        "input": "https://daylight-0123456789ab.example.workers.dev/setup",
+        "error": "format"
+      },
+      {
+        "input": "SERVER-UAP3-JDN6-YUOR-CUH7-GGOC-J35A-SRYA",
+        "error": "server-code"
+      },
+      {
+        "input": "E4AY-56TM-ADQP-5QSN-MY7B-CGPZ-UFRA",
+        "error": "pairing-code"
+      },
+      {
+        "input": "hello",
+        "error": "format"
       }
     ]
   }

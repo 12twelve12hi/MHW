@@ -183,7 +183,8 @@ test('every error code has a message; states and notices name what is missing', 
   assert.match(srv.errorMessage('AI_TOO_LARGE', { tokens: 250000, limit: 200000 }), /250,000.*200,000/);
   assert.match(srv.errorMessage('WHATEVER'), /Something went wrong on the Daylight server \(WHATEVER\)/);
   for (const s of ['needs-server', 'pairing-mismatch', 'server-outdated', 'app-outdated', 'OFFLINE']) assert.ok(srv.localMessage(s));
-  assert.match(srv.localMessage('needs-server'), /CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and DAYLIGHT_SERVER_CODE/);
+  assert.match(srv.localMessage('needs-server'), /Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID .*paste the setup link/);
+  for (const s of ['pairing-mismatch', 'locked']) assert.match(srv.localMessage(s), /new setup link.*DAYLIGHT_SERVER_CODE/, s);
   assert.match(srv.noticeText('ai'), /Not end-to-end encrypted.*stay end-to-end encrypted/);
   assert.doesNotMatch(srv.noticeText('ai', { delivery: 'v1' }), /stay end-to-end encrypted/);
   assert.match(srv.noticeText('v1'), /holds your pairing code/);
