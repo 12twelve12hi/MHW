@@ -196,6 +196,17 @@ enum LabUI {
         return AXTree.text(field.value)
     }
 
+    /// Taps a row of What's in Lab near the top of the part of it that shows (below the navigation bar, 20 pt in): a
+    /// tall row at large text sizes can have its middle in the home indicator's strip, where a tap goes to the system.
+    @MainActor
+    static func tapRow(_ row: XCUIElement, in app: XCUIApplication) {
+        let f = row.frame
+        let bar = app.navigationBars[string("whatsInLab")]
+        let top = max(f.minY, bar.exists ? bar.frame.maxY : f.minY)
+        let y = min(top + 20, f.midY)
+        row.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.width / 2, dy: y - f.minY)).tap()
+    }
+
     /// Scrolls (a drag by the left margin, held still before letting go) until `element` can be hit, at most `steps`
     /// times. -> whether it can.
     @MainActor @discardableResult

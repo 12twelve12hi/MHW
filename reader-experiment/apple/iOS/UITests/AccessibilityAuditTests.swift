@@ -78,6 +78,9 @@ final class AccessibilityAuditTests: XCTestCase {
             let app = UITestSupport.launch(paired: true, history: true, rows: rows)
             XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 30), "Home did not show")
             XCTAssertTrue(UITestSupport.waitForHistory(app), "the sample history did not show")
+            // Let the list settle (its rows come in after the launch's pairing): a row's sentence, in the primary
+            // colour, "failed" the contrast audit now and then right after it appeared (runs 39840740946, 39855307203).
+            Thread.sleep(forTimeInterval: 2)
             UITestSupport.screenshot(app, "ios-\(name)", in: self)
             try UITestSupport.auditHere(app, name, types: Self.withoutDynamicType, allowed: Self.allowed(on: "home"))
             app.terminate()

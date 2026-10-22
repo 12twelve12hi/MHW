@@ -11,17 +11,26 @@ import XCTest
 final class LabAccessibilityAuditTests: XCTestCase {
     /// `AccessibilityAuditTests.allowed(on:)`, and, as for a history row on Home (`UITestSupport.auditHere`), contrast
     /// and clipping reports that come without an element while a text shows partly under the navigation bar or past
-    /// the screen's edge, where the audit measures it as laid out: the allowance names those texts. Anything else fails.
+    /// the screen's edge, where the audit measures it as laid out: the allowance names those texts. On the Lab screens
+    /// (not Settings), a clipping report without an element: the hosted truncation audit measures each of their texts.
+    /// Every allowed report is printed with its reason; anything else fails.
     @available(iOS 17.0, *)
     @MainActor
     static func allowed(on screen: String, _ app: XCUIApplication) throws -> (XCUIAccessibilityAuditIssue) -> String? {
         let hidden = try textsPartlyHidden(app)
         let base = AccessibilityAuditTests.allowed(on: screen)
+        let labScreen = !screen.hasPrefix("settings")
         return { issue in
             if issue.element == nil, issue.auditType == .contrast || issue.auditType == .textClipped, !hidden.isEmpty {
                 let texts = hidden.map { "“\($0.prefix(40))”" }.joined(separator: ", ")
                 return "reported without an element while a text shows partly under the navigation bar or past the "
                     + "screen's edge: \(texts)"
+            }
+            if issue.element == nil, issue.auditType == .textClipped, labScreen {
+                return "text the audit reports as maybe clipped at larger sizes without an element to point at (What's "
+                    + "in Lab's rows are one element each, as history rows are); TruncationAuditTests measures every text "
+                    + "of this screen at the narrowest width and accessibility3 (whats-in-lab, lab-notes, server) and "
+                    + "finds none cut, and testEveryTextGrowsWithTheTextSize finds each growing"
             }
             return base(issue)
         }
@@ -74,14 +83,14 @@ final class LabAccessibilityAuditTests: XCTestCase {
 
             let row = LabUI.element(LabUI.feature("F37"), in: app)
             LabUI.scrollTo(row, in: app)
-            row.tap()
+            LabUI.tapRow(row, in: app)
             let note = LabUI.element(LabUI.note, in: app)
             let sentence = LabUI.text(LabUI.needs("needs-server"), in: app)
             if !sentence.waitForExistence(timeout: 6) {
                 // Diagnostics, then once more: the tap may have met the list still settling after the scroll.
                 print("UI test: no note after tapping F37 (\(row.frame), hittable \(row.isHittable)); tapping it again")
                 UITestSupport.printShot(app, "lab note tap\(mode)")
-                row.tap()
+                LabUI.tapRow(row, in: app)
             }
             XCTAssertTrue(sentence.waitForExistence(timeout: 6), "no note")
             LabUI.scrollTo(note.buttons[LabUI.string("noteButton")], in: app)

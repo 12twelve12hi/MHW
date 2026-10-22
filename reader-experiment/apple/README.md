@@ -509,8 +509,9 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     or past the screen's edge (a row's words are one element, so the audit cannot point at the text; the allowance
     names the texts, `UITestSupport.auditHere`), a navigation-bar
     button's capped text size, and Dynamic
-    Type reports on exactly the texts `iOS/UITests/DynamicTypeWaivers.swift` names for the screen (today *Nothing
-    sent yet.* on the empty Home and the device name's footer in Settings, which the audit loses at the largest size). That
+    Type reports on exactly the texts (and buttons, by their words) `iOS/UITests/DynamicTypeWaivers.swift` names for the
+    screen (today *Nothing sent yet.* on the empty Home; in Settings, which now starts with the Lab section, the device
+    name's footer, *Unpair* and the *ABOUT* header: what the audit loses at the largest size). That
     file is compiled into the unit tests too, and `testEveryTextGrowsWithTheTextSize` fails unless it measures each
     named text growing with the text size; any other Dynamic Type report fails the audit. The Comfort run leaves
     Dynamic Type out on purpose: Comfort holds text between xxLarge and accessibility3 (the F27 table). What the
