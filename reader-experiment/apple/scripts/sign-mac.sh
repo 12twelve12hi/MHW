@@ -186,7 +186,7 @@ with open(sys.argv[1], 'rb') as a, open(sys.argv[2], 'rb') as b:
 PY
 }
 check() {  # <bundle> <the entitlements it was signed with> <name>
-  local info
+  local info problem
   local embedded="$WORK/$3.embedded.plist"
   codesign --verify --strict --verbose=2 "$1"
   info=$(codesign -dvvv "$1" 2>&1)
@@ -201,15 +201,21 @@ check() {  # <bundle> <the entitlements it was signed with> <name>
   codesign -d --entitlements - --xml "$1" > "$embedded" 2>/dev/null || fail "$3: could not read its entitlements"
   echo "  $3: entitlements $(plutil -convert json -o - "$embedded")"
   same_plist "$2" "$embedded" || fail "$3: the embedded entitlements are not the ones it was signed with"
-  [ "$(plutil -extract com.apple.security.app-sandbox raw "$embedded" 2>/dev/null)" = true ] || fail "$3 is not sandboxed"
-  [ "$(plutil -extract com.apple.security.application-groups.0 raw "$embedded" 2>/dev/null)" = "$GROUP" ] \
-    || fail "$3 is not entitled to the App Group $GROUP"
-  if plutil -extract com.apple.security.application-groups.1 raw "$embedded" >/dev/null 2>&1; then
-    fail "$3 is entitled to more than one App Group"
-  fi
-  if [ "$(plutil -extract com.apple.security.get-task-allow raw "$embedded" 2>/dev/null || true)" = true ]; then
-    fail "$3 allows debugging (get-task-allow), which notarization refuses"
-  fi
+  # (plutil reads the dots in "com.apple.security…" as a key path, so Python reads the keys.)
+  problem=$(python3 - "$embedded" "$GROUP" <<'PY'
+import plistlib, sys
+with open(sys.argv[1], 'rb') as f:
+    e = plistlib.load(f)
+groups = e.get('com.apple.security.application-groups')
+if e.get('com.apple.security.app-sandbox') is not True:
+    print('is not sandboxed')
+elif groups != [sys.argv[2]]:
+    print('is entitled to the App Groups %r, not to %s alone' % (groups, sys.argv[2]))
+elif e.get('com.apple.security.get-task-allow') is True:
+    print('allows debugging (get-task-allow), which notarization refuses')
+PY
+)
+  [ -z "$problem" ] || fail "$3 $problem"
 }
 codesign --verify --deep --strict --verbose=2 "$APP"
 check "$SHARE" "$WORK/share.entitlements" ShareExtension
@@ -231,8 +237,9 @@ else
   status=0
   xcrun notarytool submit "$WORK/notarize.zip" "${auth[@]}" --wait --timeout 45m --output-format json \
     > "$WORK/notary.json" 2> "$WORK/notary.err" || status=$?
-  SUBMISSION=$(plutil -extract id raw "$WORK/notary.json" 2>/dev/null || true)
-  verdict=$(plutil -extract status raw "$WORK/notary.json" 2>/dev/null || true)
+  json_field() { python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], ""))' "$WORK/notary.json" "$1" 2>/dev/null || true; }
+  SUBMISSION=$(json_field id)
+  verdict=$(json_field status)
   if [ "$verdict" != Accepted ]; then
     cat "$WORK/notary.json" "$WORK/notary.err" >&2 || true
     if [ -n "$SUBMISSION" ]; then

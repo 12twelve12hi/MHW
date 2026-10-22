@@ -252,8 +252,8 @@ always runs:
     App Group, the same group the bundle's `DaylightAppGroup` names, and no `get-task-allow`. It also checks the
     Developer ID authority, the Team ID, the runtime flag and the timestamp;
   - it notarizes with `xcrun notarytool submit --wait`, using the API key, and prints Apple's log if the submission is
-    refused; then it staples the ticket, asks Gatekeeper (`spctl -a -vv`, which must say *Notarized Developer ID*) and
-    zips the app with `ditto -c -k --keepParent`.
+    refused; then it staples the ticket, has Gatekeeper assess the app (`spctl -a -vv` must accept it, and the script
+    warns if the answer does not say *Notarized Developer ID*) and zips the app with `ditto -c -k --keepParent`.
 
   The job then runs the Mac smoke test ([`scripts/mac-smoke-test.sh`](scripts/mac-smoke-test.sh), the one the `mac` job
   runs) on that zip: the app must use the App Group and pair, send and show *Delivered ✓*.
