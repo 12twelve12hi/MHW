@@ -14,7 +14,7 @@ How the "Send to Daylight" apps get links, pages and files to a Daylight through
 | `LAB-PROTOCOL.md` | **Lab** (normative): hello and item-state frames on the ack topic, header extras, the return and control lanes, the timeline text, the gate, vectors and CI. Section 2 of `../LAB-PLAN.md`, kept here from L0 on |
 | `js/daylight-lab.js` | The Lab reference (one module; it imports only `daylight-share.js`): parser, ledger, timeline text, `LAB_TEXT`, `labGate`, `LabInbox` |
 | `vectors/lab-vectors.json` | The Lab vectors every port must pass, made by `vectors/generate-lab.mjs` (deterministic: CI requires no diff) |
-| `js/test/fixtures/` | The v1.0 (b48752b) and v1.1 (bb8ccfa) references as they shipped: the old peers of the skew suite. Never edited |
+| `js/test/fixtures/` | The v1.0 (b48752b) and v1.1 (bb8ccfa) references as they shipped: the old peers of the skew suite. Never edited. `articles/` holds F10.1's pages (its README says where each comes from) |
 | `vectors/normalise.json` | Smart intake (F16): `normaliseShare` cases, the `x-orig` frame rule and Apple News pages, also made by `vectors/generate-lab.mjs` |
 | `js/capture/` | The one source of the capture code every sender copies: `clean-html.js`, Mozilla Readability 0.6.0 and `sync.mjs` (its README) |
 | `js/bin/daylight-send.mjs` | The command line (F09); `js/bin/build.mjs` makes the one file CI publishes to the release. `SEND-API.md` is its manual and the list of every entry point |
@@ -166,6 +166,43 @@ Every run does `tick()` first. Two runs at once lose no rows; `cli.test.mjs` run
 of them in `--wait` (without the lock the same run loses one or two rows of eight). The command line is always Lab:
 smart intake, `x-orig`, and a Lab ledger fed from the ack topic. `--wait-for reader` ends on `reader`, `queued` or
 `handed` (documents).
+
+## Lab (W1 review follow-ups, Oct 22)
+
+**Copy added Oct 22** (LAB-PLAN 1.6's table). `LAB_TEXT.setup.steps.toolbarButton` (Chrome's Toolbar button check) and
+`setup.steps.readerReadLater` (the Inbox's read-later check, next to `setup.readerTest`), `arrivals.quietHoursFooter`,
+`arrivals.excerptOne` (one waiting excerpt; several use `excerptsGroup`), and `handover.*`, the five things LAB-PLAN
+5.3.4 puts on screen, word for word: `letReceive` (the Settings › Lab row that arms the 2-minute grant), `armed` (the
+line while it is armed), `receivingElsewhere` (the handover line), `receiveHereAgain` (its button) and `unreachable`
+(the line while the Lab Reader can't be asked). `lab.test.mjs` reads the plan's table and 5.3.4 and pins every id and
+text against them; `generate-lab.mjs` pins them in `labText.strings`. The Android and Apple `LabStrings` files were
+regenerated with them (`lab-strings.mjs`, no generator change).
+
+**An outbox row's `http`** (F26's activity log; WIN1 review). `daylight-share.js` rows carry `http`: the HTTP status
+of the row's last failed publish (413, 429, another 4xx, or 408 and 5xx after the in-call retries), 0 when that failure
+had no HTTP answer, and 0 again once a publish goes or the row is delivered. So `send`, `retry`, `resendDue` and
+`flushNetwork` return it on their rows. Rows stored without it (v1.0, v1.1) read as 0, and v1.1 reads the new rows
+unchanged. Apps log a row's event as `activityEvent({type, id, kind, status, http: row.http})`; until they pass it,
+the log's last column stays "-". `lab-vectors.json` › `diagnostics.rowHttp` pins 15 sequences (each failure kind,
+the in-call retries, Retry now, a later failure, and both passes' 429 and 413 rules) with their activity lines.
+
+**F10.1's automated check** (`js/test/readability.test.mjs`). Clean article as the extension's `captureArticle`
+runs it (Readability 0.6.0 on a clone, then `clean-html.js` on its article) on 20 of Readability's own test pages and
+ten news-style pages written for the test (`js/test/fixtures/articles/`). Words are counted with repeats. On every
+Readability page it keeps 100% of the expected body and adds nothing. Nine of the ten news pages keep 100% of their
+body with the navigation, header, footer, asides, forms, comments and cookie notice gone. The tenth,
+`storm-warning-live`, keeps 87%: Readability drops a live page's "Key points" box (a heading and a list beside the
+entries). Its 90% check runs as a todo, so `node --test` lists it, and a strict test pins what it keeps now. An
+advertisement placed inside the article's own text keeps its text (`lumen-leaf-ereader`).
+
+### Still to check on a device
+
+- Chrome's Setup check: the `setup.steps.toolbarButton` wording ("puzzle piece", "pin") against the toolbar of the
+  Chrome release on the W1 device round.
+- DC-1 Inbox Setup check: the Reader's own name for its setting in `setup.steps.readerReadLater` ("allow pages from
+  other apps"), on the W1 device round (LAB-PLAN 1.6 says so).
+- F10.1 on real pages: Clean article in Chrome and Safari on a live news page with a "Key points" or summary box, to
+  see whether Readability drops it there as it does in `storm-warning-live`.
 
 ## Changelog
 
