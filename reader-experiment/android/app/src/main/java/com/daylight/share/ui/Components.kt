@@ -36,6 +36,7 @@ import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RippleConfiguration
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Typography
@@ -154,13 +155,14 @@ fun DaylightTheme(comfort: Boolean, still: Boolean = comfort, content: @Composab
     MaterialTheme(colorScheme = remember(comfort) { scheme(comfort) }, typography = remember(comfort) { typography(comfort) }) {
         val base = LocalDensity.current
         val density = remember(base, comfort) { if (comfort) ComfortDensity(base) else base }
+        // One provider whatever the values, so switching Comfort keeps every screen's state (where you are, what you typed).
         CompositionLocalProvider(
             LocalComfort provides comfort,
             LocalDensity provides density,
             LocalMinimumInteractiveComponentSize provides if (comfort) COMFORT_TARGET else USUAL_TARGET,
-        ) {
-            if (still) CompositionLocalProvider(LocalRippleConfiguration provides null, content = content) else content()
-        }
+            LocalRippleConfiguration provides if (still) null else RippleConfiguration(),
+            content = content,
+        )
     }
 }
 

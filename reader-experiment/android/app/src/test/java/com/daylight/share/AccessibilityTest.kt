@@ -46,16 +46,18 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import java.io.File
 
 /**
  * The accessibility baseline (LAB-PLAN F27; not a Lab feature) on every main screen of both roles: the Accessibility
  * Test Framework's checks (F27.2), a label on every control, announced status changes, and with Comfort at the largest
  * text on a 360 dp phone no text cut short and no control under 56 dp (F27.4). The window is tall, so every row of a
- * list is laid out and checked.
+ * list is laid out and checked; native graphics, so text is measured as on a device.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w360dp-h16000dp")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class AccessibilityTest {
     @get:Rule
     val compose = createAndroidComposeRule<MainActivity>()
@@ -109,7 +111,9 @@ class AccessibilityTest {
         row.assertIsOff()
         row.performClick()
         compose.waitForIdle()
+        // Still in Settings, on the same switch: turning Comfort on keeps the screen.
         row.assertIsOn()
+        compose.onNodeWithText("Done").assertIsDisplayed()
         assertTrue(app.comfort.value)
         assertTrue("kept across starts", Prefs(app).comfort)
         row.performClick()
