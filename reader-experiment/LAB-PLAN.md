@@ -128,6 +128,12 @@ accessibility baseline (Comfort included) are Lab features.
 | Stops Lab background work. The Inbox sends one last hello with `lab: 0` (2.2.4), then no hellos and no state frames. Return-lane polling (W2) stops, connectivity-triggered sending (F07) falls back to v1.1 back-off, and the F08 shortcut is removed. | Changes sending. Items already queued keep their `x-` fields and go out as stored. |
 | F09: URL-scheme `send` links, App Intents and the Android `SEND_URL` intent answer "Turn on Lab in {app} to use this." Pairing links still work. | Stops recording Lab frames read from the ack topic. The ledger keeps learning, invisibly, so turning Lab on shows correct states at once. |
 
+**One exception (decided Oct 22, from K6's review): a handover outlives Lab off.** On the DC-1, while the Lab Reader
+has taken receiving over (5.3.4), turning off Daylight Share's Lab does not end the handover. The Inbox keeps showing
+its handover line, with "Receive here again" when the Lab Reader says it stopped. That line says where items go, not
+a Lab feature. Ending the handover silently would make both apps receive, putting duplicates into two libraries. The
+handover ends only when the Lab Reader stops receiving (its own Labs switch) or the user taps "Receive here again".
+
 ### 1.4 What's in Lab
 
 A list with one row per Lab feature this app has in this build. Each row has the name, one sentence and a **short
