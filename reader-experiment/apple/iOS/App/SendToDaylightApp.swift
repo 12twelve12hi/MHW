@@ -86,7 +86,8 @@ enum LabBuild {
     #if DEBUG
     /// `-DLSAnnounceLog <path>` (Debug builds, the UI tests; LAB-PLAN F00.3 and F27): every VoiceOver announcement is
     /// also appended to that file, one line each, so a test can check what a screen reader is told. The announcement
-    /// itself is posted as always.
+    /// itself is posted as always. On the main actor, as `Announcer.post` is.
+    @MainActor
     static func logAnnouncements(_ arguments: [String] = ProcessInfo.processInfo.arguments) {
         guard let i = arguments.firstIndex(of: "-DLSAnnounceLog"), i + 1 < arguments.count else { return }
         let url = URL(fileURLWithPath: arguments[i + 1])
