@@ -149,8 +149,14 @@ class ShareActivity : ComponentActivity() {
         }
     }
 
+    // Lab (F04): a card that goes without sending leaves no copy behind: when it closes (a tap outside, Close, Back),
+    // and when it is destroyed without closing.
+    override fun finish() {
+        inPlace.value?.discard()
+        super.finish()
+    }
+
     override fun onDestroy() {
-        // Lab (F04): a card that goes without sending leaves no copy behind.
         inPlace.value?.discard()
         super.onDestroy()
     }
