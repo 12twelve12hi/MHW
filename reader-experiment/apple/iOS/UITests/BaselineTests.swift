@@ -22,6 +22,23 @@ final class BaselineTests: XCTestCase {
         UITestSupport.screenshot(app, "ios-settings-comfort-switched-on", in: self)
     }
 
+    /// A share card that keeps its own storage (no App Group) has its own Comfort switch, off, labelled, with its
+    /// footer (F27: a switch in every build's settings; LAB-PLAN 1.1: such a card counts as its own app).
+    @MainActor
+    func testTheShareCardHasItsOwnComfortWithoutAnAppGroup() throws {
+        let app = UITestSupport.launchShareCard("needs-pairing")
+        let comfort = app.switches["comfort"]
+        XCTAssertTrue(comfort.waitForExistence(timeout: 30), "no Comfort switch on the share card")
+        XCTAssertEqual(comfort.label, "Comfort")
+        XCTAssertEqual(UITestSupport.text(comfort.value), "0", "Comfort is on by default")
+        XCTAssertTrue(app.staticTexts["Larger text and buttons, more contrast, no motion."].exists, "no Comfort footer")
+        for _ in 0..<4 where !comfort.isHittable { app.swipeUp() }
+        comfort.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        expectation(for: NSPredicate(format: "value == '1'"), evaluatedWith: comfort)
+        waitForExpectations(timeout: 5)
+        UITestSupport.screenshot(app, "ios-share-card-comfort-switched-on", in: self)
+    }
+
     /// The pairing screen offers the typed code next to the camera, and a typed code pairs.
     @MainActor
     func testTypedCodePairingIsAlwaysOffered() throws {

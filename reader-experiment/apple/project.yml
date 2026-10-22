@@ -60,6 +60,8 @@ targets:
     platform: iOS
     sources:
       - path: iOS/Tests
+      # The audit's Dynamic Type allowances, which the growth test checks it measures.
+      - path: iOS/UITests/DynamicTypeWaivers.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: "$(DAYLIGHT_BUNDLE_ID).tests"

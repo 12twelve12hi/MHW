@@ -236,14 +236,20 @@ public final class ShareExtensionModel: ObservableObject {
         case nothing
     }
 
-    /// Each outcome is also said to VoiceOver (F27): the row's label and sentence, why it did not go, or the notice.
+    /// Each outcome is also said to VoiceOver (F27): the row's label and sentence, why it did not go, or the notice,
+    /// followed the first time by `note` when there is one.
     @Published public private(set) var phase: Phase = .reading {
         didSet {
-            if phase != oldValue, let text = Self.announcement(for: phase) { Announcer.announce(text) }
+            guard phase != oldValue else { return }
+            let note = noteSaid ? nil : self.note
+            if let text = Self.announcement(for: phase, note: note) {
+                Announcer.announce(text)
+                if note != nil { noteSaid = true }
+            }
         }
     }
     @Published public private(set) var summary = ""
-    /// Comfort (F27), as the app has it when they share storage.
+    /// Comfort (F27): the app's when they share storage; else the card's own switch (`showsCardSettings`).
     @Published public private(set) var comfort = false
     /// A line about how something went, shown under the result: "The page is larger than 8 MB, so its link was
     /// sent." (CHANGES-v1.1 2.5) when a page went as its link.
@@ -262,9 +268,48 @@ public final class ShareExtensionModel: ObservableObject {
     private var started = false
     /// The pairing the confirmation is about, and whether the shared items are sent once it is applied.
     private var pending: (pairing: Pairing, thenSend: Bool)?
+    /// Whether `note` has been said with an outcome (it is said once).
+    private var noteSaid = false
 
     public init(store: SharedStore = .shared) {
         self.store = store
+    }
+
+    /// A card that shows `phase` and never reads its input or sends (`ShareCardSample`).
+    init(sample phase: Phase, store: SharedStore, summary: String, note: String?, daylightName: String,
+         sharesPairingWithApp: Bool, comfort: Bool) {
+        self.store = store
+        self.phase = phase
+        self.summary = summary
+        self.note = note
+        self.daylightName = daylightName
+        self.sharesPairingWithApp = sharesPairingWithApp
+        self.comfort = comfort
+        started = true
+    }
+
+    /// Whether the card shows its own settings: only where it keeps its own storage (no App Group: the ad-hoc Mac
+    /// build's Share menu, a sideloaded iPhone build without the group), so it cannot follow the app's switches and
+    /// counts as an app of its own (LAB-PLAN 1.1, F27: Comfort "in every build's settings"). Shown while the card waits
+    /// for the user: the pairing form, a result, a notice, a sent card with a note.
+    public var showsCardSettings: Bool {
+        guard !sharesPairingWithApp else { return false }
+        switch phase {
+        case .needsPairing, .result, .paired, .nothing: return true
+        case .sent: return note != nil
+        case .reading, .sending, .confirmPairing: return false
+        }
+    }
+
+    /// The card's own Comfort switch (`showsCardSettings`): the card follows at once; it is saved, off the main thread,
+    /// in the storage this extension keeps, and read at the next share.
+    public func setComfort(_ on: Bool) {
+        comfort = on
+        let store = self.store
+        Task {
+            await store.ready()
+            await AppModel.onStorage { store.comfort = on }
+        }
     }
 
     public func start(inputItems: [Any]) {
@@ -435,15 +480,21 @@ public final class ShareExtensionModel: ObservableObject {
         }
     }
 
-    /// What VoiceOver hears when the phase changes to an outcome (nil while reading, sending or asking).
-    nonisolated static func announcement(for phase: Phase) -> String? {
+    /// What VoiceOver hears when the phase changes to an outcome (nil while reading, sending or asking), with `note`
+    /// after a sent card or a result ("Sent · waiting for your Daylight. The page is larger than 8 MB, so its link was
+    /// sent.").
+    nonisolated static func announcement(for phase: Phase, note: String? = nil) -> String? {
+        let said: String
         switch phase {
-        case let .sent(text): return text.message
-        case let .result(title, message): return message.isEmpty ? title : "\(title). \(message)"
+        case let .sent(text): said = text.message
+        case let .result(title, message): said = message.isEmpty ? title : "\(title). \(message)"
         case let .paired(notice): return notice
         case .nothing: return "There’s nothing here Send to Daylight can send."
         case .reading, .needsPairing, .confirmPairing, .sending: return nil
         }
+        guard let note, !note.isEmpty else { return said }
+        let ends = said.last.map { ".…✓!?".contains($0) } ?? false
+        return said + (ends ? " " : ". ") + note
     }
 
     /// "The page is larger than 8 MB, so its link was sent." when a shared page is over `DLS.maxPageHTML` (it goes as
@@ -497,7 +548,8 @@ public struct ShareExtensionView: View {
             switch model.phase {
             case .reading, .sending:
                 if model.comfort {
-                    Text(RowText(status: .sending, errorCode: "", size: 0, created: Date()).label).dlsFont(.headline)
+                    let label = RowText(status: .sending, errorCode: "", size: 0, created: Date()).label
+                    Text(label).dlsFont(.headline).wrapping(label)
                 } else {
                     ProgressView().accessibilityHidden(true)
                 }
@@ -553,10 +605,29 @@ public struct ShareExtensionView: View {
                     Text("Cancel").wrapping("Cancel").comfortTarget()
                 }
             }
+            cardSettings
         }
         .padding(24)
         .frame(maxWidth: 420)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The card's own settings, where it keeps its own storage (`ShareExtensionModel.showsCardSettings`): Comfort,
+    /// with LAB_TEXT's words. The ad-hoc Mac build's own Lab switch joins it here (LAB-PLAN 1.1, card A2).
+    @ViewBuilder private var cardSettings: some View {
+        if model.showsCardSettings {
+            Divider()
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle(isOn: Binding(get: { model.comfort }, set: { model.setComfort($0) })) {
+                    Text(Comfort.title).wrapping(Comfort.title)
+                }
+                .toggleStyle(.switch)
+                .accessibilityIdentifier("comfort")
+                .accessibilityLabel(Comfort.title)
+                Text(Comfort.footer).dlsFont(.footnote).dlsSecondary().wrapping(Comfort.footer)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private var doneButton: some View {
@@ -589,5 +660,84 @@ public struct ShareExtensionView: View {
                 .multilineTextAlignment(.center)
                 .truncationProbe(model.summary)
         }
+    }
+}
+
+/// The share card in each of its states, with fixed words, for the truncation audit (F27.4), the Lab-off parity walk
+/// (`-DLSShareCard <name>` in the apps' Debug builds shows one in place of the window, LAB-PLAN 1.7) and previews.
+/// Nothing is read or sent, and each sample keeps its own empty storage.
+public enum ShareCardSample: String, CaseIterable {
+    case reading
+    case sent
+    /// Sent, with the note that keeps the card open until Done ("The page is larger than 8 MB, so its link was sent.").
+    case sentNote = "sent-note"
+    /// Not sent now, with the note.
+    case resultNote = "result-note"
+    /// The pairing form of a card that keeps its own storage (no App Group): the paste-once words and the card's own
+    /// settings.
+    case needsPairing = "needs-pairing"
+    /// The question before a pairing link replaces the current Daylight (PROTOCOL 1.3).
+    case confirmPairing = "confirm-pairing"
+
+    public static let daylightName = "Test Daylight"
+    public static let summary = "A very long article title that goes on for a while, to see that it wraps instead of being cut short"
+
+    /// `-DLSShareCard <name>`: the sample to show, or nil.
+    public static func launchValue(_ arguments: [String] = ProcessInfo.processInfo.arguments) -> ShareCardSample? {
+        guard let i = arguments.firstIndex(of: "-DLSShareCard"), i + 1 < arguments.count else { return nil }
+        return ShareCardSample(rawValue: arguments[i + 1])
+    }
+
+    @MainActor private static var launched: ShareExtensionModel?? = nil
+
+    /// The card `-DLSShareCard <name>` asks for, made once, with Comfort as `-DLSComfort` says: the apps' Debug builds
+    /// show it in place of their window. nil without the argument.
+    @MainActor
+    public static var launchModel: ShareExtensionModel? {
+        if let launched { return launched }
+        let model = launchValue()?.model(comfort: Comfort.launchValue() ?? false)
+        launched = .some(model)
+        return model
+    }
+
+    /// A model that shows this sample, with Comfort on or off.
+    @MainActor
+    public func model(comfort: Bool = false) -> ShareExtensionModel {
+        let id = UUID().uuidString
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dls-card-\(id)", isDirectory: true)
+        let store = SharedStore(defaults: UserDefaults(suiteName: "dls-card-\(id)") ?? UserDefaults(), directory: directory)
+        let now = Date()
+        var note: String?
+        var shares = true
+        let phase: ShareExtensionModel.Phase
+        switch self {
+        case .reading:
+            phase = .reading
+        case .sent:
+            phase = .sent(RowText(status: .sent, errorCode: "", size: 0, created: now, now: now))
+        case .sentNote:
+            phase = .sent(RowText(status: .sent, errorCode: "", size: 0, created: now, now: now))
+            note = ShareText.pageSentAsLinkMessage
+        case .resultNote:
+            let text = RowText(status: .failed, errorCode: "network", size: 0, created: now, now: now)
+            phase = .result(title: text.label, message: text.sentence ?? "")
+            note = ShareText.pageSentAsLinkMessage
+        case .needsPairing:
+            phase = .needsPairing
+            shares = false
+        case .confirmPairing:
+            let current = try? Pairing(secret: Data(repeating: 7, count: 16), relay: DLS.defaultRelay,
+                                       name: Self.daylightName)
+            let next = try? Pairing(secret: Data(repeating: 9, count: 16), relay: "http://127.0.0.1:9",
+                                    name: "The Daylight in the reading room upstairs")
+            if let next {
+                phase = .confirmPairing(PairingConfirmation(current: current, next: next, source: .link))
+            } else {
+                phase = .nothing
+            }
+        }
+        return ShareExtensionModel(sample: phase, store: store, summary: self == .needsPairing ? "" : Self.summary,
+                                   note: note, daylightName: Self.daylightName, sharesPairingWithApp: shares,
+                                   comfort: comfort)
     }
 }

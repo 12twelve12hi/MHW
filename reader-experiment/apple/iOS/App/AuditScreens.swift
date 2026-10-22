@@ -4,10 +4,10 @@ import DaylightShareUI
 import SwiftUI
 import UIKit
 
-/// The truncation audit (LAB-PLAN F27.4), run by `SendToDaylightTests-iOS`: each main screen with sample data, hosted
-/// at the narrowest width the app runs at (an iPad's one-third split, 320 pt) with Comfort on and text at
-/// accessibility3, and every probed text's frame compared with the size it needs (`TruncationRecorder`). Debug builds
-/// only.
+/// The truncation audit (LAB-PLAN F27.4), run by `SendToDaylightTests-iOS`: each main screen with sample data, and the
+/// share sheet's card in each of its states (`ShareCardSample`), hosted at the narrowest width the app runs at (an
+/// iPad's one-third split, 320 pt) with Comfort on and text at accessibility3, and every probed text's frame compared
+/// with the size it needs (`TruncationRecorder`). Debug builds only.
 @MainActor
 enum AuditScreens {
     struct Report {
@@ -18,7 +18,17 @@ enum AuditScreens {
 
     static let narrowestWidth: CGFloat = 320
 
-    /// Home (with a history row in every state), Settings and the pairing screen.
+    /// The share card's states, by the name of each report ("share-reading", …). The card applies its model's Comfort
+    /// itself, so the model says whether it is on.
+    static var shareCardNames: [String] { ShareCardSample.allCases.map { "share-\($0.rawValue)" } }
+
+    static func shareCards(comfort: Bool) -> [(String, AnyView)] {
+        ShareCardSample.allCases.map {
+            ("share-\($0.rawValue)", AnyView(ShareExtensionView(model: $0.model(comfort: comfort))))
+        }
+    }
+
+    /// Home (with a history row in every state), Settings, the pairing screen and the share card in each state.
     static func reports(shots: URL?) async -> [Report] {
         let paired = await sampleModel(paired: true)
         let unpaired = await sampleModel(paired: false)
@@ -26,31 +36,51 @@ enum AuditScreens {
         out.append(await measure("home", AnyView(HomeView().environmentObject(paired)), height: 6000, shots: shots))
         out.append(await measure("settings", AnyView(SettingsView().environmentObject(paired)), height: 3000, shots: shots))
         out.append(await measure("pair", AnyView(PairView().environmentObject(unpaired)), height: 3000, shots: shots))
+        for (name, view) in shareCards(comfort: true) {
+            out.append(await measure(name, view, height: 2400, shots: shots))
+        }
         return out
     }
 
-    /// Dynamic Type: every probed text on each main screen needs more height at accessibility3 than at the default
-    /// size (Comfort off), so it follows the text size. -> the screens, each with the texts that did not grow.
-    static func scaling() async -> [(screen: String, measured: Int, problems: [String])] {
+    struct Scaling {
+        let screen: String
+        /// The texts compared at both sizes.
+        let measured: [String]
+        /// The texts that need more height at accessibility3.
+        let grown: [String]
+        /// The texts that did not grow, each with its two heights.
+        let problems: [String]
+    }
+
+    /// Dynamic Type: every probed text on each main screen (Home with history and without, Settings, the pairing
+    /// screen) and on the share card needs more height at accessibility3 than at the default size (Comfort off), so it
+    /// follows the text size.
+    static func scaling() async -> [Scaling] {
         let paired = await sampleModel(paired: true)
+        let empty = await sampleModel(paired: true, rows: false)
         let unpaired = await sampleModel(paired: false)
         let screens: [(String, AnyView)] = [
             ("home", AnyView(HomeView().environmentObject(paired))),
+            ("home-empty", AnyView(HomeView().environmentObject(empty))),
             ("settings", AnyView(SettingsView().environmentObject(paired))),
             ("pair", AnyView(PairView().environmentObject(unpaired))),
-        ]
-        var out: [(screen: String, measured: Int, problems: [String])] = []
+        ] + shareCards(comfort: false)
+        var out: [Scaling] = []
         for (name, view) in screens {
             let small = await host(view, comfort: false, typeSize: .large, height: 6000).neededSizes
             let large = await host(view, comfort: false, typeSize: .accessibility3, height: 6000).neededSizes
+            var grown: [String] = []
             var problems: [String] = []
             for (text, size) in small.sorted(by: { $0.key < $1.key }) {
                 guard let bigger = large[text] else { continue }
                 if bigger.height <= size.height {
                     problems.append("“\(text)” needs \(Int(size.height)) pt at the default size and \(Int(bigger.height)) pt at accessibility3")
+                } else {
+                    grown.append(text)
                 }
             }
-            out.append((name, small.keys.filter { large[$0] != nil }.count, problems))
+            out.append(Scaling(screen: name, measured: small.keys.filter { large[$0] != nil }.sorted(), grown: grown,
+                               problems: problems))
         }
         return out
     }
@@ -68,8 +98,9 @@ enum AuditScreens {
         return (cut, wrapped)
     }
 
-    /// A model on its own storage: paired with a long-named Daylight and a history row in every state, or not paired.
-    static func sampleModel(paired: Bool) async -> AppModel {
+    /// A model on its own storage: paired with a long-named Daylight and (with `rows`) a history row in every state,
+    /// or not paired.
+    static func sampleModel(paired: Bool, rows: Bool = true) async -> AppModel {
         let id = UUID().uuidString
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dls-audit-\(id)", isDirectory: true)
         let defaults = UserDefaults(suiteName: "dls-audit-\(id)") ?? .standard
@@ -80,7 +111,7 @@ enum AuditScreens {
                 await store.pair(pairing)
             }
             let outbox = OutboxStore(store: store)
-            for row in sampleRows() { outbox.save(row) }
+            for row in sampleRows() where rows { outbox.save(row) }
         }
         let model = AppModel(store: store, arguments: [])
         await model.reloadNow()

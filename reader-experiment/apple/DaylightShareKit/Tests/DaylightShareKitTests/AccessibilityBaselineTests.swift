@@ -153,6 +153,88 @@ final class AccessibilityBaselineTests: XCTestCase {
         XCTAssertEqual(ShareExtensionModel.announcement(for: .paired("Paired with Desk Daylight.")), "Paired with Desk Daylight.")
         XCTAssertNil(ShareExtensionModel.announcement(for: .sending))
         XCTAssertNil(ShareExtensionModel.announcement(for: .needsPairing))
+        // The note under a sent card or a result is said too (CHANGES-v1.1 2.5).
+        let note = ShareText.pageSentAsLinkMessage
+        XCTAssertEqual(ShareExtensionModel.announcement(for: .sent(sent), note: note),
+                       "Sent · waiting for your Daylight. The page is larger than 8 MB, so its link was sent.")
+        XCTAssertEqual(ShareExtensionModel.announcement(for: .result(title: "Not sent", message: "Too big to send."), note: note),
+                       "Not sent. Too big to send. The page is larger than 8 MB, so its link was sent.")
+        let delivered = RowText(status: .delivered, errorCode: "", size: 0, created: Date())
+        XCTAssertEqual(ShareExtensionModel.announcement(for: .sent(delivered), note: note),
+                       "Delivered ✓ Saved on your Daylight. The page is larger than 8 MB, so its link was sent.")
+        XCTAssertNil(ShareExtensionModel.announcement(for: .needsPairing, note: note))
+    }
+
+    // MARK: The share card
+
+    /// Every sample card shows its state without reading or sending anything (the truncation audit and the Lab-off
+    /// parity walk use them; `-DLSShareCard <name>`).
+    @MainActor
+    func testTheShareCardSamples() async throws {
+        XCTAssertEqual(ShareCardSample.allCases.map(\.rawValue),
+                       ["reading", "sent", "sent-note", "result-note", "needs-pairing", "confirm-pairing"])
+        XCTAssertEqual(ShareCardSample.launchValue(["app", "-DLSShareCard", "sent-note"]), .sentNote)
+        XCTAssertNil(ShareCardSample.launchValue(["app", "-DLSShareCard", "nonsense"]))
+        XCTAssertNil(ShareCardSample.launchValue(["app"]))
+        for sample in ShareCardSample.allCases {
+            let model = sample.model(comfort: true)
+            XCTAssertTrue(model.comfort)
+            XCTAssertEqual(model.daylightName, "Test Daylight")
+            var finished = false
+            model.onFinish = { finished = true }
+            model.start(inputItems: [])
+            try await Task.sleep(nanoseconds: 50_000_000)
+            XCTAssertFalse(finished, "\(sample) started")
+            switch (sample, model.phase) {
+            case (.reading, .reading), (.needsPairing, .needsPairing):
+                break
+            case (.sent, .sent(let text)), (.sentNote, .sent(let text)):
+                XCTAssertEqual(text.label, "Sent · waiting for your Daylight")
+            case (.resultNote, .result(let title, let message)):
+                XCTAssertEqual(title, "Waiting to send")
+                XCTAssertEqual(message, "Couldn’t send right now. It will try again by itself.")
+            case (.confirmPairing, .confirmPairing(let c)):
+                XCTAssertEqual(c.title, "Pair with The Daylight in the reading room upstairs?")
+                XCTAssertEqual(c.button, "Switch")
+            default:
+                XCTFail("\(sample) shows \(model.phase)")
+            }
+            let noted: [ShareCardSample] = [.sentNote, .resultNote]
+            XCTAssertEqual(model.note, noted.contains(sample) ? ShareText.pageSentAsLinkMessage : nil, "\(sample)")
+        }
+    }
+
+    /// A card that keeps its own storage (no App Group) has its own Comfort switch while it waits for the user, and it
+    /// is saved there; a card that shares the app's storage follows the app's switch and shows none.
+    @MainActor
+    func testACardWithItsOwnStorageHasItsOwnComfortSwitch() async throws {
+        let own = ShareCardSample.needsPairing.model()
+        XCTAssertFalse(own.sharesPairingWithApp)
+        XCTAssertTrue(own.showsCardSettings)
+        XCTAssertFalse(own.comfort)
+        own.setComfort(true)
+        XCTAssertTrue(own.comfort, "the card follows at once")
+        try await waitFor("Comfort saved in the card's storage") { own.store.defaults.bool(forKey: "dls.comfort") }
+
+        for sample in [ShareCardSample.reading, .sent, .sentNote, .resultNote, .confirmPairing] {
+            XCTAssertFalse(sample.model().showsCardSettings, "\(sample) shares the app's storage")
+        }
+
+        // In its own storage, every phase that waits for the user shows it; reading, sending and asking do not, and a
+        // sent card only when it stays open for its note.
+        let store = makeStore()
+        func card(_ phase: ShareExtensionModel.Phase, note: String? = nil) -> ShareExtensionModel {
+            ShareExtensionModel(sample: phase, store: store, summary: "", note: note, daylightName: "D",
+                                sharesPairingWithApp: false, comfort: false)
+        }
+        let sent = RowText(status: .sent, errorCode: "", size: 0, created: Date())
+        XCTAssertTrue(card(.result(title: "Not sent", message: "")).showsCardSettings)
+        XCTAssertTrue(card(.paired("Paired with D.")).showsCardSettings)
+        XCTAssertTrue(card(.nothing).showsCardSettings)
+        XCTAssertTrue(card(.sent(sent), note: ShareText.pageSentAsLinkMessage).showsCardSettings)
+        XCTAssertFalse(card(.sent(sent)).showsCardSettings)
+        XCTAssertFalse(card(.reading).showsCardSettings)
+        XCTAssertFalse(card(.sending).showsCardSettings)
     }
 
     // MARK: Truncation audit

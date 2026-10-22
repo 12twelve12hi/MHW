@@ -87,14 +87,19 @@ Every build, with Lab on or off, has the same accessibility baseline (LAB-PLAN F
   (where text styles do not follow Dynamic Type) every text style is about 30% larger. Buttons are large, at least
   52 × 52 pt, and standalone ones get a 2 pt border; secondary grey text becomes primary; nothing animates (spinners
   become words). Turning Lab off leaves it as it is. The share sheet item and the Share menu item follow it when they
-  share the app's storage (an App Group).
+  share the app's storage (an App Group). Where they cannot (the released ad-hoc Mac build, a sideloaded iPhone build
+  without the group), the card counts as an app of its own (LAB-PLAN 1.1) and has its **own Comfort switch**, with the
+  same footer, under the pairing form, a result or a note: it is kept in the extension's own storage.
 - **Every control has a label** for VoiceOver, decorative images are hidden from it, and headings are marked.
 - **States in words and glyphs**, never colour alone: each history row's label (*Delivered ✓*, *Waiting to send*,
   *Not delivered*) comes after a glyph for its state, and errors carry a warning sign.
 - **Status labels wrap** instead of being cut, at every text size: at accessibility sizes (and in Comfort) a row's
   button moves under its text, label/value rows stack, and the pairing buttons stack.
 - **Status changes are said out loud**: every banner (*Paired with …*, *Sent · waiting for your Daylight*, an error),
-  a row that becomes *Delivered ✓* or *Not delivered* ("Delivered ✓, <title>"), and the share sheet's outcome.
+  a row that becomes *Delivered ✓* or *Not delivered* ("Delivered ✓, <title>"), and the share sheet's outcome with its
+  note, once (*Sent · waiting for your Daylight. The page is larger than 8 MB, so its link was sent.*). *In your
+  Reader* comes with the Lab timeline (F01, Wave 1): v1.1 rows do not know it, so `Announcer.changes` cannot say it
+  yet; A3 extends it when `TimelineRow` arrives, and A4 and A5 check it in the apps.
 - **Typing the pairing code is always offered**, next to the QR code on the iPhone, as the way to pair on the Mac,
   and in the share sheet.
 
@@ -210,6 +215,7 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
 | `-DLSComfort 0\|1` | Turns Comfort off or on before the first render (and saves it), LAB-PLAN 1.7. |
 | `-DLSTestStorage` | Runs on fresh, empty storage of its own (`DaylightShare-UITest` next to the app's own folder, a separate defaults suite, no App Group), emptied at every launch: the UI tests never see or touch a real pairing or history. |
 | `-DLSLab 0\|1` | Reserved for the Lab builds (LAB-PLAN 1.7); the UI tests already pass `-DLSLab 0`. |
+| `-DLSShareCard <name>` | Debug builds only: shows the share card (`ShareExtensionView`) in one of its states in place of the window, with sample words and its own empty storage, for the UI tests' walk: `reading`, `sent`, `sent-note`, `result-note`, `needs-pairing` (a card without an App Group, with its own Comfort switch) or `confirm-pairing` (`ShareCardSample`). |
 
 ### UI tests, the truncation audit and the Lab-off baselines
 
@@ -225,31 +231,54 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     tooltip, the window title the system dims behind a sheet, groups inside the title-bar buttons, a parent/child
     report that names no element, and text the open Settings sheet covers or has scrolled partly out of view (the
     audit measures it where it is hidden); on the iPhone, a navigation-bar button's capped text size, and Dynamic
-    Type reports on static text the audit loses at the largest size, which `testEveryTextGrowsWithTheTextSize`
-    covers by measuring every text at the default size and at accessibility3. What the audits found and the apps now
-    do: secondary text and section headers at 72% of the primary colour (the primary colour on the Mac), a tint of
-    #0058CC and a destructive red of #C01010 (both at least 4.5:1, lighter in dark mode), no greyed-out buttons,
-    text fields that grow to more lines, row text that the row sizes, and the navigation title kept in the bar.
-  - `BaselineTests`: Comfort is in Settings, off by default, with its footer, and switches on; typing the code pairs.
-  - `LabOffParityTests` (F00.2): an explicit walk of the accessibility tree (element type, label and value, in order;
-    never `debugDescription`) of each main screen compared with `iOS/UITests/lab-off-baseline/*.json` and
-    `macOS/UITests/lab-off-baseline/*.json`. The baselines were recorded from the P0 close-out (protocol 1.1 and this
-    accessibility baseline) and are re-recorded only with a matching non-Lab change. Elements whose identifier starts
-    with `lab.` are left out (the Lab switch row shows even with Lab off). When a baseline is missing or differs, the
-    test fails and prints the new tree between `=====BEGIN lab-off-baseline <platform>-<screen>.json=====` and
-    `=====END …=====` in the job log (and CI uploads it): to re-record, copy it into the baseline file.
+    Type reports on exactly the texts `iOS/UITests/DynamicTypeWaivers.swift` names for the screen (today *Nothing
+    sent yet.* on Home and the device name's footer in Settings, which the audit loses at the largest size). That
+    file is compiled into the unit tests too, and `testEveryTextGrowsWithTheTextSize` fails unless it measures each
+    named text growing with the text size; any other Dynamic Type report fails the audit. The Comfort run leaves
+    Dynamic Type out on purpose: Comfort holds text between xxLarge and accessibility3 (the F27 table). What the
+    audits found and the apps now do: secondary text and section headers at 72% of the primary colour (the primary
+    colour on the Mac), a tint of #0058CC and a destructive red of #C01010 (both at least 4.5:1, lighter in dark
+    mode), no greyed-out buttons, text fields that grow to more lines, row text that the row sizes, the navigation
+    title kept in the bar, and a name on every switch.
+  - `BaselineTests`: Comfort is in Settings, off by default, named, with its footer, and switches on; the share card
+    without an App Group has its own Comfort switch; typing the code pairs.
+  - `LabOffParityTests` (F00.2): an explicit walk of the accessibility tree (element type, label or title, and value,
+    in order; never `debugDescription`) compared with `iOS/UITests/lab-off-baseline/*.json` and
+    `macOS/UITests/lab-off-baseline/*.json`: Home (the Mac's main window), Settings, pairing, the share card in each
+    of its states (`-DLSShareCard`), and on the Mac the menu bar item's menu. The baselines were recorded from the P0
+    close-out (protocol 1.1 and this accessibility baseline) and are re-recorded only with a matching non-Lab change.
+    The walk keeps every element that has a label, title or value, whatever its type, and every control even without
+    one; it leaves out only containers without words and the system's scroll bars, and writes the app's version as
+    `<version>` (a version bump is not a screen change).
+  - **The Lab switch** (for A1 and A2): give the Lab `Toggle` itself `.accessibilityIdentifier("lab-switch")`
+    (`AXTree.labSwitchID`, as Android's test tag) and its name `LAB_TEXT.lab`, and nothing else that identifier. With
+    Lab off the walk leaves out that one element (with what is inside it) and texts with exactly its words ("Lab" as
+    a label or a "LAB" header, and `LAB_TEXT.switchFooter`), and checks that it shows once, only in Settings or the
+    share card's own settings, as one switch named "Lab", off, with nothing else inside. What's in Lab and Daylight
+    server are rows of their own, outside that element: shown with Lab off, they change the compared tree.
+  - `TreeWalkTests`: the walk's own rules on trees built by hand (the Lab row and its words, labelled elements of
+    any type, the version, the type names, `LAB_TEXT`'s words from `share/vectors/lab-vectors.json`).
+  - When a baseline is missing or differs, the test fails and prints the new tree between
+    `=====BEGIN lab-off-baseline <platform>-<screen>.json=====` and `=====END …=====` in the job log (and CI uploads
+    it): to re-record, copy it into the baseline file.
 - `SendToDaylightTests-iOS` and `SendToDaylightTests-macOS` (hosted in the app, Debug only): the truncation audit
-  (F27.4). `AuditScreens` hosts each main screen with a history row in every state at the narrowest width (320 pt, an
-  iPad's one-third split; the Mac window's 440 pt minimum and the 460 pt Settings sheet) with Comfort on and
-  accessibility3, and every text that carries a `truncationProbe` (all of them, through `wrapping(_:)`) reports its
-  frame and the size it needs; a text that got less, or runs past the window's edge, fails the test. The audit checks
-  itself on a deliberately cut text first.
+  (F27.4). `AuditScreens` hosts each main screen with a history row in every state, and the share card in each state
+  (`ShareCardSample`), at the narrowest width (320 pt, an iPad's one-third split; the Mac window's 440 pt minimum, the
+  460 pt Settings sheet and the Share menu card's 360 pt) with Comfort on and accessibility3, and every text that
+  carries a `truncationProbe` (all of them, through `wrapping(_:)`) reports its frame and the size it needs; a text
+  that got less, or runs past the window's edge, fails the test. The audit checks itself on a deliberately cut text
+  first. On the iPhone, `testEveryTextGrowsWithTheTextSize` also measures every text of those screens (and of an
+  empty Home) at the default size and at accessibility3, and fails on one that does not grow. The menu bar item's
+  menu is drawn by the system at the width its items need, so it is not measured.
 
 The UI tests run the app on its own storage (`-DLSTestStorage`) paired with the vectors' code and a relay nobody
 listens on, so every screen reads the same on every run. Screenshots of every screen (and of the truncation audit's
 windows) are uploaded as the `rx-apple-ios-screenshots` and `rx-apple-mac-screenshots` artifacts for review; they are
 never compared. A runner image that changes the iOS or macOS version can change a tree: the test then prints the new
-one, ready to copy.
+one, ready to copy. CI does not re-run failed tests, and `scripts/ci-test-summary.sh` fails the job unless
+`AccessibilityAuditTests`, `BaselineTests`, `LabOffParityTests`, `TreeWalkTests` and `TruncationAuditTests` each ran
+with every test passed and none skipped (so a runner whose simulator is older than iOS 17, or a macOS older than 14,
+cannot turn the audits into skips).
 
 ### Notes
 

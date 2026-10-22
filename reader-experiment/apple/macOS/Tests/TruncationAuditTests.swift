@@ -1,8 +1,9 @@
 @testable import SendToDaylightMac
 import XCTest
 
-/// LAB-PLAN F27.4: with Comfort on, at the narrowest width (the window's minimum; the Settings sheet's width) and
-/// accessibility3, no text on the Mac app's main screens is truncated or clipped (`AuditScreens`, which hosts each
+/// LAB-PLAN F27.4: with Comfort on, at the narrowest width (the window's minimum; the Settings sheet's width; the
+/// Share menu card's 360 pt) and accessibility3, no text on the Mac app's main screens or on the Share menu's card
+/// (each of its states) is truncated or clipped (`AuditScreens`, which hosts each
 /// screen in the app). Screenshots go to $DLS_SHOTS when the (sandboxed) app may write there, else to its own
 /// temporary folder; the log says where.
 final class TruncationAuditTests: XCTestCase {
@@ -35,10 +36,11 @@ final class TruncationAuditTests: XCTestCase {
         let shots = Self.shots
         print("TruncationAudit macOS screenshots: \(shots.path)")
         let reports = await AuditScreens.reports(shots: shots)
-        XCTAssertEqual(reports.map(\.screen), ["main", "settings", "pair"])
+        XCTAssertEqual(reports.map(\.screen), ["main", "settings", "pair"] + AuditScreens.shareCardNames)
         for report in reports {
             print("TruncationAudit macOS \(report.screen): \(report.measured) texts measured, \(report.problems.count) cut")
-            XCTAssertGreaterThanOrEqual(report.measured, 5, "\(report.screen): too few texts reported their size")
+            XCTAssertGreaterThanOrEqual(report.measured, report.screen.hasPrefix("share-") ? 2 : 5,
+                                        "\(report.screen): too few texts reported their size")
             for problem in report.problems {
                 XCTFail("\(report.screen): \(problem)")
             }

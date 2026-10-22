@@ -300,6 +300,10 @@ public enum Announcer {
     /// What to announce when the history changes: each row that has become delivered or not delivered since `old`
     /// (the row's label and its title, "Delivered ✓, An article"). Rows new to the history are announced by the
     /// banner that follows a share, not here.
+    ///
+    /// F27's "In your Reader" is not here yet: a row learns it from the Lab timeline's reader state (F01, Wave 1),
+    /// which v1.1 rows do not have. The card that brings F01's `TimelineRow` to DaylightShareUI (A3) extends this to
+    /// announce a row that reaches the Reader ("In your Reader, <title>"), and A4 and A5 check it in the apps.
     public nonisolated static func changes(from old: [OutboxRow], to new: [OutboxRow], now: Date = Date()) -> [String] {
         let before = Dictionary(old.map { ($0.id, $0.status) }, uniquingKeysWith: { a, _ in a })
         return new.compactMap { row in

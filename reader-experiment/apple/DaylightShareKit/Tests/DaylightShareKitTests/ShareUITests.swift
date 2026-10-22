@@ -193,6 +193,10 @@ final class ShareUITests: XCTestCase {
         }
         let store = SharedStore(defaults: UserDefaults(suiteName: suite)!, directory: dir)
         await store.pair(try Pairing.generate(relay: relay, name: "CI Daylight"))
+        var said: [String] = []
+        let post = Announcer.post
+        Announcer.post = { said.append($0) }
+        defer { Announcer.post = post }
         let model = ShareExtensionModel(store: store)
         var finished = false
         model.onFinish = { finished = true }
@@ -209,6 +213,9 @@ final class ShareUITests: XCTestCase {
         }
         guard case .sent = model.phase else { return XCTFail("not sent: \(model.phase)") }
         XCTAssertEqual(model.note, "The page is larger than 8 MB, so its link was sent.")
+        // VoiceOver hears the note with the outcome, once (F27).
+        XCTAssertEqual(said.first, "Sent · waiting for your Daylight. The page is larger than 8 MB, so its link was sent.")
+        XCTAssertEqual(said.filter { $0.contains("larger than 8 MB") }.count, 1, "said once: \(said)")
         let row = try XCTUnwrap(OutboxStore(store: store).rows.first)
         XCTAssertEqual(row.kind, .url)
         XCTAssertEqual(row.url, "https://example.com/a-very-big-page")

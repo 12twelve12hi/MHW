@@ -11,7 +11,26 @@ struct MacRootView: View {
     static let minWidth: CGFloat = 440
     static let settingsWidth: CGFloat = 460
 
+    /// The Share menu's card is this wide (`ShareViewController`).
+    static let shareCardWidth: CGFloat = 360
+
     var body: some View {
+        #if DEBUG
+        // `-DLSShareCard <name>` (Debug builds, the UI tests' walk of the Share menu card): the card in one of its
+        // states (`ShareCardSample`), as wide as in the Share menu, in place of the window's content.
+        if let card = ShareCardSample.launchModel {
+            ShareExtensionView(model: card)
+                .frame(width: MacRootView.shareCardWidth)
+                .frame(minHeight: 260)
+        } else {
+            window
+        }
+        #else
+        window
+        #endif
+    }
+
+    private var window: some View {
         ZStack(alignment: .bottom) {
             if model.isPaired {
                 MacHomeView()
@@ -337,6 +356,9 @@ struct MacSettingsView: View {
                 Toggle(isOn: Binding(get: { model.comfort }, set: { model.setComfort($0) })) {
                     Text(Comfort.title).wrapping(Comfort.title)
                 }
+                // The Form puts the words and the switch apart; the switch needs its own name (F27: every control
+                // labelled).
+                .accessibilityLabel(Comfort.title)
                 .accessibilityIdentifier("comfort")
             } footer: {
                 Text(Comfort.footer).dlsFont(.callout).dlsSecondary().wrapping(Comfort.footer)

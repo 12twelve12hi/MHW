@@ -58,6 +58,20 @@ struct RootView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
+        #if DEBUG
+        // `-DLSShareCard <name>` (Debug builds, the UI tests' walk of the share card): the share sheet's card in one of
+        // its states (`ShareCardSample`) in place of the app.
+        if let card = ShareCardSample.launchModel {
+            ShareExtensionView(model: card)
+        } else {
+            app
+        }
+        #else
+        app
+        #endif
+    }
+
+    private var app: some View {
         ZStack(alignment: .bottom) {
             if model.isPaired {
                 HomeView()

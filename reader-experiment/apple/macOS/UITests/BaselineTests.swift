@@ -15,6 +15,8 @@ final class BaselineTests: XCTestCase {
         XCTAssertTrue(sheet.waitForExistence(timeout: 10), "Settings did not open")
         let comfort = sheet.descendants(matching: .any).matching(identifier: "comfort").firstMatch
         XCTAssertTrue(comfort.waitForExistence(timeout: 10), "no Comfort switch in Settings")
+        XCTAssertEqual(comfort.elementType, .switch)
+        XCTAssertEqual(comfort.label, "Comfort", "the switch has no name of its own")
         XCTAssertEqual(UITestSupport.text(comfort.value), "0", "Comfort is on by default")
         XCTAssertTrue(sheet.staticTexts["Larger text and buttons, more contrast, no motion."].exists, "no Comfort footer")
         comfort.click()
@@ -22,6 +24,26 @@ final class BaselineTests: XCTestCase {
         expectation(for: on, evaluatedWith: comfort)
         waitForExpectations(timeout: 5)
         UITestSupport.screenshot(app, "mac-settings-comfort-switched-on", in: self)
+    }
+
+    /// The Share menu's card keeps its own storage in the ad-hoc build (no App Group), so it has its own Comfort switch,
+    /// off, labelled, with its footer (F27: a switch in every build's settings; LAB-PLAN 1.1: such a card counts as its
+    /// own app).
+    @MainActor
+    func testTheShareMenuCardHasItsOwnComfortWithoutAnAppGroup() throws {
+        let app = UITestSupport.launchShareCard("needs-pairing")
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 30), "no window")
+        let comfort = window.descendants(matching: .any).matching(identifier: "comfort").firstMatch
+        XCTAssertTrue(comfort.waitForExistence(timeout: 30), "no Comfort switch on the Share menu card")
+        XCTAssertEqual(comfort.elementType, .switch)
+        XCTAssertEqual(comfort.label, "Comfort")
+        XCTAssertEqual(UITestSupport.text(comfort.value), "0", "Comfort is on by default")
+        XCTAssertTrue(window.staticTexts.matching(NSPredicate(format: "value == %@ OR label == %@", "Larger text and buttons, more contrast, no motion.", "Larger text and buttons, more contrast, no motion.")).firstMatch.exists, "no Comfort footer")
+        comfort.click()
+        expectation(for: NSPredicate(format: "value == 1 OR value == '1'"), evaluatedWith: comfort)
+        waitForExpectations(timeout: 5)
+        UITestSupport.screenshot(app, "mac-share-card-comfort-switched-on", in: self)
     }
 
     /// The pairing screen offers the typed code, and a typed code pairs.

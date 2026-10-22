@@ -4,10 +4,11 @@ import DaylightShareKit
 import DaylightShareUI
 import SwiftUI
 
-/// The truncation audit (LAB-PLAN F27.4), run by `SendToDaylightTests-macOS`: each main screen with sample data,
-/// hosted at its narrowest width (the window's minimum, 440 pt; the Settings sheet, 460 pt) with Comfort on (larger
-/// text on the Mac) and accessibility3, and every probed text's frame compared with the size it needs
-/// (`TruncationRecorder`). Debug builds only.
+/// The truncation audit (LAB-PLAN F27.4), run by `SendToDaylightTests-macOS`: each main screen with sample data, and
+/// the Share menu's card in each of its states (`ShareCardSample`), hosted at its narrowest width (the window's
+/// minimum, 440 pt; the Settings sheet, 460 pt; the card, 360 pt) with Comfort on (larger text on the Mac) and
+/// accessibility3, and every probed text's frame compared with the size it needs (`TruncationRecorder`). Debug builds
+/// only. The menu bar item's menu is drawn by the system at the width its items need, so it is not measured here.
 @MainActor
 enum AuditScreens {
     struct Report {
@@ -16,7 +17,10 @@ enum AuditScreens {
         let problems: [String]
     }
 
-    /// The main window (with a history row in every state), Settings and the pairing screen.
+    static var shareCardNames: [String] { ShareCardSample.allCases.map { "share-\($0.rawValue)" } }
+
+    /// The main window (with a history row in every state), Settings, the pairing screen and the Share menu's card in
+    /// each state (the card applies its model's Comfort itself, so its model has Comfort on).
     static func reports(shots: URL?) async -> [Report] {
         let paired = await sampleModel(paired: true)
         let unpaired = await sampleModel(paired: false)
@@ -27,6 +31,10 @@ enum AuditScreens {
                                  width: MacRootView.settingsWidth, height: 2000, shots: shots))
         out.append(await measure("pair", AnyView(MacPairView().environmentObject(unpaired)),
                                  width: MacRootView.minWidth, height: 1400, shots: shots))
+        for sample in ShareCardSample.allCases {
+            out.append(await measure("share-\(sample.rawValue)", AnyView(ShareExtensionView(model: sample.model(comfort: true))),
+                                     width: MacRootView.shareCardWidth, height: 1600, shots: shots))
+        }
         return out
     }
 
