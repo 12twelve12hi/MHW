@@ -260,7 +260,7 @@ ad-hoc build never opens. Gatekeeper's warning and *Allow unsigned extensions* w
 
 ### What CI does
 
-Four mac-lane jobs in [`rx-apple.yml`](../../.github/workflows/rx-apple.yml):
+Five mac-lane jobs in [`rx-apple.yml`](../../.github/workflows/rx-apple.yml):
 
 - **`check-mac-signing`** checks that all six secrets are present (it reads nothing else). **`mac-scripts`**
   shellchecks the signing and smoke-test scripts.
@@ -297,6 +297,10 @@ Four mac-lane jobs in [`rx-apple.yml`](../../.github/workflows/rx-apple.yml):
 - It then runs the smoke test, in which the app keeps its own storage: a self-signed signature carries no Team ID, so
   `SharedStore` never opens the group, and nothing asks for access.
 - It hands nothing on; the release gets the ad-hoc build from the `mac` job.
+- Its build, signing and smoke-test steps may fail without failing `mac-developer-id`. GitHub skips `publish` when
+  any job upstream of it failed, even indirectly, and `mac` runs after `mac-developer-id`. So
+  **`mac-developer-id-dry-run`**, which nothing needs, fails when the dry run did: the run turns red, and the ad-hoc
+  release still goes out.
 
 To sign on your own Mac instead, with the same environment variables as the secrets:
 
