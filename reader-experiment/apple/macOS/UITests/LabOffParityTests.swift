@@ -7,9 +7,10 @@ import XCTest
 ///
 /// The walks cover the main window (and its sheets), the Share menu's card and the menu bar item's menu; not the
 /// app's main menu, whose system items change with macOS. The main window and the menu bar item's menu are walked with
-/// the sample history (`-DLSSampleHistory`: a row in every state, the rows W1's timeline changes; the window at the
-/// top of its history, `main`, and at its end, `main-end`) and empty (`main-empty`, `menu-bar-empty`). Each row's age,
-/// which counts on by itself, is written "<when>".
+/// the sample history (`-DLSSampleHistory`: a row in every state, the rows W1's timeline changes; `main`, `menu-bar`)
+/// and empty (`main-empty`, `menu-bar-empty`). The History list (an outline) keeps every row in the tree whatever it
+/// shows, so one walk of the window holds all six (on the iPhone, whose list holds only the rows on screen, Home is
+/// walked at the top of its history and at its end). Each row's age, which counts on by itself, is written "<when>".
 ///
 /// The Lab switch row (`AXTree.labSwitchID`) is the one thing Lab off adds, in Settings and in the Share menu card's
 /// own settings (ad-hoc builds, LAB-PLAN 1.1; of the card's samples only `needs-pairing` shows them): it is left out
@@ -23,12 +24,10 @@ final class LabOffParityTests: XCTestCase {
         XCTAssertTrue(window.waitForExistence(timeout: 30), "no window")
         XCTAssertTrue(window.buttons["Settings"].waitForExistence(timeout: 30), "the main window did not show")
         XCTAssertTrue(UITestSupport.waitForHistory(app), "the sample history did not show")
+        XCTAssertTrue(UITestSupport.staticText(UITestSupport.historyLast, in: window).exists,
+                      "the History list does not hold its last row (the walk would miss rows: walk it at its end too)")
         UITestSupport.screenshot(app, "mac-lab-off-main", in: self)
         try UITestSupport.checkBaseline(window, screen: "main")
-
-        try UITestSupport.scrollHistoryToEnd(app)
-        UITestSupport.screenshot(app, "mac-lab-off-main-end", in: self)
-        try UITestSupport.checkBaseline(window, screen: "main-end")
     }
 
     @MainActor

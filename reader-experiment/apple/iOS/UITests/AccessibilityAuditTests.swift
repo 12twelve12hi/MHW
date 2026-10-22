@@ -22,6 +22,18 @@ final class AccessibilityAuditTests: XCTestCase {
                     return "a button in the navigation bar, which the system draws and caps in size (it offers the large content viewer instead)"
                 }
             }
+            // The audit measures contrast where an element is laid out, also where the list has scrolled it under the
+            // navigation bar (which blurs it) or past the bottom of the screen.
+            if issue.auditType == .contrast {
+                let app = XCUIApplication()
+                let bar = app.navigationBars.firstMatch
+                let screen = app.windows.firstMatch.frame
+                let top = bar.exists ? bar.frame.maxY : screen.minY
+                let shown = CGRect(x: screen.minX, y: top, width: screen.width, height: screen.maxY - top)
+                if !shown.insetBy(dx: -1, dy: -1).contains(element.frame) {
+                    return "an element the list has scrolled partly under the navigation bar or off the screen"
+                }
+            }
             return nil
         }
     }

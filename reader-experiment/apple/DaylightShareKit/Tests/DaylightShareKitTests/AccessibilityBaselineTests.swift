@@ -311,6 +311,33 @@ final class AccessibilityBaselineTests: XCTestCase {
         XCTAssertEqual(plain.rows, [])
     }
 
+    /// On iPhone and iPad a row's words are one VoiceOver element (the row's swipe action makes each small line a target
+    /// of its own otherwise): its title, its site rather than the whole link, its label and its sentence.
+    @MainActor
+    func testARowIsSaidInOneGoWithItsSite() {
+        let now = Date()
+        let rows = HistorySample.rows(now: now)
+        XCTAssertEqual(HistoryRowView.spokenLabel(rows[0], now: now), "\(HistorySample.title), example.com, Sending…")
+        XCTAssertEqual(HistoryRowView.spokenLabel(rows[1], now: now),
+                       "\(HistorySample.title), example.com, Waiting to send. Couldn’t send right now. It will try again by itself.")
+        XCTAssertEqual(HistoryRowView.spokenLabel(rows[3], now: now),
+                       "\(HistorySample.title), example.com, Delivered ✓ Saved on your Daylight.")
+        for row in rows { XCTAssertFalse(HistoryRowView.spokenLabel(row, now: now).contains("https://"), "a whole link is said") }
+
+        let link = "https://www.nytimes.com/2026/10/22/a-story.html"
+        let untitled = OutboxRow(id: "a", kind: .url, url: link, header: ItemHeader(id: "a", kind: .url, url: link, sent: ""),
+                                 created: now, status: .delivered)
+        XCTAssertEqual(HistoryRowView.spokenSource(untitled), "nytimes.com")
+        XCTAssertEqual(HistoryRowView.spokenLabel(untitled, now: now), "www.nytimes.com, Delivered ✓ Saved on your Daylight.",
+                       "the site once, when it is the title")
+        let file = OutboxRow(id: "b", kind: .file, name: "Report.pdf", mime: "application/pdf", size: 2_400_000,
+                             header: ItemHeader(id: "b", kind: .file, name: "Report.pdf", sent: ""), created: now,
+                             status: .sent)
+        XCTAssertEqual(HistoryRowView.spokenSource(file), file.displaySubtitle)
+        XCTAssertEqual(HistoryRowView.rowID, "history-row")
+        XCTAssertEqual(HistoryRowView.timeID, "history-row-time")
+    }
+
     // MARK: The UI tests' storage
 
     /// `-DLSTestStorage` gives a fresh, empty store of the process's own; without it there is none.

@@ -404,8 +404,8 @@ jobs:
 
       # The accessibility baseline (LAB-PLAN F27) and the Lab-off parity baselines (F00.2, 1.7) on the Mac: XCUITest
       # audits of the main window (empty, and with the sample history from its top to its end), Settings and pairing,
-      # with Comfort off and on (F27.2); the baseline's rules; the tree walk of the main window (with the history at its
-      # top and end, and empty), Settings, pairing, the Share menu card in each state and the menu bar item's menu (with
+      # with Comfort off and on (F27.2); the baseline's rules; the tree walk of the main window (with the history and
+      # empty), Settings, pairing, the Share menu card in each state and the menu bar item's menu (with
       # the history and empty) against macOS/UITests/lab-off-baseline, with the walk's own tests; and the truncation
       # audit hosted in the app (F27.4). A Debug build, signed ad hoc so the test runner may drive it; the app runs on
       # its own empty storage (with -DLSSampleHistory for the history).

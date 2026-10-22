@@ -90,7 +90,12 @@ Every build, with Lab on or off, has the same accessibility baseline (LAB-PLAN F
   share the app's storage (an App Group). Where they cannot (the released ad-hoc Mac build, a sideloaded iPhone build
   without the group), the card counts as an app of its own (LAB-PLAN 1.1) and has its **own Comfort switch**, with the
   same footer, under the pairing form, a result or a note: it is kept in the extension's own storage.
-- **Every control has a label** for VoiceOver, decorative images are hidden from it, and headings are marked.
+- **Every control has a label** for VoiceOver, decorative images are hidden from it, and headings are marked. On
+  iPhone and iPad each history row's words are one element, read in one go: its title, its site rather than the whole
+  link, its label and its sentence, with its age as the value ("A long read, example.com, Waiting to send. Couldn't
+  send right now. It will try again by itself.", "10 minutes"); its *Retry now* or *Try again* stays a button of its
+  own. (The row's swipe action, Remove, is offered on each element of a row, which made each small line of text a
+  target too small to hit.) On the Mac each text stays an element, as VoiceOver reads a table row's cells.
 - **States in words and glyphs**, never colour alone: each history row's label (*Delivered ✓*, *Waiting to send*,
   *Not delivered*) comes after a glyph for its state, and errors carry a warning sign.
 - **Status labels wrap** instead of being cut, at every text size: at accessibility sizes (and in Comfort) a row's
@@ -239,8 +244,11 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     is printed too. An audit the system stops before it finishes ("Audit failed to complete in time", seen on the
     first audit after the simulator starts) is run again, at most twice; issues are never run again. Allowed today: on the Mac, the system's Touch Bar and its emoji item, the Settings button's
     tooltip, the window title the system dims behind a sheet, groups inside the title-bar buttons, a parent/child
-    report that names no element, and text the open Settings sheet covers or has scrolled partly out of view (the
-    audit measures it where it is hidden); on the iPhone, a navigation-bar button's capped text size, and Dynamic
+    report that names no element, text the open Settings sheet covers or has scrolled partly out of view, and the
+    text of a history row the History list has scrolled partly or wholly out of view (its outline keeps every row in
+    the tree; the audit measures each text where it is laid out, also where it is hidden); on the iPhone, contrast
+    reports on an element the list has scrolled partly under the navigation bar or off the screen, a navigation-bar
+    button's capped text size, and Dynamic
     Type reports on exactly the texts `iOS/UITests/DynamicTypeWaivers.swift` names for the screen (today *Nothing
     sent yet.* on the empty Home and the device name's footer in Settings, which the audit loses at the largest size). That
     file is compiled into the unit tests too, and `testEveryTextGrowsWithTheTextSize` fails unless it measures each
@@ -249,18 +257,23 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     audits found and the apps now do: secondary text and section headers at 72% of the primary colour (the primary
     colour on the Mac), a tint of #0058CC and a destructive red of #C01010 (both at least 4.5:1, lighter in dark
     mode), no greyed-out buttons, text fields that grow to more lines, row text that the row sizes, the navigation
-    title kept in the bar, and a name on every switch.
+    title kept in the bar, a name on every switch, a history row's *Retry now* / *Try again* at the window's control
+    size (never small), and on the iPhone each history row's words as one element (below). An audit with an issue
+    nobody allowed prints a screenshot into the log (`UITestSupport.printShot`, a base64 JPEG between `=====BEGIN
+    shot …=====` markers, at most six a run), since the result bundle's screenshots cannot be read from the log.
   - `BaselineTests`: Comfort is in Settings, off by default, named, with its footer, and switches on; the share card
     without an App Group has its own Comfort switch; typing the code pairs.
   - `LabOffParityTests` (F00.2): an explicit walk of the accessibility tree (element type, label or title, and value,
     in order; never `debugDescription`) compared with `iOS/UITests/lab-off-baseline/*.json` and
-    `macOS/UITests/lab-off-baseline/*.json`: Home (the Mac's main window) with the sample history at its top (`home`,
-    `main`) and at its end (`home-end`, `main-end`; the list holds only the rows on screen) and empty (`home-empty`,
-    `main-empty`), Settings, pairing, the share card in each of its states (`-DLSShareCard`), and on the Mac the menu
+    `macOS/UITests/lab-off-baseline/*.json`: Home with the sample history at its top (`home`) and at its end
+    (`home-end`; the iPhone's list holds only the rows on screen) and empty (`home-empty`); the Mac's main window with
+    the sample history (`main`; its History outline keeps all six rows in the tree whatever it shows) and empty
+    (`main-empty`); Settings, pairing, the share card in each of its states (`-DLSShareCard`), and on the Mac the menu
     bar item's menu with the sample history (`menu-bar`, its six rows) and empty (`menu-bar-empty`). The rows are the
     ones W1's timeline (F01) changes: with Lab off they must read exactly as v1.1's. Each row's age (*2 days, 3 hr*),
-    which counts on by itself, carries the identifier `history-row-time` (`HistoryRowView.timeID`) and is written
-    `<when>`, as Android's walk does. The baselines were recorded from the P0 close-out (protocol 1.1 and this
+    which counts on by itself, is written `<when>`, as Android's walk does: on the Mac the age's own text
+    (`history-row-time`, `HistoryRowView.timeID`), on the iPhone the value of the row's one element (`history-row`,
+    `HistoryRowView.rowID`). The baselines were recorded from the P0 close-out (protocol 1.1 and this
     accessibility baseline) and are re-recorded only with a matching non-Lab change.
     The walk keeps every element that has a label, title or value, whatever its type, and every control even without
     one; it leaves out only containers without words and the system's scroll bars, and writes what depends on the

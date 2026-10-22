@@ -53,6 +53,11 @@ final class AccessibilityAuditTests: XCTestCase {
                 if inSheet.exists && scroll.exists && !scroll.frame.insetBy(dx: -1, dy: -1).contains(element.frame) {
                     return "text the Settings sheet has scrolled partly out of view"
                 }
+            } else if let list = UITestSupport.historyList(), !list.visible.insetBy(dx: -1, dy: -1).contains(element.frame),
+                      list.outline.staticTexts.matching(NSPredicate(format: "value == %@", value)).firstMatch.exists {
+                // The History list (an outline) keeps every row in the accessibility tree, also the rows it has
+                // scrolled away, and the audit measures each text where it is laid out.
+                return "text of a history row the History list has scrolled partly or wholly out of view"
             }
         }
         return nil

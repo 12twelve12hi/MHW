@@ -130,9 +130,9 @@ final class TreeWalkTests: XCTestCase {
         XCTAssertTrue(walk.nodes.contains(AXNode(type: "staticText", label: "Version, <version>", value: "")))
     }
 
-    /// A history row's age is written "<when>" (its words count on by themselves), as a label on the iPhone and as a
-    /// value on the Mac; the identifier is the one `HistoryRowView` gives it, and the sample history's words are the
-    /// shared copy's.
+    /// A history row's age is written "<when>" (its words count on by themselves): the age's own text, as a label or a
+    /// value, and the value of a row whose words are one element (the iPhone's). The identifiers are the ones
+    /// `HistoryRowView` gives them, and the sample history's words are the shared copy's.
     @MainActor
     func testARowsAgeIsWrittenAsWhen() throws {
         let tree = E(.window, label: "Send to Daylight", [
@@ -143,6 +143,8 @@ final class TreeWalkTests: XCTestCase {
                 E(.staticText, id: AXTree.rowTimeID),
                 E(.staticText, label: "12 sec"),
             ]),
+            E(.cell, [E(.other, id: AXTree.rowID, label: "A title, example.com, Delivered ✓. Saved on your Daylight.",
+                        value: "1 hour, 2 minutes")]),
         ])
         XCTAssertEqual(AXTree.walk(tree).nodes, [
             AXNode(type: "window", label: "Send to Daylight", value: ""),
@@ -150,6 +152,7 @@ final class TreeWalkTests: XCTestCase {
             AXNode(type: "staticText", label: AXTree.when, value: ""),
             AXNode(type: "staticText", label: "", value: AXTree.when),
             AXNode(type: "staticText", label: "12 sec", value: ""),
+            AXNode(type: "other", label: "A title, example.com, Delivered ✓. Saved on your Daylight.", value: AXTree.when),
         ])
         let ui = URL(fileURLWithPath: #filePath) // …/reader-experiment/apple/Shared/UITests/<this file>
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -157,10 +160,13 @@ final class TreeWalkTests: XCTestCase {
         let views = try String(contentsOf: ui.appendingPathComponent("Views.swift"), encoding: .utf8)
         XCTAssertTrue(views.contains("public static let timeID = \"\(AXTree.rowTimeID)\""),
                       "HistoryRowView.timeID is not AXTree.rowTimeID")
+        XCTAssertTrue(views.contains("public static let rowID = \"\(AXTree.rowID)\""), "HistoryRowView.rowID is not AXTree.rowID")
         let copy = try String(contentsOf: ui.deletingLastPathComponent().appendingPathComponent("DaylightShareKit/Copy.swift"),
                               encoding: .utf8)
         XCTAssertTrue(copy.contains("\"\(UITestSupport.historyFirst)\""))
         XCTAssertTrue(copy.contains("\"\(UITestSupport.historyLast)\""))
+        XCTAssertTrue(copy.contains("\"\(UITestSupport.historySecondButton)\""))
+        XCTAssertTrue(copy.contains("\"\(UITestSupport.historyLastButton)\""))
     }
 
     /// The type names follow the enum's raw values.

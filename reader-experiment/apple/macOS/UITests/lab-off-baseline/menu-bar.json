@@ -1,0 +1,66 @@
+{
+  "nodes" : [
+    {
+      "label" : "Send",
+      "type" : "statusItem",
+      "value" : ""
+    },
+    {
+      "label" : "Sending to Test Daylight",
+      "type" : "menuItem",
+      "value" : ""
+    },
+    {
+      "label" : "Send Clipboard Link",
+      "type" : "menuItem",
+      "value" : ""
+    },
+    {
+      "label" : "Send a File…",
+      "type" : "menuItem",
+      "value" : ""
+    },
+    {
+      "label" : "Sending… · A very long article title that goes on for a whi",
+      "type" : "menuItem",
+      "value" : ""
+    },
+    {
+      "label" : "Waiting to send · A very long article title that goes on for a whi",
+      "type" : "menuItem",
+      "value" : ""
+    },
+    {
+      "label" : "Not delivered · A very long article title that goes on for a whi",
+      "type" : "menuItem",
+      "value" : ""
+    },
+    {
+      "label" : "Delivered ✓ · A very long article title that goes on for a whi",
+      "type" : "menuItem",
+      "value" : ""
+    },
+    {
+      "label" : "Sent · waiting for your Daylight · A very long article title that goes on for a whi",
+      "type" : "menuItem",
+      "value" : ""
+    },
+    {
+      "label" : "Not delivered · A very long article title that goes on for a whi",
+      "type" : "menuItem",
+      "value" : ""
+    },
+    {
+      "label" : "Open Send to Daylight",
+      "type" : "menuItem",
+      "value" : ""
+    },
+    {
+      "label" : "Quit Send to Daylight",
+      "type" : "menuItem",
+      "value" : ""
+    }
+  ],
+  "platform" : "macos",
+  "screen" : "menu-bar"
+}

@@ -149,6 +149,32 @@ public struct HistoryRowView: View {
     /// name, one per row, and compares whatever the text says at the time it is measured.
     public static func timeProbe(_ row: OutboxRow) -> String { "the age of row \(row.id)" }
 
+    /// The accessibility identifier of a row's words as one element on iPhone and iPad (`spokenLabel`, with the row's
+    /// age as its value): the UI tests' walk writes that value as "<when>" (`AXTree.rowID`).
+    public static let rowID = "history-row"
+
+    /// What VoiceOver says for a row on iPhone and iPad, where its words are one element: its title, where it is from
+    /// (a link's site, not the whole link), its label and its sentence. "A long read, example.com, Waiting to send.
+    /// Couldn’t send right now. It will try again by itself." The row's age follows as the element's value.
+    public static func spokenLabel(_ row: OutboxRow, now: Date = Date()) -> String {
+        let source = spokenSource(row)
+        let title = row.displayTitle
+        return [title, title.localizedCaseInsensitiveContains(source) ? "" : source, RowText(row: row, now: now).message]
+            .filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+
+    /// Where a row is from, to be said: a link's or a page's site ("example.com"; a whole address is not something to
+    /// listen to), or a file's name and size.
+    public static func spokenSource(_ row: OutboxRow) -> String {
+        switch row.kind {
+        case .url, .page:
+            guard let host = URL(string: row.url)?.host, !host.isEmpty else { return row.kind == .page ? "Web page" : "" }
+            return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+        case .file:
+            return row.displaySubtitle
+        }
+    }
+
     public init(row: OutboxRow, onRetry: @escaping () -> Void) {
         self.row = row
         self.onRetry = onRetry
@@ -180,6 +206,16 @@ public struct HistoryRowView: View {
                         Text(sentence).dlsFont(.caption2).dlsSecondary().listRowText(sentence)
                     }
                 }
+                #if os(iOS)
+                // On iPhone and iPad the row's words are one VoiceOver element. The row's swipe action (Remove) is
+                // offered on each of its elements, which makes each line of small text a target of its own, too small
+                // to hit (F27.2's hit-region audit); as one element the row is also read in one go. The button stays an
+                // element of its own. On the Mac each text stays an element, as VoiceOver reads a table row's cells.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Self.spokenLabel(row))
+                .accessibilityValue(Text(row.created, style: .relative))
+                .accessibilityIdentifier(Self.rowID)
+                #endif
             }
             if !stacked { Spacer(minLength: 4) }
             if let title = text.buttonTitle {

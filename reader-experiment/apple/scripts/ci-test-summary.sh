@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # CI: what matters from an `xcodebuild test` log (each test's result, failures and compile errors, the accessibility
-# audits' AUDIT lines, the truncation audit's counts), then the Lab-off baselines the UI tests recorded (between
+# audits' AUDIT lines and the screenshots of a failed audit, the truncation audit's counts, the UI tests' notes), then
+# the Lab-off baselines the UI tests recorded (between
 # "=====BEGIN lab-off-baseline <platform>-<screen>.json=====" markers, ready to copy into lab-off-baseline/), and exits
 # with the test run's status. Each test class named after the status must have run and passed: at least one of its
 # tests passed and none failed or was skipped (an audit that skips on an older simulator, or a failure a re-run would
@@ -13,8 +14,21 @@ status=${3:-0}
 shift 3 2>/dev/null || shift $#
 
 echo "----- tests ($log) -----"
-grep -E "^Test Case .*(passed|failed|skipped)|error: |\*\* TEST |Executed [0-9]+ test|AUDIT |TruncationAudit |Test Suite .*(passed|failed)" "$log" \
-  | head -600 || true
+grep -E "^Test Case .*(passed|failed|skipped)|error: |\*\* TEST |Executed [0-9]+ test|AUDIT |TruncationAudit |UI test: |Test Suite .*(passed|failed)" "$log" \
+  | head -900 || true
+# Screenshots a failed audit printed (UITestSupport.printShot, base64 JPEGs; the result bundle's cannot be read from
+# the job log), as they are.
+python3 - "$log" <<'PY'
+import sys
+on = False
+for line in open(sys.argv[1], encoding='utf-8', errors='replace'):
+    if line.startswith('=====BEGIN shot '):
+        on = True
+    if on:
+        sys.stdout.write(line)
+    if line.startswith('=====END shot'):
+        on = False
+PY
 
 for f in "$dir"/*.json; do
   [ -e "$f" ] || continue

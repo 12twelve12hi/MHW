@@ -1,5 +1,10 @@
 import Foundation
 import XCTest
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 // Shared by the iPhone and Mac UI tests (apple/iOS/UITests, apple/macOS/UITests): launching the app on its own empty
 // storage (or with the sample history), the accessibility tree walk and the Lab-off baselines (LAB-PLAN 1.7, F00.2),
@@ -78,6 +83,9 @@ enum AXTree {
     /// The accessibility identifier of a history row's age (`HistoryRowView.timeID` in DaylightShareUI): its words
     /// ("2 days, 3 hr", "12 sec") count on by themselves, so the walk writes them as `when`, as Android's walk does.
     static let rowTimeID = "history-row-time"
+    /// The identifier of a history row's words as one element on the iPhone (`HistoryRowView.rowID`): its value is the
+    /// row's age, written as `when` too.
+    static let rowID = "history-row"
     static let when = "<when>"
 
     /// The element type's name in the baselines: `XCUIElement.ElementType`'s case name, by raw value
@@ -142,6 +150,7 @@ enum AXTree {
             if !label.isEmpty { label = when }
             if !value.isEmpty { value = when }
         }
+        if e.identifier == rowID && !value.isEmpty { value = when }
         guard !label.isEmpty || !value.isEmpty || alwaysKept.contains(e.type) else { return nil }
         return AXNode(type: typeName(e.type), label: label, value: value)
     }
@@ -244,9 +253,14 @@ enum UITestSupport {
     static let cardWithItsOwnSettings = "needs-pairing"
 
     /// The sample history's first row's label and last row's sentence (`HistorySample` in DaylightShareUI, shown with
-    /// `-DLSSampleHistory`; newest first): the history is there, and it is scrolled to its end.
+    /// `-DLSSampleHistory`; newest first).
     static let historyFirst = "Sending…"
     static let historyLast = "Your Daylight didn’t pick this up within a week. Is it on and online?"
+    /// The buttons of the sample history's second row ("Waiting to send") and of its last ("Not delivered" within a
+    /// week): the history is there, and it is scrolled to its end. Buttons, because on the iPhone a row's words are one
+    /// element (`HistoryRowView.spokenLabel`).
+    static let historySecondButton = "Retry now"
+    static let historyLastButton = "Try again"
 
     /// Starts the app on fresh, empty storage of its own (`-DLSTestStorage`), with Lab off (`-DLSLab 0`, for the Lab
     /// builds) and Comfort as given (nil: not set, so the app's default), paired with `pairingLink` or not, and with
@@ -300,17 +314,22 @@ enum UITestSupport {
         root.staticTexts.matching(NSPredicate(format: "label == %@ OR value == %@", words, words)).firstMatch
     }
 
-    /// Waits until the sample history shows (its newest row).
+    /// Waits until the sample history shows (its second row's button).
     static func waitForHistory(_ app: XCUIApplication, timeout: TimeInterval = 30) -> Bool {
-        staticText(historyFirst, in: app).waitForExistence(timeout: timeout)
+        app.buttons[historySecondButton].waitForExistence(timeout: timeout)
     }
 
-    /// Where each text is (its words and its top edge; a row's age by its identifier, since its words count on), to
-    /// tell whether a scroll moved anything.
+    /// The sample history's last row's button ("Try again"): hittable once the history is scrolled to its end.
+    static func historyEnd(in root: XCUIElement) -> XCUIElement {
+        root.buttons[historyLastButton]
+    }
+
+    /// Where each text and button is (its words and its top edge; a row's age by its identifier, since its words count
+    /// on), to tell whether a scroll moved anything.
     static func positions(_ app: XCUIApplication) throws -> [String] {
         var out: [String] = []
         func visit(_ s: XCUIElementSnapshot) {
-            if s.elementType == .staticText {
+            if s.elementType == .staticText || s.elementType == .button || s.identifier == AXTree.rowID {
                 let words = s.identifier == AXTree.rowTimeID ? AXTree.rowTimeID : (s.label.isEmpty ? AXTree.text(s.value) : s.label)
                 out.append("\(words)@\(Int(s.frame.minY.rounded()))")
             }
@@ -326,30 +345,31 @@ enum UITestSupport {
     static var scrollSign: CGFloat = -1
     #endif
 
-    /// Scrolls the history one step towards its end, without momentum: on the iPhone a slow drag over 40% of the
-    /// screen, by the left margin where no control is; on the Mac a scroll of the History list.
+    /// Scrolls the history one step towards its end, without momentum: on the iPhone a drag over half the screen, by
+    /// the left margin where no control is, held still before it lets go; on the Mac a scroll of the History list.
     static func scrollStep(_ app: XCUIApplication) {
         #if os(macOS)
         app.windows.firstMatch.outlines.firstMatch.scroll(byDeltaX: 0, deltaY: scrollSign * 120)
         #else
-        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.7))
+        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.8))
         let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.3))
-        from.press(forDuration: 0.1, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.3)
+        from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .default, thenHoldForDuration: 0.5)
         #endif
     }
 
-    /// Scrolls the history step by step to its end (until a step moves nothing), calling `atEachStep` with the step's
-    /// number after each step that moved. The iPhone's list holds only the rows on screen (and the Mac's may), so the
-    /// walks and audits see the history at its top and at its end, and the audits at every step between.
-    /// -> the steps that moved.
+    /// Scrolls the history step by step to its end, calling `atEachStep` with the step's number after each step that
+    /// moved: until a step moves nothing, or one step after the last row's button (`historyEnd`) can be hit. The
+    /// iPhone's list holds only the rows on screen, so the walks and audits see the history at its top and at its end,
+    /// and the audits at every step between. -> the steps that moved.
     @discardableResult
     static func scrollHistory(_ app: XCUIApplication, atEachStep: (Int) throws -> Void = { _ in }) throws -> Int {
         var last = try positions(app)
         var steps = 0
+        var pastEnd = false
         #if os(macOS)
         var turned = false
         #endif
-        for _ in 0..<40 {
+        for _ in 0..<80 {
             scrollStep(app)
             Thread.sleep(forTimeInterval: 1)
             let now = try positions(app)
@@ -366,15 +386,37 @@ enum UITestSupport {
             last = now
             steps += 1
             try atEachStep(steps)
+            if pastEnd { break }
+            pastEnd = historyEnd(in: app).isHittable
         }
         print("UI test: the history scrolled to its end in \(steps) steps")
         return steps
     }
 
-    /// Scrolls the history to its end and checks that its last row shows.
+    #if os(macOS)
+    /// The Mac's History list: the outline, and the part of it its scroll view shows (the outline keeps every row in
+    /// the accessibility tree, also the rows scrolled out of view). nil when the main window has none.
+    nonisolated static func historyList() -> (outline: XCUIElement, visible: CGRect)? {
+        let window = XCUIApplication().windows.firstMatch
+        let scroll = window.scrollViews.containing(.outline, identifier: nil).firstMatch
+        guard scroll.exists else { return nil }
+        let outline = scroll.outlines.firstMatch
+        guard outline.exists else { return nil }
+        return (outline, scroll.frame)
+    }
+    #endif
+
+    /// Scrolls the history to its very end (where the walk's tree is the same every time) and checks that its last row
+    /// shows.
     static func scrollHistoryToEnd(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) throws {
         try scrollHistory(app)
-        XCTAssertTrue(staticText(historyLast, in: app).exists, "the history's last row is not there at its end",
+        #if os(iOS)
+        // To the bottom of the list, wherever the last step stopped: flicks past the end come back to the same place.
+        app.swipeUp()
+        app.swipeUp()
+        Thread.sleep(forTimeInterval: 2)
+        #endif
+        XCTAssertTrue(historyEnd(in: app).isHittable, "the history's last row is not there at its end",
                       file: file, line: line)
     }
 
@@ -498,7 +540,7 @@ enum UITestSupport {
         try scrollHistory(app) { step in
             try audit(app, "\(screen), scrolled \(step)", types: types, allowed: allowed)
         }
-        XCTAssertTrue(staticText(historyLast, in: app).exists, "\(screen): the history's last row was not reached")
+        XCTAssertTrue(historyEnd(in: app).isHittable, "\(screen): the history's last row was not reached")
     }
 
     /// Runs Xcode's accessibility audit on what the app shows. Every issue is printed; an issue is ignored only when
@@ -510,9 +552,18 @@ enum UITestSupport {
     @available(iOS 17.0, macOS 14.0, *)
     static func audit(_ app: XCUIApplication, _ screen: String, types: XCUIAccessibilityAuditType = .all,
                       allowed: @escaping (XCUIAccessibilityAuditIssue) -> String? = { _ in nil }) throws {
+        #if os(macOS)
+        // Where the History list shows its rows, to place the issues on its texts (diagnostics only).
+        if let list = historyList() {
+            let f = list.visible
+            print("AUDIT \(platform) \(screen): the History list shows \(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))×\(Int(f.height))")
+        }
+        #endif
         var attempt = 1
         while true {
+            var failed = false
             do {
+                defer { if failed { printShot(app, "audit \(screen)") } }
                 try app.performAccessibilityAudit(for: types) { issue in
                     let description = describe(issue)
                     if let why = allowed(issue) {
@@ -520,6 +571,7 @@ enum UITestSupport {
                         return true
                     }
                     print("AUDIT \(platform) \(screen) issue: \(description)")
+                    failed = true
                     return false
                 }
                 return
@@ -536,9 +588,50 @@ enum UITestSupport {
         error.domain == "com.apple.xcode.xctest.accessibilityAudit" && error.code == -56
     }
 
+    /// The screenshots `printShot` has printed so far (at most `maxPrintedShots` a run).
+    static var printedShots = 0
+    static let maxPrintedShots = 6
+
+    /// Prints a screenshot of what the app shows into the log, as a JPEG at 1× between `=====BEGIN shot <name>=====`
+    /// and `=====END shot=====` (ci-test-summary.sh passes them on): the screenshots attached to the result bundle
+    /// cannot be read from the job log. Diagnostics only, for an audit that failed; at most `maxPrintedShots` a run.
+    static func printShot(_ app: XCUIApplication, _ name: String) {
+        guard printedShots < maxPrintedShots else { return }
+        printedShots += 1
+        #if os(macOS)
+        let window = app.windows.firstMatch
+        let image = (window.exists ? window.screenshot() : XCUIScreen.main.screenshot()).image
+        let size = image.size
+        guard size.width > 0, size.height > 0,
+              let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height),
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(origin: .zero, size: size))
+        NSGraphicsContext.restoreGraphicsState()
+        guard let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.6]) else { return }
+        #else
+        let image = XCUIScreen.main.screenshot().image
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let small = UIGraphicsImageRenderer(size: image.size, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: image.size))
+        }
+        guard let data = small.jpegData(compressionQuality: 0.6) else { return }
+        #endif
+        print("=====BEGIN shot \(platform) \(name)=====")
+        print(data.base64EncodedString())
+        print("=====END shot=====")
+    }
+
     @available(iOS 17.0, macOS 14.0, *)
     static func describe(_ issue: XCUIAccessibilityAuditIssue) -> String {
         var element = "no element"
+        if let e = issue.element, !e.exists {
+            // What it was, as far as the audit's reference tells without finding it again (diagnostics only).
+            element = "an element no longer there (\(String(describing: e).prefix(300)))"
+        }
         if let e = issue.element, e.exists {
             let value = text(e.value)
             element = "\(AXTree.typeName(e.elementType)) “\(e.label)”"
