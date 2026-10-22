@@ -23,6 +23,7 @@ import com.daylight.share.inbox.SyncState
 import com.daylight.share.sender.SenderRepo
 import com.daylight.share.sender.Shared
 import com.daylight.share.sender.ShareActivity
+import com.daylight.share.ui.sizeText
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -173,6 +174,29 @@ class ProtocolRulesTest {
     }
 
     // --------------------------------------------------------------------------------------------- the sender
+
+    /**
+     * A row's size line uses the units of its sentences (CHANGES-v1.1 2.5, `formatMB`): decimal and rounded up, so
+     * "PDF · 14.2 MB" sits above "…this one is 14.2 MB." and an 8,000,000-byte file is "8 MB" under "up to 9 MB".
+     */
+    @Test
+    fun rowSizesMatchTheSentences() {
+        assertEquals("", sizeText(0))
+        assertEquals("999 B", sizeText(999))
+        assertEquals("1 KB", sizeText(1_000))
+        assertEquals("45 KB", sizeText(45_000))
+        assertEquals("124 KB", sizeText(123_456))
+        assertEquals("999 KB", sizeText(999_000))
+        assertEquals("1 MB", sizeText(999_001))
+        assertEquals("8 MB", sizeText(8_000_000))
+        assertEquals("9 MB", sizeText(9_000_000))
+        assertEquals("9.1 MB", sizeText(9_000_001))
+        assertEquals("14.2 MB", sizeText(14_200_000))
+        for (n in listOf(9_000_001L, 12_000_000L, 14_200_000L, 52_428_800L)) {
+            val sentence = com.daylight.share.core.Text.tooBigMessage(n)
+            assertTrue(sentence, sentence.endsWith("this one is ${sizeText(n)}."))
+        }
+    }
 
     @Test
     fun aFileOver9MBIsRefusedBeforeItIsCopied() {

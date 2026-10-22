@@ -1,11 +1,14 @@
 package com.daylight.share
 
 import android.content.ComponentName
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.content.Intent
 import android.content.IntentFilter
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
@@ -13,6 +16,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.onNodeWithText
@@ -23,6 +27,7 @@ import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import com.daylight.share.core.FileOutboxStore
 import com.daylight.share.core.ItemHeader
+import com.daylight.share.core.Json
 import com.daylight.share.core.Kind
 import com.daylight.share.core.OutboxRow
 import com.daylight.share.core.Pairing
@@ -35,6 +40,7 @@ import com.daylight.share.ui.MainActivity
 import kotlinx.coroutines.runBlocking
 import org.robolectric.Shadows.shadowOf
 import java.io.File
+import kotlin.math.roundToInt
 
 /** The compose rule of the screen tests: the real app's MainActivity. */
 typealias AppRule = AndroidComposeTestRule<ActivityScenarioRule<MainActivity>, MainActivity>
@@ -100,6 +106,21 @@ object ScreenKit {
 
     /** The largest font scale Android offers (Settings › Display › Font size): 200 %. */
     const val LARGEST_FONT_SCALE = 2.0f
+
+    /**
+     * Turns Lab off before a screen is prepared: the Lab-off parity trees and the "lab-off" screenshots are taken with
+     * it (LAB-PLAN 1.7). K1: `app.prefs.lab = false` here, once Lab exists.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun labOff(app: App) = Unit
+
+    /** A string of `LAB_TEXT` (share/js/daylight-lab.js), from the shared Lab vectors. */
+    fun labText(key: String): String {
+        val path = System.getProperty("dls.labVectors") ?: error("dls.labVectors not set")
+        @Suppress("UNCHECKED_CAST")
+        val strings = ((Json.parse(File(path).readText()) as Map<String, Any?>)["labText"] as Map<String, Any?>)["strings"] as Map<String, Any?>
+        return strings[key] as? String ?: error("LAB_TEXT.$key is not in the Lab vectors")
+    }
 
     val senderPairing = Pairing(ByteArray(16) { (it + 1).toByte() }, NOWHERE, "Kitchen Daylight")
     val inboxPairing = Pairing(ByteArray(16) { (0x40 + it).toByte() }, NOWHERE, "Test Daylight")
@@ -246,6 +267,98 @@ object ScreenKit {
         return out
     }
 
+    // ------------------------------------------------------------------------- screenshots for review (F27.4, 1.7)
+
+    /**
+     * Saves what the app shows as `<name>.png` in `app/build/f27-screenshots` (CI uploads them for review; they are not
+     * compared): the root captured with `captureToImage()` under native graphics, cut 16 dp below the last row that holds
+     * anything but white (the test window is very tall). Returns the file, or null outside Gradle.
+     */
+    fun screenshot(compose: AppRule, name: String): File? {
+        val dir = System.getProperty("dls.screenshots")?.let(::File) ?: return null
+        compose.waitForIdle()
+        val full = try {
+            compose.onRoot().captureToImage().asAndroidBitmap()
+        } catch (e: Throwable) {
+            // captureToImage waits for the window to draw a frame; drawing the window's views gives the same pixels.
+            println("f27-screenshot: $name: captureToImage failed (${e.javaClass.simpleName}: ${e.message}); drawing the window instead")
+            val v = compose.activity.window.decorView
+            Bitmap.createBitmap(v.width, v.height, Bitmap.Config.ARGB_8888).also { v.draw(Canvas(it)) }
+        }
+        val pad = (16 * compose.density.density).roundToInt()
+        val height = minOf(full.height, lastInkedRow(full) + 1 + pad)
+        val shot = Bitmap.createBitmap(full, 0, 0, full.width, height)
+        dir.mkdirs()
+        val file = File(dir, "$name.png")
+        file.outputStream().use { shot.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        println("f27-screenshot: ${file.name} ${shot.width}x${shot.height}")
+        return file
+    }
+
+    private fun lastInkedRow(b: Bitmap): Int {
+        val row = IntArray(b.width)
+        for (y in b.height - 1 downTo 0) {
+            b.getPixels(row, 0, b.width, 0, y, b.width, 1)
+            if (row.any { it != WHITE }) return y
+        }
+        return 0
+    }
+
+    private const val WHITE = -1 // opaque white, 0xFFFFFFFF
+
+    // ------------------------------------------------------------------------------------------- motion (F27)
+
+    /**
+     * Where each text is: the unmerged tree's texts (scrubbed as in the parity tree) with their boxes, to the pixel, in
+     * the root, or from the top of the text [from] (and only the texts from there down). The Inbox's connection line is
+     * left out: the test relay's connection comes and goes on its own.
+     */
+    fun positions(compose: AppRule, from: String? = null): List<String> {
+        val nodes = ArrayList<Pair<String, androidx.compose.ui.geometry.Rect>>()
+        fun walk(n: SemanticsNode) {
+            val c = n.config
+            val texts = c.getOrNull(SemanticsProperties.Text)?.map { it.text }.orEmpty() +
+                c.getOrNull(SemanticsProperties.ContentDescription).orEmpty() +
+                listOfNotNull(c.getOrNull(SemanticsProperties.EditableText)?.text)
+            val words = texts.joinToString(" | ") { scrub(it) }
+            if (texts.isNotEmpty() && !words.contains("<connection status>")) nodes += words to n.boundsInRoot
+            n.children.forEach(::walk)
+        }
+        walk(compose.onRoot(useUnmergedTree = true).fetchSemanticsNode())
+        val top = if (from == null) 0f else nodes.firstOrNull { it.first == from }?.second?.top ?: error("no text \"$from\" on screen")
+        return nodes.filter { from == null || it.second.top >= top }.map { (words, b) ->
+            "$words @ ${b.left.roundToInt()},${(b.top - top).roundToInt()} ${b.width.roundToInt()}x${b.height.roundToInt()}"
+        }
+    }
+
+    /**
+     * What moves after [action] (a tap, a focus), frame by frame for 1.5 s: the screen may change once (at once, or
+     * when a tap is recognised), then it must hold still. An animation changes it frame after frame; this returns those
+     * changes (empty when there is no motion). Places are measured [from] a text when given ([positions]). F27:
+     * Comfort's "no motion", and the DC-1 Inbox never animates.
+     */
+    fun motionAfter(compose: AppRule, from: String? = null, action: () -> Unit): List<String> {
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        try {
+            val states = arrayListOf(positions(compose, from))
+            action()
+            repeat(MOTION_FRAMES) {
+                compose.mainClock.advanceTimeByFrame()
+                val now = positions(compose, from)
+                if (now != states.last()) states += now
+            }
+            if (states.size <= 2) return emptyList()
+            return states.zipWithNext().mapIndexed { i, (a, b) ->
+                "change ${i + 1} of ${states.size - 1}: " + (b - a.toSet()).take(4).joinToString("; ")
+            }
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    private const val MOTION_FRAMES = 94 // 1.5 s of 16 ms frames
+
     // ---------------------------------------------------------------------------- the semantics tree (LAB-PLAN 1.7)
 
     /**
@@ -277,18 +390,53 @@ object ScreenKit {
 
     private val CONTROL_TYPES = setOf("Button", "Checkbox", "Switch", "RadioButton", "Tab", "DropdownList", "TextField", "Clickable")
 
-    /** Subtrees left out of the tree by test tag: the Lab switch card (K1), the one difference Lab off keeps. */
-    val SKIPPED_TAGS = setOf("lab-switch")
+    /**
+     * The test tag of the Lab switch's card (K1), the one thing Lab off adds to a screen: [tree] leaves the card out,
+     * and [labCard] with [labOffCardProblems] check that with Lab off it holds only the switch (LAB-PLAN 1.1).
+     */
+    const val LAB_SWITCH_TAG = "lab-switch"
 
     /** The merged semantics tree under [root], in traversal order, flattened; containers without words are left out. */
     fun tree(root: SemanticsNode): List<A11yNode> {
         val out = ArrayList<A11yNode>()
         fun walk(n: SemanticsNode) {
-            if (n.config.getOrNull(SemanticsProperties.TestTag) in SKIPPED_TAGS) return
+            if (n.config.getOrNull(SemanticsProperties.TestTag) == LAB_SWITCH_TAG) return
             describe(n)?.let(out::add)
             n.children.forEach(::walk)
         }
         walk(root)
+        return out
+    }
+
+    /** The nodes of the Lab switch's card (tag [LAB_SWITCH_TAG]) under [root], in order; null when there is none. */
+    fun labCard(root: SemanticsNode): List<A11yNode>? {
+        var card: ArrayList<A11yNode>? = null
+        fun all(n: SemanticsNode, into: MutableList<A11yNode>) {
+            describe(n)?.let(into::add)
+            n.children.forEach { all(it, into) }
+        }
+        fun walk(n: SemanticsNode) {
+            if (n.config.getOrNull(SemanticsProperties.TestTag) == LAB_SWITCH_TAG) {
+                all(n, card ?: ArrayList<A11yNode>().also { card = it })
+                return
+            }
+            n.children.forEach(::walk)
+        }
+        walk(root)
+        return card
+    }
+
+    /**
+     * With Lab off the Lab card shows only the switch (LAB-PLAN 1.1): one switch, off, named [lab] (with its [footer]
+     * as one control, or the footer as its own text), and nothing else: no "What's in Lab ›", no "Daylight server ›".
+     */
+    fun labOffCardProblems(nodes: List<A11yNode>, lab: String, footer: String): List<String> {
+        val switches = nodes.filter { it.type == "Switch" && it.label in setOf(lab, "$lab\n$footer") }
+        val out = ArrayList<String>()
+        if (switches.size != 1) out += "the Lab card has ${switches.size} Lab switches, not one"
+        switches.filter { it.value != "off" }.forEach { out += "the Lab switch is not off: ${it.toJson()}" }
+        nodes.filter { it !in switches && !(it.type == "Text" && it.label in setOf(lab, footer)) }
+            .forEach { out += "shown with Lab off: ${it.toJson()}" }
         return out
     }
 

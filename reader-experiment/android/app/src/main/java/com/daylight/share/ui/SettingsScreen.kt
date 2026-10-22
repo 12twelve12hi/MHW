@@ -12,7 +12,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -99,9 +98,9 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
                 Choice("This is my Daylight (Inbox)", role == Role.INBOX) { if (role != Role.INBOX) confirmRole = Role.INBOX }
                 Choice("Send from this device", role == Role.SENDER) { if (role != Role.SENDER) confirmRole = Role.SENDER }
             }
-            OutlinedTextField(
-                value = name, onValueChange = { name = it.take(60) }, singleLine = true,
-                label = { Text(if (role == Role.INBOX) "Daylight name (shown to senders)" else "Device name (shown on the Daylight)") },
+            Field(
+                value = name, onValueChange = { name = it.take(60) },
+                label = if (role == Role.INBOX) "Daylight name (shown to senders)" else "Device name (shown on the Daylight)",
                 modifier = Modifier.fillMaxWidth(),
             )
             SecondaryButton("Save name") {
@@ -119,10 +118,10 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(RELAY_LIMITS, style = MaterialTheme.typography.bodySmall)
-            OutlinedTextField(
-                value = relay, onValueChange = { relay = it; relayError = null }, singleLine = true, label = { Text("Relay URL") },
+            Field(
+                value = relay, onValueChange = { relay = it; relayError = null }, label = "Relay URL",
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
-                isError = relayError != null, modifier = Modifier.fillMaxWidth(),
+                errorText = relayError, modifier = Modifier.fillMaxWidth(),
             )
             relayError?.let { Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced()) }
             if (checking) Text("Checking the relay: sending a 2 MB test file through it…", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced())

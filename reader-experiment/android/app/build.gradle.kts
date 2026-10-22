@@ -83,6 +83,12 @@ tasks.withType<Test>().configureEach {
     systemProperty("dls.labOffRecorded", layout.buildDirectory.dir("lab-off-baseline").get().asFile.absolutePath)
     inputs.file(rootProject.projectDir.resolve("../share/vectors/lab-vectors.json"))
     inputs.files(fileTree("src/test/lab-off-baseline")).withPropertyName("labOffBaselines")
+    // F27.4 and LAB-PLAN 1.7: each main screen as a PNG for review (with Lab off, and with Comfort at 200 % on a
+    // 360 dp phone), not compared. An output, so a cached test run brings them back too.
+    val screenshots = layout.buildDirectory.dir(if (name == "testDebugUnitTest") "f27-screenshots" else "f27-screenshots-$name").get().asFile
+    systemProperty("dls.screenshots", screenshots.absolutePath)
+    outputs.dir(screenshots).withPropertyName("f27Screenshots")
+    doFirst { screenshots.deleteRecursively() }
     testLogging {
         events("passed", "skipped", "failed")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL

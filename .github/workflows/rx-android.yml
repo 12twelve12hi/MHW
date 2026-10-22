@@ -121,6 +121,19 @@ jobs:
           path: reader-experiment/android/app/build/lab-off-baseline
           if-no-files-found: ignore
 
+      # F27.4 and LAB-PLAN 1.7: every main screen as a PNG, with Lab off and with Comfort at 200 % text on a 360 dp
+      # phone (AccessibilityTest), uploaded for review; they are not compared.
+      - name: F27 screenshots taken by this run
+        if: ${{ !cancelled() }}
+        run: ls -la app/build/f27-screenshots || echo "None: the screen tests did not run."
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: daylight-share-f27-screenshots
+          path: reader-experiment/android/app/build/f27-screenshots
+          if-no-files-found: warn
+
       - name: Name the APKs
         run: |
           mkdir -p out

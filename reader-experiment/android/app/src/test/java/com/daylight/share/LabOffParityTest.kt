@@ -1,8 +1,19 @@
 package com.daylight.share
 
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Column
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onRoot
+import com.daylight.share.ui.DaylightTheme
 import com.daylight.share.ui.MainActivity
+import com.daylight.share.ui.Section
+import com.daylight.share.ui.SwitchRow
+import com.daylight.share.ui.TextAction
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
@@ -20,8 +31,8 @@ import java.io.File
  * The baselines are `src/test/lab-off-baseline/<screen>.json`. They change only together with a non-Lab change of the
  * screen; then the test writes the new tree to `build/lab-off-baseline/` (also when one is missing) to review and copy
  * over. While the folder has no baseline at all, a screen without one is recorded and skipped; once it has any, every
- * screen must have one. The Lab switch card is left out of the tree by its test tag "lab-switch"
- * ([ScreenKit.SKIPPED_TAGS]): it is the one thing Lab off still shows.
+ * screen must have one. The Lab switch's card (test tag "lab-switch", [ScreenKit.LAB_SWITCH_TAG]) is the one thing Lab
+ * off adds: it is left out of the compared tree, and checked to hold only the switch, off (LAB-PLAN 1.1).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w360dp-h6000dp")
@@ -39,14 +50,15 @@ class LabOffParityTest {
     @Test fun inbox() = compare(MainScreen.INBOX)
     @Test fun inboxSettings() = compare(MainScreen.INBOX_SETTINGS)
 
-    /** Turns Lab off for the comparison (K1: `app.prefs.lab = false` here, once Lab exists). */
-    private fun labOff() = Unit
-
     private fun compare(screen: MainScreen) {
-        labOff()
+        ScreenKit.labOff(app)
         screen.prepare(app)
         screen.open(compose)
         val actual = stableTree()
+        ScreenKit.labCard(compose.onRoot().fetchSemanticsNode())?.let { card ->
+            val problems = ScreenKit.labOffCardProblems(card, ScreenKit.labText("lab"), ScreenKit.labText("switchFooter"))
+            if (problems.isNotEmpty()) fail("${screen.file}: with Lab off, only the Lab switch shows (LAB-PLAN 1.1):\n${problems.joinToString("\n")}")
+        }
         val dir = File(System.getProperty("dls.labOffBaselines") ?: error("dls.labOffBaselines not set"))
         val file = File(dir, "${screen.file}.json")
         if (!file.isFile) {
@@ -61,6 +73,44 @@ class LabOffParityTest {
             val recorded = record(screen, actual)
             fail("${screen.file} differs from its Lab-off baseline (${file.path}); this run's tree is in $recorded.\n${diff(expected, actual)}")
         }
+    }
+
+    /**
+     * The Lab card check sees what the comparison leaves out: with Lab off, the card may hold the switch (and its
+     * footer, or a title "Lab"), but not "What's in Lab ›" or anything else.
+     */
+    @Test
+    fun theLabCardMayHoldOnlyTheSwitch() {
+        val lab = ScreenKit.labText("lab")
+        val footer = ScreenKit.labText("switchFooter")
+        val more = mutableStateOf(false)
+        val on = mutableStateOf(false)
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                DaylightTheme {
+                    Column {
+                        Section(lab, Modifier.testTag(ScreenKit.LAB_SWITCH_TAG)) {
+                            SwitchRow(lab, on.value, detail = footer) { }
+                            if (more.value) TextAction("What’s in Lab ›") { }
+                        }
+                        SwitchRow("Comfort", false) { }
+                    }
+                }
+            }
+        }
+        fun problems(): List<String> {
+            compose.waitForIdle()
+            val root = compose.onRoot().fetchSemanticsNode()
+            val tree = ScreenKit.tree(root)
+            assertEquals("the card is left out of the compared tree", listOf("Comfort"), tree.map { it.label })
+            return ScreenKit.labOffCardProblems(ScreenKit.labCard(root)!!, lab, footer)
+        }
+        assertEquals(emptyList<String>(), problems())
+        more.value = true
+        assertTrue(problems().joinToString("\n"), problems().any { it.startsWith("shown with Lab off") && it.contains("What’s in Lab") })
+        more.value = false
+        on.value = true
+        assertTrue(problems().joinToString("\n"), problems().any { it.startsWith("the Lab switch is not off") })
     }
 
     /**

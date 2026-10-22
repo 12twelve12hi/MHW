@@ -167,12 +167,15 @@ is):
   off, switch"). States are words and glyphs ("Delivered ✓", "In your Reader ✓"), never colour alone.
 - Status lines are announced when they change: a sent item's label ("Delivered ✓"), an Inbox item's ("In your Reader
   ✓"), a share's result, the relay check's sentence. They wrap instead of being cut short, at any text size.
-- The Inbox (the DC-1's e-paper) never animates: no ripples, and the app's own switches and choices are drawn still.
-  The app uses no animated transitions in either role.
+- The Inbox (the DC-1's e-paper) never animates: no ripples, no stretch when a list is pulled past its end, and the
+  app's own switches, choices and text fields are drawn still (a field's label sits above it instead of sliding into
+  its border). Comfort does the same on a phone. The app uses no animated transitions in either role.
 - Pairing by typing the code always works: the phone has a "Pairing code" field, the Inbox shows the code in words
   under its QR code.
 - The share card stays up, with **Close**, while Comfort, TalkBack or Switch Access is on, instead of closing after a
   second or two.
+- Sizes are in the units of the status sentences (decimal, rounded up, `Text.formatMB`): a row says "PDF · 14.2 MB"
+  above "Too big to send. Files can be up to 9 MB; this one is 14.2 MB."
 
 ## Build
 
@@ -190,7 +193,8 @@ Without an Android SDK, Gradle builds only `:share-core`. `DLS_LIVE_RELAY=https:
 
 CI (`.github/workflows/rx-android.yml`) has a job per lane (LAB-PLAN 6.1): `core` runs the protocol tests and tries a
 live round trip through ntfy.sh; `app` builds both APKs, runs the app's tests and uploads the APKs as workflow
-artifacts (`daylight-share-apk` and `daylight-share-debug-apk`, the latter containing `daylight-share-debug.apk`);
+artifacts (`daylight-share-apk` and `daylight-share-debug-apk`, the latter containing `daylight-share-debug.apk`), with
+the F27 screenshots (`daylight-share-f27-screenshots`) and any re-recorded Lab-off trees;
 `publish` puts `daylight-share.apk` on the release once both passed. Android is not held by the Lab release gate.
 
 ### Screen tests (accessibility and Lab-off parity)
@@ -206,15 +210,27 @@ items, and its Settings.
   the test applies the same rules to the semantics tree and shows they catch that button. With Comfort at 200 % text
   on a 360 dp phone (native graphics, so text is measured as on a device), no text exceeds its lines or its box and no
   control is under 56 dp (F27.4; measured against each text's own box, because the layout the semantics action hands
-  out is redone at the column's full width). It also checks the Comfort switch and its words against `LAB_TEXT`, the
-  announcements, the static Inbox, the typed code, and the Inbox's relay-check and out-of-space sentences on screen.
+  out is redone at the column's full width). Each screen is saved as a PNG for review, not compared (F27.4, LAB-PLAN
+  1.7): `<screen>-lab-off.png` (Comfort off, the usual text size) and `<screen>-comfort-200.png`, in
+  `app/build/f27-screenshots/` (CI uploads them as `daylight-share-f27-screenshots`). Motion: the source may use no
+  animation API and none of Material's components that move by themselves (a self-test shows what the check catches),
+  Comfort and the Inbox provide no ripple and no overscroll effect, and tapping a field or "Show pairing code" changes
+  the screen once and then nothing moves for 1.5 s, frame by frame. It also checks the Comfort switch and its words
+  against `LAB_TEXT`, the announcements, the typed code, and the Inbox's relay-check and out-of-space sentences on
+  screen.
+- Comfort outside Compose: `HandoffDecisionsTest` checks the Inbox's card over the Reader with Comfort (text x1.3,
+  nothing cut short, stacked 56 dp buttons, the heading announced) and without, and the setup link's `comfort=1|0`;
+  `ShareCardTest` checks that the share card stays with a 56 dp **Close** under Comfort and closes by itself without.
 - `LabOffParityTest` (LAB-PLAN 1.7, F00.2) compares what a screen reader gets from each screen (the merged Compose
   semantics tree: type, label and value of each node, in order) with `app/src/test/lab-off-baseline/<screen>.json`,
   recorded from the P0 close-out (protocol 1.1 and the F27 baseline). Relative times, the version and the Inbox's
   connection line are replaced by placeholders. A baseline changes only together with a non-Lab change of its screen:
   the test then writes the new tree to `app/build/lab-off-baseline/` (CI prints it and uploads it as
-  `daylight-share-lab-off-trees`) to review and copy over. Lab tasks set Lab off in `labOff()`, and tag the Lab switch
-  card `Modifier.testTag("lab-switch")`: the comparison leaves it out, as the one thing Lab off still shows.
+  `daylight-share-lab-off-trees`) to review and copy over. Lab tasks set Lab off in `ScreenKit.labOff()` (used by the
+  parity test and the screenshots), and tag the Lab switch's card `Modifier.testTag("lab-switch")`: the comparison
+  leaves the card out, as the one thing Lab off adds, and checks that with Lab off it holds only the switch, off
+  ("Lab" with `LAB_TEXT.switchFooter`, and at most a "Lab" title): "What's in Lab ›", "Daylight server ›" or anything
+  else in the card fails (LAB-PLAN 1.1).
 
 ### Layout
 

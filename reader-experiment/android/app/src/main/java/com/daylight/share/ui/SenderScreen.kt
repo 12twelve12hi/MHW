@@ -14,7 +14,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -111,10 +110,10 @@ fun SenderScreen(activity: MainActivity, onSettings: () -> Unit) {
         } else {
             item {
                 Section("Send a link") {
-                    OutlinedTextField(
-                        value = link, onValueChange = { link = it }, singleLine = true,
-                        label = { Text("Link") },
-                        placeholder = { Text("https://…") },
+                    Field(
+                        value = link, onValueChange = { link = it },
+                        label = "Link",
+                        placeholder = "https://…",
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Send),
                         keyboardActions = KeyboardActions(onSend = { if (link.isNotBlank() && !busy) sendShared(Shared.Link(link.trim(), null)) }),
                         modifier = Modifier.fillMaxWidth(),
@@ -175,12 +174,12 @@ private fun PairSection(activity: MainActivity) {
             }
         }
         Text("Or type the code:", style = MaterialTheme.typography.bodyMedium)
-        OutlinedTextField(
-            value = code, onValueChange = { code = it; error = null }, singleLine = true,
-            label = { Text("Pairing code") },
-            placeholder = { Text("XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX") },
+        Field(
+            value = code, onValueChange = { code = it; error = null },
+            label = "Pairing code",
+            placeholder = "XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX",
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done),
-            isError = error != null,
+            errorText = error,
             modifier = Modifier.fillMaxWidth(),
         )
         error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced()) }

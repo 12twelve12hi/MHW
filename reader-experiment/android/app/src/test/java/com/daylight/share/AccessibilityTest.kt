@@ -2,6 +2,8 @@ package com.daylight.share
 
 import android.view.accessibility.AccessibilityManager
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.LocalRippleConfiguration
@@ -12,6 +14,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasSetTextAction
@@ -57,7 +60,9 @@ import java.io.File
  * The accessibility baseline (LAB-PLAN F27; not a Lab feature) on every main screen of both roles: the Accessibility
  * Test Framework's error rules (F27.2), announced status changes, and with Comfort at the largest text on a 360 dp phone
  * no text cut short and no control under 56 dp (F27.4). The window is tall, so every row of a list is laid out and
- * checked; native graphics, so text is measured as on a device.
+ * checked; native graphics, so text is measured as on a device. Each screen is saved as a PNG for review, with Lab off
+ * and with Comfort at 200 % (`app/build/f27-screenshots`, CI's `daylight-share-f27-screenshots`). Nothing moves: no
+ * animation in the source, no overscroll stretch, and a tap or a focus changes a screen once, then it holds still.
  *
  * Compose's `enableAccessibilityChecks()` runs too, but under Robolectric the framework sees only the Android views
  * (DecorView … AndroidComposeView), never Compose's nodes, so it passes whatever the screen holds. The same rules run
@@ -84,11 +89,13 @@ class AccessibilityTest {
     @Test fun inboxSettings() = checkScreen(MainScreen.INBOX_SETTINGS)
 
     private fun checkScreen(screen: MainScreen) {
+        ScreenKit.labOff(app)
         screen.prepare(app)
         screen.open(compose)
         compose.enableAccessibilityChecks()
 
-        // As shipped (Comfort off, the system's text size).
+        // As shipped (Comfort off, the system's text size), with Lab off.
+        ScreenKit.screenshot(compose, "${screen.file}-lab-off")
         compose.onRoot().tryPerformAccessibilityChecks()
         val problems = ScreenKit.accessibilityProblems(compose)
         assertTrue("${screen.file}:\n${problems.joinToString("\n")}", problems.isEmpty())
@@ -97,6 +104,7 @@ class AccessibilityTest {
         app.setComfort(true)
         ScreenKit.showAtLargestText(compose)
         screen.open(compose)
+        ScreenKit.screenshot(compose, "${screen.file}-comfort-200")
         val cut = ScreenKit.textOverflows(compose)
         assertTrue("${screen.file}, Comfort at ${ScreenKit.LARGEST_FONT_SCALE}x text: text cut short or clipped:\n${cut.joinToString("\n")}", cut.isEmpty())
         compose.onRoot().tryPerformAccessibilityChecks()
@@ -204,7 +212,7 @@ class AccessibilityTest {
         assertEquals(strings["comfortFooter"], A11yText.COMFORT_FOOTER)
     }
 
-    @OptIn(ExperimentalMaterial3Api::class)
+    @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
     @Test
     fun comfortScalesTextAndTargetsAndTheInboxNeverAnimates() {
         var baseScale = 0f
@@ -213,6 +221,7 @@ class AccessibilityTest {
         var text = 0.dp
         var target: Dp = 0.dp
         var ripple: Any? = "unread"
+        var overscroll: Any? = "unread"
         compose.runOnUiThread {
             compose.activity.setContent {
                 baseScale = LocalDensity.current.fontScale
@@ -222,6 +231,7 @@ class AccessibilityTest {
                     text = with(LocalDensity.current) { 18.sp.toDp() }
                     target = LocalMinimumInteractiveComponentSize.current
                     ripple = LocalRippleConfiguration.current
+                    overscroll = LocalOverscrollFactory.current
                 }
             }
         }
@@ -230,30 +240,138 @@ class AccessibilityTest {
         assertEquals(baseText.value * COMFORT_TEXT_SCALE, text.value, 0.01f)
         assertEquals(56.dp, target)
         assertNull("Comfort: no ripples", ripple)
+        assertNull("Comfort: no overscroll stretch", overscroll)
 
         // The phone role without Comfort keeps the usual feedback; the Inbox role never animates.
         app.setRole(Role.SENDER)
-        compose.runOnUiThread { compose.activity.setContent { DaylightTheme { ripple = LocalRippleConfiguration.current } } }
+        compose.runOnUiThread { compose.activity.setContent { DaylightTheme { ripple = LocalRippleConfiguration.current; overscroll = LocalOverscrollFactory.current } } }
         compose.waitForIdle()
         assertNotNull(ripple)
+        assertNotNull(overscroll)
         app.prefs.inboxRelay = ScreenKit.NOWHERE
         app.setRole(Role.INBOX)
-        compose.runOnUiThread { compose.activity.setContent { DaylightTheme { ripple = LocalRippleConfiguration.current; target = LocalMinimumInteractiveComponentSize.current } } }
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                DaylightTheme {
+                    ripple = LocalRippleConfiguration.current
+                    target = LocalMinimumInteractiveComponentSize.current
+                    overscroll = LocalOverscrollFactory.current
+                }
+            }
+        }
         compose.waitForIdle()
         assertNull("the Inbox: no ripples", ripple)
+        assertNull("the Inbox: no overscroll stretch", overscroll)
         assertEquals(48.dp, target)
     }
 
-    /** "No AnimatedVisibility or crossfades" (F27): the app's own code animates nothing, in either role. */
+    /**
+     * "No AnimatedVisibility or crossfades" (F27), and the Inbox never animates: the app's own code (comments left out)
+     * uses no animation API (animate*, Animat*, *Transition, enter/exit transitions, animation specs) and none of
+     * Material's components that move by themselves (its text fields float their labels; its switches, checks and
+     * radio buttons slide; progress indicators, menus, sheets, tabs and snackbars move). The app draws its own still
+     * ones: [com.daylight.share.ui.Field], [com.daylight.share.ui.SwitchRow], [com.daylight.share.ui.Choice].
+     */
     @Test
     fun theAppHasNoAnimations() {
         val src = File("src/main/java")
         assertTrue("run from the app module (cwd ${File(".").absolutePath})", src.isDirectory)
-        val banned = Regex("\\b(AnimatedVisibility|AnimatedContent|Crossfade|updateTransition|rememberInfiniteTransition|animateItem|animate[A-Z]\\w*AsState|Animatable)\\b")
         val found = src.walkTopDown().filter { it.extension == "kt" }.flatMap { f ->
-            f.readLines().mapIndexedNotNull { i, line -> if (banned.containsMatchIn(line)) "${f.name}:${i + 1}: ${line.trim()}" else null }
+            f.readLines().mapIndexedNotNull { i, line -> if (moves(line)) "${f.name}:${i + 1}: ${line.trim()}" else null }
         }.toList()
         assertTrue("animations in the app:\n${found.joinToString("\n")}", found.isEmpty())
+    }
+
+    /** The check of [theAppHasNoAnimations] catches each kind of animation, and leaves the app's still code alone. */
+    @Test
+    fun theAnimationCheckSeesAnimations() {
+        val moving = listOf(
+            "Column(Modifier.animateContentSize()) {",
+            "scope.launch { listState.animateScrollToItem(0) }",
+            "offset.animateTo(1f, tween(300))",
+            "val alpha by animateFloatAsState(if (on) 1f else 0f)",
+            "AnimatedVisibility(visible = open, enter = fadeIn() + expandVertically()) {",
+            "Crossfade(targetState = page) { p ->",
+            "val t = rememberInfiniteTransition()",
+            "items(rows, key = { it.id }) { row -> Row(Modifier.animateItem()) { } }",
+            "animationSpec = spring(stiffness = Spring.StiffnessLow)",
+            "OutlinedTextField(value = v, onValueChange = { v = it })",
+            "TextField(value, { })",
+            "Switch(checked = on, onCheckedChange = null)",
+            "    RadioButton(selected = true, onClick = null)",
+            "LinearProgressIndicator()",
+            "import androidx.compose.animation.core.Animatable",
+        )
+        moving.forEach { assertTrue(it, moves(it)) }
+        val still = listOf(
+            "// It never animates (the DC-1's e-paper)",
+            " * no animation in the source",
+            ".toggleable(value = checked, role = Role.Switch, onValueChange = onChange),",
+            ".selectable(selected = selected, role = Role.RadioButton, onClick = onClick),",
+            "BasicTextField(value = value, onValueChange = onValueChange)",
+            "Field(value = link, onValueChange = { link = it }, label = \"Link\", placeholder = \"https://…\")",
+            "LocalOverscrollFactory provides if (still) null else overscroll,",
+        )
+        still.forEach { assertFalse(it, moves(it)) }
+    }
+
+    private val animationApi = Regex(
+        "\\b(animate\\w*|Animat\\w+|\\w*Transition|Crossfade|fadeIn|fadeOut|slideIn\\w*|slideOut\\w*|expandIn|expandHorizontally|" +
+            "expandVertically|shrinkOut|shrinkHorizontally|shrinkVertically|scaleIn|scaleOut|tween|spring|keyframes\\w*|" +
+            "repeatable|infiniteRepeatable|snap)\\b|\\bandroidx\\.compose\\.animation\\b",
+    )
+    private val movingMaterial = Regex(
+        "(?<![.\\w])(OutlinedTextField|TextField|Switch|Checkbox|TriStateCheckbox|RadioButton|Slider|RangeSlider|" +
+            "CircularProgressIndicator|LinearProgressIndicator|DropdownMenu|ExposedDropdownMenuBox|ModalBottomSheet|" +
+            "BottomSheetScaffold|Snackbar|SnackbarHost|TabRow|ScrollableTabRow|PrimaryTabRow|SecondaryTabRow|NavigationBar|" +
+            "NavigationRail|FloatingActionButton|ExtendedFloatingActionButton|PullToRefreshBox|TooltipBox|SegmentedButton|" +
+            "SwipeToDismissBox|SearchBar|DockedSearchBar|DatePicker|TimePicker)\\s*\\(",
+    )
+
+    /** Whether a line of the app's source animates: code only (a line comment, or a KDoc or block comment line, is not). */
+    private fun moves(line: String): Boolean {
+        val code = line.trim()
+        if (code.startsWith("*") || code.startsWith("/*") || code.startsWith("//")) return false
+        val withoutComment = code.replace(Regex("\\s//.*$"), "")
+        return animationApi.containsMatchIn(withoutComment) || movingMaterial.containsMatchIn(withoutComment)
+    }
+
+    /** A tap or a focus changes the screen once, then it holds still: the phone's pairing-code field (F27, Comfort off). */
+    @Test
+    fun thePhonesFieldsHoldStill() {
+        ScreenKit.labOff(app)
+        MainScreen.SENDER_UNPAIRED.prepare(app)
+        MainScreen.SENDER_UNPAIRED.open(compose)
+        val field = compose.onNode(hasSetTextAction() and hasText("Pairing code"))
+        val moved = ScreenKit.motionAfter(compose) { field.performClick() }
+        assertTrue("the pairing-code field moved:\n${moved.joinToString("\n")}", moved.isEmpty())
+        field.assertIsFocused()
+        // Focused and empty, it shows the code's form at once.
+        compose.onNodeWithText("XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX", useUnmergedTree = true).assertExists()
+    }
+
+    /** The DC-1 Inbox never animates (F27, F15): showing the pairing code, and its Settings' fields. */
+    @Test
+    fun theInboxHoldsStill() {
+        ScreenKit.labOff(app)
+        MainScreen.INBOX.prepare(app)
+        MainScreen.INBOX.open(compose)
+        // The test relay is closed, so the live connection retries now and then and the status line under the title
+        // changes, moving everything below it: places are measured from the section's title.
+        val shown = ScreenKit.motionAfter(compose, from = "Pair a phone or computer") {
+            compose.onNodeWithText("Show pairing code").performClick()
+        }
+        assertTrue("showing the pairing code moved:\n${shown.joinToString("\n")}", shown.isEmpty())
+        compose.onNodeWithText("Hide").assertIsDisplayed()
+
+        compose.onNodeWithText("Settings").performClick()
+        compose.waitForIdle()
+        for (label in listOf("Daylight name (shown to senders)", "Relay URL")) {
+            val field = compose.onNode(hasSetTextAction() and hasText(label))
+            val moved = ScreenKit.motionAfter(compose) { field.performClick() }
+            assertTrue("$label moved:\n${moved.joinToString("\n")}", moved.isEmpty())
+            field.assertIsFocused()
+        }
     }
 
     @Test

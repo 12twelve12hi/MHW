@@ -11,8 +11,12 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
 import android.os.Looper
+import android.text.TextUtils
+import android.util.TypedValue
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.content.FileProvider
 import androidx.test.core.app.ApplicationProvider
@@ -205,15 +209,17 @@ class HandoffDecisionsTest {
         assertEquals(listOf("Ask with a notification", "Add to the library as a batch", "Open as they arrive"), DocumentMode.entries.map { it.label })
     }
 
+    /** Opens the debug builds' setup link (README "Debug builds") with [query] added, as an automated test does. */
+    private fun setup(query: String) {
+        val code = Pairing.generate().compactCode
+        val uri = Uri.parse("daylightshare://setup?role=inbox&c=$code&r=http%3A%2F%2F127.0.0.1%3A9&n=CI$query")
+        val c = Robolectric.buildActivity(MainActivity::class.java, Intent(Intent.ACTION_VIEW, uri).setClass(app, MainActivity::class.java)).setup()
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200))
+        c.pause().stop().destroy()
+    }
+
     @Test
     fun theDebugSetupLinkSetsDocuments() {
-        fun setup(query: String) {
-            val code = Pairing.generate().compactCode
-            val uri = Uri.parse("daylightshare://setup?role=inbox&c=$code&r=http%3A%2F%2F127.0.0.1%3A9&n=CI$query")
-            val c = Robolectric.buildActivity(MainActivity::class.java, Intent(Intent.ACTION_VIEW, uri).setClass(app, MainActivity::class.java)).setup()
-            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200))
-            c.pause().stop().destroy()
-        }
         setup("&auto=1")
         assertEquals(Role.INBOX, app.prefs.role)
         assertEquals(DocumentMode.OPEN, app.prefs.documentMode)
@@ -225,6 +231,22 @@ class HandoffDecisionsTest {
         setup("&to=")
         assertEquals("", app.prefs.deliverTo)
         assertEquals(DocumentMode.QUIET, app.prefs.documentMode)
+    }
+
+    /** `comfort=1|0` on the setup link turns Comfort (F27) on or off; a link without it leaves Comfort as it is. */
+    @Test
+    fun theDebugSetupLinkSetsComfort() {
+        assertFalse(app.prefs.comfort)
+        setup("&comfort=1")
+        assertTrue(app.prefs.comfort)
+        assertTrue(app.comfort.value)
+        assertLogged("comfort=1")
+        setup("")
+        assertTrue("kept", app.prefs.comfort)
+        setup("&comfort=0")
+        assertFalse(app.prefs.comfort)
+        assertFalse(app.comfort.value)
+        assertLogged("comfort=0")
     }
 
     // ------------------------------------------------------------------------------------------------ notifications
@@ -430,6 +452,72 @@ class HandoffDecisionsTest {
         assertNull(summary())
         assertFalse(WaitingCard.showing)
     }
+
+    /**
+     * The card over the Reader as shipped: the title cut after four lines, 48 dp buttons side by side (Later first); the
+     * heading is announced when it changes.
+     */
+    @Test
+    fun theCardOverTheReaderAsShipped() {
+        val card = cardFor(comfort = false)
+        assertEquals(View.ACCESSIBILITY_LIVE_REGION_POLITE, card.heading.accessibilityLiveRegion)
+        assertEquals(sp(18f), card.heading.textSize, 0.5f)
+        assertEquals(sp(16f), card.body.textSize, 0.5f)
+        assertEquals(4, card.body.maxLines)
+        assertEquals(TextUtils.TruncateAt.END, card.body.ellipsize)
+        assertEquals(LinearLayout.HORIZONTAL, card.row.orientation)
+        assertEquals(listOf(WaitingCard.TAG_LATER, WaitingCard.TAG_ADD), card.buttons.map { it.tag })
+        card.buttons.forEach { assertEquals(dp(48f), it.minHeight.toFloat(), 1f) }
+    }
+
+    /**
+     * With Comfort (F27) the card's text is 1.3 times larger and nothing is cut short; its buttons are 56 dp tall,
+     * stacked across the card, Add to Reader first; the heading is announced.
+     */
+    @Test
+    fun theCardOverTheReaderFollowsComfort() {
+        val card = cardFor(comfort = true)
+        assertEquals(View.ACCESSIBILITY_LIVE_REGION_POLITE, card.heading.accessibilityLiveRegion)
+        assertEquals(sp(18f * com.daylight.share.ui.COMFORT_TEXT_SCALE), card.heading.textSize, 0.5f)
+        assertEquals(sp(16f * com.daylight.share.ui.COMFORT_TEXT_SCALE), card.body.textSize, 0.5f)
+        assertEquals("every line of the body shows", Int.MAX_VALUE, card.body.maxLines)
+        assertNull("nothing ends in …", card.body.ellipsize)
+        assertEquals("PDF: Paper\nEPUB: Book\nPDF: Notes", card.body.text.toString())
+        assertEquals(LinearLayout.VERTICAL, card.row.orientation)
+        assertEquals(listOf(WaitingCard.TAG_ADD, WaitingCard.TAG_LATER), card.buttons.map { it.tag })
+        card.buttons.forEach {
+            assertEquals(dp(56f), it.minHeight.toFloat(), 1f)
+            assertEquals(sp(16f * com.daylight.share.ui.COMFORT_TEXT_SCALE), it.textSize, 0.5f)
+            assertEquals("across the card", ViewGroup.LayoutParams.MATCH_PARENT, it.layoutParams.width)
+            assertEquals(it.text.toString(), it.contentDescription.toString())
+        }
+    }
+
+    private class CardViews(val heading: TextView, val body: TextView, val row: LinearLayout, val buttons: List<TextView>)
+
+    /** The card for three waiting documents, with Comfort on or off. */
+    private fun cardFor(comfort: Boolean): CardViews {
+        app.setComfort(comfort)
+        shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        installReader()
+        inboxWith(pdf, epub, notes)
+        ShadowSettings.setCanDrawOverlays(true)
+        Handoff.dispatch(app) // "Ask": the documents wait for a tap
+        assertTrue(WaitingCard.showing)
+        assertEquals("3 new from iPhone", cardText(WaitingCard.TAG_HEADING))
+        val v = WaitingCard.view!!
+        val add = v.findViewWithTag<TextView>(WaitingCard.TAG_ADD)
+        val row = add.parent as LinearLayout
+        return CardViews(
+            heading = v.findViewWithTag(WaitingCard.TAG_HEADING),
+            body = v.findViewWithTag(WaitingCard.TAG_BODY),
+            row = row,
+            buttons = (0 until row.childCount).map { row.getChildAt(it) as TextView },
+        )
+    }
+
+    private fun sp(v: Float) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, v, app.resources.displayMetrics)
+    private fun dp(v: Float) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, app.resources.displayMetrics)
 
     @Test
     fun theCardOverTheReaderStaysUntilAnswered() {

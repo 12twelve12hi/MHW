@@ -3,9 +3,13 @@ package com.daylight.share.ui
 import android.text.format.DateUtils
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalOverscrollFactory
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +31,9 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -54,6 +61,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -62,6 +70,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.error
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -135,7 +144,8 @@ private class ComfortDensity(private val base: Density) : Density {
 
 /**
  * Black on white, large type, no colour: made for the DC-1's e-paper screen, fine on a phone. It follows the app's
- * Comfort switch, and in the Inbox role (the DC-1) nothing animates: no ripples, and the app's own controls are static.
+ * Comfort switch, and in the Inbox role (the DC-1) nothing moves: no ripples, no stretch at the end of a list, and the
+ * app's own controls and fields are static.
  */
 @Composable
 fun DaylightTheme(content: @Composable () -> Unit) {
@@ -147,20 +157,23 @@ fun DaylightTheme(content: @Composable () -> Unit) {
 
 /**
  * The theme with Comfort ([comfort]: text x1.3 via [LocalDensity], 56 dp touch targets, more contrast, no motion) and
- * [still] (no ripples: the DC-1 Inbox, and Comfort).
+ * [still] (no ripples and no overscroll stretch: the DC-1 Inbox, and Comfort).
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun DaylightTheme(comfort: Boolean, still: Boolean = comfort, content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = remember(comfort) { scheme(comfort) }, typography = remember(comfort) { typography(comfort) }) {
         val base = LocalDensity.current
         val density = remember(base, comfort) { if (comfort) ComfortDensity(base) else base }
+        val overscroll = LocalOverscrollFactory.current
         // One provider whatever the values, so switching Comfort keeps every screen's state (where you are, what you typed).
         CompositionLocalProvider(
             LocalComfort provides comfort,
             LocalDensity provides density,
             LocalMinimumInteractiveComponentSize provides if (comfort) COMFORT_TARGET else USUAL_TARGET,
             LocalRippleConfiguration provides if (still) null else RippleConfiguration(),
+            // Android 12+ stretches a list pulled past its end, and lets it spring back.
+            LocalOverscrollFactory provides if (still) null else overscroll,
             content = content,
         )
     }
@@ -175,6 +188,7 @@ fun PrimaryButton(text: String, modifier: Modifier = Modifier, enabled: Boolean 
         onClick = onClick, enabled = enabled, shape = square,
         modifier = modifier.heightIn(min = if (comfort) COMFORT_TARGET else 52.dp),
         colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = Paper, disabledContainerColor = Wash, disabledContentColor = Pencil),
+        elevation = null, // flat, and nothing rises under a pointer
     ) { Text(text) }
 }
 
@@ -331,6 +345,59 @@ fun Section(title: String? = null, modifier: Modifier = Modifier, content: @Comp
 }
 
 /**
+ * A one-line text field that never moves (F27: Comfort's "no motion", and the DC-1 Inbox never animates). Material's
+ * text fields slide their label into the border and fade the border on focus; here the [label] always sits above the
+ * box, focus thickens the border at once, and [placeholder] shows while the field is focused and empty. The label is
+ * part of the field for a screen reader ("Pairing code, edit box"); [errorText] is its error (the sentence under it
+ * says it in words).
+ */
+@Composable
+fun Field(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    placeholder: String? = null,
+    errorText: String? = null,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
+) {
+    val source = remember { MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    val style = MaterialTheme.typography.bodyLarge.copy(color = Ink)
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = if (errorText != null) modifier.semantics { error(errorText) } else modifier,
+        textStyle = style,
+        keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
+        singleLine = true,
+        interactionSource = source,
+        cursorBrush = SolidColor(Ink),
+        decorationBox = { inner ->
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(label, style = MaterialTheme.typography.bodyMedium)
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = target())
+                        .border(if (focused) 3.dp else 2.dp, Ink, square)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    if (focused && value.isEmpty() && placeholder != null) {
+                        // It wraps rather than run past the box at large text sizes.
+                        Text(placeholder, style = style.copy(color = MaterialTheme.colorScheme.onSurfaceVariant))
+                    }
+                    inner()
+                }
+            }
+        },
+    )
+}
+
+/**
  * The small card shown by the translucent activities (sharing, hand-off). Tapping outside it closes it. [close] adds a
  * Close button (with an [action], or alone for someone who needs time to read it).
  */
@@ -407,9 +474,14 @@ fun ago(ms: Long): String {
     }
 }
 
+/**
+ * A size for people in the units of the status sentences (CHANGES-v1.1 2.5): decimal and rounded up, so a row's size
+ * matches "Files can be up to 9 MB; this one is 14.2 MB." From 1 MB through `formatMB` ("8 MB", "14.2 MB"), below it
+ * in KB ("124 KB").
+ */
 fun sizeText(bytes: Long): String = when {
     bytes <= 0 -> ""
-    bytes < 1024 -> "$bytes B"
-    bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-    else -> String.format(java.util.Locale.US, "%.1f MB", bytes / 1048576.0)
+    bytes < 1_000 -> "$bytes B"
+    bytes <= 999_000 -> "${(bytes + 999) / 1_000} KB"
+    else -> "${com.daylight.share.core.Text.formatMB(bytes)} MB"
 }
