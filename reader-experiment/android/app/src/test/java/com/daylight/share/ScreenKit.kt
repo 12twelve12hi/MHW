@@ -109,10 +109,9 @@ object ScreenKit {
 
     /**
      * Turns Lab off before a screen is prepared: the Lab-off parity trees and the "lab-off" screenshots are taken with
-     * it (LAB-PLAN 1.7). K1: `app.prefs.lab = false` here, once Lab exists.
+     * it (LAB-PLAN 1.7).
      */
-    @Suppress("UNUSED_PARAMETER")
-    fun labOff(app: App) = Unit
+    fun labOff(app: App) = app.setLab(false)
 
     /** A string of `LAB_TEXT` (share/js/daylight-lab.js), from the shared Lab vectors. */
     fun labText(key: String): String {

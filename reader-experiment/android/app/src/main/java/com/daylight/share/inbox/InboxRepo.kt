@@ -6,6 +6,7 @@ import androidx.annotation.VisibleForTesting
 import com.daylight.share.core.ErrorCode
 import com.daylight.share.core.FileBody
 import com.daylight.share.core.FileReceiverStore
+import com.daylight.share.core.Http
 import com.daylight.share.core.ItemHeader
 import com.daylight.share.core.JsonFiles
 import com.daylight.share.core.Kind
@@ -49,6 +50,11 @@ data class InboxItem(
     val via: String? = null,
     val readerStatus: String? = null,
     val handedAt: Long = 0,
+    /**
+     * Where it came from: [LANE_PAIRING], the pairing's inbox topic (every item today), or [LANE_SERVER], the Daylight
+     * server's lane (Wave S, S0). Server-lane items get no Lab states (LAB-PROTOCOL 2.2.4): no sender holds their ids.
+     */
+    val lane: String = LANE_PAIRING,
 ) {
     val displayTitle: String
         get() = title?.takeIf { it.isNotBlank() } ?: name?.takeIf { it.isNotBlank() } ?: url ?: "Untitled"
@@ -71,7 +77,7 @@ data class InboxItem(
         "id" to id, "kind" to kind, "url" to url, "title" to title, "name" to name, "mime" to mime, "size" to size,
         "from" to from, "app" to app, "sent" to sent, "received" to received, "file" to file, "state" to state,
         "deliveredTo" to deliveredTo, "via" to via, "readerStatus" to readerStatus, "handedAt" to handedAt,
-    )
+    ).also { if (lane != LANE_PAIRING) it["lane"] = lane }
 
     companion object {
         /** Waiting for the hand-off to the Reader. */
@@ -86,6 +92,11 @@ data class InboxItem(
         const val IN_YOUR_READER = "In your Reader ✓"
         const val HANDED_TO_READER = "Handed to the Reader"
 
+        /** [lane]: the pairing's inbox topic. */
+        const val LANE_PAIRING = "pairing"
+        /** [lane]: the Daylight server's lane (Wave S). */
+        const val LANE_SERVER = "server"
+
         fun fromJson(m: Map<String, Any?>): InboxItem? {
             val id = m["id"] as? String ?: return null
             if (!ItemHeader.isId(id)) return null
@@ -95,7 +106,7 @@ data class InboxItem(
                 id = id, kind = s("kind") ?: Kind.URL, url = s("url"), title = s("title"), name = s("name"), mime = s("mime"),
                 size = l("size"), from = s("from"), app = s("app"), sent = s("sent") ?: "", received = l("received"),
                 file = s("file"), state = s("state") ?: WAITING, deliveredTo = s("deliveredTo"), via = s("via"),
-                readerStatus = s("readerStatus"), handedAt = l("handedAt"),
+                readerStatus = s("readerStatus"), handedAt = l("handedAt"), lane = s("lane") ?: LANE_PAIRING,
             )
         }
     }
@@ -187,21 +198,38 @@ class InboxRepo(private val app: App) {
     /** A new secret: every sender has to pair again. */
     @Synchronized
     fun resetPairing() {
+        val old = _pairing.value ?: app.prefs.inboxCode?.let { runCatching { Pairing(Pairing.parseCode(it)) }.getOrNull() }
         val p = Pairing(Pairing.generate().secret, app.prefs.inboxRelay, app.prefs.deviceName)
         app.prefs.inboxCode = p.compactCode
         receiver = null
         _pairing.value = p
+        // Reset pairing clears the Inbox's Lab store (F17): its states and hellos were the old pairing's.
+        old?.let { app.labReporter.forget(it.keys.inboxTopic) }
         logi("inbox: pairing reset")
     }
 
     /** Uses a given pairing (debug setup link, or a relay or name change). */
     @Synchronized
     fun usePairing(p: Pairing) {
+        val old = _pairing.value
         app.prefs.inboxCode = p.compactCode
         app.prefs.inboxRelay = p.relay
         receiver = null
         _pairing.value = Pairing(p.secret, p.relay, app.prefs.deviceName)
+        // Another secret (the debug setup link): the old pairing's Lab store goes, as with Reset pairing.
+        if (old != null && !old.sameSecret(p)) app.labReporter.forget(old.keys.inboxTopic)
     }
+
+    /** The HTTP of the Inbox's relay clients (tests plug in a fake relay); null: the app's own. */
+    @VisibleForTesting
+    internal var http: Http? = null
+        set(v) {
+            field = v
+            synchronized(this) { receiver = null }
+        }
+
+    /** The HTTP the Inbox's relay clients use (the Receiver's, and the Lab frames'). */
+    fun relayHttp(): Http = http ?: UrlConnectionHttp("DaylightShare/${BuildConfig.VERSION_NAME} (inbox)")
 
     /** The relay check (PROTOCOL 3.4) of [relay]: null when it passes, else the failure with its sentence. */
     fun checkRelay(relay: String): ShareException? =
@@ -249,7 +277,7 @@ class InboxRepo(private val app: App) {
             pairing = p,
             store = FileReceiverStore(File(dir, "receiver-${p.keys.inboxTopic}.json")),
             reassembler = Reassembler(File(dir, "spool")),
-            relay = RelayClient(p.relay, UrlConnectionHttp("DaylightShare/${BuildConfig.VERSION_NAME} (inbox)")),
+            relay = RelayClient(p.relay, relayHttp()),
             from = app.prefs.deviceName,
             accept = ::accept,
         )
@@ -272,10 +300,13 @@ class InboxRepo(private val app: App) {
             r.ackError?.let { logw("inbox: ack failed: $it (the next poll publishes the digest)") }
             r.storeError?.let { logw("inbox: could not store an item: $it (it comes back with the sender's next re-send)") }
             if (r.limited) logw("inbox: the relay is limiting this network (429/413 on a download)")
+            // Lab (F17): once the poll's acks are out, the Lab frames follow, last on the relay budget.
+            app.labReporter.afterPoll(ackFailed = r.ackError != null, limitStatus = r.limitStatus)
             r.items.size
         } catch (e: Exception) {
             logw("inbox: poll failed: ${e.message ?: e.javaClass.simpleName}" + ((e as? ShareException)?.status?.let { " (status $it)" } ?: ""))
             sync.value = sync.value.failed(e)
+            app.labReporter.pollFailed((e as? ShareException)?.status ?: 0)
             0
         }
     }
@@ -285,13 +316,17 @@ class InboxRepo(private val app: App) {
         val r = receiver()
         val res = r.handleLive(listOf(msg))
         if (res.ackIds.isNotEmpty()) {
-            val error = r.publishAcks(res.ackIds)
+            // sendAcks, not publishAcks: Lab needs the ack publish's 429 or 413 too (LAB-PROTOCOL 2.2.4).
+            val out = r.sendAcks(res.ackIds)
+            val error = out.error
             if (error != null) {
                 // The next poll publishes the digest, which carries these ids (PROTOCOL 3.4 step 4).
                 logw("inbox: ack failed: $error")
                 r.ackFailed()
             }
+            app.labReporter.afterLiveAcks(ackFailed = error != null, limitStatus = out.limitStatus)
         }
+        app.labReporter.afterLive(limitStatus = res.limitStatus, flush = res.items.isNotEmpty() || res.ackIds.isNotEmpty())
         if (res.items.isNotEmpty()) sync.value = sync.value.copy(lastCheck = System.currentTimeMillis(), error = null, storeFull = false)
         if (res.storeError != null) {
             logw("inbox: could not store an item: ${res.storeError} (it comes back with the sender's next re-send)")

@@ -203,6 +203,58 @@ Robolectric cannot show these; they belong to the W0 device round on the DC-1 (R
   the role question appear without animating; the same on a phone with Comfort.
 - A camera-scanned pairing link with Comfort on: the pairing question is as large as the rest of the app.
 
+## Lab
+
+Every build has **Lab** (LAB-PLAN, card K1 for Wave 0): one switch, first in Settings in both roles, **on by default**,
+for the features we are trying out. Its footer: "New features we’re trying out. Turn Lab off for the plain app; nothing
+you sent is lost." The switch belongs to the device: pairing, unpairing, re-pairing and updates leave it as it is, and
+it is never in a pairing link. With Lab off, every screen is the plain app's (the tests compare each main screen with
+the last non-Lab build's) and the Inbox publishes no Lab frame but the one that says Lab went off. Comfort is not under
+Lab.
+
+With Lab on, the Lab card has two more rows:
+
+- **What’s in Lab ›**: one row per Lab feature this build has, each with its name, one sentence and a short state
+  ("Ready", "Pair first", …), then the four features that need your own Daylight server, always listed, under "With your
+  Daylight server (optional)": Files over 9 MB, Summaries with Claude, Email-in address, Feeds and daily digest, with
+  the server's state under the heading ("Not set up"). On the phone its first line is what your Daylight said about Lab
+  ("Your Daylight: Lab on · checked in 4 min ago", or "Needs Lab on your Daylight"). Nothing is greyed out: tapping a
+  feature that is not set up shows one sentence under it that says what is missing and where to add it ("Needs your
+  Daylight server. Add the Cloudflare secrets to turn this on (Lab › Daylight server shows how).", with **Copy Server
+  code**), announced to TalkBack, until OK, another tap or leaving the screen. A server that does not answer within 5 s
+  is "Couldn’t reach the Daylight server." Wave 0 has no Lab feature of its own on Android yet (the delivery timeline
+  and the rest come with Wave 1), and no one-time note (it comes with the first Wave 1 build).
+- **Daylight server ›** ("Optional · Not set up"): where the server is set up, so it has the long texts: its state
+  (with the exact secret names), the server's address and fingerprint, the **Server code** with **Copy** (the deploy's
+  `DAYLIGHT_SERVER_CODE`; the `daylightserver://` form when the relay is not ntfy.sh), when the server last heard from
+  the Lab Inbox, today's AI use, an optional **Server address**, and how to re-run the deploy. A server that moved asks
+  "Your Daylight server moved to {host}. Use it?". The setup link of the iPhone and Mac apps comes to Android in Wave S;
+  until then paste it there. On the Inbox the server lane comes in Wave S: its section shows how to set the server up
+  and the Server code.
+
+The phone finds its Daylight server only with Lab on, and keeps what it knows in `files/server.json` (outside the
+outbox, so a server that still has your old pairing shows "pairing-mismatch"). Pairing with another Daylight first locks
+a server that knew the old pairing (Lab on or off), and the home screen then shows the new Server code and the re-run
+help until OK. Unpair and a new pairing forget a typed Server address.
+
+**What the phone hears.** Every ack-topic frame that decrypts goes into a small ledger next to the outbox
+(`files/outbox/<inboxTopic>/lab.json`), Lab on or off, so turning Lab on shows the right states at once. It holds what
+each Inbox said in its last hello and the latest state of this phone's items.
+
+**What the Inbox says (F17).** In the Inbox role, `inbox/LabReporter.kt` publishes Lab frames on the ack topic, last on
+the network's relay budget (LAB-PROTOCOL 2.2.4): a **hello** (`lab`, `android/<versionName>`, its caps `st` and `tap`,
+plus `reader-link` when the app links go to takes SAVE_PAGE; when it last polled; whether Instant delivery is
+connected) and the **state** of each item from a paired device: `waiting` when it is first announced (once), `held` when
+its card is answered Later or its notification swiped away, `reader` / `queued` / `handed` from the Reader's answer
+(`saved` and `duplicate` are `reader`; documents, shared links and anything unknown are `handed`) and `inbox` when it
+stays in the Inbox. It sends them after each poll or live batch once the acks are out, at the end of each hand-off and
+2 s after a state, at most one frame every 30 s and 30 a day; nothing while the last acks failed or for an hour after
+the relay answered 429 or 413; hellos when Lab goes on, when the caps or the version change, and every 11 hours
+(at most 3 a day while idle); with the 11-hourly ack digest it repeats the states of the last 48 hours. Turning Lab
+off sends one frame with `lab: 0`, repeated after each digest for 48 hours; then nothing. With no network it waits for
+the `lab-flush` job. Reset pairing clears its store (`files/inbox/lab-<inboxTopic>.json`). Items that come from the
+Daylight server (Wave S) get no states.
+
 ## Build
 
 Requirements: JDK 17 or 21. The protocol module needs nothing else; the APK needs the Android SDK (platform 35).
@@ -211,7 +263,7 @@ Requirements: JDK 17 or 21. The protocol module needs nothing else; the APK need
 cd reader-experiment/android
 ./gradlew :share-core:test          # protocol tests: vectors, mock relay (needs node), JS interop
 ./gradlew :app:assembleRelease      # needs ANDROID_HOME or sdk.dir in local.properties
-./gradlew :app:testDebugUnitTest    # Robolectric: share parsing, Reader routing, hand-off and notification decisions, screens, accessibility, Lab-off parity
+./gradlew :app:testDebugUnitTest    # Robolectric: share parsing, Reader routing, hand-off and notification decisions, screens, accessibility, Lab-off parity, Lab
 ```
 
 Without an Android SDK, Gradle builds only `:share-core`. `DLS_LIVE_RELAY=https://ntfy.sh ./gradlew :share-core:test
@@ -268,6 +320,20 @@ items, and its Settings.
   ("Lab" with `LAB_TEXT.switchFooter`, and at most a "Lab" title): "What's in Lab ›", "Daylight server ›" or anything
   else in the card fails (LAB-PLAN 1.1).
 
+### Lab tests (K1)
+
+The Lab tests send every relay and Daylight server request to a relay in memory (`FakeRelay`), with no server deployed
+unless a test says so.
+
+| Test | Covers |
+|---|---|
+| `PrefsLabTest` | 1.2: a missing key means on and the first start writes it (fresh install and upgrade), a stored off stays off; the one-time note only with `LAB_NOTE_ENABLED`, once; the switch is never part of a pairing; Comfort stays as it is (F27.6); F00.4: an item queued offline goes once online with Lab turned off meanwhile, and the history, the pairing, the ledger and the server pin stay; the ledger hears hellos with Lab off |
+| `LabFirstRunTest` | F00.1 (Lab on, no note in a W0 build, an upgrade keeps pairing and history) and F00.7: no screen reachable without tapping a Lab feature or opening the Daylight server section names a secret or says how to set something up, in both roles |
+| `LabNoteTest` | F00.3 (short states, the server group, a tap shows exactly the sentence under the row, announced, enabled, with Copy Server code and OK; one note at a time, gone when leaving), F00.5 (the vector pairing's Server code shown and copied), F00.6 (OFFLINE offline, and at 5 s from a relay that never answers, "Checking…" first), F17.2 ("Needs Lab on your Daylight" and "Delivered ✓" until a hello, then "Your Daylight: Lab on"), the Inbox's list and section, turning Lab off in the card, the one-time note, the re-pairing card |
+| `LabReporterTest` | F17 on the Inbox: 2.2.3's mapping through the real hand-off (every SAVE_PAGE answer, a refused SAVE_PAGE shared as a link, documents, no Reader, content gone, an unknown status as handed, nothing for "started"), `waiting` once and a held item that is announced again stays held, server-lane items record nothing; the hello and its caps, the log lines, giving way after a failed ack publish and a 429/413 from polls and the live path, F17.3's hello cadence with a fake clock (3 a day while idle, one more per toggle, 30 s apart), `lab: 0` and its repeats, a new store with Lab off publishes nothing, Reset pairing, and the setup link's `lab=` |
+| `LabScreensAccessibilityTest` | F27 on Lab's screens: What's in Lab with a note open and the Daylight server section, phone and Inbox, as shipped and with Comfort at 200 % text (`lab-*.png` among the screenshots) |
+| `LabOffParityTest` | F00.2: with Lab off each main screen equals its baseline, and the Settings of both roles have the Lab card holding only the switch, off |
+
 ### Layout
 
 - `share-core/`: the protocol in plain Kotlin/JVM, no Android classes, no dependencies, so the Reader can embed it:
@@ -275,7 +341,10 @@ items, and its Settings.
   `Outbox` (sender) and `Receiver` (Inbox), plus `RowText` (the shared status words), `PairingConfirmation` and
   `RelayProbe` (the Inbox's relay check).
 - `app/`: Compose UI (`ui/`), the share target and outbox (`sender/`), the Inbox (`inbox/`: receiving, live
-  connection, Instant delivery service, hand-off to the Reader), WorkManager jobs (`Work.kt`).
+  connection, Instant delivery service, hand-off to the Reader), WorkManager jobs (`Work.kt`). Lab: `LabRepo.kt` (the
+  gates, What's in Lab, the Daylight server; `LAB_NOTE_ENABLED`), `ui/LabScreen.kt` (the Lab card, What's in Lab, the
+  note, the server section) and `inbox/LabReporter.kt` (the Inbox's Lab frames and the `lab-flush` job); `Prefs.lab`
+  with `App.labOn` is the one reading of the switch.
 
 ### Debug builds: setup without the UI
 
@@ -289,7 +358,7 @@ adb shell am start -a android.intent.action.VIEW \
 which makes the device the Inbox with that pairing secret and relay (`role=sender` pairs a sender instead;
 `instant=1` turns on Instant delivery; `docs=ask|quiet|open` sets **Documents**, and `auto=1` / `auto=0` mean
 `docs=open` / `docs=ask`; `to=<package>` sets **Deliver to**, `to=` puts it back to Automatic; `comfort=1` / `comfort=0`
-sets **Comfort**). Debug builds also allow
+sets **Comfort**; `lab=1` / `lab=0` sets the **Lab** switch before the role, so the Inbox's first Lab frame follows it). Debug builds also allow
 plain HTTP to `10.0.2.2`, `127.0.0.1` and `localhost`. The setup link also skips the
 notification-permission prompt. Everything is logged under the tag `DaylightShare` (`adb logcat -s DaylightShare`):
 
@@ -299,6 +368,15 @@ received <id> kind=<url|page|file> -> handed to <package> via <save_page|send_li
 received <id> kind=<...> -> waiting for a tap (<card + notification|notification|card|notifications off>)[ docs=<ask|quiet|open>]
 received <id> -> notification dismissed: waits in the Inbox
 received <id> kind=<...> -> kept in inbox (no reader installed) status=no_reader
+```
+
+With Lab on, the Inbox also logs its Lab frames (LAB-PLAN F17):
+
+```
+lab: state <id> <waiting|held|inbox|handed|failed|queued|reader>
+lab: hello caps=<st,tap[,reader-link]>
+lab: states n=<k> published
+lab: hello lab=0
 ```
 
 `docs=` (documents only) is the **Documents** choice at the time; `by=` says whether the Inbox was in front, handed

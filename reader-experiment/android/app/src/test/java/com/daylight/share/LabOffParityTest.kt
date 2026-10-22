@@ -55,8 +55,12 @@ class LabOffParityTest {
         screen.prepare(app)
         screen.open(compose)
         val actual = stableTree()
-        ScreenKit.labCard(compose.onRoot().fetchSemanticsNode())?.let { card ->
-            val problems = ScreenKit.labOffCardProblems(card, ScreenKit.labText("lab"), ScreenKit.labText("switchFooter"))
+        val card = ScreenKit.labCard(compose.onRoot().fetchSemanticsNode())
+        // Settings has the Lab switch in both roles (LAB-PLAN 1.1, K1); no other main screen has a Lab card.
+        val settings = screen == MainScreen.SENDER_SETTINGS || screen == MainScreen.INBOX_SETTINGS
+        assertEquals("${screen.file}: the Lab card is in Settings, and only there", settings, card != null)
+        card?.let {
+            val problems = ScreenKit.labOffCardProblems(it, ScreenKit.labText("lab"), ScreenKit.labText("switchFooter"))
             if (problems.isNotEmpty()) fail("${screen.file}: with Lab off, only the Lab switch shows (LAB-PLAN 1.1):\n${problems.joinToString("\n")}")
         }
         val dir = File(System.getProperty("dls.labOffBaselines") ?: error("dls.labOffBaselines not set"))

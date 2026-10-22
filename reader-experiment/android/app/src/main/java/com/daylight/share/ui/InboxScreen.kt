@@ -89,6 +89,9 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
         }
     }
     val pairingOpen = showPairing ?: received.isEmpty()
+    // Lab (LAB-PLAN 1.2): the one-time note, from the first W1 build, while Lab is on.
+    val lab by app.labOn.collectAsStateWithLifecycle()
+    val labNote = lab && app.prefs.labNoteDue()
 
     ScreenList {
         item {
@@ -116,6 +119,7 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
                 TextAction("OK") { activity.notice.value = null }
             }
         }
+        if (labNote) item { LabOneTimeNote(app) }
         if (sync.storeFull) item {
             Section { Text(InboxText.OUT_OF_SPACE) }
         }

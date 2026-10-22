@@ -55,7 +55,7 @@ fun RoleScreen(activity: MainActivity, onPick: (Role) -> Unit) {
 }
 
 @Composable
-fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
+fun SettingsScreen(activity: MainActivity, onBack: () -> Unit, onLab: (LabPage) -> Unit = {}) {
     val app = App.of(activity)
     val role by app.role.collectAsStateWithLifecycle()
     var name by remember { mutableStateOf(app.prefs.deviceName) }
@@ -75,6 +75,9 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
             SecondaryButton("Done") { onBack() }
         }
         saved?.let { Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced()) }
+
+        // Lab (LAB-PLAN 1.1), first: the switch, and with Lab on What's in Lab and the Daylight server.
+        LabCard(activity, onLab)
 
         // The accessibility baseline (F27): every build has it, Lab on or off.
         Section {
@@ -159,6 +162,7 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
                 ) {
                     deliverTo = ""
                     app.prefs.deliverTo = ""
+                    app.labReporter.flushSoon() // the Inbox's Lab caps may change (reader-link): a hello
                 }
                 for (c in apps) {
                     val takes = listOfNotNull(if (c.links) "links and pages" else null, if (c.documents) "documents" else null).joinToString(" and ")
@@ -170,6 +174,7 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
                     Choice(c.label, deliverTo == c.pkg, detail = "${c.pkg} · takes $takes$rest") {
                         deliverTo = c.pkg
                         app.prefs.deliverTo = c.pkg
+                        app.labReporter.flushSoon()
                     }
                 }
                 }

@@ -86,6 +86,9 @@ object ReaderApps {
     fun takesLinks(context: Context, pkg: String): Boolean =
         takes(context, pkg, listOf(savePageProbe(), saveLinkProbe()) + if (isReader(pkg)) listOf(Intent(Intent.ACTION_SEND).setType("text/plain")) else emptyList())
 
+    /** Whether [pkg] answers SAVE_PAGE (its Reader then confirms links and pages: the Inbox's `reader-link` cap, F17). */
+    fun takesSavePage(context: Context, pkg: String): Boolean = takes(context, pkg, listOf(savePageProbe()))
+
     /** Whether [pkg] takes shared documents (a PDF or an EPUB, as ACTION_SEND or ACTION_SEND_MULTIPLE). */
     fun takesDocuments(context: Context, pkg: String): Boolean = takes(context, pkg, documentProbes())
 
@@ -374,6 +377,7 @@ object Handoff {
         for (item in plan.keep) {
             app.inbox.setItem(item.id) { it.copy(state = InboxItem.OPEN) }
             logi("received ${item.id} kind=${item.kind} -> kept in inbox (no reader installed) status=no_reader")
+            app.labReporter.kept(item)
         }
         val start = plan.start
         if (start == null) {
@@ -461,6 +465,8 @@ object Handoff {
         nm.cancel(LEGACY_NOTIFICATION)
         val fresh = due.filter { it.id !in announced }
         prefs?.addNoticeIds(Prefs.NOTICE_ANNOUNCED, fresh.map { it.id })
+        // Lab (F17): an item announced for the first time waits for a tap; its senders see "Waiting for a tap".
+        app?.labReporter?.announced(fresh)
 
         // The card stays over the Reader until answered: an e-paper reader can miss a pop-up that shows for a few seconds.
         val card = WaitingCard.update(context, due.filter { it.id !in later }, pop = fresh.isNotEmpty())
@@ -544,6 +550,8 @@ object Handoff {
         val app = context.applicationContext as? App ?: return
         app.prefs.addNoticeIds(Prefs.NOTICE_DISMISSED, listOf(id))
         logi("received $id -> notification dismissed: waits in the Inbox")
+        // Lab (F17): kept for later on purpose ("Kept for later on your Daylight").
+        app.labReporter.held(listOf(id))
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         val up = shownIds(nm) + WaitingCard.ids
         notifyWaiting(context, app.inbox.waiting().filter { it.id in up })

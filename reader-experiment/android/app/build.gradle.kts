@@ -78,6 +78,9 @@ kotlin {
 tasks.withType<Test>().configureEach {
     // Copy is pinned by the shared Lab vectors (LAB_TEXT): the Comfort switch's words are checked against them.
     systemProperty("dls.labVectors", rootProject.projectDir.resolve("../share/vectors/lab-vectors.json").absolutePath)
+    // Lab (K1): the Server code shown and copied equals the server lane's vectors (F00.5).
+    systemProperty("dls.serverVectors", rootProject.projectDir.resolve("../server/vectors/server-vectors.json").absolutePath)
+    inputs.file(rootProject.projectDir.resolve("../server/vectors/server-vectors.json"))
     // The Lab-off parity baselines (LAB-PLAN 1.7): compared here, and recorded into build/ when missing.
     systemProperty("dls.labOffBaselines", projectDir.resolve("src/test/lab-off-baseline").absolutePath)
     systemProperty("dls.labOffRecorded", layout.buildDirectory.dir("lab-off-baseline").get().asFile.absolutePath)

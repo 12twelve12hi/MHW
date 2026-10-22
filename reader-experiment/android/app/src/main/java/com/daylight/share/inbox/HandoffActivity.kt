@@ -94,6 +94,8 @@ class HandoffActivity : ComponentActivity() {
                 unclaim()
                 // Whatever still waits (documents after the first, late arrivals) gets the notification.
                 val app = App.of(this@HandoffActivity)
+                // Lab (F17): the states this run recorded go out (on a worker; a failure never holds up a hand-off).
+                app.labReporter.flushSoon()
                 val left = app.inbox.waiting()
                 if (left.isEmpty()) Handoff.cancelNotification(this@HandoffActivity) else Handoff.notifyWaiting(this@HandoffActivity, left)
                 // The Reader is importing: what this hand-off wanted and could not take yet is offered again after the gap.
@@ -250,6 +252,7 @@ class HandoffActivity : ComponentActivity() {
         }
         repo.setItem(item.id) { it.copy(state = InboxItem.OPEN) }
         logi("received ${item.id} kind=${item.kind} -> kept in inbox (no route resolved) status=no_route")
+        App.of(this).labReporter.kept(item)
         return false
     }
 
@@ -260,6 +263,7 @@ class HandoffActivity : ComponentActivity() {
             if (f == null) {
                 repo.setItem(item.id) { it.copy(state = InboxItem.OPEN) }
                 logw("item ${item.id}: content missing")
+                App.of(this).labReporter.kept(item)
             }
             f?.let { item to it }
         }
@@ -277,6 +281,7 @@ class HandoffActivity : ComponentActivity() {
         val item = withFiles[0].first
         repo.setItem(item.id) { it.copy(state = InboxItem.OPEN) }
         logi("received ${item.id} kind=${item.kind} -> kept in inbox (no route resolved) status=no_route")
+        App.of(this).labReporter.kept(item)
         return 0
     }
 
@@ -329,6 +334,8 @@ class HandoffActivity : ComponentActivity() {
     /** Logs `received <id> kind=<k> -> handed to <pkg> via <path> status=<s>`, plus ` docs=<ask|quiet|open>` for documents and how it started (` by=front|auto|tap|card`). */
     private fun done(item: InboxItem, route: Route, status: String, docs: DocumentMode? = null) {
         mark(item, route, status)
+        // Lab (F17): the hand-off's final state for its senders (saved -> reader, sent -> handed, …).
+        App.of(this).labReporter.handedOff(item, status)
         val by = when {
             item.id in fromCard -> BY_CARD
             mode == MODE_AUTO && item.id !in picked -> "auto"

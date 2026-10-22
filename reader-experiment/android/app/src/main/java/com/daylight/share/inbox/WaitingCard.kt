@@ -130,6 +130,8 @@ object WaitingCard {
 
     private fun later(context: Context, ids: List<String>) {
         (context.applicationContext as? App)?.prefs?.addNoticeIds(Prefs.NOTICE_LATER, ids)
+        // Lab (F17): kept for later on purpose ("Kept for later on your Daylight").
+        (context.applicationContext as? App)?.labReporter?.held(ids)
         logi("card: later for ${ids.joinToString(",")}: waits in the Inbox")
         hide(context)
     }

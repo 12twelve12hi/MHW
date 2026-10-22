@@ -12,6 +12,7 @@ import com.daylight.share.core.Body
 import com.daylight.share.core.BytesBody
 import com.daylight.share.core.FileBody
 import com.daylight.share.core.FileOutboxStore
+import com.daylight.share.core.Http
 import com.daylight.share.core.Kind
 import com.daylight.share.core.Limits
 import com.daylight.share.core.OutboxRow
@@ -23,6 +24,8 @@ import com.daylight.share.core.RelayClient
 import com.daylight.share.core.ShareException
 import com.daylight.share.core.Text
 import com.daylight.share.core.UrlConnectionHttp
+import com.daylight.share.core.lab.Lab
+import com.daylight.share.core.lab.LabLedger
 import com.daylight.share.logi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -53,6 +56,15 @@ class SenderRepo(private val app: App) {
 
     private var outbox: Outbox? = null
     private var outboxKey: String? = null
+    private var ledger: LabLedger? = null
+
+    /** The HTTP of the outbox's relay client (tests plug in a fake relay); null: the app's own. */
+    @VisibleForTesting
+    internal var http: Http? = null
+        set(v) {
+            field = v
+            synchronized(this) { outbox = null }
+        }
 
     fun pairing(): Pairing? = _pairing.value
 
@@ -64,6 +76,8 @@ class SenderRepo(private val app: App) {
      */
     fun pair(p: Pairing) {
         val old = pairing()
+        // Lab (LAB-PLAN 2.6): a Daylight server that knows the old pairing is locked first, Lab on or off.
+        app.lab.beforePairing(old, p)
         val keep = p.keys.inboxTopic
         synchronized(this) {
             // Under this lock, so a share being added ([addTo]) lands before the deletion or is refused after it.
@@ -80,6 +94,8 @@ class SenderRepo(private val app: App) {
 
     /** Forgets the pairing. The outbox stays until the next [pair]: kept for the same code, deleted for another. */
     fun unpair() {
+        // Lab (LAB-PLAN 2.6): a typed Server address and the cached server status were this pairing's server's.
+        app.lab.beforeUnpair(pairing())
         synchronized(this) {
             app.prefs.senderLink = null
             _pairing.value = null
@@ -109,16 +125,29 @@ class SenderRepo(private val app: App) {
         val key = p.link() + "|" + app.prefs.deviceName
         outbox?.takeIf { outboxKey == key }?.let { return it }
         // One outbox per Daylight: pairing with another one starts a fresh history.
+        val store = FileOutboxStore(File(root, p.keys.inboxTopic))
+        // Lab (F17, LAB-PROTOCOL 2.2.6): the ledger hears every ack-topic frame, Lab on or off, so turning Lab on shows
+        // the right states at once. It lives next to the outbox (lab.json) and goes with it.
+        val l = LabLedger.of(store)
         val o = Outbox(
             pairing = p,
-            store = FileOutboxStore(File(root, p.keys.inboxTopic)),
-            relay = RelayClient(p.relay, UrlConnectionHttp("DaylightShare/${BuildConfig.VERSION_NAME} (sender)")),
+            store = store,
+            relay = RelayClient(p.relay, http ?: UrlConnectionHttp("DaylightShare/${BuildConfig.VERSION_NAME} (sender)")),
             from = app.prefs.deviceName,
             app = "android/${BuildConfig.VERSION_NAME}",
+            onAckHeader = l.hook(),
         )
         outbox = o
         outboxKey = key
+        ledger = l
         return o
+    }
+
+    /** The Lab ledger of the current pairing (what the Daylight said about Lab and its items), or null when unpaired. */
+    @Synchronized
+    fun ledger(): LabLedger? {
+        val o = outbox() ?: return null
+        return ledger?.takeIf { o === outbox }
     }
 
     suspend fun refresh() = withContext(Dispatchers.IO) {
@@ -183,7 +212,19 @@ class SenderRepo(private val app: App) {
         val t = o.tick()
         if (dropIfReplaced(o)) return@withContext
         if (t.delivered > 0 || t.resent > 0) logi("sender: ${t.delivered} delivered, ${t.resent} sent again")
-        _rows.value = o.rows()
+        val rows = o.rows()
+        _rows.value = rows
+        pruneLedger(rows)
+    }
+
+    /** Keeps the ledger's states for the outbox's ids only, at most 200 (LAB-PROTOCOL 2.2.6); writes only when needed. */
+    private fun pruneLedger(rows: List<OutboxRow>) {
+        val l = ledger() ?: return
+        runCatching {
+            val ids = rows.mapTo(HashSet()) { it.id }
+            val states = l.snapshot().states
+            if (states.size > Lab.LEDGER_STATES_MAX || states.keys.any { it !in ids }) l.prune(ids)
+        }
     }
 
     /**

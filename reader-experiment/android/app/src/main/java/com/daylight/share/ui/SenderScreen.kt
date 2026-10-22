@@ -52,6 +52,11 @@ fun SenderScreen(activity: MainActivity, onSettings: () -> Unit) {
     var link by remember { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
     val notice = activity.notice.value
+    // Lab (LAB-PLAN 1.2, 2.6): the one-time note (from W1 builds) and the re-pairing card, only while Lab is on.
+    val lab by app.labOn.collectAsStateWithLifecycle()
+    val labNote = lab && app.prefs.labNoteDue()
+    var repairedSeen by remember { mutableStateOf(false) }
+    val repaired = remember(pairing, activity.resumes.intValue, lab, repairedSeen) { if (lab && !repairedSeen) app.lab.repaired() else null }
 
     LaunchedEffect(pairing) { app.sender.refresh() }
 
@@ -94,6 +99,13 @@ fun SenderScreen(activity: MainActivity, onSettings: () -> Unit) {
             Section {
                 Text(notice, modifier = Modifier.announced())
                 TextAction("OK") { activity.notice.value = null }
+            }
+        }
+        if (labNote) item { LabOneTimeNote(app) }
+        if (repaired != null) item {
+            LabRepairedCard(activity, repaired) {
+                app.lab.repairedSeen()
+                repairedSeen = true
             }
         }
         if (pairing == null) {

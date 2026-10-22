@@ -142,10 +142,11 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Debug builds only, for automated tests:
-     * `daylightshare://setup?role=inbox|sender&c=<code>[&r=<relay>][&n=<name>][&instant=1][&auto=1][&docs=ask|quiet|open][&to=<package>][&comfort=0|1]`.
+     * `daylightshare://setup?role=inbox|sender&c=<code>[&r=<relay>][&n=<name>][&instant=1][&auto=1][&docs=ask|quiet|open][&to=<package>][&comfort=0|1][&lab=0|1]`.
      * Sets the role and uses that pairing secret (instead of generating one) and relay; `instant` turns on Instant
      * delivery; `docs` sets "Documents" (`auto=1` is `docs=open`, `auto=0` is `docs=ask`); `to` sets "Deliver to"
-     * (empty: Automatic); `comfort` sets Comfort (F27).
+     * (empty: Automatic); `comfort` sets Comfort (F27); `lab` sets the Lab switch (LAB-PLAN 1.7), before the role, so
+     * the Inbox's first Lab frame follows it.
      */
     private fun debugSetup(link: String) {
         val q = Pairing.parseQuery(link.substringAfter('?', "").substringBefore('#'))
@@ -164,6 +165,7 @@ class MainActivity : ComponentActivity() {
         q["docs"]?.let { v -> DocumentMode.parse(v)?.let { app.prefs.documentMode = it } }
         q["to"]?.let { app.prefs.deliverTo = it.trim() }
         q["comfort"]?.let { app.setComfort(it == "1" || it == "true") }
+        q["lab"]?.let { app.setLab(it == "1" || it == "true") }
         when (q["role"]) {
             "sender" -> {
                 app.sender.pair(p)
@@ -175,7 +177,7 @@ class MainActivity : ComponentActivity() {
                 app.setRole(Role.INBOX)
             }
         }
-        logi("setup: role=${app.prefs.role} relay=${p.relay} inbox=${p.keys.inboxTopic} instant=${app.prefs.instantDelivery} docs=${app.prefs.documentMode.key} to=${app.prefs.deliverTo.ifEmpty { "auto" }} comfort=${if (app.prefs.comfort) 1 else 0}")
+        logi("setup: role=${app.prefs.role} relay=${p.relay} inbox=${p.keys.inboxTopic} instant=${app.prefs.instantDelivery} docs=${app.prefs.documentMode.key} to=${app.prefs.deliverTo.ifEmpty { "auto" }} comfort=${if (app.prefs.comfort) 1 else 0} lab=${if (app.prefs.lab) 1 else 0}")
         notice.value = "Set up as ${if (app.prefs.role == Role.INBOX) "the Daylight Inbox" else "a sender"} (relay ${p.relay})."
     }
 
@@ -183,10 +185,13 @@ class MainActivity : ComponentActivity() {
     private fun Root() {
         val role by app.role.collectAsStateWithLifecycle()
         var settings by remember { mutableStateOf(false) }
-        BackHandler(enabled = settings) { settings = false }
+        var labPage by remember { mutableStateOf<LabPage?>(null) }
+        BackHandler(enabled = settings) { if (labPage != null) labPage = null else settings = false }
+        val page = labPage
         when {
             role == null -> RoleScreen(this, onPick = { r -> app.setRole(r) })
-            settings -> SettingsScreen(this, onBack = { settings = false })
+            settings && page != null -> LabScreen(this, page, onBack = { labPage = null })
+            settings -> SettingsScreen(this, onBack = { settings = false }, onLab = { labPage = it })
             role == Role.INBOX -> InboxScreen(this, onSettings = { settings = true })
             else -> SenderScreen(this, onSettings = { settings = true })
         }

@@ -18,6 +18,7 @@ import com.daylight.share.core.Text
 import com.daylight.share.inbox.DocumentMode
 import com.daylight.share.inbox.InboxRepo
 import com.daylight.share.inbox.InstantDeliveryService
+import com.daylight.share.inbox.LabReporter
 import com.daylight.share.inbox.Live
 import com.daylight.share.sender.SenderRepo
 import kotlinx.coroutines.CoroutineScope
@@ -38,6 +39,12 @@ class App : Application() {
     val inbox: InboxRepo by lazy { InboxRepo(this) }
     val sender: SenderRepo by lazy { SenderRepo(this) }
 
+    /** Lab on this device (LAB-PLAN 1, 2.6): the gates, What's in Lab and the Daylight server. */
+    val lab: LabRepo by lazy { LabRepo(this) }
+
+    /** The Inbox's Lab frames (F17): its hellos and item states on the ack topic. */
+    val labReporter: LabReporter by lazy { LabReporter(this) }
+
     /** How many of our activities are started (visible), and the one in front. */
     private var started = 0
     @Volatile var front: Activity? = null
@@ -48,8 +55,10 @@ class App : Application() {
         super.onCreate()
         instance = this
         prefs = Prefs(this)
+        if (prefs.ensureLabDefault()) logi("lab: on (first start of a build with Lab)")
         roleFlow.value = prefs.role
         comfortFlow.value = prefs.comfort
+        labFlow.value = prefs.lab
         createChannels()
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) { started++ }
@@ -129,6 +138,28 @@ class App : Application() {
     fun setComfort(on: Boolean) {
         prefs.comfort = on
         comfortFlow.value = on
+    }
+
+    private val labFlow = MutableStateFlow(true)
+
+    /**
+     * The Lab switch (LAB-PLAN 1.2's one reading: [Prefs.lab] with this flow). Change it with [setLab]. Comfort is not
+     * under Lab and Lab never reads it (F27.6).
+     */
+    val labOn: StateFlow<Boolean> get() = labFlow
+
+    /**
+     * Turns Lab on or off: [Prefs.lab] first, then, on the Inbox, its hello (on) or its one `lab: 0` frame (off) on a
+     * worker (F17). Nothing else changes: the pairing, the outbox and history, the ledger, the server pin and notices
+     * stay (1.3).
+     */
+    fun setLab(on: Boolean) {
+        val changed = prefs.lab != on
+        prefs.lab = on
+        labFlow.value = on
+        if (!changed) return
+        logi("lab: ${if (on) "on" else "off"}")
+        labReporter.labSwitched()
     }
 
     private fun createChannels() {
@@ -230,6 +261,55 @@ class Prefs(private val context: Context) {
     var comfort: Boolean
         get() = sp.getBoolean("comfort", false)
         set(v) = sp.edit().putBoolean("comfort", v).apply()
+
+    // Lab: K1 (LAB-PLAN 1.2). The switch belongs to this device: never synced, never in a pairing link, and pairing,
+    // unpairing and re-pairing leave it as it is.
+
+    /** The Lab switch: a missing key means on ([ensureLabDefault] writes it at the first start of a build with Lab). */
+    var lab: Boolean
+        get() = sp.getBoolean("lab", true)
+        set(v) = sp.edit().putBoolean("lab", v).apply()
+
+    /** The one-time Lab note was dismissed (it shows only in builds with [LAB_NOTE_ENABLED]). */
+    var labNoteShown: Boolean
+        get() = sp.getBoolean("labNoteShown", false)
+        set(v) = sp.edit().putBoolean("labNoteShown", v).apply()
+
+    /** The first start of a build with Lab writes `lab = true` when the key is missing (fresh installs and upgrades). Returns whether it wrote it. */
+    fun ensureLabDefault(): Boolean {
+        if (sp.contains("lab")) return false
+        sp.edit().putBoolean("lab", true).apply()
+        return true
+    }
+
+    /** Whether the one-time note shows now: only in a build with [enabled] (F01 or F04), with Lab on, until dismissed. */
+    fun labNoteDue(enabled: Boolean = LAB_NOTE_ENABLED): Boolean = enabled && lab && !labNoteShown
+
+    /** The phone's last Daylight server answer for the whole server ("ready" or a server-wide state) and when (ms). */
+    var labServerState: String?
+        get() = sp.getString("labServerState", null)
+        set(v) = sp.edit().putString("labServerState", v).putLong("labServerAt", if (v == null) 0L else System.currentTimeMillis()).apply()
+    val labServerAt: Long get() = sp.getLong("labServerAt", 0L)
+
+    /**
+     * When this phone re-paired with another Daylight while it knew a Daylight server (LAB-PLAN 2.6, DESIGN 12.7): the
+     * Daylight server card shows the new Server code and the re-run help until OK, or until the new server answers.
+     */
+    var labRepairedAt: Long
+        get() = sp.getLong("labRepairedAt", 0L)
+        set(v) = sp.edit().putLong("labRepairedAt", v).apply()
+
+    /** The Inbox's items whose `waiting` state was recorded (F17: never again for the same id). */
+    fun labWaitingIds(): Set<String> = sp.getStringSet("labWaiting", null)?.toSet() ?: emptySet()
+
+    fun setLabWaitingIds(ids: Set<String>) {
+        sp.edit().putStringSet("labWaiting", HashSet(ids)).apply()
+    }
+
+    /** When the Inbox last ran its Lab state digest (with the v1.1 ack digest's 11 hours), ms. */
+    var labDigestAt: Long
+        get() = sp.getLong("labDigestAt", 0L)
+        set(v) = sp.edit().putLong("labDigestAt", v).apply()
 
     /** The ids of waiting items in a notice state ([NOTICE_ANNOUNCED], [NOTICE_DISMISSED], [NOTICE_LATER]). */
     fun noticeIds(state: String): Set<String> = sp.getStringSet("notice.$state", null)?.toSet() ?: emptySet()
