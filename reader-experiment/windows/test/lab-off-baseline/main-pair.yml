@@ -1,0 +1,11 @@
+- main:
+  - heading "Send to Daylight" [level=1]
+  - button "Settings"
+  - region "Pair with your Daylight":
+    - heading "Pair with your Daylight" [level=2]
+    - paragraph: On your Daylight, open Daylight Share and choose This is my Daylight. Type the 28-character code it shows, or open its pairing link on this PC.
+    - text: Pairing code or link
+    - textbox "Pairing code or link":
+      - /placeholder: ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23
+    - group: Advanced
+    - button "Pair"

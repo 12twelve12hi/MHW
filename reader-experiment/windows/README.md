@@ -224,6 +224,21 @@ links' real path.
 
 Screenshots of every view go to `test-results/a11y/` (a CI artifact, for review; not compared).
 
+### Lab-off parity baselines (LAB-PLAN 1.7)
+
+`test/lab-off-baseline/*.yml` hold what the window says, as Playwright's `locator('body').ariaSnapshot()` (roles,
+names and values, in order), for the main window and Settings, unpaired (`main-pair`, `settings-unpaired`) and paired
+with a history row in every state (`main-send`, `settings`). They were recorded from the last non-Lab build: protocol
+1.1 plus the accessibility baseline with Comfort. `test/ui/lab-off-parity.test.mjs` seeds `settings.lab = false`, a
+fixed pairing and rows at fixed ages under a fixed clock, and compares; Comfort on must give the same trees (only the
+switch reads checked). With Lab off, every Lab build must still match them: only the Lab switch row in Settings and its
+footer, which stay with Lab off, may be left out (`expectBaseline(page, name, {omit})`). Re-record them only together
+with a matching non-Lab change:
+
+```sh
+UPDATE_LAB_OFF_BASELINE=1 node --test test/ui/lab-off-parity.test.mjs
+```
+
 The workflow then uploads the installer to the `reader-experiment-latest` release; the bare `send-to-daylight.exe`
 and the test output (status file, screenshot) are kept as workflow artifacts.
 

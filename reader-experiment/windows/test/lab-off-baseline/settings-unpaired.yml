@@ -1,0 +1,19 @@
+- main:
+  - heading "Send to Daylight" [level=1]
+  - region "Settings":
+    - button "‹ Back"
+    - heading "Settings" [level=2]
+    - text: Comfort
+    - switch "Comfort"
+    - paragraph: Larger text and buttons, more contrast, no motion.
+    - heading "Send the clipboard’s link" [level=3]
+    - paragraph: "Hotkey: Ctrl + Alt + D"
+    - button "Change…"
+    - button "Turn off"
+    - status
+    - heading "Windows" [level=3]
+    - checkbox "Start at login (in the notification area)"
+    - text: Start at login (in the notification area)
+    - paragraph: "File Explorer: Send to › Daylight is set up."
+    - status
+    - paragraph: Send to Daylight 1.1.0 for Windows

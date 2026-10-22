@@ -1,0 +1,41 @@
+- main:
+  - heading "Send to Daylight" [level=1]
+  - button "Settings"
+  - region "Sending to Desk Daylight":
+    - paragraph:
+      - text: Sending to
+      - strong: Desk Daylight
+    - paragraph: Drop files or links here
+    - paragraph: PDF, EPUB, Word, text, web links…
+    - button "Choose files…"
+    - button "Send the link on the clipboard"
+    - paragraph: Or press Ctrl + Alt + D anywhere in Windows.
+    - status
+    - heading "Recent" [level=2]
+    - list "Recent":
+      - listitem:
+        - text: Link A link on its way Sent · waiting for your Daylight · 1 min ago
+        - 'button "Remove: A link on its way"': Remove
+      - listitem:
+        - text: Link A link that waits Waiting to send · 2 h ago
+        - 'button "Retry now: A link that waits"': Retry now
+        - 'button "Remove: A link that waits"': Remove
+        - paragraph: Couldn’t send right now. It will try again by itself.
+      - listitem:
+        - text: PDF Paper Delivered ✓ · 5 h ago
+        - 'button "Remove: Paper"': Remove
+        - paragraph: Saved on your Daylight.
+      - listitem:
+        - text: Link example.org/never/picked/up Not delivered · 8 days ago
+        - 'button "Try again: example.org/never/picked/up"': Try again
+        - 'button "Remove: example.org/never/picked/up"': Remove
+        - paragraph: Your Daylight didn’t pick this up within a week. Is it on and online?
+      - listitem:
+        - text: PDF Big scan Not delivered · yesterday
+        - 'button "Remove: Big scan"': Remove
+        - paragraph: Too big to send. Files can be up to 9 MB; this one is 14.2 MB.
+      - listitem:
+        - text: Link A link from a busy network Waiting to send · 3 days ago
+        - 'button "Remove: A link from a busy network"': Remove
+        - paragraph: A lot has been sent from this network in the last few hours. It will send by itself in about 3 hours.
+    - status
