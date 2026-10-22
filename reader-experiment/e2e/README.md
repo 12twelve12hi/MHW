@@ -8,8 +8,8 @@ state and the three phones' state files go to the `e2e-screens` artifact.
 | `reader-smoke.sh` | Step 1: installs the Reader (built from its public snapshot) and checks that `SAVE_PAGE` adds a document |
 | `inbox-e2e.sh` | Step 2: installs Daylight Share (debug), pairs it as the Inbox through the debug setup link, and runs every pass (its header lists them) |
 | `sender.mjs` | The "phone": the JS reference sender (protocol 1.1 with Lab Wave 0) driven from the command line; with `E2E_PEER=v1.0` or `v1.1`, that Sender as it shipped |
-| `sender-lab.test.mjs` | The phone's Lab commands against the JS reference Daylight (`LabInbox`) on the mock relay; no emulator (the `sender` job) |
-| `reader-lib.sh`, `ui-find.mjs`, `make-pdf.mjs` | Helpers: the Reader's library count, where to tap, test PDFs |
+| `sender-lab.test.mjs` | The phone's Lab commands against the JS reference Daylight (`LabInbox`) on the mock relay, and the Wave 1 commands (`send-excerpt`, `await-share`, `topics`, `lab-text`, `inbox-items`); no emulator (the `sender` job) |
+| `reader-lib.sh`, `ui-find.mjs`, `make-pdf.mjs` | Helpers: the Reader's library count, where to tap (a node, its bounds, or the node nearest another: a notice's expand button), test PDFs |
 
 ## Lab (LAB-PLAN F17, task E0)
 
@@ -66,3 +66,67 @@ Lab frames go at most one every 30 s (LAB-PROTOCOL 2.2.4), so each Lab wait can 
   `lab: hello lab=0`.
 
 Run the phone's Lab test locally with `node --test reader-experiment/e2e/sender-lab.test.mjs`.
+
+## Lab Wave 1 (LAB-PLAN E1)
+
+Passes 13 to 17 of `inbox-e2e.sh` run after the Wave 0 passes, on the same emulator, pairing and relay. Every word they
+look for on screen or in a notice comes from `LAB_TEXT` (`sender.mjs lab-text`), as the apps show it.
+
+| Pass | Covers | What it does and checks |
+|---|---|---|
+| 13 | F15.1, F15.4 | Documents = Ask, no "Display over other apps", the Reader in front, so links and documents wait for a tap. One item at a time, each with exactly one notice (`cmd notification list`), alone in the shade (other summaries and "Saved to the Reader" notices snoozed for an hour), where SystemUI shows the first notice expanded with its actions. **Add to Reader** on a link → `reader` (or `queued`), through SAVE_PAGE `by=tap`; on a PDF → `handed`, through send_file. **Keep for later** → `held`, and its notice goes; **swiping** a PDF's notice away → `held`. The phone reads each state and says "Kept for later on your Daylight" for both; opening the Inbox hands neither over; Add to Reader then gives `reader` (or `queued`) and `handed`. |
+| 14 | F11, F11.2, F11.4 | An excerpt of the page pass 1 put in the Reader (`send-excerpt`: an explicit selection, `classifyShare` with source `selection`, then `excerptItem`: HTML with its source link and a `#:~:text=` fragment, `x-cap: "excerpt"`), and a note without a link (Markdown). Documents = Open: each goes through send_file and the library grows by one: a new document, not "already in your library". `handed`. |
+| 15 | F15.1 | A link handed over by itself gets one "Saved to the Reader" notice (Quiet). **Dismiss** takes it away, and no `lab: state` line follows for that item. |
+| 16 | F26 | Setup check (MainActivity's Lab page extra `SETUP`) › **Test the Reader hand-off**: the test article goes through SAVE_PAGE (`by=front`), the library grows, Setup check says "✓ In your Reader", and no sender gets a state for it (lane `local`). |
+| 17 | F11.5, F08, F04.6, F11, F03.3 | The same Daylight Share becomes a sender on the pairing (setup link `role=sender`; it calls itself "CI Daylight", the setup link's `n`). An NYT "headline + link" shared to its share target goes as a link: `await-share` reads the inbox topic and checks the header against what the JS reference makes of the same share (kind `url`, the link without `smid`, the headline as its title, `x-orig`, no `x-cap`); the first link-only share shows the hint. After that send, `cmd shortcut get-shortcuts` lists the Direct Share shortcut `daylight` ("CI Daylig…"), and a share carrying `EXTRA_SHORTCUT_ID` goes too. The mock relay answers 413 to the next publish on the inbox topic (`/__mock/fail-publish`): the send worker posts "Couldn’t send ‘F04 forced 413’ to CI Daylight" / "Open to try again." (`dumpsys notification`). With Comfort the card opens with Options and Send; **Send as excerpt** goes as the JS reference's excerpt. Back as the Inbox (`role=inbox`, Comfort off): the shortcut is gone, the links reach the Reader through SAVE_PAGE (`reader` or `queued`) and the excerpt as a new document (`handed`). |
+
+At the end, besides Wave 0's checks: every item from the Android phone was handed to the Reader too; the Inbox's Lab
+frames stay within its daily cap (`LAB_FRAMES_PER_DAY`, 30: past it, states would wait for the digest); and every
+message the run published stays within ntfy.sh's daily messages for one address (250), since the phones, the Android
+phone and the Inbox publish from one machine, as a household does. Before Wave 1 a run used 15 Lab frames and 60
+messages.
+
+When the shade does not show what to tap, the step says so in the log ("note: … not found in the shade") and does the
+same through the debug hook, so the state checks still run: Add to Reader is the root tap
+(`am start … HandoffActivity --es mode one --es item <id>`), Keep for later and Dismiss are root broadcasts to
+`ArrivalActionReceiver` (`com.daylight.share.action.KEEP_FOR_LATER`, `…ARRIVAL_DISMISS`, data
+`daylightshare-item:<id>`), and the swipe is one to `NoticeDismissedReceiver` (`…NOTICE_DISMISSED`). The end of pass 13
+lists which actions went through the shade.
+
+```
+node sender.mjs send-url <url> [title]                 # a link with its own title (to find its notice)
+node sender.mjs send-excerpt <tag> [source url]        # an explicit selection: an HTML excerpt, or a Markdown note
+node sender.mjs topics                                 # the pairing's inbox and ack topics
+node sender.mjs lab-text <id> [name=value...]          # LAB_TEXT's words, slots filled
+node sender.mjs inbox-items [since]                    # what is on the inbox topic, read only
+node sender.mjs await-share <s> <from> <since> <link|excerpt> <text> [subject]
+                                                       # another sender's share, checked against the JS reference's
+```
+
+**Test hooks added** (debug builds or the emulator only): the setup link's `role=sender` and `comfort=`; MainActivity's
+extra `com.daylight.share.extra.LAB_PAGE` (`SETUP`); `cmd notification list` and `cmd notification snooze`; `cmd
+shortcut get-shortcuts`; `dumpsys notification --noredact`; the mock relay's `/__mock/fail-publish`; the root
+broadcasts above.
+
+### Still to check on a device
+
+For the W1 device round on Rooted 2 (with an Android 13 or 14 phone and the real ntfy.sh relay). The emulator runs one
+Daylight Share in both roles, one after the other, with the mock relay, and taps the Android 14 emulator's shade:
+
+- **F15.1 on the e-paper shade:** Add to Reader and Keep for later on a waiting item's notice, a swipe, and Dismiss on
+  "Saved to the Reader", with the phone's row following each (`reader`/`handed`, "Kept for later on your Daylight",
+  nothing new after Dismiss); TalkBack reads each notice's title and source; several arrivals are grouped.
+- **F15.4:** Keep for later on a link's notice or card makes the iPhone show "Kept for later on your Daylight", and Add
+  to Reader then "In your Reader ✓".
+- **F11.5:** an NYT "headline + link" shared from the NYT app and from Chrome on the phone arrives as a link that the
+  live Reader downloads (on the emulator the snapshot Reader may only queue it).
+- **F11.4:** an excerpt of a page already in the live Reader, sent from the Chrome extension and from the phone's Send
+  as excerpt, is a new document there, not "already in your library".
+- **F08.1, F08.2:** after one send, the Daylight's name is in Chrome's Direct Share row (the emulator only lists the
+  shortcut and sends with `EXTRA_SHORTCUT_ID`); tapping it sends with no other screen; Unpair removes it; the id
+  survives an update.
+- **F04.6:** a real ntfy.sh 413 (the phone's attachment allowance used up) after the card closed posts the "Send
+  results" notice, and tapping it opens the row.
+- **F26.1:** Test the Reader hand-off reaches the live Reader in each condition of F01.1 (the emulator runs it with the
+  Inbox in front only).
+

@@ -3,8 +3,12 @@
 // default e2e-out/sender-state.json).
 //   node sender.mjs pair <relay>              -> prints the 28-character pairing code (a fresh secret)
 //   node sender.mjs send-page <tag>           -> sends an article page, prints the item id
-//   node sender.mjs send-url <url>            -> sends a link, prints the item id
+//   node sender.mjs send-url <url> [title]    -> sends a link (title default "A link sent from a phone"), prints the id
 //   node sender.mjs send-pdf <tag> [bytes]    -> sends a generated PDF (about <bytes> long), prints the item id
+//   node sender.mjs send-excerpt <tag> [url]  -> Lab (F11): sends a passage as an explicit selection would (classifyShare
+//                                                with source "selection", then excerptItem): with <url>, an HTML
+//                                                excerpt of that page (its url with a #:~:text= fragment); without, a
+//                                                Markdown note. x-cap "excerpt". Prints the item id
 //   node sender.mjs check-too-large <bytes>   -> a PDF over 9 MB must be refused before anything is queued or sent;
 //                                                prints the sentence (CHANGES-v1.1 2.2, 2.5)
 //   node sender.mjs status                    -> one line per outbox row: id, kind, size, then the words the phone
@@ -20,13 +24,30 @@
 //        caps=<token>[,<token>...]  ... and carries these caps
 //        <id>=<state>[|<state>...]  the item's state is one of these (waiting, held, inbox, handed, failed, queued,
 //                                   reader; "none": no state)
+//   node sender.mjs topics                    -> "inbox <topic>" and "ack <topic>" of the pairing (for the mock relay's
+//                                                fail-publish hook)
+//   node sender.mjs lab-text <id> [k=v...]    -> a LAB_TEXT string by its dotted id, its {slots} filled from k=v (so
+//                                                the test looks for the app's words exactly as LAB_TEXT gives them)
+//   node sender.mjs inbox-items [since]       -> what is on the inbox topic since <unix seconds> (default: all), one
+//                                                JSON line per item part: {msg, time, id, kind, from, title, url, name,
+//                                                mime, part, parts, extras}. It only reads: it publishes nothing, acks
+//                                                nothing, and keeps no state
+//   node sender.mjs await-share <seconds> <from> <since> <link|excerpt> <text> [subject]
+//                                             -> waits until an item from <from> (another sender on the pairing: the
+//                                                Android phone on the emulator) shows on the inbox topic as the JS
+//                                                reference makes the same share: "link", normaliseShare's link (kind
+//                                                url, the cleaned URL, the headline as its title, x-orig, no x-cap);
+//                                                "excerpt", the excerpt of an explicit selection (kind file, text/html,
+//                                                excerptItem's name, title and #:~:text= URL, x-cap "excerpt"). Prints
+//                                                the item id; exits 1 on timeout, or with what differs
 // Every Sender reads the ack topic through the Lab ledger (Sender onAckHeader = labHook), so no command loses a Lab
 // frame: the ack cursor moves past what it read.
 // E2E_PEER=v1.0 or v1.1 makes an old phone instead: the Sender as it shipped, from the skew suite's fixtures
 // (share/js/test/fixtures/daylight-share-<v>.js, LAB-PROTOCOL 2.8), not today's module. It has no ledger and no Lab
 // commands, is named "E2E <v> phone", and shows its own words: v1.1's describeRow; v1.0 had no shared words, so a v1.0
 // row shows its status alone. A second and third phone on the same pairing, to show a Lab Inbox changes nothing for
-// apps in the field (F17.1). It sends pages, links and PDFs (check-too-large needs v1.1: v1.0 had no 9 MB limit).
+// apps in the field (F17.1). It sends pages, links and PDFs (check-too-large needs v1.1: v1.0 had no 9 MB limit;
+// send-excerpt needs Lab).
 // Every publish is logged on stderr as `publish <POST|PUT> <bytes> -> <status>`, so a test can see how an item was
 // split into frames (a 5 MB file goes as 3 attachments of at most 1,966,116 bytes).
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
@@ -155,6 +176,71 @@ function needLedger() {
   process.exit(2);
 }
 
+// The passage an explicit selection sends (F11): a sentence of Walden, tagged.
+const passage = (tag) => `I went to the woods because I wished to live deliberately (${tag}), to front only the essential `
+  + 'facts of life, and see if I could not learn what it had to teach, and not, when I came to die, discover that I had not lived.';
+
+// Today's protocol module, whatever phone this is: the commands that only read the relay use it.
+const cur = PEER ? await import('../share/js/daylight-share.js') : ds;
+
+async function pairingKeys() {
+  const pairing = await ds.loadPairing(storage);
+  if (!pairing) throw new Error('not paired: run pair first');
+  return { pairing, keys: await cur.deriveKeys(pairing.secret) };
+}
+
+// Every item part on the inbox topic since <since> (unix seconds, or 'all'), decrypted with the pairing's key and read
+// by the protocol's own header check. Reads only: no ack, no cursor, no state.
+async function inboxItems(since = 'all') {
+  const { pairing, keys } = await pairingKeys();
+  const relay = new cur.RelayClient({ relay: pairing.relay });
+  const out = [];
+  for (const m of await relay.poll(keys.inboxTopic, since)) {
+    const base = { msg: m.id, time: m.time };
+    if (!m.frame) { out.push({ ...base, outcome: m.outcome }); continue; }
+    try {
+      const h = cur.checkItemHeader((await cur.decryptFrame(keys, 'inbox', m.frame)).header);
+      out.push({ ...base, id: h.id, kind: h.kind, from: h.from ?? '', title: h.title ?? '', url: h.url ?? '', name: h.name ?? '',
+        mime: h.mime ?? '', part: h.part, parts: h.parts, extras: h.extras ?? {} });
+    } catch (e) {
+      out.push({ ...base, error: e.message });
+    }
+  }
+  return out;
+}
+
+// What the JS reference sends for a share (F11, F16), as the header fields an Inbox sees: "link" is normaliseShare's link,
+// "excerpt" the excerpt of an explicit selection (normaliseShare with source "selection", then excerptItem).
+function expectedShare(mode, text, subject = '') {
+  if (mode === 'link') {
+    const n = lab.normaliseShare({ text, subject });
+    if (n.kind !== 'link') throw new Error(`the JS reference makes a ${n.kind} of this share, not a link`);
+    return { kind: 'url', url: n.url, title: n.title ?? '', name: '', mime: '', extras: n.orig ? { 'x-orig': n.orig } : {} };
+  }
+  if (mode === 'excerpt') {
+    const n = lab.normaliseShare({ text, subject, source: 'selection' });
+    if (n.kind !== 'excerpt') throw new Error(`the JS reference makes a ${n.kind} of this selection, not an excerpt`);
+    const e = lab.excerptItem({ text: n.excerpt, url: n.url, pageTitle: subject });
+    return { kind: 'file', url: e.url, title: e.title, name: e.name, mime: e.mime, extras: { 'x-cap': 'excerpt' } };
+  }
+  throw new Error(`await-share: the mode is link or excerpt, not "${mode}"`);
+}
+
+// The fields of an item header that differ from the expected ones, as "field: got … want …" lines.
+function differences(got, want) {
+  const out = [];
+  for (const k of ['kind', 'url', 'title', 'name', 'mime']) {
+    if ((got[k] ?? '') !== (want[k] ?? '')) out.push(`${k}: got ${JSON.stringify(got[k] ?? '')}, want ${JSON.stringify(want[k] ?? '')}`);
+  }
+  const g = JSON.stringify(Object.fromEntries(Object.entries(got.extras ?? {}).sort()));
+  const w = JSON.stringify(Object.fromEntries(Object.entries(want.extras).sort()));
+  if (g !== w) out.push(`extras: got ${g}, want ${w}`);
+  return out;
+}
+
+// A LAB_TEXT string by its dotted id ("arrivals.addToReader"), or undefined.
+const labText = (id) => id.split('.').reduce((o, k) => (o != null && typeof o === 'object' ? o[k] : undefined), lab.LAB_TEXT);
+
 if (cmd === 'pair') {
   const secret = ds.generateSecret();
   await ds.savePairing(storage, { secret, relay: a1, name: 'E2E Daylight' });
@@ -164,12 +250,71 @@ if (cmd === 'pair') {
   sent(await s.send({ kind: 'page', url: `https://example.com/walden-${a1}`, title: `Walden, sent from a phone (${a1})`, content: article(a1) }));
 } else if (cmd === 'send-url') {
   const s = await sender();
-  sent(await s.send({ kind: 'url', url: a1, title: 'A link sent from a phone' }));
+  sent(await s.send({ kind: 'url', url: a1, title: a2 || 'A link sent from a phone' }));
 } else if (cmd === 'send-pdf') {
   const s = await sender();
   const item = pdf(a1, Number(a2 || 0));
   console.error(`pdf ${item.name}: ${item.content.length} bytes`);
   sent(await s.send(item));
+} else if (cmd === 'send-excerpt') {
+  if (!ledger) { console.error(`send-excerpt: an old phone (E2E_PEER=${PEER}) has no Lab excerpts`); process.exit(2); }
+  if (!a1) { console.error('usage: sender.mjs send-excerpt <tag> [source url]'); process.exit(2); }
+  const s = await sender();
+  const text = a2 ? `${passage(a1)} ${a2}` : passage(a1);
+  // An explicit selection (LAB-DECISIONS Q1): the extension's Send selection, Selection mode or "Send as excerpt".
+  const n = lab.normaliseShare({ text, source: 'selection' });
+  if (n.kind !== (a2 ? 'excerpt' : 'note')) throw new Error(`send-excerpt: classifyShare made a ${n.kind}`);
+  const item = lab.excerptItem({ text: n.excerpt, url: n.url ?? '', pageTitle: a2 ? `Walden, sent from a phone (${a1})` : '',
+    app: a2 ? '' : 'E2E phone', date: Date.now() });
+  console.error(`excerpt ${item.name} ${item.mime} ${item.url ?? '-'} "${item.title}"`);
+  sent(await s.send(item));
+} else if (cmd === 'topics') {
+  const { keys } = await pairingKeys();
+  console.log(`inbox ${keys.inboxTopic}\nack ${keys.ackTopic}`);
+} else if (cmd === 'lab-text') {
+  const v = a1 ? labText(a1) : undefined;
+  if (typeof v !== 'string') { console.error(`lab-text: LAB_TEXT has no string "${a1 ?? ''}"`); process.exit(2); }
+  const vars = {};
+  for (const kv of [a2, ...rest].filter(Boolean)) {
+    const i = kv.indexOf('=');
+    if (i < 1) { console.error(`lab-text: "${kv}" is not name=value`); process.exit(2); }
+    vars[kv.slice(0, i)] = kv.slice(i + 1);
+  }
+  console.log(lab.fillText(v, vars));
+} else if (cmd === 'inbox-items') {
+  for (const it of await inboxItems(a1 || 'all')) console.log(JSON.stringify(it));
+} else if (cmd === 'await-share') {
+  const [from, since, mode, text, subject = ''] = [a2, ...rest];
+  if (!(Number(a1) > 0) || !from || !/^(\d+|all)$/.test(since ?? '') || !text) {
+    console.error('usage: sender.mjs await-share <seconds> <from> <since unix|all> <link|excerpt> <text> [subject]');
+    process.exit(2);
+  }
+  let want;
+  try { want = expectedShare(mode, text, subject); } catch (e) { console.error(e.message); process.exit(2); }
+  console.error(`await-share: want ${JSON.stringify(want)} from "${from}"`);
+  const deadline = Date.now() + Number(a1) * 1000;
+  let theirs = [];
+  for (;;) {
+    let items = [];
+    try { items = await inboxItems(since); } catch (e) { console.error(`inbox poll: ${e.message}`); }
+    theirs = items.filter((it) => it.from === from && (it.part ?? 0) === 0);
+    const hit = theirs.find((it) => it.kind === want.kind && it.url === want.url);
+    if (hit) {
+      const diff = differences(hit, want);
+      console.error(`await-share: ${JSON.stringify(hit)}`);
+      if (diff.length) {
+        console.error(`await-share: ${hit.id} is not what the JS reference sends for this share:\n  ${diff.join('\n  ')}`);
+        process.exit(1);
+      }
+      console.log(hit.id);
+      process.exit(0);
+    }
+    if (Date.now() >= deadline) break;
+    await cur.sleep(2000);
+  }
+  console.error(`await-share: nothing from "${from}" with kind ${want.kind} and url ${want.url} after ${a1} s; from "${from}":`);
+  for (const it of theirs) console.error(`  ${JSON.stringify(it)}`);
+  process.exit(1);
 } else if (cmd === 'check-too-large') {
   if (typeof ds.tooBigMessage !== 'function') { console.error('check-too-large: a v1.0 phone had no 9 MB limit'); process.exit(2); }
   const s = await sender();
@@ -235,6 +380,7 @@ if (cmd === 'pair') {
     await ds.sleep(3000);
   }
 } else {
-  console.error('usage: sender.mjs pair|send-page|send-url|send-pdf|check-too-large|status|wait-acks|lab-states|wait-lab');
+  console.error('usage: sender.mjs pair|send-page|send-url|send-pdf|send-excerpt|check-too-large|status|wait-acks|lab-states|wait-lab'
+    + '|topics|lab-text|inbox-items|await-share');
   process.exit(2);
 }

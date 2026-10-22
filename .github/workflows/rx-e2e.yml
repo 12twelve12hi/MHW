@@ -8,8 +8,12 @@ name: Reader experiment - end to end on an emulator
 # of a page, a link and a PDF; waiting then handed with Documents = Ask and a root tap; a link waiting without the
 # overlay permission; the Inbox's Lab off and on (a page, a link and a PDF with no state); and the v1.0 and v1.1
 # Senders as they shipped (share/js/test/fixtures, E2E_PEER) on the same pairing, each sending a page, a link and a PDF,
-# unchanged (F17.1). The sender job checks the phone's commands against the JS reference Daylight first. Screenshots
-# and logs: the e2e-screens artifact.
+# unchanged (F17.1). Lab Wave 1 (E1): every action of an arrival notice to its state (F15: Add to Reader, Keep for
+# later, a swipe, Dismiss), an excerpt and a note as new documents (F11), the Reader hand-off test (F26), and the same
+# Daylight Share as the phone on that pairing: an NYT headline + link from the share sheet goes as a link (F11.5, Q1),
+# the Direct Share shortcut is listed (F08), a forced 413 gives the send worker's notice (F04.6) and Send as excerpt
+# goes as an excerpt; the Lab frames stay within the Inbox's daily cap. The sender job checks the phone's commands
+# against the JS reference Daylight first. Screenshots and logs: the e2e-screens artifact.
 # This workflow publishes nothing, so the Lab release gate (lab-release-gate.json) does not apply.
 on:
   push:
@@ -42,7 +46,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: sender.mjs lab-states, wait-lab and status, and the v1.0 and v1.1 phones, against the JS reference Daylight (LabInbox) on the mock relay
+      - name: sender.mjs lab-states, wait-lab, status, send-excerpt and await-share, and the v1.0 and v1.1 phones, against the JS reference Daylight (LabInbox) on the mock relay
         run: node --test reader-experiment/e2e/sender-lab.test.mjs
 
   # lane: e2e
@@ -122,7 +126,7 @@ jobs:
     name: Reader and Inbox on an emulator
     needs: [reader, share]
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4

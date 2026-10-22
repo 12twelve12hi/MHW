@@ -177,3 +177,101 @@ test('the e2e phone reads Lab frames: the hello, states, waiting then handed, La
   out = await ok(phone, ['lab-states', off]);
   assert.match(out, new RegExp(`^${off} page none: ${labLine(T.rows.delivered).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'm'));
 });
+
+// Wave 1 (E1): what the emulator steps ask of the phone. An excerpt from an explicit selection and a note (F11), the
+// pairing's topics (the mock relay's fail-publish hook, F04), LAB_TEXT's words, and await-share, which checks what
+// another sender on the pairing (on the emulator: the Android phone) published against the JS reference's share.
+test('the e2e phone sends an excerpt and a note, and await-share checks another phone\'s shares against the JS reference', async (t) => {
+  const relay = await startMockRelay();
+  const dir = mkdtempSync(join(tmpdir(), 'e2e-sender-w1-'));
+  t.after(async () => { await relay.close(); rmSync(dir, { recursive: true, force: true }); });
+  const phone = join(dir, 'phone.json');
+  const code = (await ok(phone, ['pair', relay.url])).trim();
+  const secret = await ds.parseCode(code);
+  const pairing = { secret, relay: relay.url };
+  const keys = await ds.deriveKeys(secret);
+  const receiver = new ds.Receiver({ pairing, storage: new ds.MemoryStorage(), from: 'CI Daylight' });
+
+  // topics: the pairing's inbox and ack topics.
+  assert.equal(await ok(phone, ['topics']), `inbox ${keys.inboxTopic}\nack ${keys.ackTopic}\n`);
+
+  // lab-text: LAB_TEXT's words, slots filled.
+  assert.equal(await ok(phone, ['lab-text', 'arrivals.addToReader']), `${T.arrivals.addToReader}\n`);
+  assert.equal(await ok(phone, ['lab-text', 'shareInPlace.failedTitle', 'title=F04 forced 413', 'name=CI Daylight']),
+    `${lab.fillText(T.shareInPlace.failedTitle, { title: 'F04 forced 413', name: 'CI Daylight' })}\n`);
+  assert.equal((await run(phone, ['lab-text', 'arrivals'])).code, 2, 'a section is not a string');
+  assert.equal((await run(phone, ['lab-text', 'nope.nope'])).code, 2);
+  assert.equal((await run(phone, ['lab-text', 'arrivals.saved', 'title'])).code, 2);
+
+  // send-excerpt with a source: an HTML excerpt of that page (F11), its url with a text fragment, x-cap "excerpt".
+  const source = 'https://example.com/walden-one';
+  const ex = await run(phone, ['send-excerpt', 'sel', source]);
+  assert.equal(ex.code, 0, ex.err);
+  const exId = ex.out.trim();
+  // without one: a Markdown note
+  const note = (await ok(phone, ['send-excerpt', 'note'])).trim();
+  const got = (await receiver.pollOnce()).items;
+  const byId = new Map(got.map((it) => [it.header.id, it]));
+  const e = byId.get(exId), n = byId.get(note);
+  assert.ok(e && n, 'the Daylight got the excerpt and the note');
+  assert.equal(e.header.kind, 'file');
+  assert.equal(e.header.mime, 'text/html');
+  assert.match(e.header.name, /^Excerpt - I went to the woods because\.html$/);
+  assert.ok(e.header.url.startsWith(`${source}#:~:text=I%20went%20to%20the%20woods`), e.header.url);
+  assert.match(e.header.title, /^“I went to the woods because I wished to live deliberately \(sel\).*” · Walden, sent from a phone \(sel\)$/);
+  assert.deepEqual(e.extras, { 'x-cap': 'excerpt' });
+  const html = ds.fromUtf8(e.content);
+  assert.ok(html.includes(`<a href="${source}">Walden, sent from a phone (sel)</a>`) && html.includes('<blockquote>'), html);
+  assert.equal(n.header.mime, 'text/markdown');
+  assert.match(n.header.name, /^Note - I went to the woods because\.md$/);
+  assert.equal(n.header.url, undefined);
+  assert.deepEqual(n.extras, { 'x-cap': 'excerpt' });
+  assert.match(ds.fromUtf8(n.content), /\n\n— shared from E2E phone on \d{1,2} [A-Z][a-z]+ \d{4}\n$/);
+  assert.equal((await run(phone, ['send-excerpt', 'old'], { peer: 'v1.1' })).code, 2, 'an old phone has no excerpts');
+
+  // inbox-items: what is on the inbox topic, read without acking or keeping anything.
+  const items = (await ok(phone, ['inbox-items'])).trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(items.map((it) => it.id).sort(), [exId, note].sort());
+  assert.deepEqual(items.find((it) => it.id === exId).extras, { 'x-cap': 'excerpt' });
+
+  // await-share: another phone on the pairing ("CI Daylight", as the Android phone calls itself on the emulator) shares
+  // a headline + link and an explicit selection the way the JS reference does.
+  const android = new ds.Sender({ pairing, storage: new ds.MemoryStorage(), from: 'CI Daylight', app: 'android/e2e' });
+  const since = String(Math.floor(Date.now() / 1000) - 5);
+  const nyt = 'Opinion | The Real Reason Inflation Is Still Too High, According to Economists https://www.nytimes.com/2026/10/22/opinion/inflation-economists.html?smid=nytcore-android-share';
+  const n1 = lab.normaliseShare({ text: nyt });
+  assert.equal(n1.kind, 'link', 'Q1: a headline + link stays a link');
+  const link = await android.send({ kind: 'url', url: n1.url, title: n1.title, extras: { 'x-orig': n1.orig } });
+  let r = await run(phone, ['await-share', '10', 'CI Daylight', since, 'link', nyt]);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out.trim(), link.id);
+
+  const selection = `${passage('android')} https://example.com/walden-one`;
+  const n2 = lab.normaliseShare({ text: selection, subject: 'Walden', source: 'selection' });
+  const exItem = lab.excerptItem({ text: n2.excerpt, url: n2.url, pageTitle: 'Walden', date: Date.now() });
+  const ex2 = await android.send(exItem);
+  r = await run(phone, ['await-share', '10', 'CI Daylight', since, 'excerpt', selection, 'Walden']);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out.trim(), ex2.id);
+
+  // A share that differs from the JS reference's (the whole text as its title, no x-orig) fails, saying what differs.
+  const other = 'Another headline https://example.org/story?utm_source=x';
+  const n3 = lab.normaliseShare({ text: other });
+  await android.send({ kind: 'url', url: n3.url, title: other });
+  r = await run(phone, ['await-share', '10', 'CI Daylight', since, 'link', other]);
+  assert.equal(r.code, 1);
+  assert.match(r.err, /title: got "Another headline https:\/\/example\.org\/story\?utm_source=x", want "Another headline"/);
+  assert.match(r.err, /extras: got \{\}, want \{"x-orig":"https:\/\/example\.org\/story\?utm_source=x"\}/);
+
+  // Nothing from that sender: a timeout, listing what it did send; bad arguments: exit 2.
+  r = await run(phone, ['await-share', '1', 'Nobody', 'all', 'link', nyt]);
+  assert.equal(r.code, 1);
+  assert.match(r.err, /nothing from "Nobody" with kind url/);
+  assert.equal((await run(phone, ['await-share', '1', 'CI Daylight', 'all', 'page', nyt])).code, 2);
+  assert.equal((await run(phone, ['await-share', '1', 'CI Daylight', 'yesterday', 'link', nyt])).code, 2);
+  assert.equal((await run(phone, ['await-share', '1', 'CI Daylight', 'all', 'excerpt', 'no link here, and no selection'])).code, 2,
+    'not an excerpt by the JS reference: the test asks for the wrong thing');
+});
+
+const passage = (tag) => `I went to the woods because I wished to live deliberately (${tag}), to front only the essential `
+  + 'facts of life, and see if I could not learn what it had to teach, and not, when I came to die, discover that I had not lived.';
