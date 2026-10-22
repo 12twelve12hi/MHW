@@ -5,10 +5,27 @@ import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-/** Which topic a frame belongs to; the AAD of its encryption (PROTOCOL 2). */
-enum class Purpose(val aad: String) {
-    INBOX("dlshare/v1/inbox"),
-    ACK("dlshare/v1/ack"),
+/**
+ * Which topic a frame belongs to; the AAD of its encryption (PROTOCOL 2). The Lab lanes' purposes (LAB-PROTOCOL 2.4)
+ * are fixed now and used from W2 (return lane) and W3 (control lane). [key] is the purpose's name in the vectors and
+ * the JS `aadFor`.
+ */
+enum class Purpose(val aad: String, val key: String) {
+    INBOX("dlshare/v1/inbox", "inbox"),
+    ACK("dlshare/v1/ack", "ack"),
+    LAB_RETURN("dlshare/v1/lab-return", "lab-return"),
+    LAB_RETURN_ACK("dlshare/v1/lab-return-ack", "lab-return-ack"),
+    LAB_CONTROL("dlshare/v1/lab-control", "lab-control"),
+    LAB_CONTROL_ACK("dlshare/v1/lab-control-ack", "lab-control-ack"),
+    ;
+
+    companion object {
+        /**
+         * The purpose named [key] (the JS `aadFor`, an explicit map: LAB-PROTOCOL 2.4). An unknown name throws
+         * [ShareException] "purpose", never a default.
+         */
+        fun of(key: String?): Purpose = entries.firstOrNull { it.key == key } ?: throw ShareException("purpose", "unknown purpose $key")
+    }
 }
 
 /** A decrypted frame: the header object and the body bytes. */
@@ -88,6 +105,11 @@ object Kind {
 /**
  * An item header (PROTOCOL 2.1). [toJson] writes the fields in the JavaScript reference's order, so frames built here
  * and there carry identical header bytes.
+ *
+ * [extras] are the Lab item header fields (LAB-PROTOCOL 2.3) that [check] read from part 0: `x-cap` when it is one of
+ * [X_CAP_VALUES] and `x-orig` when it passes the web URL rule. Every other `x-` field is dropped. [toJson] writes them
+ * after every other field, on part 0 only, as the JS `buildItemFrames` does; an empty map writes nothing, so a header
+ * without extras is exactly v1.1's.
  */
 data class ItemHeader(
     val id: String,
@@ -104,7 +126,14 @@ data class ItemHeader(
     val sent: String = "",
     val from: String? = null,
     val app: String? = null,
+    val extras: Map<String, String> = emptyMap(),
 ) {
+    /** The `x-cap` extra (LAB-PROTOCOL 2.3): "seen", "clean", "excerpt", "test" or null. */
+    val xCap: String? get() = extras[X_CAP]
+
+    /** The `x-orig` extra (LAB-PROTOCOL 2.3): the URL as shared before smart intake cleaned it, or null. */
+    val xOrig: String? get() = extras[X_ORIG]
+
     fun toJson(withParts: Boolean = parts > 1): Map<String, Any?> {
         val m = LinkedHashMap<String, Any?>()
         m["v"] = Limits.PROTOCOL_VERSION
@@ -130,12 +159,40 @@ data class ItemHeader(
             m["part"] = part
             m["parts"] = parts
         }
+        if (part == 0) {
+            extras[X_CAP]?.let { m[X_CAP] = it }
+            extras[X_ORIG]?.let { m[X_ORIG] = it }
+        }
         return m
     }
 
     companion object {
         const val ENC_IDENTITY = "identity"
         const val ENC_DEFLATE_RAW = "deflate-raw"
+
+        /** The Lab item header fields (LAB-PROTOCOL 2.3). */
+        const val X_CAP = "x-cap"
+        const val X_ORIG = "x-orig"
+
+        /** The values of `x-cap`. */
+        val X_CAP_VALUES = listOf("seen", "clean", "excerpt", "test")
+
+        /** The longest `x-orig` a sender writes (LAB-PROTOCOL 2.3); receivers do not apply it. */
+        const val X_ORIG_MAX = 1024
+
+        /**
+         * The Lab extras of an untrusted item header (the JS `itemHeaderExtras`; vectors > labHeaderExtras): `x-cap`
+         * when it is one of [X_CAP_VALUES] and `x-orig` when it passes the web URL rule (the trimmed value), read from
+         * part 0 only (a missing `part` is part 0). Never throws.
+         */
+        fun extrasOf(h: Map<String, Any?>): Map<String, String> {
+            val part = h["part"]
+            if (part != null && (part as? Double)?.let { it == 0.0 } != true) return emptyMap() // -0 is 0, as in JS
+            val out = LinkedHashMap<String, String>()
+            (h[X_CAP] as? String)?.takeIf { it in X_CAP_VALUES }?.let { out[X_CAP] = it }
+            (h[X_ORIG] as? String)?.let(Text::webUrl)?.let { out[X_ORIG] = it }
+            return out
+        }
         private val ID_RE = Regex("^[0-9a-f]{32}$")
         private val SHA_RE = Regex("^[0-9a-f]{64}$")
 
@@ -144,8 +201,8 @@ data class ItemHeader(
         fun isId(s: String?): Boolean = s != null && ID_RE.matches(s)
 
         /**
-         * Validates an untrusted header (the JS `checkItemHeader`) and returns a cleaned copy. Throws [ShareException]
-         * with code "header".
+         * Validates an untrusted header (the JS `checkItemHeader`) and returns a cleaned copy, with the Lab [extras] of
+         * part 0 ([extrasOf]; empty on later parts). Throws [ShareException] with code "header".
          */
         fun check(h: Map<String, Any?>): ItemHeader {
             fun bad(why: String): Nothing = throw ShareException("header", why)
@@ -180,7 +237,8 @@ data class ItemHeader(
             val sent = (h["sent"] as? String)?.take(40) ?: ""
             val from = Text.cleanName(h["from"]?.let { it as? String ?: jsString(it) }).ifEmpty { null }
             val app = (h["app"] as? String)?.take(60)
-            return ItemHeader(id, kind, url, title, name, mime, size, sha, enc, part.toInt(), parts.toInt(), sent, from, app)
+            val extras = if (part == 0L) extrasOf(h) else emptyMap()
+            return ItemHeader(id, kind, url, title, name, mime, size, sha, enc, part.toInt(), parts.toInt(), sent, from, app, extras)
         }
 
         private fun cleanMime(v: Any?): String {

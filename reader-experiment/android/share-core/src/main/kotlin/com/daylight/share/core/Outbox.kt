@@ -3,6 +3,7 @@ package com.daylight.share.core
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.logging.Logger
 
 /** Outbox row status values (the same strings as the JavaScript Sender). */
 object Status {
@@ -105,12 +106,16 @@ data class OutboxRow(
 
 /**
  * The outbox on disk: `outbox.json` (rows, newest first, and the ack cursor) and `content/<id>.enc` (the encoded body
- * of each item that may still need re-sending). [lock] is shared by every object on the same directory.
+ * of each item that may still need re-sending). [lock] is shared by every object on the same directory. The sender's
+ * Lab ledger lives next to them in [labFile] (LAB-PROTOCOL 2.2.6), so [clear] removes it with the outbox.
  */
 class FileOutboxStore(val dir: File) {
     private val file = File(dir, "outbox.json")
     val contentDir = File(dir, "content")
     val lock: Any = FileLocks.of(file)
+
+    /** `lab.json`: the sender's Lab ledger (`lab.LabLedger.of(store)`), kept with the outbox and cleared with it. */
+    val labFile: File get() = File(dir, "lab.json")
 
     fun load(): Pair<List<OutboxRow>, String> {
         synchronized(lock) {
@@ -129,14 +134,30 @@ class FileOutboxStore(val dir: File) {
 
     fun contentFile(id: String) = File(contentDir, "$id.enc")
 
-    /** Deletes every row, all stored content and the ack cursor (pairing with a different secret). */
+    /**
+     * Deletes every row, all stored content, the ack cursor and the Lab ledger ([labFile]): pairing with a different
+     * secret (PROTOCOL 3.3 step 6; LAB-PROTOCOL 2.2.6). The same secret keeps them all.
+     */
     fun clear() = synchronized(lock) { dir.deleteRecursively() }
+}
+
+/**
+ * What [Outbox.checkAcks] hands on (LAB-PROTOCOL 2.7.1): every ack-topic frame that decrypts and whose `kind` is "ack",
+ * before any row is updated, with the message's relay [time] (Unix seconds) and ntfy message id. Lab frames are such
+ * frames, so a sender's Lab ledger (`lab.LabLedger.hook()`) learns from every ack check, whether Lab is on or off.
+ * [header] is untrusted: read it with `lab.LabFrame.parse`.
+ */
+fun interface AckHeaderListener {
+    fun onAckHeader(header: Map<String, Any?>, time: Long, msgId: String)
 }
 
 /**
  * The sender (PROTOCOL 3.3; the rules of CHANGES-v1.1 2.4): publishes items, reads acks, re-sends what is due,
  * expires week-old items. Every public method is blocking and runs under the lock of its store's directory, shared by
  * every [Outbox] on those files; run them off the main thread.
+ *
+ * [onAckHeader] (Lab, LAB-PROTOCOL 2.7.1) sees every decrypted ack-topic frame whose kind is "ack"; what it throws is
+ * caught and logged, and never stops the ack check.
  */
 class Outbox(
     val pairing: Pairing,
@@ -146,6 +167,7 @@ class Outbox(
     private val app: String = "",
     private val clock: () -> Long = System::currentTimeMillis,
     private val chunkSize: Int = Limits.CHUNK,
+    private val onAckHeader: AckHeaderListener? = null,
 ) {
     private val keys = pairing.keys
     private val lock: Any = store.lock
@@ -295,6 +317,14 @@ class Outbox(
             } catch (e: ShareException) {
                 continue
             }
+            if (opened.header["kind"] != "ack") continue
+            if (onAckHeader != null) {
+                try {
+                    onAckHeader.onAckHeader(opened.header, m.time, m.id)
+                } catch (e: Exception) {
+                    LOG.warning("onAckHeader failed: $e")
+                }
+            }
             val by = Text.cleanName(opened.header["from"] as? String)
             AckHeader.idsOf(opened.header)?.forEach { acked[it] = by }
         }
@@ -419,6 +449,8 @@ class Outbox(
     }
 
     companion object {
+        private val LOG: Logger = Logger.getLogger("DaylightShare")
+
         @Deprecated("Use Limits.OUTBOX_MAX_ROWS", ReplaceWith("Limits.OUTBOX_MAX_ROWS"))
         const val MAX_ROWS = Limits.OUTBOX_MAX_ROWS
 

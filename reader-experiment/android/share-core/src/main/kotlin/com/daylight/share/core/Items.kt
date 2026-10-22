@@ -216,7 +216,14 @@ object ItemBuilder {
  * stays in memory (tests, small receivers).
  */
 class Reassembler(private val spoolDir: File? = null, private val clock: () -> Long = System::currentTimeMillis) {
-    class Completed(val header: ItemHeader, val content: Body)
+    /**
+     * A complete, verified item. [header] is part 0's (with `part` 0 and `parts` 1), and carries the Lab [extras] part 0
+     * had (LAB-PROTOCOL 2.3), so the Inbox can store them with the item.
+     */
+    class Completed(val header: ItemHeader, val content: Body) {
+        /** The Lab item header fields part 0 carried (`x-cap`, `x-orig`), checked; empty for most items. */
+        val extras: Map<String, String> get() = header.extras
+    }
 
     private class Pending(val parts: Int, val chunks: MutableMap<Int, ByteArray>, var header: ItemHeader, val created: Long)
 

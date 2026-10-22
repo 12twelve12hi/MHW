@@ -1,9 +1,9 @@
 name: Reader experiment - Android (Daylight Share)
 
 # Builds reader-experiment/android (the Daylight Share APK): runs the protocol tests of :share-core against the shared
-# vectors and the mock ntfy relay, builds the release and debug APKs, runs the app's Robolectric tests (screens,
-# accessibility, Lab-off parity), publishes daylight-share.apk to the "reader-experiment-latest" release, and tries a
-# live round trip through https://ntfy.sh (allowed to fail).
+# vectors (protocol, Lab and server) and the mock ntfy relay, builds the release and debug APKs, runs the app's
+# Robolectric tests (screens, accessibility, Lab-off parity), publishes daylight-share.apk to the
+# "reader-experiment-latest" release, and tries a live round trip through https://ntfy.sh (allowed to fail).
 #
 # Lanes (LAB-PLAN 6.1): every job carries a "# lane: <name>" comment and a lane edits only its own blocks. The core
 # lane owns the shared parts (triggers, permissions, concurrency and the publish job). Android is not held by the Lab
@@ -15,6 +15,8 @@ on:
       - 'reader-experiment/android/**'
       - 'reader-experiment/share/**'
       - '!reader-experiment/share/**/*.md'
+      # share-core's server client passes the server lane's vectors (LAB-PLAN 2.6)
+      - 'reader-experiment/server/vectors/**'
       - '.github/workflows/rx-android.yml'
   workflow_dispatch:
 
@@ -49,8 +51,14 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # LabStrings.kt is LAB_TEXT of share/js/daylight-lab.js, generated; LabVectorsTest pins it to the vectors too.
+      - name: Lab strings match LAB_TEXT
+        run: node share-core/scripts/lab-strings.mjs --check
+
       # Without an Android SDK Gradle configures only :share-core (settings.gradle.kts), which is all this job needs.
-      - name: Protocol tests (vectors, mock relay, JS interop)
+      # Lab (K0): the Lab and server vectors, LabInbox's rules and the F17 skew suite against the JS v1.0, v1.1 and
+      # current references.
+      - name: Protocol tests (vectors, mock relay, JS interop, Lab and server vectors, skew suite)
         run: ./gradlew --no-daemon -Pdls.skipApp=true :share-core:test
 
       - name: Live round trip through ntfy.sh (informational)

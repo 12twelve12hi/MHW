@@ -23,16 +23,22 @@ dependencies {
 }
 
 val shareDir = rootProject.projectDir.resolve("../share")
+val serverDir = rootProject.projectDir.resolve("../server")
 
 tasks.test {
     // The vectors and the mock relay are shared with the other implementations.
     systemProperty("dls.vectors", shareDir.resolve("vectors/test-vectors.json").absolutePath)
+    systemProperty("dls.labVectors", shareDir.resolve("vectors/lab-vectors.json").absolutePath)
+    systemProperty("dls.serverVectors", serverDir.resolve("vectors/server-vectors.json").absolutePath)
     systemProperty("dls.mockRelay", shareDir.resolve("js/mock-relay.mjs").absolutePath)
     System.getenv("DLS_NODE")?.let { systemProperty("dls.node", it) }
     // Set DLS_LIVE_RELAY=https://ntfy.sh to run the live round trip against a real relay.
     System.getenv("DLS_LIVE_RELAY")?.let { systemProperty("dls.liveRelay", it) }
     inputs.dir(shareDir.resolve("vectors"))
-    inputs.file(shareDir.resolve("js/mock-relay.mjs"))
+    inputs.file(serverDir.resolve("vectors/server-vectors.json"))
+    // The JS side of the interop and skew tests: the references (with the v1.0 and v1.1 fixtures) and the driver.
+    inputs.files(fileTree(shareDir.resolve("js")) { include("*.js", "*.mjs", "test/fixtures/**") })
+    inputs.dir("src/test/js")
     testLogging {
         events("passed", "skipped", "failed")
         showStandardStreams = true

@@ -93,7 +93,8 @@ class Receiver(
     private val lock: Any = store.lock
 
     /**
-     * [items]: new items, stored. [ackIds]: this poll's ids whose ack was published. [digestIds]: older ids the digest
+     * [items]: new items, stored; each header carries its Lab extras (`ItemHeader.extras`, LAB-PROTOCOL 2.3), as the
+     * [Reassembler.Completed] handed to [accept] does. [ackIds]: this poll's ids whose ack was published. [digestIds]: older ids the digest
      * re-published. [ackError]: why an ack could not be published (null when all went out). [storeError]: why an item
      * could not be stored ([accept] threw, or a part or its content could not be written; null when all were stored). [limited]: a download answered 429 or 413 (the relay is
      * limiting this network; what it held back arrives later).

@@ -70,10 +70,23 @@ class MockRelay private constructor(private val process: Process, val url: Strin
         }
 
         /** Runs the JS reference implementation (src/test/js/interop.mjs) and returns its JSON output. */
-        fun js(vararg args: String): Any? {
-            val lib = File(shareDir, "js/daylight-share.js").path
+        fun js(vararg args: String): Any? = jsWith(jsLib("current"), *args)
+
+        /**
+         * The JS protocol module of a [version]: "current" (share/js/daylight-share.js), or "v1.0" and "v1.1" as they
+         * shipped (share/js/test/fixtures), so the skew tests run old peers as apps in the field do.
+         */
+        fun jsLib(version: String): File = when (version) {
+            "v1.0" -> File(shareDir, "js/test/fixtures/daylight-share-v1.0.js")
+            "v1.1" -> File(shareDir, "js/test/fixtures/daylight-share-v1.1.js")
+            "current" -> File(shareDir, "js/daylight-share.js")
+            else -> error("no JS version $version")
+        }
+
+        /** Runs interop.mjs with the protocol module [lib] and returns its JSON output. */
+        fun jsWith(lib: File, vararg args: String): Any? {
             val script = File("src/test/js/interop.mjs").absolutePath
-            val p = ProcessBuilder(listOf(node, script, lib) + args).redirectErrorStream(true).start()
+            val p = ProcessBuilder(listOf(node, script, lib.path) + args).redirectErrorStream(true).start()
             val out = p.inputStream.bufferedReader().readText()
             check(p.waitFor(120, TimeUnit.SECONDS) && p.exitValue() == 0) { "node interop failed: $out" }
             return Json.parse(out.trim().lines().last())
