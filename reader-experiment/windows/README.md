@@ -40,8 +40,9 @@ its own ntfy server (a pairing link already includes it).
 
 Opening your Daylight's link again, after you renamed it or moved it to another relay, applies at once (*Pairing
 updated: now sending through …*), and anything not yet delivered goes through the new relay. A link for a **different**
-Daylight asks first and says that it replaces the current one (the button reads **Switch**); switching, or **⋯ › Unpair
-this PC**, discards anything the old Daylight hasn't picked up yet.
+Daylight asks first and says that it replaces the current one (the button reads **Switch**); switching, or **⋯ › Settings
+› Unpair this PC**, discards anything the old Daylight hasn't picked up yet. To type a code while paired, use **⋯ ›
+Settings › Change pairing…**: the same Daylight's code applies at once, another Daylight's asks first, as a link does.
 
 ## Send
 
@@ -94,6 +95,22 @@ Off by default. Turn it on in the tray menu (**Start at login**) or in **⋯ ›
 notification area when you sign in to Windows, so re-sends and the hotkey keep working. (It adds an entry under
 *Settings › Apps › Startup*, where you can also turn it off.) It stays on after an update (see below).
 
+## Comfort and accessibility
+
+**⋯ › Settings › Comfort** makes text and buttons larger, raises the contrast and turns off motion. It is off by
+default, and it is there before pairing too (the **⋯** button on the pairing screen). Pairing, switching to another
+Daylight and unpairing leave it as it is.
+
+With or without Comfort:
+
+- every control has a name a screen reader (Narrator, NVDA, JAWS) reads out;
+- when an item in the history turns **Delivered ✓**, **Waiting to send** or **Not delivered**, a screen reader says so
+  (*Delivered ✓: &lt;title&gt;*) without moving the focus; a send's own outcome is read from the line under the buttons;
+- states are written out in words (and ✓), never shown by colour alone;
+- status lines wrap instead of being cut off, also at the narrowest window and at twice the text size (Windows'
+  *Settings › Accessibility › Text size*); with Comfort, titles wrap too instead of ending in "…";
+- the pairing code can always be typed (no QR code needed), also while paired (**Change pairing…**).
+
 ## Uninstall
 
 Quit it (right-click the icon › **Quit**), then *Settings › Apps › Installed apps › Send to Daylight › Uninstall* (or
@@ -115,7 +132,7 @@ side (`src-tauri/src/`) is kept to what a web page can't do.
 | Where | What |
 |---|---|
 | `src/core.js` | Pairing (the module's `pairingConfirmation` and `applyPairingChange`), sending, the outbox and its timers, with `daylight-share.js` (no DOM, no Tauri; unit-tested in node) |
-| `src/app.js`, `index.html`, `styles.css` | The window: pairing and its confirmation, drop zone, history, settings, the hotkey recorder |
+| `src/app.js`, `index.html`, `styles.css` | The window: pairing and its confirmation, drop zone, history, settings (Comfort among them), the hotkey recorder, the screen-reader announcements |
 | `src/logic.js` | Small pure helpers (status labels, MIME types, the hotkey's key names, notification texts) |
 | `src/bridge.js` | Calls into Rust; the storage adapter (one JSON file per key in the app's data folder) |
 | `build.mjs` | Copies `src/` and `../share/js/daylight-share.js` into `dist/`, which Tauri embeds |
@@ -125,6 +142,7 @@ side (`src-tauri/src/`) is kept to what a web page can't do.
 | `src-tauri/src/store.rs`, `atomic.rs` | The page's key-value storage: each write flushed to disk, then renamed into place; a damaged file is set aside |
 | `src-tauri/windows/installer-hooks.nsh` | Installer extras: adds and removes the Send to shortcut; puts start at login back after an update |
 | `test/unit/` | Unit tests (node): `core.js` against the mock relay with a Receiver playing the Daylight, helpers, configuration |
+| `test/ui/` | The window's page (`dist/index.html`) in Chromium with a fake bridge in place of Rust (`test/helpers/ui.mjs`): the accessibility checks (below) |
 | `test/e2e/windows.e2e.mjs` | The end-to-end test on Windows (below) |
 
 Plugins (all used from Rust only, so the page needs no plugin permissions): single-instance, deep-link (the
@@ -140,11 +158,14 @@ Needs [Node.js 22](https://nodejs.org), [Rust](https://rustup.rs) (stable, MSVC)
 cd reader-experiment/windows
 npm ci
 npm test                              # builds dist/ and runs the unit tests
+npx playwright install chromium       # once, for the next line
+npm run ui                            # the window's page in Chromium: accessibility (test/ui/)
 npx tauri build --bundles nsis        # -> src-tauri/target/release/bundle/nsis/Send to Daylight_<version>_x64-setup.exe
 npx tauri dev                         # runs it from source (after npm test or node build.mjs), with the developer tools
 ```
 
-The unit tests run anywhere with node 22. Icons come from the extension's design: `node scripts/make-icons.mjs`
+The unit tests and `npm run ui` run anywhere with node 22 (`HEADED=1` shows the browser; `DLS_UI_CHANNEL=msedge`
+uses an installed Microsoft Edge, the engine of WebView2). Icons come from the extension's design: `node scripts/make-icons.mjs`
 (see the script for what it needs).
 
 ### CI and the end-to-end test
@@ -181,6 +202,27 @@ none of these options does anything. The test:
 
 `--e2e-pair <link>` pairs without asking, for trying the app by hand against a test relay; the test itself takes the
 links' real path.
+
+### Accessibility checks (LAB-PLAN F27)
+
+`test/ui/a11y.test.mjs` opens `dist/index.html` in Chromium (WebView2's engine), served with the window's own CSP from
+`tauri.conf.json`, with `window.__TAURI__` faked from a seed: the JSON store's keys (pairing, history, settings) and
+`app_info`. The page is laid out at the narrowest window: `minWidth` 360 less a 17 px scrollbar. It checks:
+
+- **axe-core** (`@axe-core/playwright`, pinned) finds no violations in any view (pairing, sending with a history row in
+  every state, Settings before and after pairing, the hotkey recorder, Change pairing… and its Switch question), light
+  and dark, Comfort off and on; first it proves axe reads the page (an unlabelled field put in for a moment is found);
+- every control has a name, and the history's states are the library's words;
+- **Comfort**: LAB_TEXT's words for the switch and its footer, off by default, before pairing too; on, the `comfort`
+  class on `<body>` gives text at 125%, buttons at least 48 px high, 2 px borders and no transitions, and the next
+  start opens in Comfort; a Comfort that can't be saved is put back and says why;
+- **no text cut short** (F27.4): with Comfort, for every element with text, `scrollWidth <= clientWidth` and
+  `scrollHeight <= clientHeight + 1`, and the window never scrolls sideways, in every view, also at 200% text; without
+  Comfort, status text still wraps at 200%;
+- **announcements**: a row that the first tick ends as Not delivered, and one the Daylight acks (a real ack on the mock
+  relay, read when Rust's tick event fires), are said through the polite live region.
+
+Screenshots of every view go to `test-results/a11y/` (a CI artifact, for review; not compared).
 
 The workflow then uploads the installer to the `reader-experiment-latest` release; the bare `send-to-daylight.exe`
 and the test output (status file, screenshot) are kept as workflow artifacts.

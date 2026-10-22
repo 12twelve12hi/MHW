@@ -10,9 +10,12 @@
     "tauri": "tauri",
     "build": "tauri build --bundles nsis",
     "e2e": "node test/e2e/windows.e2e.mjs",
-    "icons": "node scripts/make-icons.mjs"
+    "icons": "node scripts/make-icons.mjs",
+    "ui": "node build.mjs && node --test --test-concurrency=1 test/ui/*.test.mjs"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.12.3"
+    "@axe-core/playwright": "4.13.0",
+    "@tauri-apps/cli": "2.12.3",
+    "playwright": "1.56.1"
   }
 }

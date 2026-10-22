@@ -19,8 +19,9 @@
       </button>
     </header>
 
-    <!-- Not paired yet -->
+    <!-- Not paired yet, or Settings › Change pairing… (a typed code is always one step away, F27) -->
     <section id="view-pair" hidden aria-labelledby="pair-h">
+      <button id="pair-back" class="back" type="button" hidden>‹ Back</button>
       <h2 id="pair-h">Pair with your Daylight</h2>
       <p class="hint">On your Daylight, open <b>Daylight Share</b> and choose <b>This is my Daylight</b>. Type the
         28-character code it shows, or open its pairing link on this PC.</p>
@@ -66,16 +67,29 @@
 
       <h2 class="recent-h" id="recent-h" hidden>Recent</h2>
       <ol id="history" class="history" aria-labelledby="recent-h"></ol>
+      <!-- F27: a history row's new state (Delivered ✓, Waiting to send, Not delivered), said to screen readers. -->
+      <p id="announce" class="sr-only" role="status" aria-live="polite"></p>
     </section>
 
-    <!-- Settings -->
+    <!-- Settings (before pairing too, for Comfort) -->
     <section id="view-settings" hidden aria-labelledby="settings-h">
       <button id="close-settings" class="back" type="button">‹ Back</button>
       <h2 id="settings-h">Settings</h2>
-      <dl class="facts">
-        <dt>Daylight</dt><dd id="set-daylight"></dd>
-        <dt>Relay</dt><dd id="set-relay"></dd>
-      </dl>
+      <!-- F27 Comfort: part of the accessibility baseline, not Lab; the words are LAB_TEXT.comfort and .comfortFooter. -->
+      <div class="switch-row">
+        <label for="comfort" class="switch-label">Comfort</label>
+        <input id="comfort" class="switch" type="checkbox" role="switch" aria-describedby="comfort-footer">
+      </div>
+      <p id="comfort-footer" class="hint small switch-footer">Larger text and buttons, more contrast, no motion.</p>
+      <p id="comfort-msg" class="hint small" role="status" aria-live="polite"></p>
+
+      <div id="settings-paired">
+        <dl class="facts">
+          <dt>Daylight</dt><dd id="set-daylight"></dd>
+          <dt>Relay</dt><dd id="set-relay"></dd>
+        </dl>
+        <button id="repair" class="btn secondary" type="button">Change pairing…</button>
+      </div>
 
       <h3>Send the clipboard’s link</h3>
       <div class="setting">
@@ -97,9 +111,11 @@
       </div>
       <p id="windows-msg" class="hint small" role="status" aria-live="polite"></p>
 
-      <p class="hint small">Everything you send is end-to-end encrypted with a key from the pairing code. The relay
-        only sees scrambled data.</p>
-      <button id="unpair" class="btn danger" type="button">Unpair this PC</button>
+      <div id="settings-unpair">
+        <p class="hint small">Everything you send is end-to-end encrypted with a key from the pairing code. The relay
+          only sees scrambled data.</p>
+        <button id="unpair" class="btn danger" type="button">Unpair this PC</button>
+      </div>
       <p id="version" class="hint small version"></p>
     </section>
   </main>

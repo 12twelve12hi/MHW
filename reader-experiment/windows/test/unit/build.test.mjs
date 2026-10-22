@@ -160,3 +160,24 @@ test('appStorage keeps JSON values in Rust’s files and reports every failed wr
     delete globalThis.__TAURI__;
   }
 });
+
+test('Comfort (F27, not Lab): its switch and footer in LAB_TEXT’s words; the comfort class on <body> in the stylesheet', async () => {
+  const { LAB_TEXT } = await import('../../../share/js/daylight-lab.js');
+  const html = fs.readFileSync(path.join(root, 'src', 'index.html'), 'utf8');
+  assert.match(html, new RegExp(`<label for="comfort" class="switch-label">${LAB_TEXT.comfort}</label>`));
+  assert.match(html, /<input id="comfort" class="switch" type="checkbox" role="switch" aria-describedby="comfort-footer">/);
+  assert.ok(html.includes(`<p id="comfort-footer" class="hint small switch-footer">${LAB_TEXT.comfortFooter}</p>`));
+  // In Settings, outside Lab (LAB-PLAN 1.1: Lab's own row comes first, with WIN0).
+  const settings = html.slice(html.indexOf('<section id="view-settings"'), html.indexOf('</section>', html.indexOf('<section id="view-settings"')));
+  assert.ok(settings.includes('id="comfort"'));
+  const css = fs.readFileSync(path.join(root, 'src', 'styles.css'), 'utf8');
+  const base = Number(css.match(/^body \{[^}]*font: ([\d.]+)rem\//m)[1]);
+  const big = Number(css.match(/^body\.comfort \{ font-size: ([\d.]+)rem;/m)[1]);
+  assert.equal(big, base * 1.25, 'text at 125%');
+  assert.match(css, /body\.comfort \*, body\.comfort \*::before, body\.comfort \*::after \{ transition: none !important; animation: none !important; \}/);
+  assert.match(css, /body\.comfort :is\(button, summary, \.switch-row, \.check\) \{ min-height: 48px; \}/);
+  assert.match(css, /body\.comfort :is\(\.btn, \.retry, input, textarea, \.kind, kbd\) \{ border-width: 2px; \}/);
+  // Every font size is relative, so Comfort and larger text reach every part.
+  const fixed = [...css.matchAll(/font(?:-size)?:[^;]*\b\d+(?:\.\d+)?px/g)].map((m) => m[0]);
+  assert.deepEqual(fixed, []);
+});

@@ -158,10 +158,14 @@ export function createApp({
   const rows = async () => (await storage.get('outbox')) ?? [];
 
   async function getSettings() { return (await storage.get('settings')) ?? {}; }
-  async function setSettings(patch) {
-    const s = { ...(await getSettings()), ...patch };
-    await storage.set('settings', s);
-    return s;
+  /** Merges patch into the settings (the hotkey, Comfort), one write at a time so none is lost. -> the settings */
+  const settingsRun = serial();
+  function setSettings(patch) {
+    return settingsRun(async () => {
+      const s = { ...(await getSettings()), ...patch };
+      await storage.set('settings', s);
+      return s;
+    });
   }
 
   // --- sending ------------------------------------------------------------------------------------------------------

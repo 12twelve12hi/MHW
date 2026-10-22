@@ -1,5 +1,6 @@
 /* Calm and high-contrast, like the Daylight's e-paper screen: ink on paper, thin rules, no shadows.
-   Light or dark follows the Windows app mode. */
+   Light or dark follows the Windows app mode. Text sizes are relative (body follows the root's text size, em inside),
+   so Comfort and larger text scale every part (LAB-PLAN F27). */
 :root {
   --paper: #f7f5f0;
   --card: #ffffff;
@@ -39,7 +40,7 @@ body {
   min-height: 100vh;
   background: var(--paper);
   color: var(--ink);
-  font: 15px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font: 0.9375rem/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   -webkit-user-select: none;
   user-select: none;
 }
@@ -50,14 +51,14 @@ main { padding: 16px 18px 22px; max-width: 560px; margin: 0 auto; }
 
 .top { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .top .mark { flex: none; border-radius: 6px; }
-h1 { font-size: 17px; font-weight: 650; margin: 0; flex: 1; letter-spacing: .01em; }
-h2 { font-size: 16px; font-weight: 650; margin: 4px 0 8px; }
-h3 { font-size: 13px; font-weight: 650; margin: 18px 0 6px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+h1 { font-size: 1.1333em; font-weight: 650; margin: 0; flex: 1; min-width: 0; letter-spacing: .01em; }
+h2 { font-size: 1.0667em; font-weight: 650; margin: 4px 0 8px; }
+h3 { font-size: .8667em; font-weight: 650; margin: 18px 0 6px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
 .hint { color: var(--muted); margin: 0 0 12px; }
-.small { font-size: 13px; }
+.small { font-size: .8667em; }
 .center { text-align: center; }
 
-label { display: block; font-size: 13px; font-weight: 600; margin: 10px 0 4px; }
+label { display: block; font-size: .8667em; font-weight: 600; margin: 10px 0 4px; }
 input[type="url"], input[type="text"], textarea {
   width: 100%;
   font: inherit;
@@ -67,11 +68,11 @@ input[type="url"], input[type="text"], textarea {
   border-radius: 8px;
   padding: 9px 10px;
 }
-textarea { resize: vertical; font-family: "Cascadia Mono", Consolas, ui-monospace, monospace; font-size: 14px; letter-spacing: .03em; }
+textarea { resize: vertical; font-family: "Cascadia Mono", Consolas, ui-monospace, monospace; font-size: .9333em; letter-spacing: .03em; }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: .75; }
 
 details { margin: 10px 0 0; }
-summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 4px 0; width: max-content; }
+summary { cursor: pointer; color: var(--muted); font-size: .8667em; padding: 4px 0; width: max-content; max-width: 100%; }
 details[open] summary { color: var(--ink); }
 
 .btn {
@@ -89,7 +90,7 @@ details[open] summary { color: var(--ink); }
 .btn.secondary { background: transparent; color: var(--ink); border-color: var(--rule-strong); }
 .btn.danger { background: transparent; color: var(--bad); border-color: currentColor; margin-top: 20px; }
 .btn.inline { display: inline-block; width: auto; margin-top: 10px; padding: 7px 14px; }
-.btn.small-btn { width: auto; margin: 0; padding: 5px 12px; font-size: 13px; border-radius: 8px; white-space: nowrap; }
+.btn.small-btn { width: auto; margin: 0; padding: 5px 12px; font-size: .8667em; border-radius: 8px; white-space: nowrap; }
 .btn:disabled { opacity: .45; cursor: default; }
 .btn:not(:disabled):active { transform: translateY(1px); }
 .btn.secondary:not(:disabled):hover { border-color: var(--ink); }
@@ -114,12 +115,13 @@ details[open] summary { color: var(--ink); }
 }
 .drop.over { background: var(--drop); border-color: var(--ink); border-style: solid; }
 .drop-icon { fill: none; stroke: var(--ink); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.drop-title { margin: 4px 0 0; font-weight: 650; font-size: 16px; }
-.drop-sub { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+.drop-title { margin: 4px 0 0; font-weight: 650; font-size: 1.0667em; }
+.drop-sub { margin: 2px 0 0; color: var(--muted); font-size: .8667em; }
 
-.status { min-height: 1.45em; margin: 10px 0 0; font-size: 14px; white-space: pre-line; overflow-wrap: anywhere; }
+/* Status text always wraps, also at 200% text (F27). */
+.status { min-height: 1.45em; margin: 10px 0 0; font-size: .9333em; white-space: pre-line; overflow-wrap: anywhere; }
 .status.bad, .error { color: var(--bad); }
-.error { margin: 10px 0 0; font-size: 14px; }
+.error { margin: 10px 0 0; font-size: .9333em; overflow-wrap: anywhere; }
 .error:empty { display: none; }
 
 .confirm-lines { margin: 0 0 4px; }
@@ -128,47 +130,97 @@ details[open] summary { color: var(--ink); }
 
 .row { display: flex; gap: 8px; align-items: stretch; }
 .row .btn { margin-top: 12px; }
-.row.tight { gap: 6px; flex: none; }
+.row.tight { gap: 6px; flex: 0 1 auto; flex-wrap: wrap; min-width: 0; }
 
-.recent-h { margin: 18px 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+.recent-h { margin: 18px 0 4px; font-size: .8667em; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
 .history { list-style: none; margin: 0; padding: 0; }
 .history li { border-top: 1px solid var(--rule); padding: 9px 0; }
 .history li:last-child { border-bottom: 1px solid var(--rule); }
 .item-line { display: flex; align-items: baseline; gap: 8px; }
 .kind {
-  flex: none; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  flex: none; font-size: .7333em; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
   border: 1px solid var(--rule-strong); border-radius: 4px; padding: 0 4px; color: var(--muted);
 }
 .item-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
-.item-meta { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); margin-top: 3px; flex-wrap: wrap; }
-.st { font-weight: 600; color: var(--ink); }
+.item-meta { display: flex; align-items: center; gap: 6px; font-size: .8667em; color: var(--muted); margin-top: 3px; flex-wrap: wrap; }
+.st { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
 .st.busy { color: var(--muted); }
 .st.bad { color: var(--bad); }
 .acts { margin-left: auto; display: flex; gap: 6px; align-items: center; }
 .retry {
-  font: inherit; font-size: 13px; font-weight: 600; color: var(--ink); background: transparent;
+  font: inherit; font-weight: 600; color: var(--ink); background: transparent;
   border: 1px solid var(--rule-strong); border-radius: 7px; padding: 2px 12px; cursor: pointer;
 }
 .retry:hover { border-color: var(--ink); }
 .remove {
-  font: inherit; font-size: 12.5px; color: var(--muted); background: transparent; border: 0; padding: 2px 4px;
+  font: inherit; font-size: .9615em; color: var(--muted); background: transparent; border: 0; padding: 2px 4px;
   cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
 }
 .remove:hover { color: var(--ink); }
 .retry:disabled, .remove:disabled { opacity: .45; cursor: default; }
-.note { margin: 3px 0 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.note { margin: 3px 0 0; font-size: .8333em; color: var(--muted); overflow-wrap: anywhere; }
 .note.bad { color: var(--bad); }
 
-.facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 6px 0 4px; font-size: 14px; }
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 6px 0 4px; font-size: .9333em; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; overflow-wrap: anywhere; }
-.setting { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; min-height: 40px; }
-.setting-text { margin: 0; }
+.setting { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 10px; padding: 6px 0; min-height: 40px; }
+.setting-text { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 kbd {
-  font: 600 13px/1 "Segoe UI", system-ui, sans-serif; border: 1px solid var(--rule-strong); border-bottom-width: 2px;
-  border-radius: 5px; padding: 3px 6px; background: var(--card); white-space: nowrap;
+  /* inline-block, so the line grows to hold the key's frame instead of the frame spilling out of the line */
+  display: inline-block; font: 600 .8667em/1.3 "Segoe UI", system-ui, sans-serif; border: 1px solid var(--rule-strong);
+  border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; background: var(--card); white-space: nowrap; max-width: 100%;
 }
 kbd.recording { border-color: var(--focus); color: var(--focus); }
-.check { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 15px; font-weight: 500; cursor: pointer; }
-.check input { width: 18px; height: 18px; margin: 0; accent-color: var(--ink); }
+.check { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 1em; font-weight: 500; cursor: pointer; }
+.check input { flex: none; width: 1.2em; height: 1.2em; margin: 0; accent-color: var(--ink); }
 .version { margin-top: 14px; text-align: center; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0);
+  white-space: nowrap; border: 0;
+}
+
+/* A switch (Comfort): the knob's side shows the state, not only its colour. */
+.switch-row { display: flex; align-items: center; gap: 12px; margin: 8px 0 2px; min-height: 40px; }
+.switch-row .switch-label { flex: 1; min-width: 0; margin: 0; font-size: 1em; font-weight: 600; cursor: pointer; }
+input.switch {
+  -webkit-appearance: none; appearance: none; flex: none; position: relative; cursor: pointer;
+  width: 2.8em; min-width: 2.8em; height: 1.6em; margin: 0; padding: 0;
+  border: 1.5px solid var(--rule-strong); border-radius: 999px; background: var(--card);
+  transition: background-color .15s, border-color .15s;
+}
+input.switch::before {
+  content: ""; position: absolute; top: 50%; left: .18em; width: 1.05em; height: 1.05em; border-radius: 50%;
+  background: var(--muted); transform: translateY(-50%); transition: left .15s;
+}
+input.switch:checked { background: var(--ink); border-color: var(--ink); }
+input.switch:checked::before { left: calc(100% - 1.23em); background: var(--btn-ink); }
+@media (forced-colors: active) {
+  input.switch { border-color: CanvasText; }
+  input.switch::before { background: CanvasText; }
+  input.switch:checked { background: Highlight; }
+  input.switch:checked::before { background: HighlightText; }
+}
+.switch-footer { margin: 0 0 6px; }
+#comfort-msg:empty { display: none; }
+#settings-paired { margin-top: 10px; }
+
+/* Comfort (F27, not Lab): larger text and buttons, more contrast, no motion. Off by default; Settings › Comfort. */
+body.comfort { font-size: 1.171875rem; --muted: var(--ink); --rule: var(--rule-strong); }
+body.comfort *, body.comfort *::before, body.comfort *::after { transition: none !important; animation: none !important; }
+body.comfort .btn:not(:disabled):active { transform: none; }
+body.comfort ::placeholder { opacity: 1; }
+body.comfort :is(button, summary, .switch-row, .check) { min-height: 48px; }
+body.comfort summary { display: flex; align-items: center; }
+body.comfort :is(.back, .remove, .retry) { display: inline-flex; align-items: center; }
+body.comfort .retry { padding: 2px 14px; }
+body.comfort .icon-btn { min-width: 48px; display: inline-flex; align-items: center; justify-content: center; border: 2px solid var(--rule-strong); }
+body.comfort :is(.btn, .retry, input, textarea, .kind, kbd) { border-width: 2px; }
+body.comfort input.switch { border-width: 2px; }
+body.comfort .drop { border-width: 3px; }
+body.comfort .history li { border-top-width: 2px; }
+body.comfort .history li:last-child { border-bottom-width: 2px; }
+/* Nothing is cut short: titles wrap instead of ending in "…", and the hotkey's keys may wrap too. */
+body.comfort .item-title { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+body.comfort :is(kbd, .btn.small-btn) { white-space: normal; }

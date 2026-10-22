@@ -25,6 +25,9 @@ let unpairArmed = null;
 let pendingPair = null; // a pairing waiting for the user's answer: {next, expect, confirm}
 let dataProblem = ''; // saved data that couldn't be read and was set aside, said once the window is drawn
 let ready = false; // the first view is drawn: actions from Rust can be handled
+let comfort = false; // F27 Comfort (settings.comfort), not Lab
+let settingsFrom = 'view-send'; // the view Settings' Back returns to
+const lastLabel = new Map(); // row id -> the label last drawn, to announce a row's new state (F27)
 const log = []; // recent events, for the end-to-end test's status file
 
 function note(text) {
@@ -49,14 +52,48 @@ function setStatus(text, bad = false) {
 function show(v) {
   view = v;
   for (const id of VIEWS) $(id).hidden = id !== v;
-  $('open-settings').hidden = v !== 'view-send';
+  // Settings (Comfort among them) is one click away before pairing too.
+  $('open-settings').hidden = v !== 'view-send' && v !== 'view-pair';
   writeStatusSoon();
+}
+
+// --- accessibility (F27, not Lab) -----------------------------------------------------------------------------------
+
+/** Comfort: the comfort class on <body> (styles.css): larger text and buttons, more contrast, no motion. */
+function applyComfort(on) {
+  comfort = !!on;
+  document.body.classList.toggle('comfort', comfort);
+  $('comfort').checked = comfort;
+}
+
+async function onComfort() {
+  const want = $('comfort').checked;
+  applyComfort(want);
+  $('comfort-msg').textContent = '';
+  try {
+    applyComfort((await app.setSettings({ comfort: want })).comfort);
+    note(`comfort ${want ? 'on' : 'off'}`);
+  } catch (e) {
+    applyComfort(!want);
+    $('comfort-msg').textContent = `Couldn’t change that: ${e?.message ?? e}`;
+  }
+  writeStatusSoon();
+}
+
+/** Says history rows' new states to screen readers (the rows change without moving focus). */
+function announce(text) {
+  const a = $('announce');
+  a.textContent = '';
+  // A fresh text after a tick, so the same words twice are still read.
+  setTimeout(() => { a.textContent = text; }, 50);
 }
 
 // --- pairing --------------------------------------------------------------------------------------------------------
 
 function renderPair(error = '') {
   show('view-pair');
+  // Reached from Settings › Change pairing… while paired: Back returns to sending.
+  $('pair-back').hidden = !st.paired;
   $('pair-error').textContent = error;
   setTimeout(() => { if (view === 'view-pair') $('code').focus(); }, 30);
 }
@@ -312,11 +349,28 @@ function drain() {
 
 // --- history --------------------------------------------------------------------------------------------------------
 
+/**
+ * The rows whose label changed since they were last drawn to a state worth saying (F27: Delivered ✓, and Waiting to
+ * send or Not delivered), as "label: title"; a share's own outcome is said in #status. Remembers every row's label.
+ */
+function changedStates(all) {
+  const said = [];
+  for (const row of all) {
+    const label = rowView(row).label;
+    const was = lastLabel.get(row.id);
+    if (was !== undefined && was !== label && ['delivered', 'failed', 'expired'].includes(row.status)) said.push(`${label}: ${displayTitle(row)}`);
+    lastLabel.set(row.id, label);
+  }
+  return said;
+}
+
 function renderHistory() {
   const list = $('history');
   list.textContent = '';
   const shown = rows.slice(0, HISTORY_SHOWN);
   $('recent-h').hidden = shown.length === 0;
+  const said = changedStates(rows);
+  if (said.length) { announce(said.join('. ')); note(`announced ${said.join('. ')}`); }
   for (const row of shown) {
     const li = el('li');
     li.dataset.id = row.id;
@@ -440,7 +494,13 @@ function renderSendTo() {
 }
 
 function renderSettings() {
+  settingsFrom = view === 'view-pair' ? 'view-pair' : 'view-send';
   show('view-settings');
+  $('comfort').checked = comfort;
+  $('comfort-msg').textContent = '';
+  // Before pairing, only what works without a Daylight: Comfort, the hotkey and the Windows settings.
+  $('settings-paired').hidden = !st.paired;
+  $('settings-unpair').hidden = !st.paired;
   $('set-daylight').textContent = st.name || 'Your Daylight (no name given)';
   $('set-relay').textContent = st.relay.replace(/^https:\/\//, '');
   $('autostart').checked = !!info?.autostart;
@@ -513,7 +573,7 @@ function writeStatusSoon() {
       const snap = await app.snapshot();
       const c = view === 'view-confirm' ? pendingPair?.confirm : null;
       Object.assign(snap, {
-        version: info.version, hotkey, autostart: !!info.autostart, sendTo: info.sendTo, view,
+        version: info.version, hotkey, autostart: !!info.autostart, sendTo: info.sendTo, view, comfort,
         confirm: c ? { title: c.title, lines: c.lines, button: c.button } : null,
         statusText: $('status').textContent, pairError: $('pair-error').textContent, log: log.slice(-50),
       });
@@ -522,11 +582,18 @@ function writeStatusSoon() {
   }, 80);
 }
 
+/** Settings' Back (and Esc): to the view Settings was opened from. */
+function closeSettings() {
+  if (settingsFrom === 'view-pair' || !st.paired) renderPair(); else renderSend();
+  $('open-settings').focus();
+}
+
 function onKey(e) {
   if (recording) { onRecordKey(e); return; }
   if (e.key !== 'Escape' || e.defaultPrevented) return;
-  if (view === 'view-settings') { renderSend(); $('open-settings').focus(); }
+  if (view === 'view-settings') closeSettings();
   else if (view === 'view-confirm') onConfirm(false);
+  else if (view === 'view-pair' && st.paired) { renderSend(); $('open-settings').focus(); }
   else if (view === 'view-send') bridge.hideWindow().catch(() => {});
 }
 
@@ -561,7 +628,10 @@ async function init() {
   });
   $('send-clip').addEventListener('click', onSendClipboard);
   $('open-settings').addEventListener('click', renderSettings);
-  $('close-settings').addEventListener('click', () => { renderSend(); $('open-settings').focus(); });
+  $('close-settings').addEventListener('click', closeSettings);
+  $('comfort').addEventListener('change', onComfort);
+  $('repair').addEventListener('click', () => { $('code').value = ''; $('relay').value = ''; renderPair(); });
+  $('pair-back').addEventListener('click', () => { renderSend(); $('open-settings').focus(); });
   $('hotkey-change').addEventListener('click', startRecording);
   $('hotkey-off').addEventListener('click', async () => { if (!(await applyHotkey(''))) $('hotkey-msg').textContent = 'The hotkey is off.'; });
   $('autostart').addEventListener('change', onAutostart);
@@ -595,6 +665,7 @@ async function init() {
 
   let settings = {};
   try { settings = await app.getSettings(); } catch (e) { onBadData('settings', e); }
+  applyComfort(settings.comfort);
   await applyHotkey(settings.hotkey ?? DEFAULT_HOTKEY, { save: false });
 
   if (info.e2e?.pair) {

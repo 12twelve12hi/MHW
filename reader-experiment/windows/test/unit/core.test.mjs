@@ -580,3 +580,19 @@ test('settings persist', async () => {
   await app.setSettings({ hotkey: 'Ctrl+Shift+F9' });
   assert.deepEqual(await app.getSettings(), { hotkey: 'Ctrl+Shift+F9' });
 });
+
+test('Comfort is a setting of its own: writes at once keep each other, and pairing changes leave it as it was (F27)', async () => {
+  const d1 = await daylight('One');
+  const d2 = await daylight('Two');
+  const { app } = newApp();
+  // The hotkey recorder and the Comfort switch can save at the same moment; neither write is lost.
+  const [a, b] = await Promise.all([app.setSettings({ comfort: true }), app.setSettings({ hotkey: 'Ctrl+Alt+F8' })]);
+  assert.deepEqual(a, { comfort: true });
+  assert.deepEqual(b, { comfort: true, hotkey: 'Ctrl+Alt+F8' });
+  assert.deepEqual(await app.getSettings(), { comfort: true, hotkey: 'Ctrl+Alt+F8' });
+  await app.pair(d1.link);
+  const pre = await app.preparePairing(d2.link, { source: 'link' });
+  await app.applyPairing(pre.next, { expect: pre.current.code });
+  await app.unpair();
+  assert.deepEqual(await app.getSettings(), { comfort: true, hotkey: 'Ctrl+Alt+F8' }, 'pairing, Switch and Unpair keep it');
+});
