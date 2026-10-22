@@ -58,7 +58,7 @@ spec; `test-vectors.json` did not change.
 `LabLedger` (per publisher; `snapshot()` reads it all at once) and `labHook`, `describeLabRow`, `labRowA11yLabel`,
 `wantsFastChecks`, `checkedInText`, `inboxLabText`, `LAB_TEXT`, `needsMessage`, `labGate`, `deriveLabTopics`,
 `LabInbox` and `LabInboxSim`; for the Daylight server's row and section (1.1, 1.4, 2.6) `serverHeadingShort`,
-`serverRowSubtitle`, `serverFeatureShort`, `serverMovedText`, `labInboxSeenText`, `aiTodayText`, `setupConfirmText` and `formatUsd`. The extension, web and Windows builds copy it next to `daylight-share.js`; every export is
+`serverRowSubtitle`, `serverFeatureShort`, `serverMovedText`, `labInboxSeenText`, `aiTodayText`, `setupConfirmText`, `hostLineText` and `formatUsd`. The extension, web and Windows builds copy it next to `daylight-share.js`; every export is
 a single `export const|function|class`, which their classic bundle needs (a test checks it).
 
 **Choices the reference made where LAB-PROTOCOL leaves room** (the vectors pin them; ports follow):
@@ -78,7 +78,15 @@ a single `export const|function|class`, which their classic bundle needs (a test
 - The server's row and section: `LAB_TEXT.serverSection` holds 2.6's own lines (the move sheet, "Lab Inbox last seen
   {rel}" and its not-yet line, "AI today: US${used} of US${cap}", the labels Server code, Copy and Server
   address, and the **Set up with a link** row's ten `setup…` strings: row, footer, placeholder, button, confirmation
-  title, body, confirm and cancel buttons, working and done lines). The row's `{short}` is the heading form (`serverRowSubtitle('needs-server')` is "Optional · Not set up");
+  title, body, confirm and cancel buttons, working and done lines), and since Oct 22 the rest of 2.6's copy: the steps
+  (`stepsHeading` "Turn it on", `steps`, a list of five strings shown numbered and only while the state is
+  `needs-server`, whose second is the server module's `RERUN_HELP` word for word, and `stepsMore`), `hostLabel` and
+  `hostLine`, `deliveryLabel`, `deliveryLab` and `deliveryV1`, and the address field's `addressPlaceholder`,
+  `addressSave` and `addressFooter`. `hostLineText(host, fingerprint)` fills `hostLine` "{host} · {fingerprint}":
+  `{host}` as `serverMovedText` makes it, the fingerprint as given (pass `showFingerprint(values.fingerprint)`), and
+  when one side is empty the line is the other alone. In lab-vectors.json, `strings` holds `steps` joined with "," (as
+  every list; ports compare their list joined the same way) and `serverSection.hostLine` pins `hostLineText`; a test
+  reads the ids and texts from LAB-PLAN 2.6's table. The row's `{short}` is the heading form (`serverRowSubtitle('needs-server')` is "Optional · Not set up");
   an unknown server state reads as `error`. A server feature's row shows its short state only when its state differs
   from the heading's (`serverFeatureShort`). `{host}` is the new origin minus its scheme and path, as text.
   `setupConfirmText(server)` fills the setup link's confirmation the same way; `server` is a string, the server

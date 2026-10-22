@@ -144,6 +144,9 @@ test('lab vectors: text', () => {
   for (const c of V.labText.serverSection.aiToday) assert.equal(lab.aiTodayText(c.used, c.cap), c.expect, JSON.stringify(c));
   assert.ok(V.labText.serverSection.setupConfirm.length >= 4);
   for (const c of V.labText.serverSection.setupConfirm) assert.equal(lab.setupConfirmText(c.server), c.expect, c.server);
+  assert.ok(V.labText.serverSection.hostLine.length >= 4);
+  for (const c of V.labText.serverSection.hostLine) assert.equal(lab.hostLineText(c.host, c.fingerprint), c.expect, JSON.stringify(c));
+  assert.ok(V.labText.serverSection.hostLine.some((c) => /:\d+ · /.test(c.expect)), 'a case with a port');
   for (const s of Object.values(V.labText.strings)) assert.ok(!/[A-Za-z]'[A-Za-z]/.test(s), `ASCII apostrophe in ${s}`);
 });
 
@@ -487,6 +490,53 @@ test('setup link (LAB-PLAN 2.6, server DESIGN 3.5): the copy is the plan’s tab
     'daylight-3f9a0c1d2e4b.me.workers.dev will get this pairing’s Server code. Continue only if this address is on your own Cloudflare account.');
   assert.equal(lab.setupConfirmText(parsed.server), lab.setupConfirmText(link), 'a link and its origin name the same host');
   assert.equal(lab.setupConfirmText(parsed.server).split(' ')[0], lab.serverMovedText(parsed.server).split(' ')[5].replace(/\.$/, ''));
+});
+
+test('the rest of the server section’s copy (LAB-PLAN 2.6, Oct 22): every id and text of the plan’s table, step 2 is RERUN_HELP', async () => {
+  const srv = await import('../../../server/client/daylight-server.js'); // read only: the server lane owns it
+  const S = lab.LAB_TEXT.serverSection;
+  // the table, read from the plan itself: | `id` (…) | text |, ASCII apostrophes and quotes there (§0.1)
+  const plan = readFileSync(new URL('../../../LAB-PLAN.md', import.meta.url), 'utf8');
+  const at = plan.indexOf('**The rest of the server section\'s copy');
+  assert.ok(at >= 0, 'the plan has the table');
+  const rows = [];
+  for (const line of plan.slice(at).split('\n').slice(1)) {
+    if (rows.length && !line.startsWith('|')) break;
+    const m = /^\| `(\w+)`[^|]* \| (.*) \|$/.exec(line);
+    if (m) rows.push([m[1], m[2]]);
+  }
+  const ids = ['stepsHeading', 'steps', 'stepsMore', 'hostLabel', 'hostLine', 'deliveryLabel', 'deliveryLab', 'deliveryV1',
+    'addressPlaceholder', 'addressSave', 'addressFooter'];
+  assert.deepEqual(rows.map(([id]) => id), ids, 'the plan table’s ids, in order');
+  const ascii = (t) => t.replace(/[’‘]/g, '\'').replace(/[“”]/g, '"');
+  for (const [id, text] of rows) {
+    if (id === 'steps') {
+      const steps = text.split(/(?:^|\s)[1-5]\.\s/).filter(Boolean).map((t) => t.trim());
+      assert.equal(steps.length, 5);
+      assert.ok(Array.isArray(S.steps) && S.steps.length === 5 && S.steps.every((t) => typeof t === 'string'), 'a list of five strings');
+      assert.deepEqual(S.steps.map(ascii), steps);
+    } else {
+      assert.equal(typeof S[id], 'string', id);
+      assert.equal(ascii(S[id]), text, id);
+    }
+  }
+  // the shipped strings carry ’ ‘ “ ” (§0.1), never their ASCII stand-ins
+  for (const t of [...S.steps, ...ids.filter((id) => id !== 'steps').map((id) => S[id])]) assert.ok(!/['"]/.test(t), t);
+  assert.equal(S.stepsMore, 'Every step, with where to click: the Daylight server’s README, “Turn it on”.');
+  // step 2 is the client module's RERUN_HELP, character for character
+  assert.equal(S.steps[1], srv.RERUN_HELP);
+  assert.deepEqual([...S.steps[1]].map((c) => c.codePointAt(0)), [...srv.RERUN_HELP].map((c) => c.codePointAt(0)));
+  // the host line: {host} exactly as serverMovedText and setupConfirmText make it, the fingerprint as given
+  const fp = srv.showFingerprint('3f9a0c1d');
+  for (const origin of ['https://daylight-3f9a0c1d2e4b.me.workers.dev', 'https://daylight.example.org:8443/setup#SETUP-AAAA', 'daylight.example.org']) {
+    const host = lab.serverMovedText(origin).split(' ')[5].replace(/\.$/, '');
+    assert.equal(lab.hostLineText(origin, fp), `${host} · 3f9a-0c1d`, origin);
+    assert.equal(lab.setupConfirmText(origin).split(' ')[0], host);
+  }
+  assert.equal(lab.hostLineText('https://daylight.example.org:8443', '3f9a-0c1d'), 'daylight.example.org:8443 · 3f9a-0c1d', 'the port stays');
+  assert.deepEqual([lab.hostLineText('https://daylight.example.org', ''), lab.hostLineText(undefined, '3f9a-0c1d'), lab.hostLineText(null, null)],
+    ['daylight.example.org', '3f9a-0c1d', '']);
+  assert.equal(S.hostLine, '{host} · {fingerprint}');
 });
 
 test('labGate with the server lane’s DaylightServer: needs-server before a deploy, OFFLINE at 5 s from a relay that never answers (F00.6)', async () => {

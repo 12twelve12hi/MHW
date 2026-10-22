@@ -348,8 +348,8 @@ export const LAB_TEXT = {
   serverRow: 'Daylight server',
   serverRowSubtitle: 'Optional · {short}',
   serverHeading: 'With your Daylight server (optional)',
-  // 2.6: the Daylight server section's own lines (W0); serverMovedText, labInboxSeenText, aiTodayText and
-  // setupConfirmText fill them
+  // 2.6: the Daylight server section's own lines (W0); serverMovedText, labInboxSeenText, aiTodayText,
+  // setupConfirmText and hostLineText fill them
   serverSection: {
     moved: 'Your Daylight server moved to {host}. Use it?',
     labInboxSeen: 'Lab Inbox last seen {rel}',
@@ -369,6 +369,26 @@ export const LAB_TEXT = {
     setupCancel: 'Cancel',
     setupWorking: 'Setting up…',
     setupDone: 'Your Daylight server is set up. Your other devices and your Daylight will find it on their own.',
+    // 2.6 "The rest of the server section's copy" (Oct 22): the steps (shown numbered, only while the state is
+    // needs-server; steps[1] is the server module's RERUN_HELP, word for word), the host line (hostLineText fills it),
+    // the delivery line and the server address field
+    stepsHeading: 'Turn it on',
+    steps: [
+      'Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in GitHub › Settings › Secrets and variables › Actions.',
+      'In GitHub › Actions, open the latest ‘Reader experiment - Daylight server’ run and choose Re-run all jobs.',
+      'When it finishes, open Cloudflare › D1 › daylight-server › Console and run SELECT link FROM setup;',
+      'Paste that link in Set up with a link.',
+      'Optional, for Summaries with Claude: add ANTHROPIC_API_KEY the same way, then re-run.',
+    ],
+    stepsMore: 'Every step, with where to click: the Daylight server’s README, “Turn it on”.',
+    hostLabel: 'Your server',
+    hostLine: '{host} · {fingerprint}',
+    deliveryLabel: 'Delivery',
+    deliveryLab: 'Through Lab on your Daylight, end-to-end encrypted',
+    deliveryV1: 'Through your pairing (v1 delivery)',
+    addressPlaceholder: 'https://',
+    addressSave: 'Save',
+    addressFooter: 'Only needed when your Daylight server has an address of its own. Leave it empty and your apps find it.',
   },
   comfort: 'Comfort',
   comfortFooter: 'Larger text and buttons, more contrast, no motion.',
@@ -778,6 +798,19 @@ export function serverMovedText(moved) {
  */
 export function setupConfirmText(server) {
   return fill(LAB_TEXT.serverSection.setupConfirmBody, { host: originHost(server) });
+}
+
+/**
+ * The server section's host line (2.6, "The rest of the server section's copy"): "{host} · {fingerprint}". host: the
+ * server's origin (or a host), filled exactly as serverMovedText fills {host}: the text without its scheme and anything
+ * from the first '/' after it (the port stays). fingerprint: the text to show, as given (pass the server module's
+ * showFingerprint(values.fingerprint), "3f9a-0c1d"). When one of them is empty (null and undefined are ""), the line is
+ * the other alone, without the " · "; both empty give "".
+ */
+export function hostLineText(host, fingerprint) {
+  const h = originHost(host), f = String(fingerprint ?? '');
+  if (!h || !f) return h || f;
+  return fill(LAB_TEXT.serverSection.hostLine, { host: h, fingerprint: f });
 }
 
 /**

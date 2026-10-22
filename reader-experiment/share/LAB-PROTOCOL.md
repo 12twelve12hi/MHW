@@ -498,6 +498,7 @@ export function serverMovedText(moved) {}                              // 2.6: "
 export function labInboxSeenText(lastSeen, now) {}                     // 2.6: "Lab Inbox last seen {rel}" or the not-yet line
 export function aiTodayText(used, cap) {}                              // 2.6: "AI today: US${used} of US${cap}"
 export function setupConfirmText(server) {}                            // 2.6: "{host} will get this pairing’s Server code. …"
+export function hostLineText(host, fingerprint) {}                     // 2.6: "{host} · {fingerprint}" (one side empty: the other)
 export async function labGate(feature, ctx) {}                         // -> {ready, state, message, short}
 export async function deriveLabTopics(secret) {}                       // 2.4
 export class LabInbox { constructor({ storage, relay, keys, info, from, now }) {}   // the Inbox side, for the JS
