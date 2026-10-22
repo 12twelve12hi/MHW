@@ -3,7 +3,7 @@
 // (state.status), and may slow it down (state.statusDelayMs).
 //
 // Also: a relay that never answers (hangingServer) and an address where nothing listens (deadAddress), for the gate's
-// OFFLINE cases (F00.6).
+// OFFLINE cases (F00.6), and a deleted Worker's address (goneWorker), for a server that moved.
 import http from 'node:http';
 
 /** A GET /v1/status answer (DESIGN 10.5): every feature ready unless `features` says otherwise. */
@@ -71,4 +71,24 @@ export async function deadAddress() {
   const url = `http://127.0.0.1:${server.address().port}`;
   await new Promise((r) => server.close(() => r()));
   return url;
+}
+
+/**
+ * A workers.dev address whose Worker was deleted (a deploy with "New setup link" deletes the old one, server DESIGN
+ * 3.5): Cloudflare answers every path 404 with a page of its own, which the client reads as SERVER_ERROR.
+ */
+export async function goneWorker() {
+  const hits = [];
+  const server = http.createServer((req, res) => {
+    hits.push(`${req.method} ${new URL(req.url, 'http://x').pathname}`);
+    req.resume();
+    res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<!doctype html><title>There is nothing here yet</title><p>There is nothing here yet.</p>');
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return {
+    url: `http://127.0.0.1:${server.address().port}`, hits,
+    count: (what) => hits.filter((h) => h === what).length,
+    close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(() => r()); }),
+  };
 }

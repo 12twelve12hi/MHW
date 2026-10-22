@@ -1,7 +1,8 @@
 // Lab in a real Chromium (LAB-PLAN F00 and F17, extension parts; card X0): the popup's Lab row and lab.html, against
 // the mock relay, a stand-in Daylight server (test/helpers/fake-worker.mjs) and Daylights from daylight-lab.js.
 //
-//   F00.1  a fresh install has Lab on, with no one-time note in W0
+//   F00.1  a fresh install has Lab on, with no one-time note in W0; an update over the last non-Lab build turns Lab on
+//          and keeps the pairing, the history, the device name and Comfort
 //   F00.2  with Lab on, W0 leaves the popup's pairing and sending screens as the non-Lab baselines (Lab off is
 //          lab-off-parity.e2e.mjs); with Lab off, the popup and lab.html show only the switch
 //   F00.3  a server feature's tap shows exactly its sentence under it, announced, never greyed out
@@ -159,6 +160,86 @@ test('a fresh install has Lab on and no one-time note in W0; Settings starts wit
   assert.equal(await server.getByRole('heading', { name: LAB_TEXT.serverRow, level: 2 }).isVisible(), true);
   await server.close();
   await popup.close();
+});
+
+test('F00.1 upgrade: the update over a non-Lab build turns Lab on at its first start and keeps the pairing, history, name and Comfort', { timeout: 150000 }, async () => {
+  // Its own browser profile: the release build without Lab, used for a while, then the Lab build in its folder with a
+  // higher version, as an update leaves it: the same extension and its storage. Chrome keeps the background scripts of
+  // an extension loaded from the command line in its service-worker store whatever the folder holds, so that store goes
+  // with the update (a store update registers the new worker); chrome.storage.local is elsewhere and stays.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dls-upgrade-'));
+  const folder = path.join(dir, 'extension');
+  const profile = path.join(dir, 'profile');
+  const install = (opts, bump = false) => {
+    const from = built('chrome', opts);
+    fs.rmSync(folder, { recursive: true, force: true });
+    fs.cpSync(from.dir, folder, { recursive: true });
+    const file = path.join(folder, 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+    manifest.version = `${manifest.version.split('.').slice(0, 3).join('.')}${bump ? '.1' : ''}`;
+    fs.writeFileSync(file, JSON.stringify(manifest, null, 2));
+    return manifest.version;
+  };
+  const ours = (x) => x.url().startsWith('chrome-extension://') && x.url().endsWith('/background.js');
+  /** Starts the browser; -> {c, w: the extension's service worker once sendToDaylight is up, built: that build's Lab}. */
+  const launch = async () => {
+    const c = await chromium.launchPersistentContext(profile, {
+      channel: 'chromium', headless: !process.env.HEADED, args: [`--disable-extensions-except=${folder}`, `--load-extension=${folder}`],
+    });
+    const w = c.serviceWorkers().find(ours) ?? await c.waitForEvent('serviceworker', { predicate: ours, timeout: 30000 });
+    for (let i = 0; i < 100; i++) {
+      const r = await w.evaluate(() => (globalThis.sendToDaylight ? [chrome.runtime.getManifest().version, globalThis.sendToDaylight.lab.built] : null)).catch(() => null);
+      if (r) return { c, w, version: r[0], built: r[1] };
+      await new Promise((res) => setTimeout(res, 100));
+    }
+    await c.close();
+    throw new Error('the extension never started');
+  };
+  const all = (w) => w.evaluate(() => chrome.storage.local.get(null));
+
+  const v1 = install({ lab: false });
+  let { c, w, version, built: hasLab } = await launch();
+  let was, id;
+  try {
+    id = new URL(w.url()).host;
+    assert.deepEqual([version, hasLab], [v1, false], 'the build without Lab');
+    const secret = ds.generateSecret();
+    await w.evaluate(async (i) => globalThis.sendToDaylight.pair({ input: i, from: 'Old laptop', confirm: true }),
+      await ds.pairingLink({ secret, relay: relay.url, name: 'Upgraded Daylight' }));
+    await w.evaluate(async () => globalThis.sendToDaylight.setComfort(true));
+    await w.evaluate(async () => globalThis.sendToDaylight.sendUrl('https://example.com/before-lab', 'Sent before Lab'));
+    await new ds.Receiver({ pairing: { secret, relay: relay.url }, storage: new ds.MemoryStorage() }).pollOnce();
+    await w.evaluate(async () => globalThis.sendToDaylight.tick());
+    was = await all(w);
+    assert.deepEqual(was.settings, { from: 'Old laptop', comfort: true }, 'a non-Lab build writes no Lab switch');
+    assert.deepEqual(was.outbox.map((r) => [r.title, r.status]), [['Sent before Lab', 'delivered']]);
+    assert.ok(was.pairing);
+  } finally { await c.close(); }
+
+  // The update.
+  const v2 = install({ lab: true }, true);
+  fs.rmSync(path.join(profile, 'Default', 'Service Worker'), { recursive: true, force: true });
+  ({ c, w, version, built: hasLab } = await launch());
+  try {
+    assert.equal(new URL(w.url()).host, id, 'the same extension');
+    assert.deepEqual([version, hasLab], [v2, true], 'updated to the Lab build');
+    assert.deepEqual(await labDefaultWritten(w), { from: 'Old laptop', comfort: true, lab: true }, 'the first start wrote lab = true and kept the rest');
+    const now = await all(w);
+    assert.deepEqual(now.pairing, was.pairing, 'the pairing is kept');
+    assert.deepEqual(now.outbox, was.outbox, 'the history is kept');
+    const popup = await c.newPage();
+    await popup.setViewportSize({ width: 360, height: 640 });
+    await popup.goto(`chrome-extension://${id}/popup.html`);
+    await popup.waitForSelector('body[data-ready="1"]');
+    assert.equal(await popup.evaluate(() => document.body.classList.contains('comfort')), true, 'Comfort is still on');
+    assert.equal(await popup.locator('#history li').count(), 1);
+    assert.equal(await popup.textContent('#history li .st'), 'Delivered ✓');
+    await popup.getByRole('button', { name: 'Settings' }).click();
+    await popup.waitForSelector('#view-settings:not([hidden])');
+    assert.equal(await popup.getByRole('switch', { name: LAB_TEXT.lab, exact: true }).isChecked(), true, 'Lab is on');
+    assert.equal(await popup.getByRole('switch', { name: LAB_TEXT.comfort, exact: true }).isChecked(), true);
+    await shot(popup, 'popup-settings-after-upgrade');
+  } finally { await c.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('with Lab on, W0 leaves the popup’s sending screen as the non-Lab baseline (F00.2)', { timeout: 90000 }, async () => {
@@ -536,7 +617,13 @@ test('the server moved: the section asks “Your Daylight server moved to {host}
   // 3.5). This browser has neither site, so nothing is asked of either server here.
   const old = 'https://daylight-aaaaaaaaaaaa.example.workers.dev';
   const moved = 'https://daylight-bbbbbbbbbbbb.example.workers.dev';
-  await storageSet({ 'server/pin': { origin: old, fingerprint: values.fingerprint } });
+  // The config read on the relay a minute ago is cached, fresh for 6 hours (CONFIG_REFRESH_MS): opening the section
+  // reads the config topic anyway (DESIGN 4.3), so the question comes at once.
+  await storageSet({
+    'server/pin': { origin: old, fingerprint: values.fingerprint },
+    'server/config': { server: old, api: 1, fingerprint: values.fingerprint, delivery: 'lab', sent: new Date(Date.now() - MIN).toISOString(), id: '' },
+    'server/configAt': Date.now() - MIN,
+  });
   await new ds.RelayClient({ relay: relay.url }).publish(values.configTopic, await S.buildConfigFrame(values, { server: moved }));
   const server = await openLab('server');
   const question = 'Your Daylight server moved to daylight-bbbbbbbbbbbb.example.workers.dev. Use it?';

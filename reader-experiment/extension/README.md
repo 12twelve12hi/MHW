@@ -143,7 +143,11 @@ While Lab is on, two rows under the switch open the page `lab.html` in a tab:
   - **The server moved.** When your server announces itself at a new address (a deploy with *New setup link* makes a
     new Worker and deletes the old one), the section asks *Your Daylight server moved to {host}. Use it?*. Until you
     answer, it keeps using the address you had. **Use it** asks for the new site and switches to it; **Cancel**
-    changes nothing, and the question comes back the next time the section opens.
+    changes nothing, and the question comes back the next time the section opens. Opening the section or What’s in
+    Lab reads the server's announcements again, however recently they were read (otherwise they are kept for 6
+    hours), so the question comes at once. When a server feature is tapped and the server found from those kept
+    announcements fails (gone, unreachable, or not recognising this pairing), they are read again then too; a server
+    that keeps saying it doesn't recognise the pairing costs one such read, not one per tap.
 
 Server calls run in the background (the pairing secret and the server's token never reach a web page). The first time a
 server feature or the Server address is used, the browser asks for access to the server's site; saying no shows
@@ -231,8 +235,9 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   answer updates the rows' short states in place (`updateWhatsInLab`), so a note opened meanwhile stays. Tests:
   `test/unit/lab.test.mjs` (node, against the mock relay, a stand-in server in `test/helpers/fake-worker.mjs` and Lab
   Daylights from `daylight-lab.js`) and `test/e2e/lab.e2e.mjs` (Chromium: the popup's row and `lab.html`, Lab on and
-  off, the notes, the Server code and Copy, OFFLINE at 5 s, no setup text before a tap, the header line, the cached
-  states, the server-moved question, and Unpair forgetting a typed Server address).
+  off, the update over a non-Lab build (F00.1), the notes, the Server code and Copy, OFFLINE at 5 s, no setup text
+  before a tap, the header line, the cached states, the server-moved question with a fresh cached config, and Unpair
+  forgetting a typed Server address).
   **Test hook** (LAB-PLAN 1.7): every build, the `chrome-test` one included, reads `settings.lab` from
   `storage.local` and never overwrites a stored value, so a test seeds `{settings: {lab: false}}` (after the first
   start wrote its default: `labDefaultWritten()` in `test/helpers/lab-off.mjs`) to run with Lab off.

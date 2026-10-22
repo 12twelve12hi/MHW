@@ -135,13 +135,16 @@ export function createLab({
 
   /**
    * The server as a whole: discovery (the pin, the move, the API level), this browser's host permission for it, then
-   * GET /v1/status (cached 10 minutes; force: ask now). One relay poll at most.
-   * -> {state, message, config?, status?, moved?, origins?}; state is 'ready' or a state of SERVER_WIDE.
+   * GET /v1/status (cached 10 minutes). force: Lab settings opened (the section or What's in Lab), so the config topic
+   * is read now whatever the cached config's age (DESIGN 4.3 rule 1) and the status is asked now: a server that moved
+   * is asked about at once, not after the config's 6 hours. One relay poll at most, two when a server found from the
+   * cached config fails (see below). -> {state, message, config?, status?, moved?, origins?}; state is 'ready' or a
+   * state of SERVER_WIDE.
    */
   async function probeNow(pairing, force) {
     const server = await serverFor(pairing);
     let d;
-    try { d = await server.discover(); } catch (e) { return server.noteError('', e); }
+    try { d = await server.discover({ force }); } catch (e) { return server.noteError('', e); }
     if (!d) {
       let pin = null;
       try { pin = await storage.get('server/pin'); } catch { /* none */ }
@@ -157,8 +160,18 @@ export function createLab({
       return { state: 'ready', message: null, config, status, moved: d.moved };
     } catch (e) {
       // The pinned server may be gone because it moved (a deploy with "New setup link" deletes the old Worker): the
-      // move goes with the error, so the section can ask about it.
-      return { ...(await server.noteError('', e)), config, moved: d.moved };
+      // move goes with the error, so the section can ask about it. A config that came from the cache is read again
+      // from the config topic once in this check (2.6), so the move is found now: after a 401, discover() polls only
+      // on the first BAD_AUTH of an episode (noteError removed server/configAt: 2.6's "discover({force: true}) once");
+      // after a server that is gone or failing (OFFLINE, SERVER_ERROR), discover({force: true}). A forced check read
+      // the topic already.
+      const out = await server.noteError('', e);
+      let moved = d.moved;
+      const code = e?.code;
+      if (!force && d.source === 'cache' && (code === 'BAD_AUTH' || code === 'OFFLINE' || code === 'SERVER_ERROR')) {
+        try { moved = (await server.discover(code === 'BAD_AUTH' ? {} : { force: true }))?.moved ?? moved; } catch { /* the relay is out of reach too */ }
+      }
+      return { ...out, config, moved };
     }
   }
 
