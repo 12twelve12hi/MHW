@@ -193,43 +193,43 @@ public final class SharedStore: @unchecked Sendable {
         DispatchQueue.main.async { NotificationCenter.default.post(name: .daylightShareChanged, object: nil) }
     }
 
-    /// This device's settings that move into the App Group when the group has none of its own (an update keeps them,
-    /// LAB-PLAN 1.2, 1.3): Comfort, the Lab switch and the one-time Lab note.
-    static let deviceSettingKeys = [Key.comfort, Key.lab, Key.labNoteShown]
+    /// This device's settings, which move into the App Group when the group has no value of its own (an update keeps
+    /// them, LAB-PLAN 1.2, 1.3), paired or not: Comfort, the Lab switch, the one-time Lab note and this device's name.
+    static let deviceSettingKeys = [Key.comfort, Key.lab, Key.labNoteShown, Key.deviceName]
     /// The files beside the outbox that belong to its pairing: the outbox and its bodies, Lab's ledger (`lab.json`, whose
     /// item states go with the outbox's ack cursor) and the Daylight server's pin, config and notices (`server.json`).
     static let pairingFiles = ["outbox.json", "outbox", LabLedger.fileName, FileServerStore.fileName]
 
     /// What this process kept without the App Group (an earlier ad-hoc build, say: the ad-hoc Mac app updated to the
-    /// Developer ID one) moves into the group. This device's settings (`deviceSettingKeys`) move when the group has no
-    /// value of its own. A pairing moves when the group has none, with everything that belongs to it: the device name,
-    /// the re-pairing follow-up and `pairingFiles`. Moved, not copied: unpairing in the group later must not bring it
-    /// back.
+    /// Developer ID one) moves into the group, paired or not:
+    /// - this device's settings (`deviceSettingKeys`), each when the group has no value of its own;
+    /// - when the group has no pairing: a pairing, with everything that belongs to it (the re-pairing follow-up and
+    ///   `pairingFiles`, which replace the group's); without one (Unpair keeps the Daylight server's pin and notices),
+    ///   `server.json` when the group has none.
+    /// Moved, not copied: unpairing in the group later must not bring a pairing back.
     static func migrate(from old: Storage, to new: Storage) {
         for key in deviceSettingKeys {
             guard new.defaults.object(forKey: key) == nil, let value = old.defaults.object(forKey: key) else { continue }
             new.defaults.set(value, forKey: key)
             old.defaults.removeObject(forKey: key)
         }
-        guard new.defaults.data(forKey: Key.pairing) == nil, let pairing = old.defaults.data(forKey: Key.pairing) else {
-            return
-        }
-        new.defaults.set(pairing, forKey: Key.pairing)
-        for key in [Key.deviceName, Key.labRepaired] {
-            if let value = old.defaults.object(forKey: key), new.defaults.object(forKey: key) == nil {
-                new.defaults.set(value, forKey: key)
-            }
-        }
+        guard new.defaults.data(forKey: Key.pairing) == nil else { return }
         let fm = FileManager.default
-        for name in pairingFiles {
+        func move(_ name: String, replacing: Bool) {
             let source = old.directory.appendingPathComponent(name)
-            guard fm.fileExists(atPath: source.path) else { continue }
             let target = new.directory.appendingPathComponent(name)
+            guard fm.fileExists(atPath: source.path), replacing || !fm.fileExists(atPath: target.path) else { return }
             try? fm.removeItem(at: target)
             try? fm.moveItem(at: source, to: target)
         }
+        guard let pairing = old.defaults.data(forKey: Key.pairing) else {
+            move(FileServerStore.fileName, replacing: false)
+            return
+        }
+        new.defaults.set(pairing, forKey: Key.pairing)
+        if let at = old.defaults.object(forKey: Key.labRepaired) { new.defaults.set(at, forKey: Key.labRepaired) }
+        for name in pairingFiles { move(name, replacing: true) }
         old.defaults.removeObject(forKey: Key.pairing)
-        old.defaults.removeObject(forKey: Key.deviceName)
         old.defaults.removeObject(forKey: Key.labRepaired)
     }
 

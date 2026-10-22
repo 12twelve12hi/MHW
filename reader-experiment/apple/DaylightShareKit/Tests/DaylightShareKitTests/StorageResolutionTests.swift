@@ -56,8 +56,8 @@ final class StorageResolutionTests: XCTestCase {
 
     /// A resolver for a fake App Group whose container check (`isWritable`) takes `delay` seconds.
     func resolver(declared: [String] = [StorageResolutionTests.group], delay: TimeInterval, writable: Bool = true,
-                  probe: Probe, groupDefaults: UserDefaults) -> AppGroupResolver {
-        let container = root.appendingPathComponent("group-container", isDirectory: true)
+                  probe: Probe, groupDefaults: UserDefaults, container name: String = "group-container") -> AppGroupResolver {
+        let container = root.appendingPathComponent(name, isDirectory: true)
         return AppGroupResolver(
             declaredGroups: { declared },
             extraGroups: { probe.record("extraGroups"); return [] },
@@ -281,21 +281,50 @@ final class StorageResolutionTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: ledgerFile.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: ownDir.appendingPathComponent(FileServerStore.fileName).path))
 
-        // A group with settings of its own keeps them; this device's settings move even without a pairing.
+        // An unpaired Mac (Unpair keeps the server's pin and notices): its settings and Lab state move too. A group
+        // with a setting of its own keeps it.
         let own2 = makeDefaults()
-        let earlier2 = SharedStore(defaults: own2, directory: root.appendingPathComponent("own2"))
+        let own2Dir = root.appendingPathComponent("own2")
+        let earlier2 = SharedStore(defaults: own2, directory: own2Dir)
         earlier2.lab = false
+        earlier2.labNoteShown = true
         earlier2.comfort = true
+        earlier2.deviceName = "Studio Mac"
+        FileServerStore(store: earlier2).set(ServerKeys.pin, pin)
+        FileServerStore(store: earlier2).set(ServerKeys.notices, .object(["ai": .bool(true)]))
         let group2 = makeDefaults()
-        group2.set(true, forKey: "dls.lab")
-        let store2 = SharedStore(resolver: resolver(delay: 0, probe: Probe(), groupDefaults: group2),
-                                 privateDefaults: own2, privateDirectory: root.appendingPathComponent("own2"))
+        group2.set(true, forKey: "dls.comfort")
+        let store2 = SharedStore(resolver: resolver(delay: 0, probe: Probe(), groupDefaults: group2, container: "group2"),
+                                 privateDefaults: own2, privateDirectory: own2Dir)
         await store2.ready()
         XCTAssertTrue(store2.isShared)
-        XCTAssertTrue(store2.lab, "the group's own switch stays")
-        XCTAssertEqual(own2.object(forKey: "dls.lab") as? Bool, false, "and this process's is left where it was")
-        XCTAssertTrue(store2.comfort, "Comfort, which the group did not have, moves")
         XCTAssertNil(store2.pairing)
+        XCTAssertFalse(store2.lab, "Lab stays off")
+        XCTAssertTrue(store2.labNoteShown)
+        XCTAssertEqual(store2.deviceName, "Studio Mac")
+        XCTAssertEqual(FileServerStore(store: store2).get(ServerKeys.pin), pin)
+        XCTAssertEqual(FileServerStore(store: store2).get(ServerKeys.notices)?["ai"]?.bool, true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: own2Dir.appendingPathComponent(FileServerStore.fileName).path))
+        XCTAssertTrue(store2.comfort)
+        XCTAssertEqual(own2.object(forKey: "dls.comfort") as? Bool, true, "the group's own Comfort stays; this one is left")
+
+        // A group that has a pairing of its own keeps its server state; only this device's settings move.
+        let own3 = makeDefaults()
+        let own3Dir = root.appendingPathComponent("own3")
+        let earlier3 = SharedStore(defaults: own3, directory: own3Dir)
+        await earlier3.pair(try Pairing.generate(relay: "https://relay.test", name: "Other"))
+        earlier3.lab = false
+        FileServerStore(store: earlier3).set(ServerKeys.pin, pin)
+        let group3 = makeDefaults()
+        await SharedStore(defaults: group3, directory: root.appendingPathComponent("group3/Library/Application Support/DaylightShare"))
+            .pair(pairing)
+        let store3 = SharedStore(resolver: resolver(delay: 0, probe: Probe(), groupDefaults: group3, container: "group3"),
+                                 privateDefaults: own3, privateDirectory: own3Dir)
+        await store3.ready()
+        XCTAssertEqual(store3.pairing, pairing, "the group's pairing stays")
+        XCTAssertFalse(store3.lab, "this device's Lab switch moves")
+        XCTAssertNil(FileServerStore(store: store3).get(ServerKeys.pin), "another pairing's server pin does not")
+        XCTAssertNotNil(own3.data(forKey: "dls.pairing"))
     }
 
     @MainActor

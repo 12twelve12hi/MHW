@@ -21,10 +21,12 @@ ack frame's header, before its ids count), `SharedStore` keys `dls.lab`, `dls.la
 re-pairing follow-up), and Lab frame purposes in `FramePurpose`.
 
 **Updates keep Lab (1.2, 1.3).** When a build with the App Group first finds it (the ad-hoc Mac app updated to the
-Developer ID one), `SharedStore.migrate` moves this device's settings (`dls.comfort`, `dls.lab`, `dls.labNoteShown`)
-into the group when the group has none of its own, and, with a pairing the group lacks, everything that belongs to it:
-the device name, `dls.labRepaired`, `outbox.json` and `outbox/`, `lab.json` (the ledger, beside the ack cursor) and
-`server.json` (the pin, config and notices). Tested in `StorageResolutionTests.testAnUpdateIntoTheGroupKeepsLabAndComfort`.
+Developer ID one), `SharedStore.migrate` moves, paired or not, this device's settings (`dls.comfort`, `dls.lab`,
+`dls.labNoteShown`, `dls.deviceName`), each when the group has none of its own. When the group has no pairing, a pairing
+moves with everything that belongs to it: `dls.labRepaired`, `outbox.json` and `outbox/`, `lab.json` (the ledger, beside
+the ack cursor) and `server.json` (the pin, config and notices); an unpaired Mac's `server.json` (Unpair keeps the pin
+and notices) moves when the group has none. A group with a pairing of its own keeps its server state. Tested in
+`StorageResolutionTests.testAnUpdateIntoTheGroupKeepsLabAndComfort`.
 
 **Re-pairing (2.6, DESIGN 3.4 and 12.7).** Every pairing change goes through `LabCenter.pair(_:)`: with another secret,
 a server that knows the old pairing (a pin, or a typed Server address) gets `POST /v1/admin/lock` with the old token
