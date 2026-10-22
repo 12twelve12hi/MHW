@@ -125,7 +125,8 @@ jobs:
       # phone (AccessibilityTest), uploaded for review; they are not compared.
       - name: F27 screenshots taken by this run
         if: ${{ !cancelled() }}
-        run: ls -la app/build/f27-screenshots || echo "None: the screen tests did not run."
+        run: |
+          ls -la app/build/f27-screenshots || echo "None: the screen tests did not run."
 
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
