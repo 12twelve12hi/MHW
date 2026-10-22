@@ -1,5 +1,6 @@
 // Storage for the web sender: IndexedDB (room for PDFs kept for re-sends), else localStorage, else memory.
-// Adapters follow daylight-share.js: async get(key), set(key, value), remove(key) with JSON-serialisable values.
+// Adapters follow daylight-share.js: async get(key), set(key, value), remove(key) with JSON-serialisable values, and
+// keys(), so a pairing change removes every lab/ key of the old pairing (applyPairingChange; LAB-PLAN 2.2.6).
 // The service worker opens the same database (sw.js) to hand over files shared to the installed app.
 
 import { MemoryStorage } from './daylight-share.js';
@@ -41,6 +42,7 @@ export function idbStorage(db) {
     get: (k) => idbRequest(db, KV, 'readonly', (s) => s.get(k)),
     set: (k, v) => idbRequest(db, KV, 'readwrite', (s) => s.put(v, k)).then(() => undefined),
     remove: (k) => idbRequest(db, KV, 'readwrite', (s) => s.delete(k)).then(() => undefined),
+    keys: () => idbRequest(db, KV, 'readonly', (s) => s.getAllKeys()).then((k) => (k ?? []).map(String)),
   };
 }
 
@@ -51,6 +53,14 @@ export function localStorageAdapter(prefix = 'send-to-daylight:') {
     // A full localStorage throws; for the re-send copy ('outbox/<id>') the protocol library catches it and sends once.
     async set(k, v) { localStorage.setItem(prefix + k, JSON.stringify(v)); },
     async remove(k) { localStorage.removeItem(prefix + k); },
+    async keys() {
+      const out = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k?.startsWith(prefix)) out.push(k.slice(prefix.length));
+      }
+      return out;
+    },
   };
 }
 
@@ -69,6 +79,7 @@ export async function openStorage() {
   } catch { /* storage blocked */ }
   const m = new MemoryStorage();
   m.kind = 'memory';
+  m.keys = async () => [...m.m.keys()];
   return { storage: m, db: null };
 }
 

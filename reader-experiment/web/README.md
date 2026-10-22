@@ -28,8 +28,8 @@ anywhere: unzip `send-to-daylight-web.zip` from the
    **Delivered ✓** once the Daylight confirms it; **Waiting to send** with why (and **Retry now** when the relay
    couldn't be reached); **Not delivered** with why (and **Try again** where that can help). Every row has **Remove**.
 
-**Settings** (top right, also before pairing) starts with **Comfort**: *Larger text and buttons, more contrast, no
-motion.* It is off by default; on, text is 125% larger, every button at least 48 px high, borders 2 px and muted text
+**Settings** (top right, also before pairing) starts with **Lab** (below), then **Comfort**: *Larger text and buttons,
+more contrast, no motion.* It is off by default; on, text is 125% larger, every button at least 48 px high, borders 2 px and muted text
 full ink, transitions stop and titles wrap instead of ending in "…". It is part of the plain page, not Lab
 (`settings.comfort` in IndexedDB), and pairing, unpairing and Lab leave it as it is. The rest of the accessibility
 baseline holds with Comfort off too: every control has a name, states are said in words and glyphs, status text wraps
@@ -50,12 +50,73 @@ appears in the share sheet for links and files (Web Share Target; files go throu
 
 **iPhone:** see [SHORTCUT.md](SHORTCUT.md) to add **Send to Daylight** to the share sheet.
 
+## Lab
+
+New features are tried out behind one **Lab** switch, the first row of Settings (LAB-PLAN 1). It is **on** by default;
+turn it off for the plain page (*New features we’re trying out. Turn Lab off for the plain app; nothing you sent is
+lost.*). Turning it off hides every Lab control and stops Lab's work (no Daylight server is looked for or asked); it
+keeps the pairing, the outbox, the history and the Daylight server's settings, and an item already on its way still
+goes. The switch belongs to this browser (`settings.lab` in IndexedDB, never in a pairing link or the Shortcut link):
+pairing, unpairing and renaming leave it as it is, and every open tab follows it.
+
+While Lab is on, two rows under the switch open:
+
+- **What’s in Lab ›**: the features this page has, each with a short state ("Ready", "Not set up", "In a later
+  update", …). The header line says whether your Daylight has confirmed Lab ("Your Daylight: Lab on · checked in 4 min
+  ago"), from what it says on its confirmation channel; opening the list reads that channel once. In this first Lab
+  build (Wave 0) the list holds only the features that run on your own **Daylight server** (Files over 9 MB,
+  Summaries with Claude, Email-in address, Feeds and daily digest). They are always shown and never greyed out:
+  tapping one that isn't set up shows one sentence under it, saying what's missing, with at most one button that fixes
+  it from here (**Copy Server code**) and **OK**. Screen readers hear it. A ready server answers "comes to this app in
+  a later Lab update" until the feature is built here.
+- **Daylight server ›** (*Optional · Not set up*): where setup happens. It shows the server's state in full (with the
+  exact GitHub secret names), the server's address and fingerprint, the **Server code** with **Copy** (the
+  `daylightserver://` link form when the pairing's relay isn't ntfy.sh), when the Daylight last said hello to the
+  server, today's AI spend, **Set up with a link**, the optional **Server address** field and how to re-run the
+  deploy. See [`../server/README.md`](../server/README.md) to turn the server on.
+  - **Set up with a link** takes the one-time setup link the deploy makes (`https://daylight-….workers.dev/setup#SETUP-…`;
+    server DESIGN 3.5). It comes right after the state while that state says to paste one, else last. The link is read
+    here first: anything else (the Server code, the pairing code, another address) says why and sends nothing. Then
+    *Use this Daylight server?* names the link's address, and only **Use it** sends the server this pairing's Server
+    code (*Setting up…*); the section then reads the server again. Your other devices and your Daylight find it on
+    their own.
+
+The page calls your Daylight server itself (the server answers any web page, with its bearer token, never a cookie:
+server DESIGN 10.2), so unlike the extension it asks no site permission. A server answer is used for 10 minutes; a
+server that doesn't answer within 5 seconds reads as *Couldn’t reach the Daylight server*. Before this browser is
+paired with another Daylight, a server that knows the old pairing is locked (Lab on or off), so a lost or replaced
+pairing can't use it, and a typed Server address (the old server's) is forgotten. Afterwards, while Lab is on, the
+sending screen shows the locked text with the new **Server code**, **Copy** and how to re-run the deploy, under
+*Daylight server*, until **OK** (or until the new server answers).
+
+**Not there yet** (strings the shared copy, `LAB_TEXT`, doesn't have; reported to the share and server lanes, as for
+the extension): the sheet for a server that moved (*Your Daylight server moved to {host}. Use it?* exists, its buttons
+don't), so a server redeployed at a new address with the same pairing keeps reading *Couldn’t reach the Daylight
+server* here until its address is typed in *Server address* or its new setup link is used; the setup steps in brief;
+and labels for the delivery mode and for the host and fingerprint line.
+
+**Test hook** (LAB-PLAN 1.7): `?lab=0` or `?lab=1` in the address sets the switch, only when the page is served from
+`127.0.0.1` (the tests' server, or `node build.mjs --serve`); the page then takes it out of the address.
+
 ## How it works
 
-`index.html`, `app.js`, `styles.css`, `web-logic.js`, `web-storage.js`, `sw.js` and `manifest.webmanifest` are the page;
-`build.mjs` copies in the protocol library ([`../share/js/daylight-share.js`](../share/js/daylight-share.js)) and the
-status helpers (`../extension/src/logic.js`), so each has one source, and stamps the service worker with a hash of
-the site. The pairing and the outbox live in this browser's IndexedDB (localStorage if that is unavailable). Items are
+`index.html`, `app.js`, `styles.css`, `web-logic.js`, `web-storage.js`, `web-lab.js`, `web-lab-page.js`, `sw.js` and
+`manifest.webmanifest` are the page; `build.mjs` copies in the protocol library
+([`../share/js/daylight-share.js`](../share/js/daylight-share.js)), the Lab module
+([`../share/js/daylight-lab.js`](../share/js/daylight-lab.js)), the Daylight server's client module
+([`../server/client/daylight-server.js`](../server/client/daylight-server.js), with its import pointed at the copy
+next to it), the status helpers (`../extension/src/logic.js`) and the Lab screens' parts
+(`../extension/src/lab-ui.js`), so each has one source, and stamps the service worker with a hash of the site.
+
+Lab (card B0, Wave 0): `web-lab.js` is the data, with no page code (`createWebLab`): the switch (`settings.lab`;
+missing means on, and the first start writes `true`), the sender ledger (`daylight-lab.js` `LabLedger`, fed by every
+frame on the Daylight's confirmation topic through the Sender's `onAckHeader`, Lab on or off, and pruned to the outbox
+after each check), the gates (`labGate` with its 5 s deadline), the Daylight server (`DaylightServer`; discovery only
+with Lab on) and the lock before re-pairing (then `lab/repaired` until OK or a ready server). `web-lab-page.js` draws
+Settings' Lab rows, What's in Lab, the server section and the follow-up with `lab-ui.js`, the same parts as the
+extension's `lab.html`. Every word is `LAB_TEXT`'s or the server module's. `LAB_FEATURES`, `LAB_SERVER_FEATURES` and
+`BUILT_FEATURES` in `web-lab.js` say what this page lists and runs; `LAB_NOTE_ENABLED` is `false` until a build has the
+delivery timeline (B1). The pairing and the outbox live in this browser's IndexedDB (localStorage if that is unavailable). Items are
 end-to-end encrypted in the page before they leave it; the relay (ntfy.sh by default) sees only scrambled data.
 
 The page checks for the Daylight's confirmations when it opens, every minute while open, and shortly after each send,
@@ -79,11 +140,22 @@ node build.mjs --serve 8080    # builds dist/site and dist/send-to-daylight-web.
 
 Tests live with the extension's (`../extension/test/unit/web-logic.test.mjs`, `../extension/test/e2e/web.e2e.mjs`,
 the accessibility checks in `../extension/test/e2e/a11y.e2e.mjs`: axe-core, nothing clipped at 360 px with Comfort
-on, status text at 200%; and the Lab-off parity test `../extension/test/e2e/web-lab-off-parity.e2e.mjs` with its
-baselines `../extension/test/e2e/lab-off-baseline/web-*.yml`); see
-[the extension README](../extension/README.md#build-and-test). `lab-wave.json` names the Lab wave of this folder's
-code for the release gate (`null` until B0); a web Lab build waits for the iPhone and Mac builds of its wave before it
-reaches the release or Pages.
+on, status text at 200%); see [the extension README](../extension/README.md#build-and-test). Lab's are
+`../extension/test/unit/web-lab.test.mjs` (node: `web-lab.js` against the mock relay, a stand-in Daylight server and
+Lab Daylights from `daylight-lab.js`; the build; the release gate), `../extension/test/e2e/web-lab.e2e.mjs`
+(Chromium: Settings' Lab rows, What's in Lab, the server section and the follow-up, with Lab on and off, the stand-in
+server behind the server's own CORS answer), `../extension/test/e2e/web-lab-a11y.e2e.mjs` (axe-core with Lab on and
+off, light and dark, Comfort off and on; nothing clipped at 360 px; notes at 200%; screenshots in
+`test-results/web-lab`) and the Lab-off parity test `../extension/test/e2e/web-lab-off-parity.e2e.mjs` with its
+baselines `../extension/test/e2e/lab-off-baseline/web-*.yml` (re-recorded only with a non-Lab change).
+
+**Lab release gate** (LAB-PLAN 6.2): a web Lab build waits for the iPhone and Mac builds of its wave before it reaches
+the release or Pages. `lab-wave.json` names the Lab wave of this folder's code (`w0` from B0), and
+`scripts/lab-wave.mjs` reads it from the code too (this folder's page files and the extension files the build copies
+in), so a `lab-wave.json` left behind can't let a later wave through: `node scripts/lab-wave.mjs` prints the wave the
+build is held for, `--check` fails when `lab-wave.json` is behind the code, and it exits 2 when it can't tell (then
+nothing is published). While `../lab-release-gate.json` has that wave `false`, CI builds and tests the page but
+uploads neither `send-to-daylight-web.zip` nor the Pages site, and its log says why.
 
 ## GitHub Pages
 

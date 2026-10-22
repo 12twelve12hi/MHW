@@ -5,6 +5,8 @@ import * as ds from './daylight-share.js';
 import { statusInfo, rowMessage, kindLabel, displayTitle, relativeTime, titleFromName, maintain, relayForInput } from './logic.js';
 import { readParams, hasShareParams, sharedLink, normalizeUserUrl, mimeFor, deviceName, shortcutPrefix, serial } from './web-logic.js';
 import { openStorage, takeShared, pruneShared } from './web-storage.js';
+import { createWebLab, labTestHook, withoutLabParam } from './web-lab.js';
+import { createLabPage, LAB_VIEWS } from './web-lab-page.js';
 
 const VERSION = '1.1.0';
 const APP = `web/${VERSION}`;
@@ -20,6 +22,9 @@ const channel = 'BroadcastChannel' in self ? new BroadcastChannel('send-to-dayli
 
 let storage = null;
 let db = null;
+let lab = null; // Lab (web-lab.js): the switch, the ledger, the gates and the Daylight server
+let labPage = null; // its screens (web-lab-page.js)
+const settingsRun = serial(); // Lab's settings writes, one at a time
 let pairing = null;
 let settings = {};
 let sender = null;
@@ -45,7 +50,7 @@ function setStatus(text, tone = '') {
 }
 
 function show(view) {
-  for (const v of ['view-pair', 'view-confirm', 'view-send', 'view-settings']) $(v).hidden = v !== view;
+  for (const v of ['view-pair', 'view-confirm', 'view-send', 'view-settings', ...LAB_VIEWS]) $(v).hidden = v !== view;
   // Settings (Comfort among them) is one tap away before pairing too.
   $('open-settings').hidden = view !== 'view-send' && view !== 'view-pair';
 }
@@ -84,8 +89,10 @@ function announce(text) {
 async function loadState() {
   pairing = await ds.loadPairing(storage).catch(() => null);
   settings = (await storage.get('settings')) ?? {};
-  sender = pairing ? new ds.Sender({ pairing, storage, from: settings.from || defaultFrom, app: APP }) : null;
+  // Every ack-topic frame that decrypts feeds the Lab ledger, Lab on or off (LAB-PLAN 2.2.6).
+  sender = pairing ? new ds.Sender({ pairing, storage, from: settings.from || defaultFrom, app: APP, onAckHeader: lab?.hook }) : null;
   applyComfort(settings.comfort);
+  labPage?.apply(settings);
 }
 
 async function loadRows() {
@@ -112,8 +119,11 @@ async function applyPairing(next, { from, expect } = {}) {
     }
     // A typed code, or a link without a name, for the Daylight already paired keeps the name it has.
     if (!ds.cleanName(p.name) && current && ds.samePairingSecret(current, p)) p.name = current.name;
+    // Another Daylight: a Daylight server that knows this pairing is locked first (LAB-PLAN 2.6), Lab on or off.
+    const repair = lab ? await lab.beforeRepair(current, p) : { known: false };
     await ds.applyPairingChange(storage, current, p);
     await ds.savePairing(storage, p);
+    if (repair.known) await lab.afterRepair();
     if (from != null) await storage.set('settings', { ...((await storage.get('settings')) ?? {}), from: ds.cleanName(from) });
   });
   await loadState();
@@ -194,7 +204,7 @@ async function onPair(ev) {
     if (c.ask && !(await askPairing(c))) { if (!pendingAsk) renderPair(); return; } // Cancel: back to the form as it was
     await applyPairing(next, { from: $('from').value, expect });
     $('code').value = '';
-    await renderSend();
+    await renderSend({ sayRepaired: true });
     setStatus(c.notice || `Paired with ${pairing.name || 'your Daylight'}.`, 'ok');
     if (pendingShare) { const s = pendingShare; pendingShare = null; await sendShare(s); }
   } catch (e) {
@@ -226,7 +236,7 @@ async function pairFromParam(value) {
     setStatus(e.message, 'bad');
     return false;
   }
-  await renderSend();
+  await renderSend({ sayRepaired: true });
   setStatus(c.notice || `Paired with ${pairing.name || 'your Daylight'}.`, 'ok');
   return true;
 }
@@ -350,7 +360,9 @@ async function tick() {
   if (!sender) return;
   const s = sender;
   try { await lock(() => maintain(s)); } catch { /* offline: next time */ }
+  await lab?.prune();
   await changed();
+  labPage?.ledgerChanged();
 }
 
 // --- rendering ------------------------------------------------------------------------------------------------------
@@ -402,16 +414,19 @@ function renderHistory() {
   }
 }
 
-async function renderSend() {
+async function renderSend({ sayRepaired = false } = {}) {
   show('view-send');
   $('daylight-name').textContent = pairing.name || 'your Daylight';
   await loadRows();
+  await labPage?.loadRepaired({ say: sayRepaired });
 }
 
-async function renderSettings() {
-  backTo = $('view-pair').hidden ? 'view-send' : 'view-pair';
+/** Settings: the Settings button (openSettings) or ‹ Back from a Lab view. focus: the id of the control to focus. */
+async function renderSettings({ focus = null } = {}) {
   show('view-settings');
+  if (focus) $(focus)?.focus();
   $('comfort').checked = !!settings.comfort;
+  labPage?.loadSubtitle();
   $('settings-paired').hidden = !pairing;
   if (!pairing) return;
   $('set-daylight').textContent = pairing.name || 'Your Daylight (no name given)';
@@ -444,7 +459,8 @@ async function onCopyShortcut() {
 
 async function onSaveName(ev) {
   ev.preventDefault();
-  settings = { ...settings, from: ds.cleanName($('set-from').value) };
+  // What is stored now (the Lab switch may have changed since), with the new name.
+  settings = { ...((await storage.get('settings')) ?? {}), from: ds.cleanName($('set-from').value) };
   await storage.set('settings', settings);
   await loadState();
   $('name-saved').textContent = `Saved. Items now show as sent from “${settings.from || defaultFrom}”.`;
@@ -523,7 +539,10 @@ function wire() {
   $('confirm-no').addEventListener('click', () => pendingAsk?.resolve(false));
   $('url-form').addEventListener('submit', onSendUrl);
   $('file').addEventListener('change', async (e) => { const input = e.target; await sendFiles(input.files); input.value = ''; });
-  $('open-settings').addEventListener('click', renderSettings);
+  $('open-settings').addEventListener('click', () => {
+    backTo = $('view-pair').hidden ? 'view-send' : 'view-pair';
+    renderSettings();
+  });
   $('close-settings').addEventListener('click', () => (backTo === 'view-pair' || !pairing ? renderPair() : renderSend()));
   $('comfort').addEventListener('change', onComfort);
   $('name-form').addEventListener('submit', onSaveName);
@@ -538,12 +557,45 @@ function wire() {
     await handleAddress();
     if (!pairing) renderPair();
   });
-  channel?.addEventListener('message', async () => { await loadState(); if (pairing) await loadRows(); });
+  channel?.addEventListener('message', async () => {
+    await loadState();
+    if (pairing) await loadRows();
+    labPage?.ledgerChanged();
+    if (!$('view-send').hidden) await labPage?.loadRepaired();
+  });
+}
+
+/**
+ * Lab (LAB-PLAN 1): the switch (missing means on: the first start writes true), the test hook ?lab=0|1 on 127.0.0.1
+ * (1.7), and the screens. Discovery and server calls run only with Lab on; the ledger learns either way.
+ */
+async function startLab() {
+  lab = createWebLab({
+    storage, run: settingsRun, getPairing: () => ds.loadPairing(storage), getSettings: () => storage.get('settings'),
+    deviceName: async () => settings.from || defaultFrom, appId: APP,
+    refreshAcks: async () => { if (sender) { const s = sender; await lock(() => s.checkAcks()); } },
+  });
+  labPage = createLabPage({
+    lab, $, show,
+    toSettings: ({ focus } = {}) => renderSettings({ focus }),
+    announce,
+    changed: async () => { channel?.postMessage('changed'); await loadState(); },
+    isPaired: () => !!pairing,
+    afterRepairSeen: () => $('url').focus(),
+  });
+  labPage.wire();
+  const hook = labTestHook(location);
+  if (hook !== null) {
+    await lab.setLab(hook);
+    history.replaceState(null, '', withoutLabParam(location.href));
+  }
+  await lab.ensureDefault();
 }
 
 async function init() {
   wire();
   ({ storage, db } = await openStorage());
+  await startLab();
   await loadState();
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});

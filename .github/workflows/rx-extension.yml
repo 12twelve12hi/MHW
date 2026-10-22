@@ -123,14 +123,25 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
+      - name: The Lab wave of this code (web/scripts/lab-wave.mjs; fails when web/lab-wave.json is behind the code)
+        run: node ../web/scripts/lab-wave.mjs --check
+
       - name: Build the web sender
         run: node ../web/build.mjs
 
-      - name: Unit tests (web)
+      - name: Unit tests (web, its Lab included)
         run: node --test test/unit/*web*.test.mjs
 
-      - name: End-to-end tests in Chromium (web sender against the mock relay, Lab-off parity)
+      - name: End-to-end tests in Chromium (web sender against the mock relay; Lab on and off, accessibility, Lab-off parity)
         run: node --test --test-concurrency=1 test/e2e/*web*.e2e.mjs
+
+      - name: Keep the web sender's Lab screenshots (for review)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rx-web-lab-screenshots
+          path: reader-experiment/extension/test-results/web-lab
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         with:
@@ -217,7 +228,9 @@ jobs:
   # Optional: deploys the web sender to GitHub Pages at <pages URL>/send/. Pages also serves the highlights prototype
   # (highlights-prototype.yml) at the root, so this job deploys both together instead of replacing it. Until Pages is
   # switched on, and this branch may deploy to the github-pages environment, the job fails without failing the run.
-  # A web Lab build is held back from Pages exactly as from the release (the gate above).
+  # A web Lab build is held back from Pages exactly as from the release (the gate above): by the wave
+  # web/scripts/lab-wave.mjs reads (the later of web/lab-wave.json's and the code's own). When it can't tell, the step
+  # fails and nothing is deployed.
   pages:
     name: Deploy to GitHub Pages (optional)
     needs: web
@@ -233,12 +246,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Check the Lab release gate (LAB-PLAN 6.2)
         id: gate
         run: |
           set -euo pipefail
           gate=reader-experiment/lab-release-gate.json
-          wave=$(jq -r '.wave // ""' reader-experiment/web/lab-wave.json)
+          wave=$(node reader-experiment/web/scripts/lab-wave.mjs)
           if [ -z "$wave" ] || [ "$(jq -r --arg w "$wave" '.[$w] == true' "$gate")" = true ]; then
             echo "Web sender: deploying to Pages (Lab wave ${wave:-none})."
             echo "open=true" >> "$GITHUB_OUTPUT"

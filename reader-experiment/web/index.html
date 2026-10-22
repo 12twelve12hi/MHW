@@ -85,6 +85,10 @@
       </label>
 
       <p id="status" class="status" role="status" aria-live="polite"></p>
+      <!-- Lab (LAB-PLAN 2.6, DESIGN 12.7): after a re-pairing that locked the Daylight server, its locked text with the
+           new Server code, Copy and the re-run help, until OK (lab-ui.js renderRepaired). Empty and hidden otherwise,
+           and always with Lab off. -->
+      <section id="repaired" class="lab-repaired" hidden></section>
 
       <h2 id="recent-h" class="recent-h" hidden>Recent</h2>
       <ol id="history" class="history" aria-labelledby="recent-h"></ol>
@@ -96,6 +100,19 @@
     <section id="view-settings" hidden>
       <button id="close-settings" class="back" type="button">‹ Back</button>
       <h2>Settings</h2>
+      <!-- Lab (LAB-PLAN 1.1): the first row of Settings, also before pairing. While Lab is on, two rows under the switch
+           open What's in Lab and the Daylight server (web-lab-page.js). The text is LAB_TEXT's (lab, whatsInLab,
+           serverRow, switchFooter); the server row's subtitle is serverRowSubtitle(). With Lab off only the switch and
+           its footer show (1.3). -->
+      <div id="lab-row" class="switch-row">
+        <label for="lab" class="switch-label">Lab</label>
+        <input id="lab" class="switch" type="checkbox" role="switch" aria-describedby="lab-footer">
+      </div>
+      <div id="lab-rows" class="nav-rows" hidden>
+        <button id="open-whats-in-lab" class="nav-row" type="button"><span class="nav-text"><span class="nav-label">What’s in Lab</span></span><span class="chev" aria-hidden="true">›</span></button>
+        <button id="open-server" class="nav-row" type="button"><span class="nav-text"><span class="nav-label">Daylight server</span><span id="server-sub" class="nav-sub"></span></span><span class="chev" aria-hidden="true">›</span></button>
+      </div>
+      <p id="lab-footer" class="hint small switch-footer">New features we’re trying out. Turn Lab off for the plain app; nothing you sent is lost.</p>
       <!-- F27 Comfort: part of the accessibility baseline, not Lab; the text is LAB_TEXT.comfort and .comfortFooter. -->
       <div class="switch-row">
         <label for="comfort" class="switch-label">Comfort</label>
@@ -128,6 +145,21 @@
         <button id="unpair" class="btn danger" type="button">Unpair this device</button>
         <p class="hint small fine">Everything you send is end-to-end encrypted with a key from the pairing code. The relay (<span id="set-relay-2"></span>) only sees scrambled data.</p>
       </div>
+    </section>
+
+    <!-- Lab (LAB-PLAN 1.4, 1.5, 2.6), from Settings while Lab is on: What's in Lab (short states only; a feature's
+         sentence shows when it is tapped) and the Daylight server section (the long texts: where setup happens).
+         lab-ui.js fills them; every word is LAB_TEXT's or the server module's. -->
+    <section id="view-whats-in-lab" hidden aria-labelledby="whats-h">
+      <button class="back" type="button" data-lab-back>‹ Back</button>
+      <h2 id="whats-h">What’s in Lab</h2>
+      <div id="whats"></div>
+    </section>
+
+    <section id="view-server" hidden aria-labelledby="server-h">
+      <button class="back" type="button" data-lab-back>‹ Back</button>
+      <h2 id="server-h">Daylight server</h2>
+      <div id="server"></div>
     </section>
   </main>
 </body>

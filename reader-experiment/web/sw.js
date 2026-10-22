@@ -11,6 +11,7 @@ const MAX_ITEM = 9000000;
 const CACHE = `send-to-daylight-${BUILD}`;
 const SHELL = [
   './', 'app.js', 'styles.css', 'daylight-share.js', 'logic.js', 'web-logic.js', 'web-storage.js', 'manifest.webmanifest',
+  'web-lab.js', 'web-lab-page.js', 'daylight-lab.js', 'daylight-server.js', 'lab-ui.js',
   'icons/icon.svg', 'icons/favicon-32.png', 'icons/icon-192.png', 'icons/apple-touch-icon.png',
 ];
 

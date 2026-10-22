@@ -5,8 +5,13 @@
 //
 //   node build.mjs [--serve [port]]      (--serve also serves dist/site on http://127.0.0.1:<port>, default 8080)
 //
-// daylight-share.js (../share/js) and logic.js (../extension/src) are copied in from their one source; sw.js gets a
-// hash of the site so browsers pick up each new version.
+// daylight-share.js and daylight-lab.js (../share/js), logic.js and lab-ui.js (../extension/src) are copied in from
+// their one source, and so is the Daylight server's client module (../server/client/daylight-server.js), with one
+// change: its import of the protocol library points at the copy next to it (LAB-PLAN F00: the web sender's Lab). sw.js
+// gets a hash of the site so browsers pick up each new version.
+//
+// The Lab release gate (LAB-PLAN 6.2) is not here: every web build has Lab, and rx-extension.yml holds the zip and the
+// Pages deploy back while the code's Lab wave (scripts/lab-wave.mjs) waits in ../lab-release-gate.json.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -18,17 +23,34 @@ import { zipDir, listFiles } from '../extension/scripts/zip.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(here, 'dist');
 const SITE = path.join(DIST, 'site');
-const OWN = ['index.html', 'app.js', 'styles.css', 'web-logic.js', 'web-storage.js', 'sw.js', 'manifest.webmanifest', 'icons'];
-const SHARED = {
+const OWN = ['index.html', 'app.js', 'styles.css', 'web-logic.js', 'web-storage.js', 'web-lab.js', 'web-lab-page.js', 'sw.js', 'manifest.webmanifest', 'icons'];
+export const SHARED = {
   'daylight-share.js': path.join(here, '..', 'share', 'js', 'daylight-share.js'),
+  'daylight-lab.js': path.join(here, '..', 'share', 'js', 'daylight-lab.js'),
   'logic.js': path.join(here, '..', 'extension', 'src', 'logic.js'),
+  'lab-ui.js': path.join(here, '..', 'extension', 'src', 'lab-ui.js'),
 };
+const SERVER_LIB = path.join(here, '..', 'server', 'client', 'daylight-server.js');
+const SERVER_IMPORT = "from '../../share/js/daylight-share.js';";
+
+/**
+ * The server client module as the page loads it: next to its copy of daylight-share.js. Only the one import line
+ * changes; anything else in the module that would need rewriting is an error here, not at run time.
+ */
+export function serverModule(text = fs.readFileSync(SERVER_LIB, 'utf8')) {
+  const n = text.split(SERVER_IMPORT).length - 1;
+  if (n !== 1) throw new Error(`daylight-server.js: expected one import of ../../share/js/daylight-share.js, found ${n}`);
+  const out = text.replace(SERVER_IMPORT, "from './daylight-share.js';");
+  if (/from\s+'\.\.\//.test(out)) throw new Error('daylight-server.js: an import outside the module folder');
+  return out;
+}
 
 export function buildSite(out = SITE) {
   fs.rmSync(out, { recursive: true, force: true });
   fs.mkdirSync(out, { recursive: true });
   for (const f of OWN) fs.cpSync(path.join(here, f), path.join(out, f), { recursive: true });
   for (const [name, src] of Object.entries(SHARED)) fs.copyFileSync(src, path.join(out, name));
+  fs.writeFileSync(path.join(out, 'daylight-server.js'), serverModule());
   const hash = createHash('sha256');
   for (const rel of listFiles(out).filter((f) => f !== 'sw.js')) hash.update(rel).update(fs.readFileSync(path.join(out, rel)));
   const build = hash.digest('hex').slice(0, 12);
