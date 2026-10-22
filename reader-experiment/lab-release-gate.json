@@ -1,0 +1,5 @@
+{
+  "about": "LAB-PLAN 6.2: the extension, web and Windows Lab builds reach the release only after the iPhone and Mac builds of the same wave. Their CI publish steps check this file. The orchestrating session flips a wave to true once the iPhone and Mac builds of that wave are published.",
+  "w0": false,
+  "w1": false
+}
