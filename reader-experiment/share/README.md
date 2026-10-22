@@ -84,8 +84,10 @@ a single `export const|function|class`, which their classic bundle needs (a test
   `hostLine`, `deliveryLabel`, `deliveryLab` and `deliveryV1`, and the address field's `addressPlaceholder`,
   `addressSave` and `addressFooter`. `hostLineText(host, fingerprint)` fills `hostLine` "{host} · {fingerprint}":
   `{host}` as `serverMovedText` makes it, the fingerprint as given (pass `showFingerprint(values.fingerprint)`), and
-  when one side is empty the line is the other alone. In lab-vectors.json, `strings` holds `steps` joined with "," (as
-  every list; ports compare their list joined the same way) and `serverSection.hostLine` pins `hostLineText`; a test
+  when one side is empty the line is the other alone. In lab-vectors.json, `serverSection.steps` is the five steps as
+  an array of five strings: ports pin their list against that array, never by splitting `strings`, which holds them
+  joined with "," as every list (four steps have commas of their own; every other list's items are comma-free, and the
+  generator fails on a new list item with a comma). `serverSection.hostLine` pins `hostLineText`; a test
   reads the ids and texts from LAB-PLAN 2.6's table. The row's `{short}` is the heading form (`serverRowSubtitle('needs-server')` is "Optional · Not set up");
   an unknown server state reads as `error`. A server feature's row shows its short state only when its state differs
   from the heading's (`serverFeatureShort`). `{host}` is the new origin minus its scheme and path, as text.

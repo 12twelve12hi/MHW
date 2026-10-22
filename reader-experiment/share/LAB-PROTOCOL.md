@@ -559,7 +559,7 @@ the protocol vectors' secret:
 | `labGate` | A stubbed ctx (paired or not, caps, local check, server state, a server that never answers) → `{state, short}` |
 | `labHeaderExtras` | Item headers with valid and invalid `x-cap` and `x-orig`, on part 0 and on later parts, and unknown `x-` fields → the `extras` that `checkItemHeader` returns |
 | `labRowText` | (row, now, ctx) → `{label, sentence, action, stepLine, final}` for every row of 2.5 and the v1.1 fall-throughs |
-| `labText` | Every string id → text, with the per-platform variants of 1.6 and the short states of 1.4 |
+| `labText` | Every string id → text (a list joined with ","), with the per-platform variants of 1.6 and the short states of 1.4; `serverSection.steps` is the five setup steps as an array of five strings, the form to pin (four contain commas, so the joined form can't be split) |
 | `v1Safety` | The `labFrames` frames as a v1.1 ack reader sees them: no ids. Kotlin's and Swift's `VectorTests` also assert `idsOf` / `ids(in:)` = `[]` and no delivered row. |
 
 **W1 additions:**

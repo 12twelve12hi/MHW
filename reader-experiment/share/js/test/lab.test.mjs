@@ -147,6 +147,14 @@ test('lab vectors: text', () => {
   assert.ok(V.labText.serverSection.hostLine.length >= 4);
   for (const c of V.labText.serverSection.hostLine) assert.equal(lab.hostLineText(c.host, c.fingerprint), c.expect, JSON.stringify(c));
   assert.ok(V.labText.serverSection.hostLine.some((c) => /:\d+ · /.test(c.expect)), 'a case with a port');
+  // the five setup steps as an array of five strings (ports pin their list against it; the joined form has commas inside)
+  assert.ok(Array.isArray(V.labText.serverSection.steps) && V.labText.serverSection.steps.length === 5);
+  assert.deepEqual(V.labText.serverSection.steps, lab.LAB_TEXT.serverSection.steps);
+  assert.equal(V.labText.strings['serverSection.steps'], V.labText.serverSection.steps.join(','));
+  for (const id of ['featureOrder', 'serverFeatureOrder', 'excerpt.months']) {
+    const list = id.split('.').reduce((o, k) => o[k], lab.LAB_TEXT);
+    assert.deepEqual(V.labText.strings[id].split(','), list, `${id} splits back on ","`);
+  }
   for (const s of Object.values(V.labText.strings)) assert.ok(!/[A-Za-z]'[A-Za-z]/.test(s), `ASCII apostrophe in ${s}`);
 });
 
