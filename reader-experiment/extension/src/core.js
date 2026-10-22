@@ -526,7 +526,8 @@ export function createApp({
 
   /**
    * sendTab with Lab on. opts: {linkOnly, prompt (may ask for a PDF's site), mode (F10: page | clean | link |
-   * selection; F10's Use switch off leaves page and link), force (F10: send a thin article anyway), thin ('ask': return
+   * selection; F10's Use switch off leaves page, link and F11's selection, LAB-PROTOCOL 2.9.6; a clean article then
+   * only when asked for by name: a menu or a command), force (F10: send a thin article anyway), thin ('ask': return
    * {thin} under 150 words; 'page': send the full page instead, for menus, commands and the card), remember (F10: keep
    * the mode for the site), review (F10: open Review first when "Review before sending" is on)}.
    */
@@ -534,7 +535,7 @@ export function createApp({
     const { linkOnly = false, prompt = false, force = false, thin = 'page', remember = false, review = false } = opts;
     const sendAs = labUseOn(c.s, 'F10');
     let mode = opts.mode ?? 'page';
-    if (!sendAs && (mode === 'clean' || mode === 'selection') && !opts.explicit) mode = 'page';
+    if (!sendAs && mode === 'clean' && !opts.explicit) mode = 'page';
     if (linkOnly) mode = 'link';
     const tabUrl = tab?.url || tab?.pendingUrl || '';
     const tabTitle = tab?.title || '';
@@ -679,8 +680,29 @@ export function createApp({
   const scheduled = new Map(); // tabId -> {timer, resolve}
 
   /**
+   * Whether a popup page is open, also popup.html opened in a tab: Chrome's runtime.getContexts (116+), or
+   * extension.getViews where the background is a page (Safari); false where it can't be told.
+   */
+  async function popupOpen() {
+    let page = '';
+    try { page = api.runtime.getURL('popup.html'); } catch { return false; }
+    try {
+      if (typeof api.runtime?.getContexts === 'function') {
+        return ((await api.runtime.getContexts({})) ?? []).some((x) => String(x?.documentUrl ?? '').startsWith(page));
+      }
+      if (typeof api.extension?.getViews === 'function') {
+        return api.extension.getViews().some((w) => String(w?.location?.href ?? '').startsWith(page));
+      }
+    } catch { /* can't be told */ }
+    return false;
+  }
+
+  /**
    * F04: sends the tab after `ms` (1.5 s) unless Options cancels it (cancelScheduled). Only with Lab on, F04 in use and
    * "Send when I click the toolbar button" ticked, and never for someone who needs more time (noCountdown).
+   * A PDF the extension may only download with its site's permission can't be asked for here (no click any more): the
+   * answer is {needsPermission} for the popup, which asks with its Allow button, as "Send this PDF" does; with the
+   * popup gone, nobody could answer, so its link goes with v1.1's sentence for a site not allowed (never nothing).
    * -> the send's answer, or {cancelled: true}
    */
   async function scheduleSend(tabId, { mode = 'page', ms = countdownMs } = {}) {
@@ -700,7 +722,12 @@ export function createApp({
         if (scheduled.get(tabId) === entry) scheduled.delete(tabId);
         try {
           const tab = await api.tabs.get(tabId);
-          resolve(await withBadge(() => sendTab(tab, { mode, thin: 'page', prompt: false })));
+          let r = await withBadge(() => sendTab(tab, { mode, thin: 'page', prompt: false }));
+          if (r?.needsPermission && !(await popupOpen())) {
+            const p = r;
+            r = claim(p.token) ? await withBadge(() => sendUrl(p.url, p.title, 'pdf-denied')) : { handled: true };
+          }
+          resolve(r);
         } catch (e) { reject(e); }
       }, ms);
     });
@@ -895,8 +922,9 @@ export function createApp({
   }
 
   /**
-   * What the popup needs about its tab before it offers anything (F04, F10): whether the extension can read it,
-   * whether text is selected, and the Send as mode by context. -> {readable, selection, pdf, mode, url}
+   * What the popup needs about its tab before it offers anything (F04, F10, F11): whether the extension can read it,
+   * whether text is selected (F11's, so with F10's Use switch off too: LAB-PROTOCOL 2.9.6), and the Send as mode by
+   * context (with F10's switch off, the page as you see it, or the PDF). -> {readable, selection, pdf, mode, url, site}
    */
   async function tabInfo(tabId) {
     const c = await labCtx();
@@ -911,7 +939,7 @@ export function createApp({
     try { remembered = (await storage.get(SEND_AS_KEY)) ?? {}; } catch { /* none */ }
     const sendAs = c.on && labUseOn(c.s, 'F10');
     return {
-      readable: !!info, selection: sendAs && selection, pdf, url, site: siteOf(url),
+      readable: !!info, selection: c.on && selection, pdf, url, site: siteOf(url),
       mode: sendAs ? defaultMode({ selection, pdf, url, remembered }) : (pdf ? 'pdf' : 'page'),
     };
   }

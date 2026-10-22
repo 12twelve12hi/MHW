@@ -32,7 +32,11 @@ function fakeCleanHtml(root) {
   return '<!doctype html>\n' + html;
 }
 
-export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenus = true, commands = true, omnibox = false } = {}) {
+/**
+ * popupApi: how the background can tell an open popup: 'contexts' (Chrome's runtime.getContexts), 'views' (Safari's
+ * background page: extension.getViews) or null (neither).
+ */
+export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenus = true, commands = true, omnibox = false, popupApi = 'contexts' } = {}) {
   const local = new Map();
   const tabs = new Map();
   const granted = new Set();
@@ -44,6 +48,7 @@ export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenu
   let nextTab = 100;
   let activeTab = null;
   let requestAnswer = async () => false;
+  let contexts = []; // runtime.getContexts's answer: the extension's open pages ({contextType, documentUrl})
   const realFetch = globalThis.fetch;
 
   function notify(changes) {
@@ -208,6 +213,8 @@ export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenu
     api.commands = { async getAll() { return clone(list); }, onCommand: event(listeners.command) };
   }
   if (omnibox) api.omnibox = { onInputEntered: event(listeners.omnibox) };
+  if (popupApi === 'contexts') api.runtime.getContexts = async () => clone(contexts);
+  if (popupApi === 'views') api.extension = { getViews: () => contexts.map((c) => ({ location: { href: c.documentUrl } })) };
 
   return {
     api, local, granted, alarms, menus, opened, badge, listeners,
@@ -223,6 +230,8 @@ export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenu
     /** Changes a tab's page (its selection, its article, …). */
     setPage: (id, patch) => Object.assign(tabs.get(id).page, patch),
     grant: (origin) => granted.add(origin),
+    /** The extension's open pages, as runtime.getContexts lists them: popupOpen(true) opens the popup. */
+    popupOpen: (open) => { contexts = open ? [{ contextType: 'POPUP', documentUrl: 'chrome-extension://fake-extension-id/popup.html' }] : []; },
     onRequest: (fn) => { requestAnswer = fn; },
   };
 }

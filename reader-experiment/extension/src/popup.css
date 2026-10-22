@@ -268,6 +268,7 @@ input.switch:checked::before { left: calc(100% - 1.23em); background: var(--btn-
 .send-as-menu { margin-top: 6px; padding: 4px 8px; border: 1px solid var(--rule-strong); border-radius: 8px; background: var(--card); }
 .send-as-item { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 1em; font-weight: 400; cursor: pointer; overflow-wrap: anywhere; }
 .send-as-item input { width: auto; margin: 0; }
+.lab-excerpt { margin-top: 0; }
 .lab-paste { margin-top: 0; }
 .lab-paste-said:empty { display: none; }
 .lab-paste-said .lab-note-body { margin-top: 8px; }

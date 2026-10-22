@@ -7,8 +7,8 @@ import { webUrl } from './daylight-share.js';
 import { LAB_TEXT, normaliseShare, wantsFastChecks, FAST_CHECK_MS } from './daylight-lab.js';
 import { copyText, renderRepaired, noteFollowUp } from './lab-ui.js';
 import {
-  renderLabNote, renderLabRow, labRowText, rowAnnouncement, renderCheckIn, renderSendAs, renderThin, renderBigFiles,
-  renderLine, renderCard, renderPaste,
+  renderLabNote, renderLabRow, labRowText, labResultMessage, rowAnnouncement, renderCheckIn, renderSendAs, renderThin,
+  renderBigFiles, renderLine, renderCard, renderPaste, renderExcerptButton,
 } from './lab-popup.js';
 import { queueRows } from './lab-send.js';
 import {
@@ -113,7 +113,7 @@ function announce(text) {
  * popup is its last non-Lab build's.
  */
 function removeLab() {
-  for (const id of ['lab-row', 'lab-rows', 'lab-footer', 'lab-note', 'lab-card', 'lab-send-as', 'lab-paste', 'lab-after', 'lab-checkin', 'lab-queue']) $(id)?.remove();
+  for (const id of ['lab-row', 'lab-rows', 'lab-footer', 'lab-note', 'lab-card', 'lab-send-as', 'lab-excerpt', 'lab-paste', 'lab-after', 'lab-checkin', 'lab-queue']) $(id)?.remove();
 }
 
 /** Lab is on and this build has it: the popup shows Wave 1's pieces. */
@@ -337,11 +337,7 @@ function renderTab() {
 function resultMessage(r) {
   const row = r?.row;
   if (!row) return { text: '' }; // {handled}: the background sent it already; the history shows it
-  if (labOnNow()) {
-    const d = labRowText(row, { ...(timeline ?? {}), online: navigator.onLine });
-    const label = /[.…✓]$/.test(d.label) ? d.label : `${d.label}.`;
-    return { text: [r.note, d.sentence ? `${label} ${d.sentence}` : label].filter(Boolean).join(' '), bad: row.status === 'expired' };
-  }
+  if (labOnNow()) return labResultMessage(r, { ...(timeline ?? {}), online: navigator.onLine });
   return { text: [r.note, rowMessage(row)].filter(Boolean).join(' '), bad: row.status === 'expired' };
 }
 
@@ -362,11 +358,12 @@ function currentMode() {
 }
 
 /**
- * The tab as Lab sees it, then Send as (F10), Paste and send (F33) and, when "Send when I click the toolbar button" is
- * ticked, the share-in-place card (F04).
+ * The tab as Lab sees it, then Send as (F10; with F10's Use switch off, F11's "Send as excerpt" while text is
+ * selected), Paste and send (F33) and, when "Send when I click the toolbar button" is ticked, the share-in-place card
+ * (F04).
  */
 async function renderTabLab() {
-  for (const id of ['lab-card', 'lab-send-as', 'lab-paste', 'lab-after']) {
+  for (const id of ['lab-card', 'lab-send-as', 'lab-excerpt', 'lab-paste', 'lab-after']) {
     const box = $(id);
     if (box) { box.hidden = true; box.textContent = ''; }
   }
@@ -381,7 +378,22 @@ async function renderTabLab() {
   try { tabLab = await call('labTabInfo', { tabId: tab.id }); } catch { tabLab = null; }
   if (!tabLab || !labOnNow()) return;
   if (labw.use?.F10 && !tabLab.pdf) sendAs = renderSendAs($('lab-send-as'), { mode: currentMode() });
+  else if (excerptOffered()) renderExcerptButton($('lab-excerpt'), { onSend: sendExcerpt });
   if (labw.use?.F04 && labw.clickSend) startCard(); // F04: "Send when I click the toolbar button" (lab-send.js clickToSend)
+}
+
+/**
+ * F11's explicit path without Send as (LAB-PROTOCOL 2.9.6): with F10's Use switch off, text selected on a readable
+ * page that isn't a PDF.
+ */
+function excerptOffered() {
+  return !labw?.use?.F10 && !!tabLab?.selection && !!tabLab?.readable && !tabLab?.pdf;
+}
+
+/** "Send as excerpt": the selection as an excerpt document (the background's Selection mode, as Send as sends it). */
+function sendExcerpt() {
+  card?.done();
+  return send(false, { mode: 'selection' });
 }
 
 /**
@@ -392,7 +404,7 @@ async function renderTabLab() {
 function startCard() {
   const linkOnly = !tabLab.readable && !tabLab.pdf;
   const choices = !!labw.comfort || !!labw.alwaysOptions; // no countdown for those who need more time (noCountdown)
-  for (const id of ['send-page', 'send-link', 'lab-send-as', 'lab-paste']) $(id).hidden = true;
+  for (const id of ['send-page', 'send-link', 'lab-send-as', 'lab-excerpt', 'lab-paste']) $(id).hidden = true;
   const target = document.querySelector('#view-send .target');
   if (target) target.hidden = true;
   const mode = linkOnly ? 'link' : currentMode();
@@ -407,6 +419,11 @@ function startCard() {
           box.append(line);
           sendAs = renderSendAs(line, { mode });
           box.append(reviewSwitch());
+        } else if (!linkOnly && excerptOffered()) {
+          const line = document.createElement('div');
+          line.className = 'lab-excerpt';
+          box.append(line);
+          renderExcerptButton(line, { onSend: sendExcerpt });
         }
       },
       send: () => cardSend(linkOnly),
@@ -414,9 +431,14 @@ function startCard() {
     },
   });
   if (choices) return;
-  call('labScheduleSend', { tabId: tab.id, mode }).then((r) => {
+  call('labScheduleSend', { tabId: tab.id, mode }).then(async (r) => {
     if (r?.cancelled) return;
     card?.done();
+    // A PDF the extension may download only with its site's permission: asked here, as "Send this PDF" asks (the
+    // browser's prompt, or, where the browser won't show it this long after the click, Allow and Send the link).
+    if (r?.needsPermission) {
+      try { r = await askPermission(r); } catch (e) { setStatus(e.message, true); r = null; }
+    }
     showResult(r);
     startPolling();
   }, (e) => { card?.done(); setStatus(e.message, true); });
@@ -502,6 +524,7 @@ async function sendCopiedLink(text) {
 function setBusy(busy) {
   $('send-page').disabled = busy || !(tab && (webUrl(tab.url) || /^file:/i.test(tab.url || '')));
   $('send-link').disabled = busy || !(tab && webUrl(tab.url));
+  for (const b of document.querySelectorAll('.lab-excerpt-btn')) b.disabled = busy;
   $('app').setAttribute('aria-busy', busy ? 'true' : 'false');
 }
 

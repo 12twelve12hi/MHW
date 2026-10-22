@@ -10,11 +10,13 @@
 //   F03    a page shown only with a login cookie arrives with that text (F03.1), with no script, on* or form value
 //          (F03.2)
 //   F04    the card: sent 1.5 s after the click, also when the popup closes; Options stops it; Comfort: the choices and
-//          Send, nothing before Send (F04.5)
+//          Send, nothing before Send (F04.5); a PDF that needs its site's permission: the popup asks (Allow, Send the
+//          link)
 //   F07    offline: "Waiting for connection" and the queue with Cancel; back online it goes (F07.1, F07.2)
 //   F10    Send as (the modes, Selection by itself), Clean article with Readability, the thin-page question (F10.2),
 //          the mode kept for the site across a restart (F10.3), Review renders a 1 MB page within 1 s and sends the
-//          edited title (F10.4)
+//          edited title (F10.4), and says what the popup says (offline: "Waiting for connection"); F10's Use switch
+//          off: no Send as, and a selection still goes (Send as excerpt, LAB-PROTOCOL 2.9.6)
 //   F11    Send selection: one excerpt with the quote, its link and the date (F11.1)
 //   F26    Setup check: its lines, the test article along the timeline, Copy diagnostics without URLs (F26.1-3)
 //   F33    Paste and send: the host before anything is sent (F33.3)
@@ -281,27 +283,39 @@ test('F01: the timeline with a Lab Daylight (In your Reader ✓ within 45 s; a P
   await sw.evaluate(() => globalThis.sendToDaylight.checkAcksNow());
   await settled(popup, r.row.id, 'Waiting for a tap on your Daylight', 20000);
   assert.equal(await sw.evaluate(() => chrome.action.getBadgeText({})), '⌛', 'F01: the badge');
-  pdfState = 'handed';
-  await lab.labInbox.record(r.row.id, 'handed', Math.floor(Date.now() / 1000) + 300);
-  await lab.pollOnce();
-  await sw.evaluate(() => globalThis.sendToDaylight.checkAcksNow());
-  await settled(popup, r.row.id, 'Handed to the Reader', 20000);
-  const pdfRow = popup.locator(`li[data-id="${r.row.id}"]`);
-  assert.equal(await pdfRow.locator('.lab-row-a11y').textContent(), 'Handed to the Reader. Your Daylight passed it to the Reader. The Reader doesn’t confirm documents yet.');
 
-  // F01.6: three rows: reader (final, not newest), handed (final, newest) and a new `sent` one (the newest).
+  // F01.6: three rows: `reader` (final, not the newest), `waiting` (not final, not the newest) and the newest, `sent`.
   await popup.click('#send-page');
   await popup.waitForFunction(() => document.querySelectorAll('#history li').length === 3
-    && ['sent', 'delivered'].includes(document.querySelector('#history li').dataset.status));
+    && document.querySelector('#history li').dataset.status === 'sent');
   const newest = popup.locator('#history li').first();
+  const pdfRow = popup.locator(`li[data-id="${r.row.id}"]`);
+  assert.deepEqual(await popup.locator('#history li .st').allTextContents(), ['Sent · waiting for your Daylight', 'Waiting for a tap on your Daylight', 'In your Reader ✓']);
   assert.equal(await newest.locator('.lab-steps').isVisible(), true, 'the newest row shows its step line');
+  assert.equal(await newest.locator('.lab-steps').textContent(), 'Sent ✓ · On your Daylight … · In the Reader');
+  assert.equal(await pdfRow.locator('.lab-steps').isVisible(), true, 'a row that is not final shows its step line, newest or not');
+  assert.equal(await pdfRow.locator('.lab-steps').textContent(), 'Sent ✓ · On your Daylight ✓ · In the Reader …');
+  assert.equal(await pdfRow.locator('.sentence').isVisible(), true, 'and its sentence');
+  assert.equal(await pdfRow.locator('.lab-row-a11y').textContent(), 'Waiting for a tap on your Daylight. Tap its notice on your Daylight to add it to the Reader.');
   assert.equal(await row.locator('.lab-steps').isVisible(), false, 'a final row that is not the newest keeps it in its details');
+  assert.equal(await row.locator('.sentence').isVisible(), false);
   assert.equal(await row.locator('.lab-row-a11y').textContent(), 'In your Reader ✓. Saved in the Daylight Reader.', 'its label and sentence are still read');
+  for (const li of [newest, pdfRow, row]) {
+    assert.equal(await li.locator('.lab-steps').getAttribute('aria-hidden'), 'true', 'no step count for screen readers');
+  }
   await row.getByRole('button', { name: await row.locator('.item-title').textContent(), exact: true }).click();
   assert.equal(await row.locator('.lab-steps').isVisible(), true, 'tapping the row opens its details');
   assert.deepEqual(await unnamed(popup), []);
   await axeBoth(popup, 'popup: the timeline');
   await shot(popup, 'timeline');
+
+  pdfState = 'handed';
+  await lab.labInbox.record(r.row.id, 'handed', Math.floor(Date.now() / 1000) + 300);
+  await lab.pollOnce();
+  await sw.evaluate(() => globalThis.sendToDaylight.checkAcksNow());
+  await settled(popup, r.row.id, 'Handed to the Reader', 20000);
+  assert.equal(await pdfRow.locator('.lab-row-a11y').textContent(), 'Handed to the Reader. Your Daylight passed it to the Reader. The Reader doesn’t confirm documents yet.');
+  assert.equal(await pdfRow.locator('.lab-steps').isVisible(), false, 'handed is final: not the newest, so its step line is in its details');
   await popup.close();
 
   // F01.5: a v1.1 Daylight (no Lab frames): Delivered ✓, exactly as v1.1.
@@ -460,6 +474,67 @@ test('F10.4: Review shows a 1 MB page within 1 s, without scripts and in greys, 
   await unpair();
 });
 
+test('F10 Review offline: Send says what the popup says for the same row, “Waiting for connection” (2.5 rule 2); back online it goes', { timeout: 150000 }, async () => {
+  const day = await newPairing();
+  await storageSet({ settings: { lab: true, labNoteShown: true, labReview: true, from: 'W1 Chrome' } });
+  const { page, id } = await openTab(`${site.url}/brief.html`);
+  const popup = await openPopup(id);
+  const [review] = await Promise.all([ctx.waitForEvent('page'), popup.click('#send-page')]);
+  await review.waitForSelector('body[data-ready="1"]');
+  await ctx.setOffline(true);
+  try {
+    await review.click('#review-send');
+    await review.waitForSelector('body[data-sent="1"]');
+    assert.equal(await review.textContent('#review-said'), 'Waiting for connection. It will send when this device is back online.');
+    await popup.waitForSelector('#lab-queue li');
+    assert.equal(await popup.textContent('#lab-queue li .st'), 'Waiting for connection', 'the popup’s row: the same words');
+  } finally { await ctx.setOffline(false); }
+  const [item] = await day.receive(1, 70000);
+  assert.equal(item.extras['x-cap'], 'seen');
+  await review.close();
+  await popup.close();
+  await page.close();
+  await storageSet({ settings: { lab: true, labNoteShown: true, from: 'W1 Chrome' } });
+  await unpair();
+});
+
+test('2.9.6: F10’s Use switch off: no Send as, the page as you see it; with text selected, “Send as excerpt” sends the selection', { timeout: 120000 }, async () => {
+  const day = await newPairing();
+  await storageSet({ settings: { lab: true, labNoteShown: true, labExcerptNoteShown: true, labUse: { F10: false }, from: 'W1 Chrome' } });
+  const { page, id } = await openTab(`${site.url}/long-read.html`);
+  let popup = await openPopup(id);
+  assert.equal(await popup.locator('#lab-send-as').isHidden(), true, 'no Send as');
+  assert.equal(await popup.locator('#lab-excerpt').isHidden(), true, 'nothing selected: no excerpt button');
+  await popup.close();
+  await page.evaluate(() => {
+    const r = document.createRange();
+    r.selectNodeContents(document.querySelector('#quote'));
+    getSelection().removeAllRanges();
+    getSelection().addRange(r);
+  });
+  popup = await openPopup(id);
+  const excerpt = popup.getByRole('button', { name: LAB_TEXT.shareInPlace.sendAsExcerpt, exact: true });
+  await excerpt.waitFor();
+  assert.equal(await popup.locator('#lab-send-as').isHidden(), true, 'still no Send as');
+  assert.equal(await popup.textContent('#send-page'), 'Send this page');
+  assert.deepEqual(await unnamed(popup), []);
+  await axeBoth(popup, 'popup: Send as excerpt (F10’s Use switch off)');
+  await shot(popup, 'excerpt-f10-off');
+  // Send this page: the page as you see it (F03), not the selection.
+  await popup.click('#send-page');
+  let [item] = await day.receive(1);
+  assert.deepEqual([item.header.kind, item.extras['x-cap']], ['page', 'seen']);
+  // Send as excerpt: the selection, as an excerpt document (F11).
+  await excerpt.click();
+  [item] = await day.receive(1);
+  assert.deepEqual([item.header.kind, item.header.mime, item.extras['x-cap']], ['file', 'text/html', 'excerpt']);
+  assert.match(new TextDecoder().decode(item.content), /<blockquote>The quick brown fox jumps over the lazy dog, again and again\.<\/blockquote>/);
+  await popup.close();
+  await page.close();
+  await storageSet({ settings: { lab: true, labNoteShown: true, from: 'W1 Chrome' } });
+  await unpair();
+});
+
 // --- F04 ---------------------------------------------------------------------------------------------------------------
 
 test('F04: “Send when I click the toolbar button”: the card sends after 1.5 s, also with the popup closed; Options stops it; Comfort waits for Send', { timeout: 120000 }, async () => {
@@ -524,6 +599,46 @@ test('F04: “Send when I click the toolbar button”: the card sends after 1.5 
   await unpair();
 });
 
+test('F04: a PDF that needs its site’s permission: after the countdown the card’s popup asks, with Allow and Send the link', { timeout: 120000 }, async () => {
+  // The background's side (it answers {needsPermission} only while a popup is open, and sends the link otherwise) is
+  // lab-send.test.mjs's: in automation the extension has no activeTab, so a tab on a site it may not read has no URL to
+  // send. Here the popup gets that answer from its countdown, as it would for such a PDF, and the browser refuses to
+  // show its own prompt (as it does once the click is too long ago; automation can't answer the prompt anyway).
+  const day = await newPairing('Card Daylight');
+  await storageSet({ settings: { lab: true, labNoteShown: true, labClickSend: true, from: 'W1 Chrome' } });
+  const { page, id } = await openTab(`${site.url}/brief.html`);
+  const popup = await ctx.newPage();
+  try {
+    await popup.addInitScript(() => {
+      const ns = globalThis.browser ?? globalThis.chrome;
+      ns.permissions.request = () => Promise.reject(new Error('This function must be called during a user gesture'));
+      const rt = ns.runtime;
+      const send = rt.sendMessage.bind(rt);
+      rt.sendMessage = (msg) => (msg?.type !== 'labScheduleSend' ? send(msg) : new Promise((resolve) => setTimeout(() => resolve({
+        ok: true, result: { needsPermission: { origins: ['https://papers.example/*'] }, url: 'https://papers.example/locked.pdf', title: 'Locked paper', token: 'f'.repeat(32) },
+      }), 1500)));
+    });
+    await popup.setViewportSize({ width: 360, height: 700 });
+    await popup.goto(`chrome-extension://${extId}/popup.html?tab=${id}`);
+    await popup.waitForSelector('body[data-ready="1"]');
+    assert.equal(await popup.textContent('.lab-card-title'), 'Sending to Card Daylight');
+    await popup.waitForSelector('#permission:not([hidden])', { timeout: 10000 });
+    assert.equal(await popup.textContent('#perm-host'), 'papers.example');
+    assert.equal(await popup.textContent('#status'), '', 'no empty result in its place');
+    assert.deepEqual(await day.receive(0), [], 'nothing before the answer');
+    await axeBoth(popup, 'popup: the card asks for a PDF’s site');
+    await shot(popup, 'card-permission');
+    await popup.click('#perm-link');
+    const [item] = await day.receive(1);
+    assert.deepEqual([item.header.kind, item.header.url], ['url', `${site.url}/brief.html`]);
+  } finally {
+    await popup.close();
+    await page.close();
+    await storageSet({ settings: { lab: true, labNoteShown: true, from: 'W1 Chrome' } });
+    await unpair();
+  }
+});
+
 // --- F07 ---------------------------------------------------------------------------------------------------------------
 
 test('F07: offline, a share reads “Waiting for connection” in the queue with Cancel; back online it goes', { timeout: 150000 }, async () => {
@@ -541,6 +656,7 @@ test('F07: offline, a share reads “Waiting for connection” in the queue with
   assert.equal((await storageGet('outbox'))[0].attempts, 0, 'nothing was published');
   assert.ok(await sw.evaluate(() => chrome.alarms.get('dls-offline')), 'the dls-offline alarm waits for the network');
   assert.equal(await popup.getByRole('button', { name: /^Cancel: / }).count(), 1, 'Cancel on the row');
+  assert.equal(await popup.locator('#lab-queue li .retry').count(), 0, 'no Retry now: it goes by itself once back online');
   await axeBoth(popup, 'popup: the queue');
   await shot(popup, 'queue');
   // A second one, cancelled.
@@ -694,9 +810,11 @@ test('F26: Setup check’s lines and buttons; the test article from Waiting for 
   const lines = await setup.locator('.lab-check-line').allTextContents();
   assert.ok(lines.includes('✓ Pairing'));
   assert.ok(lines.includes('✓ Keyboard shortcut'));
-  // Unmet checks have a button (F26.3): the toolbar pin isn't known in automation, site access isn't given.
-  assert.equal(await setup.locator('li[data-check="siteAccess"] .lab-check-line').textContent(), '! Site access');
-  assert.equal(await setup.locator('li[data-check="siteAccess"]').getByRole('button').textContent(), 'Allow');
+  // Chrome has no Site access line: it reads only the tab the user chose (activeTab) and asks one site at a time where
+  // a PDF or the Daylight server needs more, so a fresh install has nothing to fix here and nothing asks for every
+  // site (Safari's line: safari.test.mjs).
+  assert.equal(await setup.locator('li[data-check="siteAccess"]').count(), 0);
+  assert.ok(!lines.some((l) => /Site access/.test(l)), lines.join(' | '));
   assert.equal(await setup.getByText(LAB_TEXT.setup.testFooter).isVisible(), true);
   await setup.getByRole('button', { name: LAB_TEXT.setup.testSend }).click();
   await setup.waitForSelector('#lab-test-progress p');
@@ -760,6 +878,7 @@ test('F27: the popup with Lab’s W1 pieces (Send as, Paste and send, the check-
     assert.equal(await popup.textContent('#lab-checkin'), 'Your Daylight checked in 2 min ago.');
     assert.deepEqual(await popup.locator('#history li .st').allTextContents(), ['Sent · waiting for your Daylight', 'Waiting for a tap on your Daylight', 'In your Reader ✓', 'Not delivered']);
     assert.equal(await popup.textContent('#lab-queue li .st'), 'Waiting to send');
+    assert.deepEqual(await popup.locator('#lab-queue li .acts button').allTextContents(), ['Retry now', 'Cancel'], 'F01.4: v1.1’s Retry now beside Cancel');
     await popup.click('.send-as-btn');
     assert.deepEqual(await unnamed(popup), []);
     await axeBoth(popup, `popup with W1${comfort ? ', Comfort' : ''}`);

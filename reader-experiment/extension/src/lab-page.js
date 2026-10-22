@@ -337,9 +337,9 @@ function followTest(test) {
   } else { clearInterval(testTimer); testTimer = null; }
 }
 
-/** An unmet check's button: pair (the popup's pairing in a tab), the shortcuts page, or site access. */
+/** An unmet check's button: pair (the popup's pairing in a tab), the shortcuts page, or site access (Safari). */
 async function fixCheck(c) {
-  if (c.action === 'sites') { await askSite(['<all_urls>']); await render(); return; }
+  if (c.action === 'sites') { await askSite(c.origins); await render(); return; }
   if (c.action === 'shortcuts') { await openTab('chrome://extensions/shortcuts'); return; }
   if (c.action === 'pair') await openTab(api.runtime.getURL('popup.html?standalone=1'));
 }

@@ -1,5 +1,11 @@
 // The background logic end to end in node: a fake browser API, the mock ntfy relay, a local web site, and a
 // Receiver (the Daylight's side) from daylight-share.js.
+//
+// These are v1.1's flows. They run with Lab off here, and again with Lab on, the default (core-lab-on.test.mjs sets
+// DLS_TEST_LAB=1), so Lab's send path (labSendTab) keeps them: the same rows, retries, relay trouble and PDFs. With Lab
+// on only these differ, each by its LAB branch: the badge shows the most recent row (F01: … until it is delivered,
+// also after a send that made no row), pages go through clean-html.js (F03; the fake's stand-in here), and the menu has
+// Lab's entries (F34).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { built } from '../helpers/built.mjs';
@@ -14,6 +20,9 @@ const ds = await b.load('daylight-share.js');
 const quiet = { warn() {}, log() {} };
 const PDF = makePdf({ pages: 3, fillerBytes: 20_000 });
 const BIG_PDF = makePdf({ pages: 2, fillerBytes: 10_000_000 }); // a 10 MB PDF: over the protocol's 9 MB
+const LAB = process.env.DLS_TEST_LAB === '1';
+/** The HTML a page item carries: v1.1's capture, or with Lab on clean-html.js's (the fake's stand-in marks it). */
+const sentHtml = (html) => (LAB ? `<!doctype html>\n${html.replace(/^<html/i, '<html data-fake-clean="1"')}` : `<!DOCTYPE html>\n${html}`);
 
 /** fetch as an extension without host permissions sees it: cross-origin requests fail unless CORS allows them. */
 function extensionFetch(fb, site, flags) {
@@ -33,9 +42,9 @@ async function setup({ target = 'chrome', native, pdfChunkSize, paired = true, c
   const relay = await startMockRelay(relayNow ? { now: relayNow } : {});
   const site = await startSite({ pdf: PDF, bigPdf: BIG_PDF });
   const fb = fakeBrowser({ native, contextMenus });
-  // These are v1.1's tests: the plain app, with Lab off (LAB-PLAN 1.3; the test hook of 1.7 seeds settings.lab). Lab's
-  // sending is lab-send.test.mjs.
-  await fb.api.storage.local.set({ settings: { lab: false } });
+  // v1.1's tests: the plain app with Lab off (LAB-PLAN 1.3; the test hook of 1.7 seeds settings.lab), and the same with
+  // Lab on (core-lab-on.test.mjs). Lab's own sending is lab-send.test.mjs.
+  await fb.api.storage.local.set({ settings: { lab: LAB } });
   const flags = { relayStatus: 0 };
   const app = core.createApp({ api: fb.api, target, fetch: extensionFetch(fb, site, flags), pdfChunkSize, log: quiet, now, storage });
   const secret = ds.generateSecret();
@@ -98,7 +107,7 @@ test('"Send this page" sends the HTML as a page item; acks mark it delivered', a
     const r = await s.app.onMessage({ type: 'sendTab', tabId });
     assert.equal(r.row.kind, 'page');
     assert.equal(r.row.status, 'sent');
-    assert.deepEqual(s.fb.badge.history.slice(-2), ['…', '✓']);
+    assert.deepEqual(s.fb.badge.history.slice(-2), LAB ? ['…', '…'] : ['…', '✓'], 'Lab: … until the Daylight has it');
 
     const items = await s.receive();
     assert.equal(items.length, 1);
@@ -108,7 +117,7 @@ test('"Send this page" sends the HTML as a page item; acks mark it delivered', a
     assert.equal(header.title, 'A quiet article');
     assert.equal(header.from, 'Chrome on Mac');
     assert.equal(header.app, 'chrome/1.2.3');
-    assert.equal(new TextDecoder().decode(content), `<!DOCTYPE html>\n${articleHtml}`);
+    assert.equal(new TextDecoder().decode(content), sentHtml(articleHtml));
 
     assert.equal((await s.rows())[0].status, 'sent');
     assert.ok(s.fb.local.has(`outbox/${r.row.id}`), 'content kept until delivered');
@@ -145,7 +154,7 @@ test('"Send link only" and pages that are too large or unreadable go as url item
 
     const t5 = s.fb.addTab({ url: 'chrome://settings', title: 'Settings', scriptable: false });
     await assert.rejects(s.app.onMessage({ type: 'sendTab', tabId: t5 }), /only web pages/);
-    assert.equal(s.fb.badge.text, '!');
+    assert.equal(s.fb.badge.text, LAB ? '…' : '!', 'Lab: no row, so the most recent one’s mark');
 
     const items = await s.receive();
     assert.deepEqual(items.map((i) => i.header.kind).sort(), ['url', 'url', 'url', 'url']);
@@ -191,7 +200,7 @@ test('a PDF the page cannot read: CORS-open servers need no permission; others a
     const t2 = s.fb.addTab({ url, title: 'Quiet', scriptable: false });
     const ask = await s.app.onMessage({ type: 'sendTab', tabId: t2 });
     assert.deepEqual(ask.needsPermission, { origins: ['http://127.0.0.1/*'] });
-    assert.equal(s.fb.badge.text, '', 'no error badge while asking');
+    assert.equal(s.fb.badge.text, LAB ? '…' : '', 'no error badge while asking (Lab: the most recent row’s mark)');
     // Denied: the link goes, with a note.
     const denied = await s.app.onMessage({ type: 'sendPdf', url: ask.url, title: ask.title, token: ask.token });
     assert.equal(denied.row.kind, 'url');
@@ -283,7 +292,7 @@ test('a relay that is busy (429): "Waiting to send" with Retry now, a ! badge; R
     const r = await s.app.onMessage({ type: 'sendTab', tabId: t });
     assert.equal(r.row.status, 'failed');
     assert.equal(r.row.errorCode, 'network');
-    assert.equal(s.fb.badge.text, '!');
+    assert.equal(s.fb.badge.text, LAB ? '…' : '!', 'Lab: it goes again by itself, so it is on its way');
     const L = await b.load('logic.js');
     assert.deepEqual(L.statusInfo(r.row), {
       label: 'Waiting to send', tone: 'busy', hint: 'Couldn’t send right now. It will try again by itself.', action: 'retry-now', retry: 'Retry now',
@@ -330,7 +339,9 @@ test('start sets up menus and the alarm; with nothing to wait for, a tick makes 
   const s = await setup();
   try {
     await s.app.start();
-    assert.deepEqual([...s.fb.menus.keys()], [core.MENU.page, core.MENU.link, core.MENU.pdfLink]);
+    assert.deepEqual([...s.fb.menus.keys()], LAB
+      ? [core.MENU.page, core.MENU.clean, core.MENU.link, core.MENU.selection, core.MENU.image, core.MENU.pdfLink]
+      : [core.MENU.page, core.MENU.link, core.MENU.pdfLink]);
     assert.deepEqual(s.fb.menus.get(core.MENU.pdfLink).targetUrlPatterns, core.PDF_LINK_PATTERNS);
     assert.equal(s.fb.alarms.get(core.ALARM_TICK).periodInMinutes, 15);
     const before = s.relay.state.requests.length;
@@ -612,7 +623,7 @@ test('a local HTML file (file://) goes as an HTML file item', async () => {
     const [item] = await s.receive();
     assert.equal(item.header.name, 'My notes.html');
     assert.equal(item.header.mime, 'text/html');
-    assert.equal(new TextDecoder().decode(item.content), '<!DOCTYPE html>\n<html><body>notes</body></html>');
+    assert.equal(new TextDecoder().decode(item.content), sentHtml('<html><body>notes</body></html>'));
   } finally { await s.close(); }
 });
 
@@ -626,13 +637,13 @@ test('Comfort (F27, not Lab): off by default, saved in settings, kept through re
     assert.equal((await st()).comfort, true, 'before pairing too');
     await s.app.pair({ input: s.link, from: 'Kitchen Chrome' });
     await s.app.onMessage({ type: 'setName', from: 'Desk Chrome' });
-    assert.deepEqual((await s.fb.api.storage.local.get('settings')).settings, { lab: false, from: 'Desk Chrome', comfort: true });
+    assert.deepEqual((await s.fb.api.storage.local.get('settings')).settings, { lab: LAB, from: 'Desk Chrome', comfort: true });
     await s.app.pair({ input: await ds.pairingLink({ secret: ds.generateSecret(), relay: s.relay.url }), confirm: true });
     await s.app.unpair();
     assert.equal((await st()).comfort, true, 'pairing changes and unpairing leave it');
     // Saved together, neither change is lost.
     await Promise.all([s.app.onMessage({ type: 'setName', from: 'Laptop Chrome' }), s.app.onMessage({ type: 'setComfort', comfort: false })]);
-    assert.deepEqual((await s.fb.api.storage.local.get('settings')).settings, { lab: false, from: 'Laptop Chrome', comfort: false });
+    assert.deepEqual((await s.fb.api.storage.local.get('settings')).settings, { lab: LAB, from: 'Laptop Chrome', comfort: false });
     assert.equal((await st()).comfort, false);
   } finally { await s.close(); }
 });

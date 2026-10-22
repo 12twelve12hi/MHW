@@ -5,7 +5,7 @@
 import { api } from './api.js';
 import { formatMB } from './daylight-share.js';
 import { LAB_TEXT, fillText } from './daylight-lab.js';
-import { rowMessage } from './logic.js';
+import { labResultMessage } from './lab-popup.js';
 
 const $ = (id) => document.getElementById(id);
 const token = location.hash.replace(/^#/, '');
@@ -50,7 +50,12 @@ async function init() {
     for (const id of ['review-send', 'review-cancel', 'review-title']) $(id).disabled = true;
     try {
       const sent = await call('labReviewSend', { token, title: $('review-title').value });
-      $('review-said').textContent = sent?.row ? [sent.note, rowMessage(sent.row)].filter(Boolean).join(' ') : '';
+      // The timeline's words, as the popup says them for the same row (LAB-PLAN 2.5: "Waiting for connection" offline).
+      let timeline = null;
+      try { timeline = await call('labTimeline'); } catch { timeline = null; }
+      const m = labResultMessage(sent, { ...(timeline ?? {}), online: navigator.onLine });
+      $('review-said').textContent = m.text;
+      $('review-said').classList.toggle('bad', !!m.bad);
       document.body.dataset.sent = '1';
     } catch (e) {
       $('review-said').textContent = e.message;

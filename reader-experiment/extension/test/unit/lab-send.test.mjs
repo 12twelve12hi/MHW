@@ -32,9 +32,9 @@ const quiet = { warn() {}, log() {} };
 const MIN = 60000;
 const { LAB_TEXT } = L;
 
-async function setup({ target = 'chrome', paired = true, settings = {}, now, countdownMs = 60, omnibox = true, commands } = {}) {
+async function setup({ target = 'chrome', paired = true, settings = {}, now, countdownMs = 60, omnibox = true, commands, popupApi } = {}) {
   const relay = await startMockRelay();
-  const fb = fakeBrowser({ os: 'mac', omnibox, commands: commands ?? [
+  const fb = fakeBrowser({ os: 'mac', omnibox, popupApi, commands: commands ?? [
     { name: 'send-page', shortcut: 'Alt+Shift+D', description: 'Send this page to Daylight' },
     { name: 'send-selection', shortcut: 'Alt+Shift+S', description: 'Send selection to Daylight' },
     { name: 'send-clean', shortcut: '', description: 'Send clean article to Daylight' },
@@ -245,6 +245,9 @@ test('F10: Clean article (x-cap "clean"); under 150 words the popup asks, Send a
     assert.equal((await s.msg({ type: 'labTabInfo', tabId: tab })).mode, 'page');
     await s.app.onMenu({ menuItemId: core.MENU.clean }, { id: tab, url: 'https://news.example/long', title: 'Long' });
     assert.equal((await s.receive())[0].extras['x-cap'], 'clean');
+    // A clean article the popup didn't ask for by name (the card's countdown) is the page as you see it.
+    await s.app.sendTab({ id: tab, url: 'https://news.example/long', title: 'Long' }, { mode: 'clean', thin: 'page' });
+    assert.equal((await s.receive())[0].extras['x-cap'], 'seen');
   } finally { await s.close(); }
 });
 
@@ -316,6 +319,37 @@ test('F10 Review: the item waits for review.html; Send sends it with the edited 
   } finally { await s.close(); }
 });
 
+test('2.9.6: F10’s Use switch off keeps F11’s selection: the tab says text is selected, Send as excerpt sends it, the page goes as you see it', async () => {
+  const s = await setup({ settings: { labUse: { F10: false } } });
+  try {
+    const tab = s.fb.addTab({
+      url: 'https://news.example/sel', title: 'Sel – News', html: ARTICLE,
+      selection: { text: 'A passage worth keeping, from the middle of the piece.', html: '<p>A passage worth keeping, from the middle of the piece.</p>' },
+    });
+    assert.deepEqual(await s.msg({ type: 'labTabInfo', tabId: tab }), {
+      readable: true, selection: true, pdf: false, url: 'https://news.example/sel', site: 'news.example', mode: 'page',
+    }, 'the selection is F11’s; the mode stays the page (no Send as switching by itself)');
+    // The popup's "Send as excerpt" (Selection mode by name).
+    const r = await s.msg({ type: 'sendTab', tabId: tab, mode: 'selection' });
+    assert.equal(r.excerpt, true);
+    let [item] = await s.receive();
+    assert.deepEqual([item.header.kind, item.header.mime, item.extras['x-cap']], ['file', 'text/html', 'excerpt']);
+    assert.equal(item.header.title, '“A passage worth keeping, from the middle of the piece.” · Sel – News');
+    // Send this page: the page as you see it (F03), not the selection; and no mode kept for the site.
+    await s.msg({ type: 'sendTab', tabId: tab, mode: 'page' });
+    [item] = await s.receive();
+    assert.deepEqual([item.header.kind, item.extras['x-cap']], ['page', 'seen']);
+    // The menu and the command are F11's too.
+    await s.app.onMenu({ menuItemId: core.MENU.selection, frameId: 0 }, { id: tab, url: 'https://news.example/sel', title: 'Sel – News' });
+    await s.app.onCommand('send-selection', { id: tab, url: 'https://news.example/sel', title: 'Sel – News' });
+    assert.deepEqual((await s.receive()).map((i) => i.extras['x-cap']), ['excerpt', 'excerpt']);
+    assert.equal((await s.storage('lab/sendAs'))?.['news.example'], undefined);
+    // Lab off: nothing of the kind.
+    await s.msg({ type: 'setLab', lab: false });
+    assert.equal((await s.msg({ type: 'labTabInfo', tabId: tab })).selection, false);
+  } finally { await s.close(); }
+});
+
 // --- F04: the countdown ---------------------------------------------------------------------------------------------
 
 test('F04: the background sends after the countdown, also with the popup gone; Options cancels it; no countdown for those who need more time', async () => {
@@ -341,6 +375,46 @@ test('F04: the background sends after the countdown, also with the popup gone; O
     }
     await new Promise((res) => setTimeout(res, 120));
     assert.deepEqual(await s.receive(), []);
+  } finally { await s.close(); }
+});
+
+for (const popupApi of ['contexts', 'views']) {
+  test(`F04: a PDF that needs its site’s permission: the open popup gets {needsPermission} to ask; with the popup gone its link goes, never nothing (${popupApi === 'contexts' ? 'Chrome: runtime.getContexts' : 'Safari: extension.getViews'})`, async () => {
+    const s = await setup({ settings: { labClickSend: true }, countdownMs: 40, popupApi });
+    try {
+      // A PDF the tab can't read and the extension can't fetch without the site's permission (a closed port here).
+      const url = 'http://127.0.0.1:9/files/locked.pdf';
+      const tab = s.fb.addTab({ url, title: 'Locked paper', scriptable: false });
+      // The popup is open: the answer is for its Allow button; nothing went yet.
+      s.fb.popupOpen(true);
+      const ask = await s.msg({ type: 'labScheduleSend', tabId: tab, mode: 'page' });
+      assert.deepEqual(ask.needsPermission, { origins: ['http://127.0.0.1/*'] });
+      assert.ok(ask.token);
+      assert.deepEqual(await s.receive(), []);
+      // The popup's "Send the link" (or a refused permission): the link, with v1.1's sentence.
+      const viaPopup = await s.msg({ type: 'sendPdf', url: ask.url, title: ask.title, token: ask.token });
+      assert.equal(viaPopup.row.kind, 'url');
+      // The popup closed before the countdown ended: nobody can answer, so the link goes now with that sentence.
+      s.fb.popupOpen(false);
+      const r = await s.msg({ type: 'labScheduleSend', tabId: tab, mode: 'page' });
+      assert.equal(r.row.kind, 'url');
+      assert.equal(r.row.url, url);
+      assert.equal(r.note, 'Without access to the site the PDF can’t be downloaded, so its link was sent.');
+      const items = await s.receive();
+      assert.deepEqual(items.map((i) => [i.header.kind, i.header.url]), [['url', url], ['url', url]]);
+      // The popup's answer counts once: a second Allow or Send the link for the same question sends nothing more.
+      assert.deepEqual(await s.msg({ type: 'sendPdf', url, title: 'Locked paper', token: ask.token }), { handled: true });
+    } finally { await s.close(); }
+  });
+}
+
+test('F04: where an open popup can’t be told (neither getContexts nor getViews), the link goes rather than nothing', async () => {
+  const s = await setup({ settings: { labClickSend: true }, countdownMs: 40, popupApi: null });
+  try {
+    const url = 'http://127.0.0.1:9/files/locked.pdf';
+    const tab = s.fb.addTab({ url, title: 'Locked paper', scriptable: false });
+    const r = await s.msg({ type: 'labScheduleSend', tabId: tab, mode: 'page' });
+    assert.deepEqual([r.row.kind, r.row.url], ['url', url]);
   } finally { await s.close(); }
 });
 
@@ -564,11 +638,13 @@ test('F26: Setup check’s lines and buttons, the test article along the timelin
   const s = await setup();
   try {
     let c = await s.msg({ type: 'labChecks' });
+    // Chrome has no Site access line: the tab the user chose is all it reads (activeTab), and a PDF's site or the
+    // Daylight server's is asked for one at a time when it's needed. Nothing here asks for every site (Safari: below).
     assert.deepEqual(c.checks.map((x) => [x.id, x.ok, x.line, x.button]), [
       ['paired', true, '✓ Pairing', null],
       ['shortcut', true, '✓ Keyboard shortcut', null],
-      ['siteAccess', false, '! Site access', 'Allow'],
     ]);
+    assert.ok(c.checks.every((x) => !x.origins));
     assert.equal(c.test, null);
     // The test article: a page of about 400 words at daylight.invalid, x-cap "test".
     const day = await labDaylight(s.pairing, { stateFor: () => 'waiting' });

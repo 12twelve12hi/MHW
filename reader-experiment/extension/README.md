@@ -191,12 +191,17 @@ What Lab adds to sending (LAB-PLAN 3.3). With Lab off none of it shows or runs, 
   the background owns the timer, so closing the popup still sends. **Options** stops it and shows Send as, **Review
   before sending**, **Send** and **Send the link instead**. With Comfort or **Always show Options before sending** on,
   the card opens with the choices and nothing goes before **Send** (an extension can't tell whether a screen reader or
-  switch access is on, so those two cover it). A page the extension can't read says its link will be sent.
+  switch access is on, so those two cover it). A page the extension can't read says its link will be sent. A PDF the
+  extension may download only with its site's permission is asked for in the popup once the countdown ends, as **Send
+  this PDF** asks (the browser's prompt, or **Allow and send** and **Send the link**); if the popup was closed by then,
+  nobody can answer, so its link goes with the plain sentence (*Without access to the site the PDF can’t be downloaded,
+  so its link was sent.*).
 - **Works offline** (F07). Shared while the browser is offline, an item waits (*Waiting for connection*) in **Waiting
   to send (n)** above the history, each with **Cancel**; the `dls-offline` alarm (every minute, only while something
   waits) and the popup's `online` event send them once the network is back (oldest first, at most 30 messages and 18 MB
   a pass, passes 3 minutes apart). A relay that fails while the browser is online is the plain app's *Waiting to send*
-  with its own back-off.
+  with its own back-off, in the same queue, with the plain app's **Retry now** beside **Cancel** where it helps (a busy
+  relay, a network error) and no button where it can't (a full relay sends by itself in about 3 hours) (F01.4).
 - **Send as** (F10). "Send as: Page ▾" above **Send this page**: Page as you see it, Clean article, Link only,
   Selection. It switches to Selection by itself when text is selected, a PDF tab sends the file, and otherwise it starts
   with the mode last used on that site (`lab/sendAs`, the 500 most recent sites). **Clean article** runs Mozilla
@@ -204,15 +209,21 @@ What Lab adds to sending (LAB-PLAN 3.3). With Lab off none of it shows or runs, 
   `x-cap: "clean"`; under 150 words it asks *This page looks thin (n words). Send the full page instead?*
   (**Send full page**, **Send anyway**); a menu, a shortcut or the card can't ask, so they send the full page then.
   **Review before sending** (What's in Lab › Send as) opens `review.html`: the page with JavaScript off and in greys,
-  its word count and size, and its title to edit, with **Send** and **Cancel**.
-- **Send a selection** (F11), from Selection mode, the right-click menu or Alt+Shift+S: the selected passage as an
+  its word count and size, and its title to edit, with **Send** and **Cancel**; after **Send** it says what the popup
+  says for the same row (*Waiting for connection* offline). With Send as's **Use** switch off there is no Send as line
+  and pages go as you see them; while text is selected, **Send as excerpt** under **Send link only** still sends the
+  selection, since that switch doesn't take away F11's explicit selections (LAB-PROTOCOL 2.9.6).
+- **Send a selection** (F11), from Selection mode (or **Send as excerpt**), the right-click menu or Alt+Shift+S: the
+  selected passage as an
   excerpt document (HTML, "Excerpt - {first words}.html", titled "“{first line}” · {page title}", with the page's link
   and the date, `x-cap: "excerpt"`), never the whole article. The first one says once: *Excerpts wait for a tap on your
   Daylight for now.* Only these explicit paths make excerpts (LAB-DECISIONS Q1).
 - **Clean links** (F16). Links and page addresses lose tracking parameters and redirect wrappers (`normaliseShare`);
   the address as shared goes along as `x-orig`.
 - **Setup check** (F26), What's in Lab › Setup check: ✓ or ! for the pairing, the toolbar button (Chrome), the keyboard
-  shortcut (Chrome) and site access, each unmet one with a button where there is one to press; **Send a test article**
+  shortcut (Chrome) and site access (Safari, which asks on each site until it may read pages there; **Allow** asks
+  Safari, whose prompt says how far. Chrome has no such line: it reads only the tab you chose, and asks for one site at
+  a time where a PDF or your Daylight server needs more), each unmet one with a button where there is one to press; **Send a test article**
   (a page of about 400 words at `https://daylight.invalid/test/…`, `x-cap: "test"`), followed until *✓ Delivered* and
   *✓ In your Reader* (or *Waiting for a tap on your Daylight* meanwhile); the **Activity log** (the last 200 events,
   without titles or addresses) and **Copy diagnostics** (redacted: no address, title, code or topic).
@@ -259,6 +270,8 @@ Permissions: `activeTab` and `scripting` read the tab you chose to send, only wh
 use the menu; `contextMenus`, `alarms`, `storage` and `unlimitedStorage` run the menus, the retries and the outbox
 (kept until delivered, so it can be re-sent); host access to `https://ntfy.sh` reaches the relay. Access to other
 sites is optional and asked for one site at a time: to download a PDF, and (Lab) to reach your own Daylight server.
+On Safari, Lab's Setup check also shows whether Safari lets the extension read pages without asking on each site; its
+**Allow** asks Safari, and Safari's prompt lets you choose how far.
 
 ## Build and test
 
@@ -321,7 +334,11 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   **Test hook** (LAB-PLAN 1.7): every build, the `chrome-test` one included, reads `settings.lab` from
   `storage.local` and never overwrites a stored value, so a test seeds `{settings: {lab: false}}` (after the first
   start wrote its default: `labDefaultWritten()` in `test/helpers/lab-off.mjs`) to run with Lab off. The plain app's
-  own suites (`test/unit/core.test.mjs`, `test/e2e/extension.e2e.mjs`) run that way.
+  own suites (`test/unit/core.test.mjs`, `test/e2e/extension.e2e.mjs`) run that way, and again with Lab on, the
+  default (`test/unit/core-lab-on.test.mjs`, `test/e2e/extension-lab-on.e2e.mjs` set `DLS_TEST_LAB` and `DLS_E2E_LAB`),
+  so Lab's send path and popup keep every plain flow: relay trouble with **Retry now**, 413, Remove and Cancel among
+  them. What Lab changes on purpose (the badge from the most recent row, `clean-html.js`'s lowercase doctype, the queue,
+  Lab's menu entries) is each suite's `LAB` branch.
 - **Lab, Wave 1** (LAB-PLAN 3.3, card X1): `src/lab-send.js` holds the rules as pure functions (the menus with Lab on
   and off, Send as's default and the mode kept per site, the clean article's page, the badge mark, who gets no
   countdown, the queue, the omnibox's address); `core.js` sends with them (`labSendTab`: the capture through
@@ -343,7 +360,8 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   (Chromium, the real capture code and Readability: the one-time note; F03.1 and F03.2 on a page shown only with a
   login cookie; the timeline with a Lab Daylight and a v1.1 one; F02e.1 with a 14 MB PDF; Send as, Selection by
   itself, Send selection, Clean article, the thin question and the mode kept across a browser restart; Review of a 1 MB
-  page within 1 s; the card, Options and Comfort; offline with `context.setOffline`; Paste and send; the menu entries,
+  page within 1 s, and its result line offline; Send as excerpt with Send as's Use switch off; the card, Options and
+  Comfort, and the card's popup asking for a PDF's site; offline with `context.setOffline`; Paste and send; the menu entries,
   commands and the omnibox; the Use switches and the features' settings; Setup check with the test article; axe,
   light and dark, Comfort, nothing clipped).
 - `test/e2e/a11y.e2e.mjs` is the accessibility baseline (LAB-PLAN F27) for the popup and the web sender: axe-core
@@ -423,8 +441,17 @@ for the extension (its Safari build is the plain one until then).
   arrives as a new document.
 - [ ] **F26.1** Setup check's test article reaches the Reader and ticks *✓ Delivered* and *✓ In your Reader*, in each
   condition of F01.1 (*Waiting for a tap on your Daylight* meanwhile where the Inbox asks).
-- [ ] **F26.3** Each unmet check's button opens the right place: the shortcuts page (Chrome), site access (Allow),
-  pairing. The toolbar-pin check has no button: LAB_TEXT has no steps for pinning (reported to the share lane).
+- [ ] **F26.3** Each unmet check's button opens the right place: the shortcuts page (Chrome), site access (Allow,
+  Safari), pairing. The toolbar-pin check has no button: LAB_TEXT has no steps for pinning (reported to the share lane).
+- [ ] **F26, Safari's Site access** On the Mac and the iPhone: a fresh install reads *! Site access*; **Allow** shows
+  Safari's own prompt, and its choice turns the line to *✓ Site access* (for every website) or leaves it (one site);
+  the line follows what Safari › Settings › Extensions (iPhone: Settings › Apps › Safari › Extensions) says. Chrome
+  shows no Site access line.
+- [ ] **F04, a PDF on a site the extension may not read** With **Send when I click the toolbar button** on: a PDF whose
+  in-tab read fails (Safari's PDF view; Chrome only for a PDF the page can't fetch) brings Chrome's or Safari's own
+  prompt in the card's popup after the countdown, or **Allow and send** and **Send the link**; closing the popup at once
+  sends its link with *Without access to the site the PDF can’t be downloaded, so its link was sent.* (Chrome tells an
+  open popup by `runtime.getContexts`, Safari by `extension.getViews`: check both).
 - [ ] **F33** Chrome asks for the clipboard permission on the first **Paste and send**, and Safari shows its Paste
   button; the host shows before anything is sent.
 - [ ] **F34.2** The four shortcuts at `chrome://extensions/shortcuts`; "dl example.com/story" in Chrome's address bar

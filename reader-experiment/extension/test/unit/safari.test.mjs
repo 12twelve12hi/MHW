@@ -84,6 +84,12 @@ test('the Safari background script pairs from the app, sends, and runs Lab', asy
     assert.equal(fb.listeners.omnibox.length, 0);
     const checks = (await fb.api.runtime.sendMessage({ type: 'labChecks' })).result;
     assert.deepEqual(checks.checks.map((c) => c.id), ['paired', 'siteAccess'], 'Safari: no toolbar pin or shortcut to check');
+    // Site access is Safari's line (it asks on each site until it may read pages there); Allow asks Safari for it.
+    const site = checks.checks[1];
+    assert.deepEqual([site.ok, site.line, site.button, site.action, site.origins], [false, '! Site access', 'Allow', 'sites', ['<all_urls>']]);
+    fb.granted.add('<all_urls>');
+    const allowed = (await fb.api.runtime.sendMessage({ type: 'labChecks' })).result.checks[1];
+    assert.deepEqual([allowed.ok, allowed.line, allowed.button, allowed.origins], [true, '✓ Site access', null, undefined]);
     const g = (await fb.api.runtime.sendMessage({ type: 'labGate', feature: 'F37' })).result;
     assert.deepEqual([g.state, g.message, g.button], ['needs-server', L.LAB_TEXT.needs['needs-server'], 'Copy Server code']);
     assert.match(g.serverCode, /^daylightserver:\/\/setup\?c=/);

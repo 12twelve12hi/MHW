@@ -55,7 +55,9 @@ export function labRowText(row, ctx, now = Date.now()) {
  * describeLabRow's rules 1 and 4 (no step line) keeps v1.1's layout exactly (statusInfo). Otherwise the sentence and
  * the step line show on the newest row and on every row that is not final; elsewhere the title opens them. The row's
  * accessible text is "{label}. {sentence}" (labRowA11yLabel); the step line is hidden from screen readers.
- * on: {retry(id, button), remove(id, button)}; cancel: the queue's Cancel instead of Remove (F07).
+ * on: {retry(id, button), remove(id, button)}; cancel: the queue's Cancel instead of Remove (F07). v1.1's button
+ * (Retry now, Try again) stays beside Cancel wherever describeLabRow keeps it (F01.4): a row waiting for a connection
+ * has none, since it goes by itself when the network is back.
  */
 export function renderLabRow(row, ctx, { newest = false, now = Date.now(), on = {}, cancel = false } = {}) {
   const d = labRowText(row, ctx, now);
@@ -93,7 +95,7 @@ export function renderLabRow(row, ctx, { newest = false, now = Date.now(), on = 
   const acts = el('span', 'acts');
   const action = lab ? d.action : info.action;
   const retryLabel = ACTION_LABELS[action] ?? null;
-  if (retryLabel && !cancel) {
+  if (retryLabel) {
     const b = el('button', 'retry', retryLabel);
     b.type = 'button';
     b.setAttribute('aria-label', `${retryLabel}: ${title}`);
@@ -133,6 +135,19 @@ export function renderLabRow(row, ctx, { newest = false, now = Date.now(), on = 
     });
   }
   return li;
+}
+
+/**
+ * What a share's answer says with Lab on (CHANGES-v1.1 2.5, LAB-PLAN 2.5): why its link went instead, if it did, then
+ * the timeline's label and sentence: "Waiting for connection" while offline (rule 2), v1.1's words otherwise until it
+ * is delivered. The popup and review.html say the same. r: {row, note}; ctx as labRowText's. -> {text, bad}
+ */
+export function labResultMessage(r, ctx, now = Date.now()) {
+  const row = r?.row;
+  if (!row) return { text: '' };
+  const d = labRowText(row, ctx, now);
+  const label = /[.…✓]$/.test(d.label) ? d.label : `${d.label}.`;
+  return { text: [r.note, d.sentence ? `${label} ${d.sentence}` : label].filter(Boolean).join(' '), bad: row.status === 'expired' };
 }
 
 /** The words a row's change is announced with (F27, 2.5): "{label}: {title}" for Lab rows and v1.1's alike. */
@@ -199,6 +214,21 @@ export function renderSendAs(box, { mode = 'page', onChange } = {}) {
   box.append(toggle, list);
   box.hidden = false;
   return { set, get: () => current };
+}
+
+/**
+ * F11's explicit path while F10's Use switch is off (LAB-PROTOCOL 2.9.6: that switch takes away Send as, not a
+ * selection): with text selected, "Send as excerpt" in `box`, beside the page's own buttons, which still send the page
+ * as you see it. onSend() on a tap. -> the button
+ */
+export function renderExcerptButton(box, { onSend } = {}) {
+  box.textContent = '';
+  const b = button(LAB_TEXT.shareInPlace.sendAsExcerpt);
+  b.classList.add('lab-excerpt-btn');
+  b.addEventListener('click', () => onSend?.());
+  box.append(b);
+  box.hidden = false;
+  return b;
 }
 
 // --- F10: the thin-page question, F02's entry point, F11's line ------------------------------------------------------

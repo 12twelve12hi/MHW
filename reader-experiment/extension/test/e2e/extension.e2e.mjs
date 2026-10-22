@@ -2,7 +2,11 @@
 // automation can't click the toolbar button that grants activeTab), the mock ntfy relay, a local site with an article
 // and a PDF, and a Receiver from daylight-share.js playing the Daylight.
 //
-// It runs with Lab off: the plain app (Lab's Wave 1 is lab-w1.e2e.mjs).
+// These are v1.1's flows. They run with Lab off here (the plain app), and again with Lab on, the default
+// (extension-lab-on.e2e.mjs sets DLS_E2E_LAB=1), so a Lab-on regression in them fails CI: relay trouble's Retry now
+// among them. With Lab on, a row that waits to send is in the queue ("Waiting to send (n)", with Cancel beside v1.1's
+// button), a page goes through clean-html.js (F03: its doctype is written lowercase), and the badge shows the most
+// recent row (F01: … until the Daylight has it). Lab's Wave 1 itself is lab-w1.e2e.mjs.
 //
 //   PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node --test test/e2e/extension.e2e.mjs      (HEADED=1 to watch)
 
@@ -18,7 +22,10 @@ import { makePdf } from '../helpers/pdf.mjs';
 import { startMockRelay } from '../../../share/js/mock-relay.mjs';
 import { labDefaultWritten } from '../helpers/lab-off.mjs';
 
-const OUT = path.join(path.dirname(new URL(import.meta.url).pathname), '..', '..', 'test-results');
+const LAB = process.env.DLS_E2E_LAB === '1';
+const OUT = path.join(path.dirname(new URL(import.meta.url).pathname), '..', '..', 'test-results', ...(LAB ? ['extension-lab-on'] : []));
+/** Where a row that waits to send is: Lab's queue (F07), or v1.1's history. */
+const WAITING_LIST = LAB ? '#lab-queue-list' : '#history';
 const PDF = makePdf({ pages: 4, fillerBytes: 300_000 }); // over one ntfy message: travels as an attachment
 const LARGE_PDF = makePdf({ pages: 2, fillerBytes: 5_000_000 }); // over the relay's 2 MB per attachment: three pieces
 const b = built('chrome-test');
@@ -42,6 +49,28 @@ async function receive(n, { timeout = 20000 } = {}) {
 
 async function tabIdFor(url) {
   return sw.evaluate(async (u) => (await chrome.tabs.query({ url: u }))[0]?.id, url);
+}
+
+/**
+ * The status line once a pairing has finished, given the words it should have: the popup shows the sending view first
+ * and says how the pairing went once that view is drawn (with Lab on, after the tab's Lab answer too), so this waits up
+ * to 10 s for them, then returns what the line says (the assertion shows any difference).
+ */
+async function pairedStatus(popup, expected) {
+  await popup.waitForFunction((t) => document.querySelector('#status').textContent === t, expected, { timeout: 10000 }).catch(() => {});
+  return popup.textContent('#status');
+}
+
+/**
+ * The pairing view puts the focus in its code field 50 ms after it opens: wait for that, so the fields typed next
+ * aren't typed into the code field halfway (Playwright fills one field after another faster than that).
+ */
+const pairViewReady = (popup) => popup.waitForFunction(() => document.activeElement?.id === 'code');
+
+/** Settings › Change pairing, ready to type in. */
+async function openRepair(popup) {
+  await popup.click('#repair');
+  await pairViewReady(popup);
 }
 
 async function openPopup(tabId) {
@@ -72,10 +101,10 @@ before(async () => {
     if (await sw.evaluate(() => !!globalThis.chrome?.runtime?.id && !!globalThis.sendToDaylight).catch(() => false)) break;
     await new Promise((r) => setTimeout(r, 100));
   }
-  // These are v1.1's tests: the plain app, with Lab off (LAB-PLAN 1.3; the chrome-test build reads a seeded
-  // settings.lab, 1.7). Lab's Wave 1 is lab-w1.e2e.mjs.
+  // v1.1's tests: the plain app with Lab off (LAB-PLAN 1.3; the chrome-test build reads a seeded settings.lab, 1.7), or
+  // with Lab on (its one-time note seen, so the screens are the ones under test). Lab's Wave 1 is lab-w1.e2e.mjs.
   await labDefaultWritten(sw);
-  await sw.evaluate(() => chrome.storage.local.set({ settings: { lab: false } }));
+  await sw.evaluate((lab) => chrome.storage.local.set({ settings: lab ? { lab: true, labNoteShown: true } : { lab: false } }), LAB);
   secret = ds.generateSecret();
   receiver = new ds.Receiver({ pairing: { secret, relay: relay.url }, storage: new ds.MemoryStorage() });
 });
@@ -125,7 +154,7 @@ test('"Send this page" delivers the page HTML', { timeout: 60000 }, async () => 
   assert.match(item.header.app, /^chrome\/\d+\.\d+\.\d+$/);
   assert.equal(item.header.enc, 'deflate-raw');
   const html = new TextDecoder().decode(item.content);
-  assert.match(html, /^<!DOCTYPE html>\n<html lang="en">/);
+  assert.match(html, LAB ? /^<!doctype html>\n<html lang="en">/ : /^<!DOCTYPE html>\n<html lang="en">/);
   assert.match(html, /Marker paragraph: the slow loris of e-paper ✓ ünïcödé/);
   await popup.close();
   await page.close();
@@ -206,7 +235,7 @@ test('"Send link only", a page over 8 MB, the PDF-link menu and the shortcut', {
   assert.equal(pdfLink.header.title, 'Read the paper (PDF)');
   assert.deepEqual(pdfLink.content, PDF);
   assert.ok(later.find((i) => i.header.kind === 'page'), 'shortcut sent the page');
-  assert.equal(await sw.evaluate(() => chrome.action.getBadgeText({})), '✓');
+  assert.equal(await sw.evaluate(() => chrome.action.getBadgeText({})), LAB ? '…' : '✓', 'Lab: on its way until delivered');
   await Promise.all([popup.close(), bigPopup.close(), page.close(), big.close()]);
 });
 
@@ -252,11 +281,17 @@ test('relay trouble reads as in every app: Waiting to send with Retry now, the f
     await popup.click('#send-link');
     await popup.waitForFunction(() => document.querySelector('#status').textContent.startsWith('Waiting to send.'));
     assert.equal(await status(), 'Waiting to send. Couldn’t send right now. It will try again by itself.');
-    const failed = '#history li[data-status="failed"]';
+    const failed = `${WAITING_LIST} li[data-status="failed"]`;
     await popup.waitForSelector(`${failed} .retry`);
     assert.equal(await popup.textContent(`${failed} .st`), 'Waiting to send');
     assert.equal(await popup.textContent(`${failed} .retry`), 'Retry now');
     assert.equal(await popup.textContent(`${failed} .sentence`), 'Couldn’t send right now. It will try again by itself.');
+    if (LAB) {
+      // F01.4 with Lab on: v1.1's Retry now beside the queue's Cancel, under "Waiting to send (1)".
+      assert.equal(await popup.textContent('#lab-queue-h'), 'Waiting to send (1)');
+      assert.equal(await popup.textContent(`${failed} .remove`), 'Cancel');
+      assert.equal(await popup.locator('#history li[data-status="failed"]').count(), 0, 'in the queue, not in Recent');
+    }
     await popup.screenshot({ path: path.join(OUT, 'popup-waiting.png') });
     relayTrouble.status = 0;
     await popup.click(`${failed} .retry`);
@@ -271,7 +306,7 @@ test('relay trouble reads as in every app: Waiting to send with Retry now, the f
     const n = await popup.$$eval('#history li', (li) => li.length);
     const rowsBefore = (await sw.evaluate(async () => (await chrome.storage.local.get('outbox')).outbox)).length;
     await popup.click(`${failed} .remove`);
-    await popup.waitForFunction(() => !document.querySelector('#history li[data-status="failed"]'));
+    await popup.waitForFunction((sel) => !document.querySelector(sel), failed);
     assert.equal(await popup.$$eval('#history li', (li) => li.length), n, 'the list fills up from older rows');
     const rows = await sw.evaluate(async () => (await chrome.storage.local.get('outbox')).outbox);
     assert.equal(rows.length, rowsBefore - 1, 'Remove drops the row');
@@ -291,7 +326,7 @@ test('Change pairing: the relay in use is filled in; the same code on a new rela
   const kept = (await outbox()).length;
   assert.ok(kept > 0);
   await popup.click('#open-settings');
-  await popup.click('#repair');
+  await openRepair(popup);
   await popup.waitForSelector('#view-pair:not([hidden])');
   assert.equal(await popup.isVisible('#pair-back'), true, 'a way back while paired');
   // Advanced > Relay URL holds the relay in use, so a typed code doesn't silently move this browser to ntfy.sh.
@@ -310,6 +345,7 @@ test('Change pairing: the relay in use is filled in; the same code on a new rela
   await popup.screenshot({ path: path.join(OUT, 'popup-switch.png') });
   await popup.click('#confirm-no');
   await popup.waitForSelector('#view-pair:not([hidden])');
+  await pairViewReady(popup);
   assert.equal((await outbox()).length, kept, 'Cancel keeps the outbox');
 
   // The same code typed again (to rename this browser): no question, and the relay stays.
@@ -317,18 +353,19 @@ test('Change pairing: the relay in use is filled in; the same code on a new rela
   await popup.fill('#from', 'E2E Chrome, renamed');
   await popup.click('#pair-btn');
   await popup.waitForSelector('#view-send:not([hidden])');
-  assert.equal(await popup.textContent('#status'), 'Pairing updated.');
+  assert.equal(await pairedStatus(popup, 'Pairing updated.'), 'Pairing updated.');
   assert.equal(await sw.evaluate(async () => (await chrome.storage.local.get('pairing')).pairing.relay), relay.url);
   assert.equal((await outbox()).length, kept);
 
   // The same Daylight on another relay: no question; the outbox stays and the next send goes through the new relay.
   await popup.click('#open-settings');
-  await popup.click('#repair');
+  await openRepair(popup);
   await popup.fill('#code', await ds.formatCode(secret));
   await popup.fill('#relay', relay2.url);
   await popup.click('#pair-btn');
   await popup.waitForSelector('#view-send:not([hidden])');
-  assert.equal(await popup.textContent('#status'), `Pairing updated: now sending through ${ds.relayHost(relay2.url)}.`);
+  const moved = `Pairing updated: now sending through ${ds.relayHost(relay2.url)}.`;
+  assert.equal(await pairedStatus(popup, moved), moved);
   assert.equal(await popup.textContent('#daylight-name'), 'E2E Daylight', 'a typed code keeps the name');
   assert.equal((await outbox()).length, kept);
   await popup.click('#send-link');
@@ -339,7 +376,7 @@ test('Change pairing: the relay in use is filled in; the same code on a new rela
 
   // Switch: the old outbox goes.
   await popup.click('#open-settings');
-  await popup.click('#repair');
+  await openRepair(popup);
   assert.equal(await popup.inputValue('#relay'), relay2.url);
   await popup.fill('#code', await ds.formatCode(other));
   await popup.fill('#relay', relay.url);
@@ -347,7 +384,7 @@ test('Change pairing: the relay in use is filled in; the same code on a new rela
   await popup.waitForSelector('#view-confirm:not([hidden])');
   await popup.click('#confirm-yes');
   await popup.waitForSelector('#view-send:not([hidden])');
-  assert.equal(await popup.textContent('#status'), 'Paired with your Daylight.');
+  assert.equal(await pairedStatus(popup, 'Paired with your Daylight.'), 'Paired with your Daylight.');
   assert.deepEqual(await outbox(), []);
   assert.equal(await popup.$$eval('#history li', (li) => li.length), 0);
   await popup.close();

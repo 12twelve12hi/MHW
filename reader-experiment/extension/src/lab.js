@@ -67,6 +67,11 @@ export const FEATURE_VIEWS = { F04: 'f04', F10: 'f10', F34: 'f34', F26: 'setup' 
 
 /** Lab's settings with a yes/no value (the Use switches and the menu boxes are maps of them). Off by default. */
 export const LAB_OPTIONS = ['labClickSend', 'labAlwaysOptions', 'labReview'];
+/**
+ * F26's Site access on Safari: the sites Setup check looks for, and that its Allow asks Safari for (the check's
+ * `origins`; Safari's own prompt then says how far).
+ */
+export const SAFARI_SITES = ['<all_urls>'];
 const ACTIVITY_KEY = 'lab/activity';
 
 /** The storage key of the re-pairing follow-up (2.6): {at}. Under lab/, so the next pairing change removes it. */
@@ -690,8 +695,10 @@ export function createLab({
 
   /**
    * F26's Setup check (Chrome, Safari): the pairing; the toolbar button (Chrome: action.getUserSettings's isOnToolbar);
-   * the keyboard shortcut (commands.getAll; Chrome, which can set one); site access (permissions.contains for every
-   * site); then the test article along its way. Each check: {id, name, ok, line ("✓ …" or "! …"), button, action}.
+   * the keyboard shortcut (commands.getAll; Chrome, which can set one); site access (Safari only: permissions.contains,
+   * since Safari asks on each site until it may read pages; Chrome needs only the tab the user chose, activeTab, and
+   * asks one site at a time where a PDF or the Daylight server needs more, so it has nothing to report here); then the
+   * test article along its way. Each check: {id, name, ok, line ("✓ …" or "! …"), button, action}.
    * -> {lab, checks, test: null | {id, label, delivered, reader, lines}}
    */
   async function checks() {
@@ -713,9 +720,12 @@ export function createLab({
       try { key = (await api.commands.getAll()).find((c) => c.name === COMMANDS.page)?.shortcut ?? ''; } catch { key = ''; }
       add('shortcut', C.shortcut, !!key, LAB_TEXT.buttons['needs-quick-sends'], 'shortcuts');
     }
-    let sites = false;
-    try { sites = !!(await api.permissions?.contains?.({ origins: ['<all_urls>'] })); } catch { sites = false; }
-    add('siteAccess', C.siteAccess, sites, LAB_TEXT.buttons['needs-site-access'], 'sites');
+    if (platform === 'safari') {
+      let sites = false;
+      try { sites = !!(await api.permissions?.contains?.({ origins: SAFARI_SITES })); } catch { sites = false; }
+      add('siteAccess', C.siteAccess, sites, LAB_TEXT.buttons['needs-site-access'], 'sites');
+      if (!sites) out.at(-1).origins = SAFARI_SITES;
+    }
     return { lab: true, checks: out, test: await testProgress() };
   }
 
