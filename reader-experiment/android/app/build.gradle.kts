@@ -82,7 +82,7 @@ tasks.withType<Test>().configureEach {
     systemProperty("dls.labOffBaselines", projectDir.resolve("src/test/lab-off-baseline").absolutePath)
     systemProperty("dls.labOffRecorded", layout.buildDirectory.dir("lab-off-baseline").get().asFile.absolutePath)
     inputs.file(rootProject.projectDir.resolve("../share/vectors/lab-vectors.json"))
-    inputs.dir("src/test/lab-off-baseline").optional()
+    inputs.files(fileTree("src/test/lab-off-baseline")).withPropertyName("labOffBaselines")
     testLogging {
         events("passed", "skipped", "failed")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
