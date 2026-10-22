@@ -173,6 +173,15 @@ public struct HistoryRowView: View {
         }
     }
 
+    /// The style of where a row is from: 12 pt on both platforms (the iPhone's caption at the default size; on the Mac,
+    /// whose caption is 10 pt, the callout). A short 10 pt text such as "example.com" only "nearly passed" the Mac's
+    /// contrast audit, which holds small text to a higher contrast.
+    #if os(macOS)
+    static let sourceStyle: Font.TextStyle = .callout
+    #else
+    static let sourceStyle: Font.TextStyle = .caption
+    #endif
+
     /// The accessibility identifier of a row's words as one element on iPhone and iPad (`spokenLabel`, with the row's
     /// time as its value): the UI tests' walk writes that value as "<when>" (`AXTree.rowID`).
     public static let rowID = "history-row"
@@ -215,7 +224,7 @@ public struct HistoryRowView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(row.displayTitle).listRowText(row.displayTitle)
                     if !source.isEmpty {
-                        Text(source).dlsFont(.caption).dlsSecondary().listRowText(source)
+                        Text(source).dlsFont(Self.sourceStyle).dlsSecondary().listRowText(source)
                     }
                     // The label and the time side by side, or one under the other where they do not fit on a line
                     // (never a word broken in two).

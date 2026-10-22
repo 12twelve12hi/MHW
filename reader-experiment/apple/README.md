@@ -267,8 +267,8 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     file is compiled into the unit tests too, and `testEveryTextGrowsWithTheTextSize` fails unless it measures each
     named text growing with the text size; any other Dynamic Type report fails the audit. The Comfort run leaves
     Dynamic Type out on purpose: Comfort holds text between xxLarge and accessibility3 (the F27 table). What the
-    audits found and the apps now do: secondary text and section headers at 72% of the primary colour (the text colour
-    on the Mac, pure black or white, as short 10 pt texts in a history row only "nearly passed" in the label colour), a tint of #0058CC and a destructive red of #C01010 (both at least 4.5:1, lighter in dark
+    audits found and the apps now do: secondary text and section headers at 72% of the primary colour (the primary
+    colour on the Mac), a history row's site at 12 pt on the Mac too (a short 10 pt text only "nearly passed" there), a tint of #0058CC and a destructive red of #C01010 (both at least 4.5:1, lighter in dark
     mode), no greyed-out buttons, text fields that grow to more lines, row text that the row sizes, the navigation
     title kept in the bar, a name on every switch, a history row's *Retry now* / *Try again* at the window's control
     size (never small), and on the iPhone each history row's words as one element (below). An audit with an issue

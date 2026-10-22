@@ -36,11 +36,9 @@ public enum Comfort {
 
     /// Secondary text: on iPhone and iPad the primary colour at 72% (about 9:1 on the background), where the system's
     /// secondary grey is about 3.5:1 and fails the contrast audit; on the Mac, whose small text sizes the audit holds to
-    /// a higher contrast, the text colour (black in light mode, white in dark mode): the label colour, a slightly
-    /// lighter black, left a short 10 pt text such as a history row's site "nearly passed". Comfort uses the primary
-    /// colour everywhere.
+    /// a higher contrast, the primary colour. Comfort uses the primary colour everywhere.
     #if os(macOS)
-    public static let secondaryText = Color(nsColor: .textColor)
+    public static let secondaryText = Color.primary
     #else
     public static let secondaryText = Color.primary.opacity(0.72)
     #endif

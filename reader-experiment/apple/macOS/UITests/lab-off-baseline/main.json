@@ -1,0 +1,246 @@
+{
+  "nodes" : [
+    {
+      "label" : "Send to Daylight",
+      "type" : "window",
+      "value" : ""
+    },
+    {
+      "label" : "Send to Daylight",
+      "type" : "group",
+      "value" : ""
+    },
+    {
+      "label" : "Send to Daylight",
+      "type" : "group",
+      "value" : ""
+    },
+    {
+      "label" : "Sending to Test Daylight",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Settings",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Drop a PDF, document or link here"
+    },
+    {
+      "label" : "Choose File…",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "Send Clipboard Link",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "Paste or type a link",
+      "type" : "textField",
+      "value" : ""
+    },
+    {
+      "label" : "Send",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "History",
+      "type" : "staticText",
+      "value" : ""
+    },
+    {
+      "label" : "Check now",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "History",
+      "type" : "outline",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "A very long article title that goes on for a while, to see that it wraps instead of being cut short"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "example.com"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Sending…"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "<when>"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "A very long article title that goes on for a while, to see that it wraps instead of being cut short"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "example.com"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Waiting to send"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "<when>"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Couldn’t send right now. It will try again by itself."
+    },
+    {
+      "label" : "Retry now",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "A very long article title that goes on for a while, to see that it wraps instead of being cut short"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "example.com"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Not delivered"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "<when>"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Too big to send. Files can be up to 9 MB; this one is 14.2 MB."
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "A very long article title that goes on for a while, to see that it wraps instead of being cut short"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "example.com"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Delivered ✓"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "<when>"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Saved on your Daylight."
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "A very long article title that goes on for a while, to see that it wraps instead of being cut short"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "example.com"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Sent · waiting for your Daylight"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "<when>"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Your Daylight hasn’t picked this up yet. It is sent again twice a day."
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "A very long article title that goes on for a while, to see that it wraps instead of being cut short"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "example.com"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Not delivered"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "<when>"
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Your Daylight didn’t pick this up within a week. Is it on and online?"
+    },
+    {
+      "label" : "Try again",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "button",
+      "value" : ""
+    },
+    {
+      "label" : "",
+      "type" : "staticText",
+      "value" : "Send to Daylight"
+    }
+  ],
+  "platform" : "macos",
+  "screen" : "main"
+}
