@@ -103,7 +103,7 @@ your server") and spend the Anthropic key within its caps. Section 15 covers the
 |---|---|---|
 | Workers requests | 100,000 / day (resets 00:00 UTC) | Cron 1,440 + app traffic (hundreds) + hosted-frame downloads (tens) ≈ 2,000 / day. Failed authentications are rate-limited (3.3). |
 | CPU time | **10 ms per HTTP request and per Cron run.** Each isolate has some flexibility for *infrequent* overruns; a Worker that overruns consistently is terminated (error 1102, `exceededCpu`). | 2.2. |
-| Wall-clock time | No limit for an HTTP request while the client stays connected; **15 min** for a Cron run; `waitUntil` ≤ 30 s after the response | AI calls run inside the request (with keepalives, 9.5) or inside a Cron run (jobs); never in `waitUntil`. |
+| Wall-clock time | No limit for an HTTP request while the client stays connected; **15 min** for a Cron run; `waitUntil` ≤ 30 s after the response | AI calls run inside the request (with keepalives, 9.5) or inside a Cron run (jobs). `waitUntil` only gives a call whose client disconnected its 30 s grace to finish and settle its reservation (9.5). |
 | Subrequests | **50 external** per invocation; calls to Cloudflare services count separately; 6 simultaneous outgoing connections | Fixed allowances per Cron step, ≤ 40 in total (2.3). Redirects count. |
 | D1 queries | **50 per Worker invocation** (1,000 on Paid). Neither workerd nor Miniflare enforces this. | Every invocation has a budget of 40 statements, counted by a wrapper around `env.DB` that the tests also use (2.3). |
 | Memory | 128 MB per isolate | Bodies stream; the largest buffer is one ≤ 1 MiB server frame or one ≤ 2 MiB PDF part. |

@@ -727,6 +727,46 @@ off. Afterwards, show the new Server code and the re-run help (DESIGN 12.7).
 They must pass `server-vectors.json` › `derived`, `serverCodeParsing`, `frames` (config), `negative` (config parts)
 and `serverState`. Wave S adds the rest.
 
+**Setup link (added Oct 22; server DESIGN 3.5).** The deploy needs only `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID`, so it cannot know the Server code. Instead it makes a one-time **setup link**
+(`https://daylight-<12 hex>.<subdomain>.workers.dev/setup#SETUP-…`), which the user reads in Cloudflare and pastes into
+one app. That app sends the server this pairing's Server code. Every other device and the Lab Inbox then find the server
+as before. `DAYLIGHT_SERVER_CODE` still works and always wins.
+
+- **W0 subset, Swift (A0, kit lane):** `SETUP_HOST`, `parseSetupLink`, `deriveSetupToken` and `DaylightServer.setup(link)`.
+  They follow the client module exactly, including its error reasons (`format`, `host`, `checksum`, `server-code`,
+  `pairing-code`) and messages. They pass `server-vectors.json` › `setupLinks`. If A0 is already done without them, they
+  are A1's first commit (titled "kit: …"); A2 waits for that commit and never writes a second copy.
+- **Kotlin:** Wave S (with S0). The Android app needs no setup link in W0: the server's README tells users to paste it
+  in the iPhone or Mac app.
+- **JS apps:** the module already has them. X0, B0 and WIN0 may add the row; it is not required in W0.
+- **Where it shows.** The Daylight server section (iPhone and Mac in W0) shows a **Set up with a link** row while the
+  server's state is `needs-server`, `pairing-mismatch` or `locked`, or after a `BAD_AUTH` (their messages say to paste a
+  new setup link). Elsewhere it stays under the section's other rows. The flow:
+  1. A text field and a **Set up** button.
+  2. `parseSetupLink` runs locally. A refused link shows the module's message for its reason; nothing is sent.
+  3. A confirmation that shows the link's address (`parseSetupLink(link).server` minus the scheme). Nothing is sent
+     unless the user confirms (DESIGN 3.5: a look-alike Worker name on someone else's account is possible).
+  4. `DaylightServer.setup(link)`, with "Setting up…" while it runs. Success shows the done line, and the section
+     re-reads the state. Failures show the module's messages (`SETUP_USED`, `SETUP_INVALID`, `BAD_AUTH`, `423`,
+     offline).
+- **Copy** (LAB_TEXT `serverSection`, added by the share lane before A0; ASCII apostrophes here, ’ in the apps):
+
+  | Id | Text |
+  |---|---|
+  | `setupRow` | Set up with a link |
+  | `setupFooter` | Paste the setup link from your deploy. It gives your own Daylight server this pairing's Server code, once. |
+  | `setupPlaceholder` | https://daylight-….workers.dev/setup#SETUP-… |
+  | `setupButton` | Set up |
+  | `setupConfirmTitle` | Use this Daylight server? |
+  | `setupConfirmBody` | {host} will get this pairing's Server code. Continue only if this address is on your own Cloudflare account. |
+  | `setupConfirm` | Use it |
+  | `setupCancel` | Cancel |
+  | `setupWorking` | Setting up… |
+  | `setupDone` | Your Daylight server is set up. Your other devices and your Daylight will find it on their own. |
+
+  `setupConfirmText(link)` fills `{host}` the way `serverMovedText` does, and the Lab vectors pin it.
+
 ### 2.7 JS reference additions, then the ports
 
 **2.7.1 `share/js/daylight-share.js`** (protocol module). These changes are wire-neutral, and `test-vectors.json`
