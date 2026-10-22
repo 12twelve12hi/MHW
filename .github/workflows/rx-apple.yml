@@ -193,9 +193,9 @@ jobs:
           xcrun simctl terminate "$IOS_DEVICE" com.daylight.share || true
 
       # The accessibility baseline (LAB-PLAN F27) and the Lab-off parity baselines (F00.2, 1.7): XCUITest audits of Home
-      # (empty, and with the sample history: a row in every state, from its top to its end), Settings and pairing, with
+      # (empty, and with the sample history: a row in every state, in parts that show whole), Settings and pairing, with
       # Comfort off and on (F27.2); the baseline's rules (Comfort in Settings, off by default; the share card's own
-      # Comfort; typed-code pairing); the tree walk of Home (with the history at its top and end, and empty), Settings,
+      # Comfort; typed-code pairing); the tree walk of Home (with the history in those parts, and empty), Settings,
       # pairing and the share card in each state against iOS/UITests/lab-off-baseline (a missing or changed baseline is
       # printed between "=====BEGIN lab-off-baseline" markers, and the test fails), with the walk's own tests; and the
       # truncation and Dynamic Type audit hosted in the app (F27.4). The apps run on their own empty storage

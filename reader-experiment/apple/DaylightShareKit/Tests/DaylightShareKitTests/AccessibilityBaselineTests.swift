@@ -22,10 +22,11 @@ final class AccessibilityBaselineTests: XCTestCase {
         super.tearDown()
     }
 
-    func makeStore() -> SharedStore {
+    func makeStore(directory: String? = nil) -> SharedStore {
         let suite = "dls-tests-\(UUID().uuidString)"
         suites.append(suite)
-        return SharedStore(defaults: UserDefaults(suiteName: suite)!, directory: root)
+        return SharedStore(defaults: UserDefaults(suiteName: suite)!,
+                           directory: directory.map { root.appendingPathComponent($0) } ?? root)
     }
 
     @MainActor
@@ -274,6 +275,12 @@ final class AccessibilityBaselineTests: XCTestCase {
         XCTAssertEqual(rows.map(\.created), rows.map(\.created).sorted(by: >), "newest first")
         XCTAssertEqual(Set(rows.map(\.id)).count, rows.count)
 
+        XCTAssertEqual(HistorySample.rows(now: now, only: [3, 4]).map(\.id), [rows[2].id, rows[3].id])
+        XCTAssertEqual(HistorySample.rows(now: now, only: nil).count, 6)
+        XCTAssertEqual(HistorySample.picked(["app", "-DLSSampleHistory", "5,6", "-DLSTestStorage"]), [5, 6])
+        XCTAssertNil(HistorySample.picked(["app", "-DLSSampleHistory", "-DLSTestStorage"]), "no numbers: all six")
+        XCTAssertNil(HistorySample.picked(["app", "-DLSSampleHistory"]))
+        XCTAssertEqual(HistorySample.picked(["app", "-DLSSampleHistory", "0,2,9"]), [2], "only rows that exist")
         XCTAssertTrue(HistorySample.isRequested(["app", "-DLSTestStorage", "-DLSSampleHistory"]))
         XCTAssertFalse(HistorySample.isRequested(["app", "-DLSSampleHistory"]), "never into a real history")
         XCTAssertFalse(HistorySample.isRequested(["app", "-DLSTestStorage"]))
@@ -299,6 +306,13 @@ final class AccessibilityBaselineTests: XCTestCase {
         await model.retry(failed)
         await model.reloadNow()
         XCTAssertEqual(model.rows, held, "the sample history changed")
+
+        // Some of them, by number.
+        let partial = AppModel(store: makeStore(directory: "partial"), arguments: [])
+        try await waitFor("the first read") { partial.isLoaded }
+        await partial.handleLaunchArguments(["app", "-DLSTestStorage", "-DLSPairLink", link, "-DLSSampleHistory", "3,4"],
+                                            sampleHistory: true)
+        XCTAssertEqual(partial.rows.map(\.status), [.expired, .delivered])
 
         // Without it, nothing is written and nothing is held (a store of its own: makeStore() shares one directory).
         let suite = "dls-tests-\(UUID().uuidString)"

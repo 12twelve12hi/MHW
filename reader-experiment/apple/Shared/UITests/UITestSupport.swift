@@ -256,22 +256,30 @@ enum UITestSupport {
     /// `-DLSSampleHistory`; newest first).
     static let historyFirst = "Sending…"
     static let historyLast = "Your Daylight didn’t pick this up within a week. Is it on and online?"
-    /// The buttons of the sample history's second row ("Waiting to send") and of its last ("Not delivered" within a
-    /// week): the history is there, and it is scrolled to its end. Buttons, because on the iPhone a row's words are one
-    /// element (`HistoryRowView.spokenLabel`).
-    static let historySecondButton = "Retry now"
+    /// The button of the sample history's last row ("Not delivered" within a week): hittable once the history is
+    /// scrolled to its end. A button, because on the iPhone a row's words are one element
+    /// (`HistoryRowView.spokenLabel`).
     static let historyLastButton = "Try again"
+
+    /// The sample history in parts short enough to show whole at the top of the iPhone's Home (`-DLSSampleHistory 1,2`
+    /// …): the walks and audits see every row without scrolling. (A scrolled list does not stay put under the audit,
+    /// which scrolls it itself.)
+    static let historyParts: [[Int]] = [[1, 2], [3, 4], [5, 6]]
 
     /// Starts the app on fresh, empty storage of its own (`-DLSTestStorage`), with Lab off (`-DLSLab 0`, for the Lab
     /// builds) and Comfort as given (nil: not set, so the app's default), paired with `pairingLink` or not, and with
-    /// `history` the sample history: a row in every state (`-DLSSampleHistory`, Debug builds).
-    static func launch(paired: Bool, comfort: Bool? = false, history: Bool = false,
+    /// `history` the sample history: a row in every state (`-DLSSampleHistory`, Debug builds), or the rows numbered in
+    /// `rows`.
+    static func launch(paired: Bool, comfort: Bool? = false, history: Bool = false, rows: [Int]? = nil,
                        extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         var arguments = ["-DLSTestStorage", "-DLSLab", "0"]
         if let comfort { arguments += ["-DLSComfort", comfort ? "1" : "0"] }
         if paired { arguments += ["-DLSPairLink", pairingLink] }
-        if history { arguments += ["-DLSSampleHistory"] }
+        if history {
+            arguments += ["-DLSSampleHistory"]
+            if let rows { arguments += [rows.map(String.init).joined(separator: ",")] }
+        }
         app.launchArguments = arguments + extra
         app.launch()
         waitUntilReadable(app)
@@ -314,9 +322,9 @@ enum UITestSupport {
         root.staticTexts.matching(NSPredicate(format: "label == %@ OR value == %@", words, words)).firstMatch
     }
 
-    /// Waits until the sample history shows (its second row's button).
+    /// Waits until the sample history shows (a row's time, `HistoryRowView.timeID`, which every row has).
     static func waitForHistory(_ app: XCUIApplication, timeout: TimeInterval = 30) -> Bool {
-        app.buttons[historySecondButton].waitForExistence(timeout: timeout)
+        app.descendants(matching: .any).matching(identifier: AXTree.rowTimeID).firstMatch.waitForExistence(timeout: timeout)
     }
 
     /// The sample history's last row's button ("Try again"): hittable once the history is scrolled to its end.
@@ -405,20 +413,6 @@ enum UITestSupport {
         return (outline, scroll.frame)
     }
     #endif
-
-    /// Scrolls the history to its very end (where the walk's tree is the same every time) and checks that its last row
-    /// shows.
-    static func scrollHistoryToEnd(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) throws {
-        try scrollHistory(app)
-        #if os(iOS)
-        // To the bottom of the list, wherever the last step stopped: flicks past the end come back to the same place.
-        app.swipeUp()
-        app.swipeUp()
-        Thread.sleep(forTimeInterval: 2)
-        #endif
-        XCTAssertTrue(historyEnd(in: app).isHittable, "the history's last row is not there at its end",
-                      file: file, line: line)
-    }
 
     // MARK: The tree walk (LAB-PLAN 1.7)
 
@@ -531,41 +525,18 @@ enum UITestSupport {
 
     // MARK: Audits (F27.2)
 
-    /// Audits the screen with the sample history at its top, then after every step of scrolling it to its end
-    /// (`scrollHistory`), so every row is audited where it shows. With `everyStep` false (a history many screens long:
-    /// Comfort at the largest text size) it flicks instead, and audits where the second row's button shows and at the
-    /// end.
+    /// Audits the Mac's main window with the sample history at the top of the list, then after every step of
+    /// scrolling it to its end (`scrollHistory`), so every row is audited where it shows. (The iPhone's Home is audited
+    /// with parts of the history that show whole, `historyParts`, instead: a scrolled list does not stay put under the
+    /// audit there.)
     @available(iOS 17.0, macOS 14.0, *)
     static func auditHistory(_ app: XCUIApplication, _ screen: String, types: XCUIAccessibilityAuditType = .all,
-                             everyStep: Bool = true,
                              allowed: @escaping (XCUIAccessibilityAuditIssue) -> String? = { _ in nil }) throws {
         try auditHere(app, screen, types: types, allowed: allowed)
-        if everyStep {
-            try scrollHistory(app) { step in
-                try auditHere(app, "\(screen), scrolled \(step)", types: types, allowed: allowed)
-            }
-        } else {
-            let second = app.buttons[historySecondButton]
-            XCTAssertTrue(flick(to: second, in: app), "\(screen): the history's second row was not reached")
-            try auditHere(app, "\(screen), at its second row", types: types, allowed: allowed)
-            XCTAssertTrue(flick(to: historyEnd(in: app), in: app), "\(screen): the history's last row was not reached")
-            try auditHere(app, "\(screen), at its end", types: types, allowed: allowed)
+        try scrollHistory(app) { step in
+            try auditHere(app, "\(screen), scrolled \(step)", types: types, allowed: allowed)
         }
         XCTAssertTrue(historyEnd(in: app).isHittable, "\(screen): the history's last row was not reached")
-    }
-
-    /// Flicks the history on (on the Mac, scrolls it a step) until `element` can be hit, at most `tries` times.
-    static func flick(to element: XCUIElement, in app: XCUIApplication, tries: Int = 30) -> Bool {
-        for _ in 0..<tries {
-            if element.exists && element.isHittable { return true }
-            #if os(macOS)
-            scrollStep(app)
-            #else
-            app.swipeUp()
-            #endif
-            Thread.sleep(forTimeInterval: 1)
-        }
-        return element.exists && element.isHittable
     }
 
     /// `audit` of a screen with the sample history. On the iPhone a row's words are one element

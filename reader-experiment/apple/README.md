@@ -104,7 +104,8 @@ Every build, with Lab on or off, has the same accessibility baseline (LAB-PLAN F
   seconds (*10 min, 13 sec*) that changed every second on screen and under VoiceOver. The state and the time sit side
   by side, or one under the other where they do not fit, so no word is broken.
 - **Status labels wrap** instead of being cut, at every text size: at accessibility sizes (and in Comfort) a row's
-  button moves under its text, label/value rows stack, and the pairing buttons stack.
+  button moves under its text (on the Mac it is always there), label/value rows stack, and the pairing buttons
+  stack.
 - **Status changes are said out loud**: every banner (*Paired with …*, *Sent · waiting for your Daylight*, an error),
   a row that becomes *Delivered ✓* or *Not delivered* ("Delivered ✓, <title>"), and the share sheet's outcome with its
   note, once (*Sent · waiting for your Daylight. The page is larger than 8 MB, so its link was sent.*). *In your
@@ -226,7 +227,7 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
 | `-DLSStatusDump` | Writes `debug-status.json` (storage, pairing, Comfort, history rows with their labels, and a once-a-second heartbeat) to the app's Application Support folder, on the Mac `~/Library/Containers/com.daylight.share.mac/Data/Library/Application Support/DaylightShare/`. |
 | `-DLSComfort 0\|1` | Turns Comfort off or on before the first render (and saves it), LAB-PLAN 1.7. |
 | `-DLSTestStorage` | Runs on fresh, empty storage of its own (`DaylightShare-UITest` next to the app's own folder, a separate defaults suite, no App Group), emptied at every launch: the UI tests never see or touch a real pairing or history. |
-| `-DLSSampleHistory` | Debug builds only, and only with `-DLSTestStorage`: once the launch's pairing is in place, the history holds the sample rows (`HistorySample`: a row in every state, newest first — *Sending…*; *Waiting to send* with *Retry now*; *Not delivered* as too large; *Delivered ✓*; *Sent · waiting for your Daylight* a day on; *Not delivered* within a week, with *Try again*), and the app reads no acks and re-sends nothing, so each row stays in its state. For the UI tests' walks and audits. |
+| `-DLSSampleHistory [n,…]` | Debug builds only, and only with `-DLSTestStorage`: once the launch's pairing is in place, the history holds the sample rows (or only those numbered after it, 1 the newest: `-DLSSampleHistory 3,4`) (`HistorySample`: a row in every state, newest first — *Sending…*; *Waiting to send* with *Retry now*; *Not delivered* as too large; *Delivered ✓*; *Sent · waiting for your Daylight* a day on; *Not delivered* within a week, with *Try again*), and the app reads no acks and re-sends nothing, so each row stays in its state. For the UI tests' walks and audits. |
 | `-DLSLab 0\|1` | Reserved for the Lab builds (LAB-PLAN 1.7); the UI tests already pass `-DLSLab 0`. |
 | `-DLSShareCard <name>` | Debug builds only: shows the share card (`ShareExtensionView`) in one of its states in place of the window, with sample words and its own empty storage, for the UI tests' walk: `reading`, `sent`, `sent-note`, `result-note`, `needs-pairing` (a card without an App Group, with its own Comfort switch) or `confirm-pairing` (`ShareCardSample`). |
 
@@ -239,10 +240,13 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
   `Shared/UITests`):
   - `AccessibilityAuditTests` run Xcode's `performAccessibilityAudit()` on Home (the Mac's main window), Settings and
     the pairing screen, with Comfort off and on (iOS 17+, macOS 14+; F27.2). Home and the main window are audited
-    empty and with the sample history (`-DLSSampleHistory`): at the top of the history and again after every step
-    of scrolling it to its end (`UITestSupport.auditHistory`; with Comfort at the largest size, where Home is many
-    screens long, at its top, at its second row and at its end), so every row's status label, time, sentence and
-    *Retry now* or *Try again* button is audited where it shows. On the iPhone the history runs leave Dynamic Type out: at
+    empty and with the sample history (`-DLSSampleHistory`), so every row's status label, time, sentence and *Retry
+    now* or *Try again* button is audited. The Mac's main window: at the top of the history and after every step of
+    scrolling it to its end (`UITestSupport.auditHistory`). The iPhone's Home: in parts of the history that show whole
+    at the top of the screen (`-DLSSampleHistory 1,2`, `3,4`, `5,6`; with Comfort, each row alone), since the audit
+    scrolls a list itself and a list scrolled to a row does not stay put under it; with Comfort at the largest size,
+    where one row is taller than the screen, Home is audited at its top (the truncation audit measures every row text
+    there). On the iPhone the history runs leave Dynamic Type out: at
     the largest size the audit loses every row that was on screen (the list scrolls it away) and reports each of its
     texts, so each row text is measured growing by `testEveryTextGrowsWithTheTextSize` instead (Home with the same
     rows), and the empty Home keeps the audit's Dynamic Type check. Every issue is printed as an `AUDIT` line
@@ -263,8 +267,8 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     file is compiled into the unit tests too, and `testEveryTextGrowsWithTheTextSize` fails unless it measures each
     named text growing with the text size; any other Dynamic Type report fails the audit. The Comfort run leaves
     Dynamic Type out on purpose: Comfort holds text between xxLarge and accessibility3 (the F27 table). What the
-    audits found and the apps now do: secondary text and section headers at 72% of the primary colour (the primary
-    colour on the Mac), a tint of #0058CC and a destructive red of #C01010 (both at least 4.5:1, lighter in dark
+    audits found and the apps now do: secondary text and section headers at 72% of the primary colour (the text colour
+    on the Mac, pure black or white, as short 10 pt texts in a history row only "nearly passed" in the label colour), a tint of #0058CC and a destructive red of #C01010 (both at least 4.5:1, lighter in dark
     mode), no greyed-out buttons, text fields that grow to more lines, row text that the row sizes, the navigation
     title kept in the bar, a name on every switch, a history row's *Retry now* / *Try again* at the window's control
     size (never small), and on the iPhone each history row's words as one element (below). An audit with an issue
@@ -274,8 +278,9 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     without an App Group has its own Comfort switch; typing the code pairs.
   - `LabOffParityTests` (F00.2): an explicit walk of the accessibility tree (element type, label or title, and value,
     in order; never `debugDescription`) compared with `iOS/UITests/lab-off-baseline/*.json` and
-    `macOS/UITests/lab-off-baseline/*.json`: Home with the sample history at its top (`home`) and at its end
-    (`home-end`; the iPhone's list holds only the rows on screen) and empty (`home-empty`); the Mac's main window with
+    `macOS/UITests/lab-off-baseline/*.json`: Home with the sample history in three parts that each show whole at
+    the top of the screen (`home-rows-1-2`, `home-rows-3-4`, `home-rows-5-6`; the iPhone's list holds only the rows on
+    screen) and empty (`home-empty`); the Mac's main window with
     the sample history (`main`; its History outline keeps all six rows in the tree whatever it shows) and empty
     (`main-empty`); Settings, pairing, the share card in each of its states (`-DLSShareCard`), and on the Mac the menu
     bar item's menu with the sample history (`menu-bar`, its six rows) and empty (`menu-bar-empty`). The rows are the

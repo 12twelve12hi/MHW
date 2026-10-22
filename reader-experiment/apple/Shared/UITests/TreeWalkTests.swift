@@ -165,7 +165,6 @@ final class TreeWalkTests: XCTestCase {
                               encoding: .utf8)
         XCTAssertTrue(copy.contains("\"\(UITestSupport.historyFirst)\""))
         XCTAssertTrue(copy.contains("\"\(UITestSupport.historyLast)\""))
-        XCTAssertTrue(copy.contains("\"\(UITestSupport.historySecondButton)\""))
         XCTAssertTrue(copy.contains("\"\(UITestSupport.historyLastButton)\""))
     }
 

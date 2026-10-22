@@ -450,8 +450,8 @@ public final class AppModel: ObservableObject {
     /// `SharedStore.shared`.)
     ///
     /// `sampleHistory` (the apps pass `HistorySample.isRequested()` in Debug builds only: `-DLSSampleHistory` with
-    /// `-DLSTestStorage`) puts `HistorySample.rows` in the history once the pairing is in place, and holds them there
-    /// (`holdsSampleHistory`).
+    /// `-DLSTestStorage`) puts `HistorySample.rows` in the history once the pairing is in place (the ones numbered after
+    /// the argument, "3,4", or all six), and holds them there (`holdsSampleHistory`).
     public func handleLaunchArguments(_ args: [String] = ProcessInfo.processInfo.arguments,
                                       sampleHistory: Bool = false) async {
         guard !launchArgumentsHandled else { return }
@@ -473,8 +473,9 @@ public final class AppModel: ObservableObject {
         if sampleHistory {
             // After the pairing, which empties the outbox when it is a new one.
             let now = Date()
+            let only = HistorySample.picked(args)
             await write { store in
-                OutboxStore(store: store).update { $0.rows = HistorySample.rows(now: now) }
+                OutboxStore(store: store).update { $0.rows = HistorySample.rows(now: now, only: only) }
             }
         }
         if let url = value("-DLSSendLink") { await sendLink(url) }

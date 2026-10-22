@@ -37,9 +37,24 @@ public enum HistorySample {
         }
     }
 
+    /// The rows numbered in `only` (1 is the newest, 6 the oldest), or all of them when it is nil.
+    public static func rows(now: Date = Date(), only: [Int]?) -> [OutboxRow] {
+        let all = rows(now: now)
+        guard let only else { return all }
+        return all.enumerated().filter { only.contains($0.offset + 1) }.map(\.element)
+    }
+
     /// `-DLSSampleHistory` with `-DLSTestStorage` (the UI tests' own storage, emptied at every launch): the sample
     /// never goes into a real history. The apps read it in Debug builds only.
     public static func isRequested(_ arguments: [String] = ProcessInfo.processInfo.arguments) -> Bool {
         arguments.contains("-DLSSampleHistory") && arguments.contains("-DLSTestStorage")
+    }
+
+    /// The rows `-DLSSampleHistory` names after it, by number ("3,4"): a history short enough to show whole at the top
+    /// of the iPhone's Home, so the UI tests need not scroll it. nil (all six) when no numbers follow.
+    public static func picked(_ arguments: [String] = ProcessInfo.processInfo.arguments) -> [Int]? {
+        guard let i = arguments.firstIndex(of: "-DLSSampleHistory"), i + 1 < arguments.count else { return nil }
+        let numbers = arguments[i + 1].split(separator: ",").compactMap { Int($0) }.filter { (1...states.count).contains($0) }
+        return numbers.isEmpty ? nil : numbers
     }
 }

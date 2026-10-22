@@ -196,8 +196,14 @@ public struct HistoryRowView: View {
         let text = RowText(row: row)
         let source = Self.source(row)
         let when = Self.when(row.created)
-        // At accessibility text sizes and in Comfort the button goes under the text.
+        // On the Mac, and at accessibility text sizes and in Comfort, the button goes under the text, which keeps the
+        // window's width. (Beside the button, a title narrowed to its left failed the Mac's contrast audit, where the
+        // same title at the row's full width passes; the Mac has room for the extra line.)
+        #if os(macOS)
+        let stacked = true
+        #else
         let stacked = comfort || typeSize.isAccessibilitySize
+        #endif
         let layout = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
             : AnyLayout(HStackLayout(alignment: .top, spacing: 10))
         layout {

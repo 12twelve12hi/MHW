@@ -5,9 +5,10 @@ import XCTest
 /// Comfort). Baselines: `lab-off-baseline/<screen>.json` next to this file, re-recorded only with a matching non-Lab
 /// change. Without one the test prints the tree between `=====BEGIN lab-off-baseline …=====` markers and fails.
 ///
-/// Home is walked with the sample history (`-DLSSampleHistory`: a row in every state, the rows W1's timeline changes)
-/// at its top (`home`) and at its end (`home-end`; the list holds only the rows on screen), and empty (`home-empty`).
-/// Each row's age, which counts on by itself, is written "<when>".
+/// Home is walked with the sample history (`-DLSSampleHistory`: a row in every state, the rows W1's timeline changes) in
+/// three parts that each show whole at the top of the screen (`home-rows-1-2`, `-3-4`, `-5-6`; the list holds only
+/// the rows on screen, and the parts need no scrolling), and empty (`home-empty`). Each row's time, which depends on
+/// when the test runs, is written "<when>".
 ///
 /// The Lab switch row (`AXTree.labSwitchID`) is the one thing Lab off adds, and on the iPhone only in Settings: it is
 /// left out of the compared tree and checked to hold only the switch, off (LAB-PLAN 1.1). The share sheet follows the
@@ -16,15 +17,15 @@ final class LabOffParityTests: XCTestCase {
     @MainActor
     func testHomeWithARowInEveryStateMatchesTheLabOffBaseline() throws {
         continueAfterFailure = true
-        let app = UITestSupport.launch(paired: true, history: true)
-        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 30), "Home did not show")
-        XCTAssertTrue(UITestSupport.waitForHistory(app), "the sample history did not show")
-        UITestSupport.screenshot(app, "ios-lab-off-home", in: self)
-        try UITestSupport.checkBaseline(app, screen: "home")
-
-        try UITestSupport.scrollHistoryToEnd(app)
-        UITestSupport.screenshot(app, "ios-lab-off-home-end", in: self)
-        try UITestSupport.checkBaseline(app, screen: "home-end")
+        for rows in UITestSupport.historyParts {
+            let name = "home-rows-" + rows.map(String.init).joined(separator: "-")
+            let app = UITestSupport.launch(paired: true, history: true, rows: rows)
+            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 30), "Home did not show")
+            XCTAssertTrue(UITestSupport.waitForHistory(app), "the sample history did not show")
+            UITestSupport.screenshot(app, "ios-lab-off-\(name)", in: self)
+            try UITestSupport.checkBaseline(app, screen: name)
+            app.terminate()
+        }
     }
 
     @MainActor

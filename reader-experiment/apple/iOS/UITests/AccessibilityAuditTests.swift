@@ -67,35 +67,49 @@ final class AccessibilityAuditTests: XCTestCase {
         try UITestSupport.audit(unpaired, "pair", allowed: Self.allowed(on: "pair"))
     }
 
-    /// Home with a row in every state, at its top and after every step to its end.
+    /// Home with a row in every state, in parts that show whole at the top of the screen (`historyParts`): the
+    /// audit scrolls a list itself, so a list scrolled to a row does not stay put under it.
     @MainActor
     func testHomeWithARowInEveryStatePassesTheAudit() throws {
         guard #available(iOS 17.0, *) else { throw XCTSkip("performAccessibilityAudit needs iOS 17 or later") }
         continueAfterFailure = true
-        let app = UITestSupport.launch(paired: true, history: true)
-        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 30), "Home did not show")
-        XCTAssertTrue(UITestSupport.waitForHistory(app), "the sample history did not show")
-        UITestSupport.screenshot(app, "ios-home", in: self)
-        try UITestSupport.auditHistory(app, "home", types: Self.withoutDynamicType, allowed: Self.allowed(on: "home"))
-        UITestSupport.screenshot(app, "ios-home-end", in: self)
+        for rows in UITestSupport.historyParts {
+            let name = "home-rows-" + rows.map(String.init).joined(separator: "-")
+            let app = UITestSupport.launch(paired: true, history: true, rows: rows)
+            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 30), "Home did not show")
+            XCTAssertTrue(UITestSupport.waitForHistory(app), "the sample history did not show")
+            UITestSupport.screenshot(app, "ios-\(name)", in: self)
+            try UITestSupport.auditHere(app, name, types: Self.withoutDynamicType, allowed: Self.allowed(on: "home"))
+            app.terminate()
+        }
     }
 
-    /// Comfort at the largest text size (Comfort keeps it at accessibility3). Dynamic Type is audited in the run above,
-    /// with Comfort off; here it is left out because Comfort holds the text between xxLarge and accessibility3 on
-    /// purpose (the F27 table), so text that stops growing past accessibility3 is what Comfort is for.
+    /// Comfort: Home with each row of the sample history alone, at Comfort's smallest text size (xxLarge, the system's
+    /// default size held up to it), where one row shows whole under the sending section; then Home (with the history
+    /// below), Settings and pairing at the largest size (Comfort keeps it at accessibility3), where a row is taller than
+    /// the screen (`TruncationAuditTests` measures every row text there). Dynamic Type is audited in the run above, with
+    /// Comfort off; here it is left out because Comfort holds the text between xxLarge and accessibility3 on purpose
+    /// (the F27 table), so text that stops growing past accessibility3 is what Comfort is for.
     @MainActor
     func testWithComfortAtTheLargestTextSize() throws {
         guard #available(iOS 17.0, *) else { throw XCTSkip("performAccessibilityAudit needs iOS 17 or later") }
         continueAfterFailure = true
         let largest = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         let types = Self.withoutDynamicType
+        for row in 1...6 {
+            let app = UITestSupport.launch(paired: true, comfort: true, history: true, rows: [row])
+            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 30), "Home did not show")
+            XCTAssertTrue(UITestSupport.waitForHistory(app), "the sample history did not show")
+            UITestSupport.screenshot(app, "ios-home-row-\(row)-comfort", in: self)
+            try UITestSupport.auditHere(app, "home-row-\(row) (Comfort)", types: types, allowed: Self.allowed(on: "home"))
+            app.terminate()
+        }
+
         let history = UITestSupport.launch(paired: true, comfort: true, history: true, extra: largest)
         XCTAssertTrue(history.buttons["Settings"].waitForExistence(timeout: 30), "Home did not show")
         XCTAssertTrue(UITestSupport.waitForHistory(history), "the sample history did not show")
         UITestSupport.screenshot(history, "ios-home-comfort", in: self)
-        try UITestSupport.auditHistory(history, "home (Comfort)", types: types, everyStep: false,
-                                       allowed: Self.allowed(on: "home"))
-        UITestSupport.screenshot(history, "ios-home-end-comfort", in: self)
+        try UITestSupport.auditHere(history, "home (Comfort, largest)", types: types, allowed: Self.allowed(on: "home"))
         history.terminate()
 
         let app = UITestSupport.launch(paired: true, comfort: true, extra: largest)
