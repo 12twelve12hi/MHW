@@ -78,4 +78,8 @@ export const bridge = {
   onWake: (fn) => listen('dls://wake', fn),
   onTick: (fn) => listen('dls://tick', fn),
   onAutostart: (fn) => listen('dls://autostart', fn),
+  /** Lab (F01): whether the window is on screen (WebView2 tells a hidden window's page it is visible). -> boolean */
+  windowShown: () => invoke('window_shown'),
+  /** The window was shown (true) or hidden to the notification area (false). */
+  onShownChange: (fn) => listen('dls://shown', fn),
 };

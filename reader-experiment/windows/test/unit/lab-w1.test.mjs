@@ -231,7 +231,7 @@ test('F01: a Lab Daylight’s states make the rows’ words, In your Reader ✓ 
     const file = await s.app.sendFile({ name: 'Paper.pdf', bytes: ds.utf8('%PDF-1.4\n') });
     assert.deepEqual((await labelOf(s.app, link.id)).stepLine, 'Sent ✓ · On your Daylight … · In the Reader');
     await s.day.pollOnce(); // acks first, then reader (the link) and handed (the file)
-    await s.app.tick();
+    await Promise.all([s.app.tick(), s.app.tick()]); // two ticks at once (a send's and Rust's): one toast
     const rows = (await s.app.snapshot()).rows;
     const linkRow = rows.find((r) => r.id === link.id);
     const fileRow = rows.find((r) => r.id === file.id);

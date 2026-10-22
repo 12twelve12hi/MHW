@@ -261,7 +261,7 @@ side (`src-tauri/src/`) is kept to what a web page can't do.
 | `src/bridge.js` | Calls into Rust; the storage adapter (one JSON file per key in the app's data folder) |
 | `build.mjs` | Copies `src/`, `../share/js/daylight-share.js`, `../share/js/daylight-lab.js` (unchanged) and `../server/client/daylight-server.js` (with its one import pointed at the copy next to it) into `dist/`, which Tauri embeds |
 | `lab-wave.json`, `scripts/lab-wave.mjs` | The Lab wave of this code, as declared and as read from the code, for the release gate (below) |
-| `src-tauri/src/main.rs` | Tray icon and menu, the window (closing hides it), single instance (a second launch hands over its arguments: Send To files, pairing and send links), the clipboard hotkey, notifications, start at login, commands for the page (Lab's: the tray entry's words, whether Windows lets the app notify, Windows' notification settings) |
+| `src-tauri/src/main.rs` | Tray icon and menu, the window (closing hides it), single instance (a second launch hands over its arguments: Send To files, pairing and send links), the clipboard hotkey, notifications, start at login, commands for the page (Lab's: the tray entry's words, whether Windows lets the app notify, Windows' notification settings, whether the window is on screen, which WebView2 doesn't tell the page) |
 | `src-tauri/src/args.rs` | The command line: files, `daylightshare:` pairing links and `daylightshare://send` links (Lab, F09), `--autostart`, test-mode options and hooks |
 | `src-tauri/src/sendto.rs` | The **Send to › Daylight** shortcut (created on the first run if the installer didn't) |
 | `src-tauri/src/store.rs`, `atomic.rs` | The page's key-value storage: each write flushed to disk, then renamed into place; a damaged file is set aside |
@@ -344,9 +344,9 @@ and keeps it) work only in an app started in test mode; otherwise none of these 
    Daylight's rows read *Delivered ✓* there too (F01.5), the Lab Daylight's file *Handed to the Reader* (F01.2);
 9. turns on start at login with `--e2e-autostart` and checks this user's Run entry;
 10. restarts the app: pairing, history, start at login and what the ledger learnt come back. With the window in the
-    notification area, the hotkey sends a link the Lab Daylight then puts in the Reader: at the next ack read the
-    status file shows *In your Reader ✓* (F01.1) and the log the toast *In your Reader: {title}* (or, if the page
-    reports the window as shown, no toast). A `daylightshare://send` link asks *Send to Desk Daylight?* with the title
+    notification area (Rust says it isn't on screen: `hidden`), the hotkey sends a link the Lab Daylight then puts in
+    the Reader: at the next ack read the status file shows *In your Reader ✓* (F01.1) and the log the toast *In your
+    Reader: {title}* (no toast if the window had to be opened to read the ack). A `daylightshare://send` link asks *Send to Desk Daylight?* with the title
     and site (`sendQuestion`), nothing goes before `--e2e-confirm`, which sends it cleaned with `x-orig`; with
     `quick=1` it asks too (quick sends are off) and `--e2e-cancel` sends nothing (F09.3). Then it restarts with
     `--e2e-lab 0`: Lab is off and saved, the ledger is kept, the rows have no timeline words, and the status file
@@ -492,9 +492,10 @@ the `Send-to-Daylight-windows-setup` artifact of the green rx-windows run).
 - [ ] **F01.2** With Documents = Ask, a PDF reads *Waiting for a tap on your Daylight*, then, after the tap, *Handed to
   the Reader* and *The Reader doesn’t confirm documents yet.* at the next check.
 - [ ] **F01.3** The header reads *Your Daylight checked in N min ago*; with the Daylight off, sends still go out.
-- [ ] **F01 (toast)** With the window closed to the notification area, a link that reaches the Reader shows the Windows
-  notification *In your Reader: {title}*; with the window open, none (its row says so). CI checks the code path; whether
-  WebView2 reports a hidden window as hidden to the page is what this confirms.
+- [ ] **F01 (toast)** With the window closed to the notification area (and minimized), a link that reaches the Reader
+  shows the Windows notification *In your Reader: {title}*; with the window open, none (its row says so). CI checks it
+  on the runner with the window never shown; the app asks Rust whether the window is on screen, since WebView2 tells a
+  hidden window's page that it is visible.
 - [ ] **F01.6** Narrator (and NVDA) read each row as "{label}. {sentence}", with no step count, and say *In your Reader ✓:
   {title}* when a row gets there.
 - [ ] **F02e** Dropping a 14 MB PDF on the window shows the too-big sentence and **Send files over 9 MB ›**, whose note

@@ -93,6 +93,8 @@ function fakeTauri(seed) {
     set_clipboard_label: ({ text }) => { fake.trayLabel = text; return null; },
     notifications_state: () => seed.notifications ?? 'on',
     open_notification_settings: () => { fake.openedSettings = (fake.openedSettings ?? 0) + 1; return null; },
+    // Whether the window is on screen (Rust's answer; seed.windowShown, default true; fake.shown changes it).
+    window_shown: () => fake.shown ?? seed.windowShown ?? true,
     show_window: () => null,
     hide_window: () => null,
     set_hotkey: ({ accel }) => accel,
@@ -151,7 +153,8 @@ export async function startUi() {
 
   /**
    * A window on the page. seed: {kv: {key: JSON text}, info, clipboard, failWrites: [keys], failClipboard, notifications
-   * ('on' | 'off' | 'unknown', Setup check), bigFiles ({path: size})}; width (default the
+   * ('on' | 'off' | 'unknown', Setup check), bigFiles ({path: size}), windowShown (false: in the notification area)};
+   * width (default the
    * narrowest), height, colorScheme, now (a fixed Date.now(), for times that read the same every run).
    * -> the page, once the app has drawn its first view (body[data-ready="1"]); page.errors collects page errors.
    */

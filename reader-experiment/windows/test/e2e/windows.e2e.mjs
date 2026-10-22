@@ -497,7 +497,8 @@ async function main() {
 
   // --- 10a. Lab, Wave 1: In your Reader with the window hidden, and a send link ---------------------------------------------
   step('F01: the Lab Daylight puts a link in the Reader; the next ack read shows “In your Reader ✓”, and the toast goes out while the window is hidden');
-  console.log(`the window is ${back.hidden ? 'hidden' : 'not hidden'} for the page (document.hidden ${back.hidden})`);
+  // Rust says whether the window is on screen (WebView2 tells a hidden window's page it is visible).
+  check(back.hidden === true, 'started in the notification area: the window is not on screen', String(back.hidden));
   ps(`Set-Clipboard -Value '${READER_URL}'`);
   launchAgain(['--e2e-hotkey'], 'hotkey hook (a link for the Reader)');
   const forReader = await waitFor('the Daylight to receive the link', () => received.find((i) => i.header.url === READER_URL), { timeout: 90000 }).catch(() => null);

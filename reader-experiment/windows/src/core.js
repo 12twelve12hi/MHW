@@ -84,6 +84,7 @@ export function createApp({
   let flushTimer = null;
   let lastFlush = -Infinity;
   const quickSends = []; // F09: times of the last quick sends (QUICK_SENDS_PER_MINUTE)
+  const toldReader = new Set(); // F01: rows onReader was told about, so two ticks that overlap tell it once
 
   /**
    * Lab (LAB-PLAN 1, 2.2.6, 2.6): the switch, the sender ledger (fed by every Sender below through onAckHeader, Lab on
@@ -482,7 +483,10 @@ export function createApp({
       if (!b || !a) continue;
       if (a.status !== b.status) lab.logEvent({ type: 'status', id: row.id, kind: row.kind, status: statusOf(row) });
       if (a.s && a.s !== b.s) lab.logEvent({ type: 'state', id: row.id, kind: row.kind, status: a.s });
-      if (a.label === reader && b.label !== reader) { try { onReader?.(row); } catch (e) { log.warn?.('Send to Daylight: onReader', e); } }
+      if (a.label === reader && b.label !== reader && !toldReader.has(row.id)) {
+        toldReader.add(row.id);
+        try { onReader?.(row); } catch (e) { log.warn?.('Send to Daylight: onReader', e); }
+      }
     }
   }
 

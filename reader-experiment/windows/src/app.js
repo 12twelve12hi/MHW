@@ -46,6 +46,8 @@ let labTl = null; // the timeline's ledger read (lab.timeline()), for the rows a
 let pendingSend = null; // a send link's question (F09): prepareSendLink's {link, title, lines}
 let testId = ''; // Setup check's test article (F26): the row it follows
 let testError = '';
+/** The window is on screen, as Rust says (WebView2 tells a hidden window's page it is visible): F01's toast and checks. */
+let onScreen = true;
 let settingsFrom = 'view-send'; // the view Settings' Back returns to
 const lastLabel = new Map(); // row id -> the label last drawn, to announce a row's new state (F27)
 const log = []; // recent events, for the end-to-end test's status file
@@ -779,6 +781,8 @@ async function readLabSettings() {
   renderClipLabel();
   renderNote();
   if (was !== labIsOn) {
+    // The rows' words change with Lab (v1.1's or the timeline's): that is no new state to announce.
+    lastLabel.clear();
     await refreshTimeline();
     if (view === 'view-send') renderSend();
   }
@@ -827,6 +831,7 @@ async function onLab() {
   $('lab-rows').hidden = !want;
   try {
     labIsOn = (await app.lab.setLab(want)).lab;
+    lastLabel.clear(); // the rows' words change with Lab: no new state to announce
     note(`lab ${labIsOn ? 'on' : 'off'}`);
   } catch (e) {
     labIsOn = !want;
@@ -1112,7 +1117,7 @@ function writeStatusSoon() {
         // the check-in header (F01) and whether the window was hidden (F01's toast shows only then).
         sendQuestion: pendingSend && labIsOn ? { title: pendingSend.title, lines: pendingSend.lines } : null,
         clipButton: $('send-clip').textContent, noteShown: !$('lab-note').hidden, checkInShown: $('lab-checkin').hidden ? '' : $('lab-checkin').textContent,
-        hidden: document.hidden,
+        hidden: !seen(),
       });
       await bridge.e2eStatus(JSON.stringify(snap, null, 2));
     } catch (e) { console.warn('Send to Daylight: status file', e); }
@@ -1146,10 +1151,13 @@ function onBadData(key, e) {
   writeStatusSoon();
 }
 
+/** Whether someone can see the window: Rust says it is on screen and the page isn't hidden. */
+const seen = () => onScreen && !document.hidden;
+
 function onShown() {
   if (!app) return;
-  app.setVisible(!document.hidden);
-  if (document.hidden) return;
+  app.setVisible(seen());
+  if (!seen()) return;
   app.tickIfStale();
   if (view === 'view-send') renderHistory();
 }
@@ -1158,9 +1166,11 @@ function onShown() {
  * F01's toast (2.5): a row the ledger says is in the Reader now, while the window is hidden: "In your Reader: {title}".
  * With the window showing, its row says so.
  */
-function onReader(row) {
+async function onReader(row) {
   if (!labIsOn) return;
-  if (!document.hidden) { note(`in the Reader ${row.id.slice(0, 8)} (window shown: no toast)`); return; }
+  // Asked of Rust now: the window may have been hidden or shown since the last event.
+  try { onScreen = await bridge.windowShown(); } catch { /* the last word stays */ }
+  if (seen()) { note(`in the Reader ${row.id.slice(0, 8)} (window shown: no toast)`); return; }
   const title = fillText(LAB_TEXT.readerToast, { title: displayTitle(row) });
   note(`toast: ${title}`);
   notifyNow(title, LAB_TEXT.rows.reader.sentence).catch(() => {});
@@ -1241,6 +1251,8 @@ async function init() {
   await bridge.onWake(() => { if (ready) drain(); });
   await bridge.onTick(() => app.tick().catch(() => {}));
   await bridge.onAutostart((on) => { info.autostart = !!on; $('autostart').checked = !!on; note(`start at login ${on ? 'on' : 'off'}`); writeStatusSoon(); });
+  await bridge.onShownChange((on) => { onScreen = !!on; onShown(); writeStatusSoon(); });
+  try { onScreen = !!(await bridge.windowShown()); } catch { onScreen = !document.hidden; }
 
   // Lab (LAB-PLAN 1.2): a missing switch means on, and the first start of a build with Lab writes it. In test mode,
   // --e2e-lab 0|1 sets it (1.7), as a click on the switch would.
@@ -1282,7 +1294,7 @@ async function init() {
   }
 
   ready = true;
-  app.setVisible(!document.hidden);
+  app.setVisible(seen());
   drain();
   app.start();
   setInterval(() => { if (!document.hidden && view === 'view-send') renderHistory(); }, 60 * 1000);

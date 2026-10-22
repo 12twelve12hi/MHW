@@ -38,6 +38,9 @@ const EV_WAKE: &str = "dls://wake";
 /// Windows throttles while the window is hidden.
 const EV_TICK: &str = "dls://tick";
 const EV_AUTOSTART: &str = "dls://autostart";
+/// The window was shown (true) or hidden to the notification area (false). WebView2 keeps telling a hidden window's page
+/// that it is visible (document.hidden stays false), so the page learns it here (Lab: F01's toast and faster checks).
+const EV_SHOWN: &str = "dls://shown";
 const TICK_EVERY: Duration = Duration::from_secs(15 * 60);
 /// Never read more than this into memory for the page: the protocol's largest item (MAX_ITEM, 9,000,000 bytes, in
 /// revision 1.1). The page asks for the same limit.
@@ -116,7 +119,15 @@ fn show_main(app: &AppHandle) {
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
+        let _ = app.emit(EV_SHOWN, true);
     }
+}
+
+/// Whether the window is on screen: shown and not minimized. -> false while it is in the notification area.
+fn main_shown(app: &AppHandle) -> bool {
+    app.get_webview_window(MAIN)
+        .map(|w| w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false))
+        .unwrap_or(false)
 }
 
 fn clipboard_action(app: &AppHandle) -> Action {
@@ -318,7 +329,15 @@ fn show_window(app: AppHandle) {
 fn hide_window(app: AppHandle) {
     if let Some(w) = app.get_webview_window(MAIN) {
         let _ = w.hide();
+        let _ = app.emit(EV_SHOWN, false);
     }
+}
+
+/// Lab (F01): whether the window is on screen, for the toast "In your Reader: {title}", which goes out only when it
+/// isn't (its row says so otherwise).
+#[tauri::command]
+fn window_shown(app: AppHandle) -> bool {
+    main_shown(&app)
 }
 
 /// Registers the clipboard hotkey ("" turns it off). -> the accelerator now registered.
@@ -540,6 +559,7 @@ fn main() {
             open_notification_settings,
             show_window,
             hide_window,
+            window_shown,
             set_hotkey,
             set_autostart,
             add_send_to,
@@ -555,6 +575,7 @@ fn main() {
                 if window.label() == MAIN {
                     api.prevent_close();
                     let _ = window.hide();
+                    let _ = window.app_handle().emit(EV_SHOWN, false);
                 }
             }
         })

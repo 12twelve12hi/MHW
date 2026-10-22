@@ -420,3 +420,41 @@ for (const scale of [1, 2, 2.25]) {
     await page.context().close();
   });
 }
+
+test('switching Lab off or on changes the rows’ words without announcing them as new states', { timeout: 60000 }, async () => {
+  const page = await ui.open({ kv: await labStore(), now: NOW });
+  await page.waitForTimeout(300);
+  assert.equal(await page.textContent('#announce'), '');
+  for (const on of [false, true]) {
+    await openSettings(page);
+    await page.getByRole('switch', { name: LAB_TEXT.lab, exact: true }).click();
+    await page.waitForFunction((v) => window.__fake.json('settings')?.lab === v, on);
+    await page.locator('#close-settings').click();
+    await page.waitForSelector('#view-send:not([hidden])');
+    await page.waitForTimeout(300);
+    assert.equal(await rowOf(page, 'p-reader').locator('.st').textContent(), on ? 'In your Reader ✓' : 'Delivered ✓');
+    assert.equal(await page.textContent('#announce'), '', `Lab ${on ? 'on' : 'off'}: nothing said`);
+  }
+  await page.context().close();
+});
+
+test('F01’s toast: a link that reaches the Reader while the window is in the notification area shows “In your Reader: {title}”', { timeout: 60000 }, async () => {
+  const f = await fresh();
+  const page = await ui.open({ kv: f.kv() });
+  // Rust hides the window to the notification area and says so (WebView2 still tells the page it is visible).
+  await page.evaluate(() => { window.__fake.shown = false; window.__fake.emit('dls://shown', false); });
+  const labInbox = new L.LabInbox({
+    storage: new ds.MemoryStorage(), relay: new ds.RelayClient({ relay: relay.url }), keys: await ds.deriveKeys(f.secret),
+    info: () => ({ lab: 1, app: 'android/1.5.0', caps: ['st', 'tap', 'reader-link'], live: false }), from: 'Daylight', autoFlushMs: null,
+  });
+  const sim = new L.LabInboxSim({ receiver: new ds.Receiver({ pairing: { secret: f.secret, relay: relay.url }, storage: new ds.MemoryStorage() }), labInbox });
+  await page.evaluate(() => window.__fake.queue({ type: 'clipboard', text: 'Calm reading https://example.com/calm', error: '' }));
+  await page.waitForFunction(() => (window.__fake.json('outbox') ?? []).length === 1);
+  await sim.pollOnce();
+  await tick(page);
+  await page.waitForFunction(() => window.__fake.notes.some((n) => n.title.startsWith('In your Reader:')), null, { timeout: 10000 });
+  const toast = (await page.evaluate(() => window.__fake.notes)).find((n) => n.title.startsWith('In your Reader:'));
+  assert.deepEqual(toast, { title: L.fillText(LAB_TEXT.readerToast, { title: 'Calm reading' }), body: LAB_TEXT.rows.reader.sentence });
+  assert.deepEqual((await page.evaluate(() => window.__fake.notes)).map((n) => n.title), ['Sent to Desk Daylight', 'In your Reader: Calm reading'], 'the hotkey’s “Sent to {name}” (F08), then the toast, once');
+  await page.context().close();
+});
