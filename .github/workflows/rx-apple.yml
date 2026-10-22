@@ -266,7 +266,8 @@ jobs:
   # Hands `publish` the Mac release (the send-to-daylight-mac artifact): its own ad-hoc zip without the signing
   # secrets, as before; with them, the Developer ID build from mac-developer-id and never the ad-hoc one (the last steps
   # below). So it runs after mac-developer-id, whatever that job's result. A failed dry run does not hold back the
-  # ad-hoc release: mac-developer-id lets its dry-run steps fail and mac-developer-id-dry-run reports them.
+  # ad-hoc release: without the secrets mac-developer-id is continue-on-error (any failure, a lost runner) and
+  # mac-developer-id-dry-run reports the dry run's verdict.
   mac:
     name: Mac (build, smoke test, UI tests, zip)
     needs: [check-mac-signing, mac-developer-id]
@@ -454,24 +455,15 @@ jobs:
         with:
           name: rx-apple-mac-developer-id
           path: reader-experiment/apple
-      - name: Check the Developer ID zip (the team's Developer ID, notarization ticket stapled)
+      # scripts/check-mac-release.sh: the app and both extensions signed by the team's Developer ID (codesign -dvv),
+      # with the runtime flag, a timestamp and the team's App Group embedded; the ticket stapled. The dry run in
+      # mac-developer-id runs the same script on its own zip, and mac-scripts runs its self-test.
+      - name: Check the Developer ID zip (the team's Developer ID, App Group, notarization ticket stapled)
         if: needs.check-mac-signing.outputs.developer-id == 'true'
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          CHECK="$RUNNER_TEMP/mac-release"
-          rm -rf "$CHECK" && mkdir -p "$CHECK"
-          ditto -x -k Send-to-Daylight-mac.zip "$CHECK"
-          SIGNED="$CHECK/Send to Daylight.app"
-          INFO=$(codesign -dv "$SIGNED" 2>&1)
-          printf '%s\n' "$INFO" | grep -E '^(Authority|TeamIdentifier|Timestamp)='
-          if ! printf '%s\n' "$INFO" | grep -q "^Authority=Developer ID Application: .*($APPLE_TEAM_ID)\$" \
-             || ! printf '%s\n' "$INFO" | grep -qx "TeamIdentifier=$APPLE_TEAM_ID"; then
-            echo "::error::the zip from mac-developer-id is not signed with the team's Developer ID"; exit 1
-          fi
-          codesign --verify --deep --strict "$SIGNED"
-          xcrun stapler validate "$SIGNED"
-          rm -rf "$CHECK"
+          bash scripts/check-mac-release.sh Send-to-Daylight-mac.zip "$APPLE_TEAM_ID"
           echo "### Mac release handed to publish: the Developer ID build (signed, notarized and stapled by mac-developer-id)" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
@@ -616,31 +608,44 @@ jobs:
 
   # lane: mac
   mac-scripts:
-    name: Mac signing and smoke-test scripts (shellcheck)
+    name: Mac signing and smoke-test scripts (shellcheck, release check self-test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Shellcheck the Mac signing and smoke-test scripts
-        run: shellcheck reader-experiment/apple/scripts/sign-mac.sh reader-experiment/apple/scripts/mac-smoke-test.sh
+      - name: Shellcheck the Mac signing, release-check and smoke-test scripts
+        run: |
+          shellcheck reader-experiment/apple/scripts/sign-mac.sh reader-experiment/apple/scripts/check-mac-release.sh \
+            reader-experiment/apple/scripts/mac-smoke-test.sh
+      # The release check's rules on sample codesign -dvv output: a Developer ID signature of the team passes; one read
+      # with plain -dv (no Authority lines), another team's, an Apple Development or ad-hoc signature, no runtime flag or
+      # timestamp, and wrong entitlements fail; the dry run's self-signed signature passes only as a dry run.
+      - name: Self-test the Mac release check
+        run: bash reader-experiment/apple/scripts/check-mac-release.sh --self-test
 
   # lane: mac
   # The Developer ID build (scripts/sign-mac.sh). With the secrets: a Release build for APPLE_TEAM_ID (every bundle's
   # App Group <TEAMID>.com.daylight.share, Config/Base.xcconfig), signed with the Developer ID (hardened runtime, secure
-  # timestamp), every bundle and its embedded entitlements checked, notarized, stapled, accepted by Gatekeeper, zipped and
-  # smoke-tested (the app must use the App Group, which it shares with the Share menu item: one pairing, Lab switch and
-  # history; the Safari extension reads only its pairing there, LAB-PLAN 1.1); the `mac` job then hands that zip to
-  # `publish`, in place of its ad-hoc one. Without the secrets, a dry run of the same steps: the same build for a
-  # stand-in team (DRYRUN0000), a throwaway self-signed certificate made here, no notarization, and the smoke test, in
-  # which the app keeps its own storage (a self-signed signature carries no Team ID, so SharedStore never opens the
-  # group). The `mac` job runs after this one, and GitHub skips `publish` when any job upstream of it failed, even
-  # indirectly; so in the dry run the build, signing and smoke-test steps may fail without failing this job
-  # (continue-on-error), and mac-developer-id-dry-run, which nothing needs, fails the run instead. A broken dry run
-  # turns the run red but does not hold back the ad-hoc release.
+  # timestamp), every bundle and its embedded entitlements checked, notarized, stapled, accepted by Gatekeeper, zipped,
+  # checked as the `mac` job checks it (scripts/check-mac-release.sh) and smoke-tested (the app must use the App Group,
+  # which it shares with the Share menu item: one pairing, Lab switch and history; the Safari extension reads only its
+  # pairing there, LAB-PLAN 1.1); the `mac` job then hands that zip to `publish`, in place of its ad-hoc one. Without the
+  # secrets, a dry run of the same steps: the same build for a stand-in team (DRYRUN0000), a throwaway self-signed
+  # certificate made here, no notarization, the same release check with that certificate as the signer, and the smoke
+  # test, in which the app keeps its own storage (a self-signed signature carries no Team ID, so SharedStore never opens
+  # the group).
+  # The `mac` job runs after this one, and GitHub skips `publish` when any job upstream of it failed, even indirectly.
+  # So in the dry run nothing about this job may fail it for its dependents: the job is continue-on-error then (a failed
+  # step of any kind, a lost runner), every step has a timeout and together they stay under the job's (a hang fails a
+  # step rather than timing the job out), the build, signing, check and smoke-test steps are continue-on-error too, and
+  # the verdict step always runs. mac-developer-id-dry-run, which nothing needs, fails the run on that verdict. A broken
+  # dry run turns the run red but does not hold back the ad-hoc release.
   mac-developer-id:
     name: Mac (Developer ID; a dry run until the secrets exist)
     needs: [check-mac-signing]
     runs-on: macos-15
-    timeout-minutes: 75
+    continue-on-error: ${{ needs.check-mac-signing.outputs.developer-id != 'true' }}
+    # The dry run's step timeouts add up to 112 minutes (it takes about 4); the release's notarization waits up to 45.
+    timeout-minutes: 120
     outputs:
       dry-run: ${{ steps.dry-run.outputs.result }}
     concurrency:
@@ -654,18 +659,25 @@ jobs:
       RELEASE: ${{ needs.check-mac-signing.outputs.developer-id }}
       TEAM: ${{ needs.check-mac-signing.outputs.developer-id == 'true' && secrets.APPLE_TEAM_ID || 'DRYRUN0000' }}
       APP: build/dd-mac-developer-id/Build/Products/Release/Send to Daylight.app
+      # The dry run's throwaway certificate: the signer check-mac-release.sh expects in the dry run.
+      DRY_RUN_IDENTITY: Send to Daylight CI dry run (self-signed)
     steps:
       - uses: actions/checkout@v4
+        timeout-minutes: 5
 
       - uses: actions/setup-node@v4
+        timeout-minutes: 5
         with:
           node-version: 22
 
       - name: Select the newest Xcode that has its iOS platform installed
+        timeout-minutes: 10
         run: bash scripts/select-xcode.sh
       - name: Install XcodeGen
+        timeout-minutes: 10
         run: brew install xcodegen
       - name: Build the Safari web extension (when its build script exists)
+        timeout-minutes: 10
         run: |
           if [ -f ../extension/build.mjs ]; then
             (cd ../extension && node build.mjs --target safari --no-zip) || echo "::warning::the web extension build failed; the Safari extension gets the placeholder"
@@ -674,9 +686,11 @@ jobs:
             echo "::warning::no reader-experiment/extension/dist/safari yet; the Safari extension gets the placeholder"
           fi
       - name: Generate the Xcode project
+        timeout-minutes: 5
         run: xcodegen generate
       - name: Build for Mac, for the team (Release, not yet signed)
         id: build
+        timeout-minutes: 30
         continue-on-error: ${{ env.RELEASE != 'true' }}
         run: |
           set -o pipefail
@@ -689,6 +703,7 @@ jobs:
           [ "$VERSION" = "$WANT" ] || { echo "::error::the Mac app is version $VERSION, Config/Base.xcconfig says $WANT"; exit 1; }
       - name: Sign with the Developer ID, notarize, staple and zip
         if: env.RELEASE == 'true'
+        timeout-minutes: 60
         env:
           MAC_DEVELOPER_ID_P12: ${{ secrets.MAC_DEVELOPER_ID_P12 }}
           MAC_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MAC_DEVELOPER_ID_P12_PASSWORD }}
@@ -701,17 +716,18 @@ jobs:
       - name: Dry run - sign with a throwaway self-signed certificate (no notarization)
         id: dry-run-sign
         if: env.RELEASE != 'true' && steps.build.outcome == 'success'
+        timeout-minutes: 15
         continue-on-error: true
         run: |
           CERT="$RUNNER_TEMP/dry-run-certificate"
           rm -rf "$CERT" && mkdir -p "$CERT"
-          cat > "$CERT/cert.cnf" <<'EOF'
+          cat > "$CERT/cert.cnf" <<EOF
           [req]
           distinguished_name = dn
           x509_extensions = codesign
           prompt = no
           [dn]
-          CN = Send to Daylight CI dry run (self-signed)
+          CN = $DRY_RUN_IDENTITY
           O = Send to Daylight CI
           [codesign]
           basicConstraints = critical, CA:FALSE
@@ -728,9 +744,23 @@ jobs:
           MAC_DEVELOPER_ID_P12=$(base64 < "$CERT/cert.p12") MAC_DEVELOPER_ID_P12_PASSWORD="$PASSWORD" \
             bash scripts/sign-mac.sh --dry-run "$APP" "$TEAM" Send-to-Daylight-mac.zip
           rm -rf "$CERT"
+      # What the `mac` job checks before it hands the zip to `publish` (with the secrets), run here on this job's zip in
+      # both modes: in the dry run with the throwaway certificate as the signer, its "not set" Team ID and no ticket.
+      - name: Check the zip as the release check does (scripts/check-mac-release.sh)
+        id: check
+        if: env.RELEASE == 'true' || steps.dry-run-sign.outcome == 'success'
+        timeout-minutes: 5
+        continue-on-error: ${{ env.RELEASE != 'true' }}
+        run: |
+          if [ "$RELEASE" = true ]; then
+            bash scripts/check-mac-release.sh Send-to-Daylight-mac.zip "$TEAM"
+          else
+            bash scripts/check-mac-release.sh --dry-run "$DRY_RUN_IDENTITY" Send-to-Daylight-mac.zip "$TEAM"
+          fi
       - name: Smoke test the signed app (launch, responsive, pair, send, Delivered)
         id: smoke
         if: env.RELEASE == 'true' || steps.dry-run-sign.outcome == 'success'
+        timeout-minutes: 15
         continue-on-error: ${{ env.RELEASE != 'true' }}
         run: |
           if [ "$RELEASE" = true ]; then
@@ -740,23 +770,29 @@ jobs:
           fi
       - name: Dry run - the verdict (mac-developer-id-dry-run fails the run on it)
         id: dry-run
-        if: env.RELEASE != 'true'
+        if: always() && env.RELEASE != 'true'
+        timeout-minutes: 2
         env:
+          # failure when a step that is not continue-on-error failed or timed out (checkout, Xcode, XcodeGen, …)
+          SETUP: ${{ job.status }}
           BUILD: ${{ steps.build.outcome }}
           SIGN: ${{ steps.dry-run-sign.outcome }}
+          CHECK: ${{ steps.check.outcome }}
           SMOKE: ${{ steps.smoke.outcome }}
         run: |
-          echo "build: $BUILD, dry-run signing: $SIGN, smoke test: $SMOKE"
-          if [ "$BUILD" = success ] && [ "$SIGN" = success ] && [ "$SMOKE" = success ]; then
+          echo "setup: $SETUP, build: $BUILD, dry-run signing: $SIGN, release check: $CHECK, smoke test: $SMOKE"
+          if [ "$SETUP" = success ] && [ "$BUILD" = success ] && [ "$SIGN" = success ] && [ "$CHECK" = success ] \
+             && [ "$SMOKE" = success ]; then
             echo "result=success" >> "$GITHUB_OUTPUT"
           else
             echo "result=failure" >> "$GITHUB_OUTPUT"
-            echo "::error::the Developer ID dry run failed (build: $BUILD, signing: $SIGN, smoke test: $SMOKE)"
+            echo "::error::the Developer ID dry run failed (setup: $SETUP, build: $BUILD, signing: $SIGN, release check: $CHECK, smoke test: $SMOKE)"
           fi
 
       # Not named send-to-daylight-*: the `mac` job checks it and hands it to `publish` under that name.
       - uses: actions/upload-artifact@v4
         if: env.RELEASE == 'true'
+        timeout-minutes: 5
         with:
           name: rx-apple-mac-developer-id
           path: reader-experiment/apple/Send-to-Daylight-mac.zip
@@ -764,14 +800,16 @@ jobs:
 
   # lane: mac
   # The Developer ID dry run's verdict (see mac-developer-id): fails when the dry run did. Nothing needs this job, so a
-  # failure here turns the run red without holding back `publish` and the ad-hoc release.
+  # failure here turns the run red without holding back `publish` and the ad-hoc release. mac-developer-id is
+  # continue-on-error in the dry run, so its result may read success when it failed: its verdict step's output decides
+  # (missing when the job never got that far).
   mac-developer-id-dry-run:
     name: Mac Developer ID dry run (verdict)
     needs: [check-mac-signing, mac-developer-id]
     if: ${{ !cancelled() && needs.check-mac-signing.outputs.developer-id != 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - name: The dry run built, signed and checked every bundle, and the signed app passed the smoke test
+      - name: The dry run built, signed and checked every bundle, passed the release check and the smoke test
         env:
           JOB: ${{ needs.mac-developer-id.result }}
           DRY_RUN: ${{ needs.mac-developer-id.outputs.dry-run }}

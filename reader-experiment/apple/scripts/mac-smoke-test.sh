@@ -40,7 +40,7 @@ BUNDLE_ID=$(plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist")
 DECLARED=$(plutil -extract DaylightAppGroup raw "$APP/Contents/Info.plist" 2>/dev/null || true)
 STATUS="$HOME/Library/Containers/$BUNDLE_ID/Data/Library/Application Support/DaylightShare/debug-status.json"
 rm -f "$STATUS"
-codesign -dv "$APP" 2>&1 | grep -E '^(Identifier|Authority|TeamIdentifier|Timestamp|Notarization Ticket)=' || true
+codesign -dvv "$APP" 2>&1 | grep -E '^(Identifier|Authority|TeamIdentifier|Timestamp|Notarization Ticket)=' || true
 curl -fsS "http://127.0.0.1:$RELAY_PORT/v1/health" >/dev/null 2>&1 || { node ../share/js/mock-relay.mjs --port "$RELAY_PORT" > "$TEMP/mock-relay-2.log" 2>&1 & sleep 2; }
 LINK=$(node scripts/ci-pairing-link.mjs "http://127.0.0.1:$RELAY_PORT" "CI Mac Daylight")
 CODE=$(echo "$LINK" | sed -E 's/.*[?&]c=([A-Z2-7]+).*/\1/')

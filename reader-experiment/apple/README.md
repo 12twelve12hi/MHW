@@ -189,8 +189,8 @@ The Safari extension is its own app in both builds (LAB-PLAN 1.1). Only its pair
 native handler (`getPairing`). Its Lab switch, its settings and its history stay in the extension's own storage.
 
 **Moving from the ad-hoc build.** Replace the app in Applications and open it. The first time, it moves its pairing,
-this Mac's name and its history (the outbox) into the shared group (`SharedStore.migrate`). From then on the Share
-menu item and the Safari extension use that pairing. Today nothing else moves:
+this Mac's name and its history (the outbox) into the shared group (`SharedStore.migrate`), but only when it was
+paired. From then on the Share menu item and the Safari extension use that pairing. Today nothing else moves:
 - Comfort and the Lab switch start at their defaults (Comfort off, Lab on);
 - the one-time Lab note (LAB-PLAN 1.6) shows again;
 - what Lab learned about deliveries (the Lab ledger, `lab.json`) and the Daylight server's pin and notices
@@ -263,7 +263,10 @@ ad-hoc build never opens. Gatekeeper's warning and *Allow unsigned extensions* w
 Five mac-lane jobs in [`rx-apple.yml`](../../.github/workflows/rx-apple.yml):
 
 - **`check-mac-signing`** checks that all six secrets are present (it reads nothing else). **`mac-scripts`**
-  shellchecks the signing and smoke-test scripts.
+  shellchecks the signing, release-check and smoke-test scripts, and runs the release check's self-test
+  (`scripts/check-mac-release.sh --self-test`) on sample `codesign -dvv` output: a Developer ID signature of the team
+  passes, and one read with plain `-dv` (which prints no *Authority* lines), another team's, an Apple Development or
+  ad-hoc signature, a missing runtime flag or timestamp, and wrong entitlements all fail.
 - **`mac-developer-id`** makes a Release build for the team (`DEVELOPMENT_TEAM`, not yet signed), so every bundle's
   Info.plist names the team's App Group. It then runs
   [`scripts/sign-mac.sh`](scripts/sign-mac.sh):
@@ -278,14 +281,18 @@ Five mac-lane jobs in [`rx-apple.yml`](../../.github/workflows/rx-apple.yml):
     refused; then it staples the ticket, has Gatekeeper assess the app (`spctl -a -vv` must accept it, and the script
     warns if the answer does not say *Notarized Developer ID*) and zips the app with `ditto -c -k --keepParent`.
 
-  The job then runs the Mac smoke test ([`scripts/mac-smoke-test.sh`](scripts/mac-smoke-test.sh), the one the `mac` job
-  runs) on that zip: the app must use the App Group and pair, send and show *Delivered ✓*.
+  The job then checks the zip as the `mac` job will ([`scripts/check-mac-release.sh`](scripts/check-mac-release.sh))
+  and runs the Mac smoke test on it ([`scripts/mac-smoke-test.sh`](scripts/mac-smoke-test.sh), the one the `mac` job
+  runs): the app must use the App Group and pair, send and show *Delivered ✓*.
 - **`mac`** builds, smoke-tests and UI-tests the ad-hoc app as always. It runs after `mac-developer-id` and chooses
   the zip it hands to `publish` (the `send-to-daylight-mac` artifact):
   - without the secrets, its own ad-hoc zip, whatever the dry run's result;
-  - with them, the Developer ID build, after checking its signature's Team ID and its stapled ticket. It never hands
-    over its ad-hoc zip then. If `mac-developer-id` failed (a notary outage or refusal, its smoke test), `mac` fails
-    and `publish` doesn't run, so the release keeps its last builds, the iPhone's included.
+  - with them, the Developer ID build, after `scripts/check-mac-release.sh` has checked it: the app and both
+    extensions signed by `Developer ID Application: … (<TEAMID>)` with that Team ID (read with `codesign -dvv`), the
+    runtime flag, a timestamp and the team's App Group in the embedded entitlements, `codesign --verify --deep
+    --strict`, and the stapled ticket (`xcrun stapler validate`). It never hands over its ad-hoc zip then. If
+    `mac-developer-id` failed (a notary outage or refusal, its smoke test), `mac` fails and `publish` doesn't run, so
+    the release keeps its last builds, the iPhone's included.
 
 **Without the secrets** `mac-developer-id` is a dry run of the same script:
 - It builds for a stand-in team, `DRYRUN0000`, and signs with a throwaway self-signed code-signing certificate that
@@ -294,13 +301,17 @@ Five mac-lane jobs in [`rx-apple.yml`](../../.github/workflows/rx-apple.yml):
   (`DRYRUN0000.com.daylight.share`).
 - It skips notarization, stapling and the Gatekeeper check, and it does not require the Developer ID authority or a
   Team ID.
+- It runs the release check the `mac` job runs on a Developer ID zip, `check-mac-release.sh --dry-run`, on its own
+  zip: the same checks of all three bundles, except that the signer must be the throwaway certificate
+  (`Authority=Send to Daylight CI dry run (self-signed)`, `TeamIdentifier=not set`) and there is no ticket to validate.
 - It then runs the smoke test, in which the app keeps its own storage: a self-signed signature carries no Team ID, so
   `SharedStore` never opens the group, and nothing asks for access.
 - It hands nothing on; the release gets the ad-hoc build from the `mac` job.
-- Its build, signing and smoke-test steps may fail without failing `mac-developer-id`. GitHub skips `publish` when
-  any job upstream of it failed, even indirectly, and `mac` runs after `mac-developer-id`. So
-  **`mac-developer-id-dry-run`**, which nothing needs, fails when the dry run did: the run turns red, and the ad-hoc
-  release still goes out.
+- Nothing in it may hold back the ad-hoc release. GitHub skips `publish` when any job upstream of it failed, even
+  indirectly, and `mac` runs after `mac-developer-id`. So without the secrets `mac-developer-id` is
+  `continue-on-error` as a whole job (a failed checkout, Xcode or XcodeGen step, a lost runner), each of its steps has
+  a timeout and together they stay under the job's, and its verdict step always runs. **`mac-developer-id-dry-run`**,
+  which nothing needs, fails on that verdict: the run turns red, and the ad-hoc release still goes out.
 
 To sign on your own Mac instead, with the same environment variables as the secrets:
 

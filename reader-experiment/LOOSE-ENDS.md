@@ -38,7 +38,8 @@ Before you add them:
   Mac's name and the history into the App Group, but not Comfort, the Lab switch, the one-time Lab note, Lab's
   delivery record (`lab.json`) or the Daylight server's pin and notices (`server.json`). The plan says updates keep
   them (LAB-PLAN 1.2, 1.3). `SharedStore.migrate` in `apple/DaylightShareKit` must carry them too, and it needs a test.
-  This is the kit lane's job; remove this item once it lands.
+  Today it also moves nothing at all unless the ad-hoc build was paired; an unpaired Mac's settings and Lab state should
+  move as well. This is the kit lane's job; remove this item once it lands.
 
 Then push any change under `reader-experiment/apple/`, or choose Re-run all jobs on the latest "Reader experiment –
 Apple apps" run. If a secret is missing, the "Mac signing (secrets)" job's log names it. Keep the secrets once the
