@@ -281,7 +281,7 @@ async function fakeCloudflare(t, { account, token, workers = [] }) {
       if (cf.workersDown) return send(500, { success: false, errors: [{ code: 10013, message: 'An unknown error has occurred.' }] });
       const name = decodeURIComponent(service[1]);
       return cf.workers.has(name) ? send(200, { success: true, result: { id: name, default_environment: { environment: 'production' } } })
-        : send(404, { success: false, errors: [{ code: 10007, message: 'This Worker does not exist on your account.' }] });
+        : send(404, { success: false, errors: [{ code: 10090, message: 'workers.api.error.service_not_found' }] });
     }
     if (req.method === 'POST' && req.url === `/client/v4/accounts/${account}/d1/database/test-d1/query`) {
       const { sql, params } = JSON.parse(body);

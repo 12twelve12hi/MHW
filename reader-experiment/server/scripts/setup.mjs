@@ -50,18 +50,21 @@ export function cfD1({ account, database, token, fetchFn = fetch }) {
 }
 
 /**
- * Whether the account has no Worker called `name`, so this run's deploy creates it. Only Cloudflare's "This Worker does
- * not exist on your account" (HTTP 404 with code 10007, how wrangler tells) says so. Anything else (the Worker, another
- * error, no network) is false, which is safe: secrets.mjs remove then treats it as a Worker that may hold what an
- * earlier deploy gave it.
+ * Whether the account has no Worker called `name`, so this run's deploy creates it. Only Cloudflare's not-found answer
+ * says so: HTTP 404 with code 10090 (service not found, what this services endpoint says for a name never deployed) or
+ * 10007 (script not found), the two codes wrangler's isWorkerNotFoundError accepts on this same endpoint. Anything else
+ * (the Worker, another error, no network) is false, which is safe: secrets.mjs remove then treats it as a Worker that
+ * may hold what an earlier deploy gave it.
  */
+const WORKER_NOT_FOUND = new Set([10007, 10090]);
+
 export async function workerMissing({ account, token, name, fetchFn = fetch, api = API }) {
   try {
     const res = await fetchFn(`${api}/accounts/${account}/workers/services/${encodeURIComponent(name)}`, {
       headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000),
     });
     const json = await res.json().catch(() => ({}));
-    return res.status === 404 && json?.success === false && Array.isArray(json.errors) && json.errors.some((e) => e?.code === 10007);
+    return res.status === 404 && json?.success === false && Array.isArray(json.errors) && json.errors.some((e) => WORKER_NOT_FOUND.has(e?.code));
   } catch { return false; }
 }
 

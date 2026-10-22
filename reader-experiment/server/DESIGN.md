@@ -1679,12 +1679,13 @@ listing that shows the Worker without it, or a delete that worked, clears it. Wh
 only if that row does not name this Worker as holding none, or D1 can't be read. A Worker this run created holds
 only what was just uploaded, so a listing that keeps failing is nothing to report and the row then names it without
 the pairing code. `setup.mjs`'s `new_worker` says so for a new setup-link name, and for any other name (a new
-`DAYLIGHT_SERVER_CODE`'s, as after re-pairing; a setup row whose deploy failed) when Cloudflare answers "This Worker
-does not exist on your account" (`GET …/workers/services/<name>`: 404, code 10007, as wrangler reads it); any other
-answer is "not new", which fails safe. Such a Worker is still listed, so one wrongly taken for new loses what it
-holds. (A `DAYLIGHT_PAIRING` added by hand in the dashboard is outside what the deploy can know.) Test-only
-behaviour hangs on the build-time constant `__TESTING__`, which is `false` in every deploy bundle. CI checks that the
-bundle does not contain the test variable's name.
+`DAYLIGHT_SERVER_CODE`'s, as after re-pairing; a setup row whose deploy failed) when Cloudflare answers that no such
+Worker exists (`GET …/workers/services/<name>`: 404 with code 10090, service not found, or 10007, script not found:
+the two codes wrangler's `isWorkerNotFoundError` accepts on that endpoint); any other answer is "not new", which fails
+safe. Such a Worker is still listed, so one wrongly taken for new loses what it holds. (A `DAYLIGHT_PAIRING` added
+by hand in the dashboard is outside what the deploy can know.) Test-only behaviour hangs on the build-time constant
+`__TESTING__`, which is `false` in every deploy bundle. CI checks that the bundle does not contain the test variable's
+name.
 
 ### 12.4 `.github/workflows/rx-server.yml`
 

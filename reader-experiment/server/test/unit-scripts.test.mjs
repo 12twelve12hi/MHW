@@ -158,7 +158,7 @@ test('workers.dev subdomain: kept when it exists, created only on "none", never 
   assert.ok(!calls.includes('PUT'));
 });
 
-test('a Worker is new only when Cloudflare says it does not exist (404, code 10007); anything else is not (12.3)', async () => {
+test('a Worker is new only when Cloudflare says it does not exist (404, code 10090 or 10007, as wrangler reads it); anything else is not (12.3)', async () => {
   const { workerMissing } = await import('../scripts/setup.mjs');
   const urls = [];
   const answer = (status, body) => async (url, init) => {
@@ -167,15 +167,21 @@ test('a Worker is new only when Cloudflare says it does not exist (404, code 100
     return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   };
   const base = { account: 'a'.repeat(32), token: 'tk', name: 'daylight-0123456789ab', api: 'https://cf.test/client/v4' };
-  const gone = { success: false, errors: [{ code: 10007, message: 'This Worker does not exist on your account.' }] };
-  assert.equal(await workerMissing({ ...base, fetchFn: answer(404, gone) }), true);
+  // wrangler's isWorkerNotFoundError, which it uses on this services endpoint: 10090 is what the endpoint says for a
+  // name never deployed (wrangler 3's deploy took only that one), 10007 the "script not found" of /workers/scripts/….
+  const gone = { success: false, errors: [{ code: 10090, message: 'workers.api.error.service_not_found' }] };
+  assert.equal(await workerMissing({ ...base, fetchFn: answer(404, gone) }), true, '10090');
   assert.deepEqual(urls, [`GET https://cf.test/client/v4/accounts/${'a'.repeat(32)}/workers/services/daylight-0123456789ab Bearer tk`]);
+  const scriptGone = { success: false, errors: [{ code: 10007, message: 'workers.api.error.script_not_found' }] };
+  assert.equal(await workerMissing({ ...base, fetchFn: answer(404, scriptGone) }), true, '10007');
   for (const [status, body, why] of [
     [200, { success: true, result: { id: 'daylight-0123456789ab' } }, 'it exists'],
     [404, { success: false, errors: [{ code: 7003, message: 'Could not route to /accounts/…' }] }, 'a routing error'],
     [404, '<html>Not Found</html>', 'not Cloudflare’s JSON'],
     [403, { success: false, errors: [{ code: 10000 }] }, 'no permission'],
     [500, gone, 'a 5xx'],
+    [500, scriptGone, 'a 5xx (10007)'],
+    [200, gone, 'a 200 that names the code'],
     ['network', null, 'no network'],
   ]) assert.equal(await workerMissing({ ...base, fetchFn: answer(status, body) }), false, why);
 });
