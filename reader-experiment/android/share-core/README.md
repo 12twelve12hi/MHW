@@ -59,10 +59,15 @@ pins every one to `share/vectors/lab-vectors.json`.
 - *Sender:* `LabLedger.of(store)` and `onAckHeader = ledger.hook()` on the `Outbox`, whether Lab is on or off. Screens
   read `ledger.snapshot()`: What's in Lab's header is `LabText.inboxLabText(snap.inboxLab, snap.checkedIn, now)`.
 - *Inbox:* one `LabInbox` per pairing, its store `FileLabStore(files/inbox/lab-<inboxTopic>.json)`, `info` the current
-  hello (`LabInboxInfo(1, "android/<versionName>", caps, live = instantDeliveryOn)`), `schedule` mapped to a delayed
-  flush (replacing any earlier one), `log` to the `DaylightShare` tag. After each poll, once its acks are out:
-  `notePolled`, `noteAcksFailed(result.ackError != null)`, `noteRelayLimit(result.limitStatus)`, `record` each item's
-  state (only items of the pairing's inbox topic), then `flush()`. A poll that throws: `noteRelayLimit(e.status)` (a
+  hello, `schedule` mapped to a delayed flush (replacing any earlier one), `log` to the `DaylightShare` tag. The hello
+  is `LabInboxInfo(if (Prefs.lab) Lab.LAB_LEVEL else 0, "android/<versionName>", caps, live = instantDeliveryOn)`,
+  with `Prefs.lab` read on each call, never a literal 1: a new or cleared store (a new pairing, Reset pairing) starts
+  with Lab on exactly when this `lab` is 1 or more, and would then record and publish states while the Inbox's Lab is
+  off. The switch sets `Prefs.lab` first, then calls `labTurnedOn()` or `labTurnedOff()` on a worker. With Lab off, the
+  calls below are harmless: `record` answers false, `flush` answers "off", and nothing goes but the `lab: 0` frame
+  `labTurnedOff()` sends and its repeats. After each poll, once its acks are out: `notePolled`,
+  `noteAcksFailed(result.ackError != null)`, `noteRelayLimit(result.limitStatus)`, `record` each item's state (only
+  items of the pairing's inbox topic), then `flush()`. A poll that throws: `noteRelayLimit(e.status)` (a
   `RelayException`'s 429). A live batch: `handleLive(msgs)`, then `sendAcks(result.ackIds)` (not `publishAcks`, which
   drops the status), `noteAcksFailed(out.error != null)`, `noteRelayLimit(out.limitStatus)` and
   `noteRelayLimit(result.limitStatus)`, then record and flush. `noteRelayLimit` ignores anything but 429 and 413. A flush
@@ -97,7 +102,7 @@ both readings against the JS under node.
 | `VectorsTest`, `RelayTest`, `LiveRelayTest` | Protocol 1.1: `share/vectors/test-vectors.json`, the mock relay with ntfy.sh's limits, JS interop both ways, a live round trip (informational); the ack publish's 429 and 413 in `limitStatus` and `sendAcks` (2.7.1) |
 | `lab.LabVectorsTest` | Every W0 section of `share/vectors/lab-vectors.json` (constants, labTopics, labFrames, labParse, labLedger, labGate, labHeaderExtras, labRowText, labText, v1Safety). labExcerpt, diagnostics and testArticle are W1 sections for K3; a section no test knows fails `everySectionIsPorted` |
 | `server.ServerVectorsTest` | `server/vectors/server-vectors.json` › derived, serverCodeParsing, frames (config), negative, serverState (with what `noteError` does to the cache); discovery, the pin and a move, the status cache, the gate's deadline; server addresses read as the JS reads them (`src/test/js/server-origins.mjs`) |
-| `lab.LabInboxTest` | 2.2.4 with a fake clock: the merge rule, 24 a frame, 30 s spacing, giving way, the daily cap, halving, hellos, `lab: 0` and its repeats, the pending cap, the digest; `record`, the notes and `clear` during a publish in flight, and two flushes of one file; the ledger's file and pruning |
+| `lab.LabInboxTest` | 2.2.4 with a fake clock: the merge rule, 24 a frame, 30 s spacing, giving way, the daily cap, halving, hellos, `lab: 0` and its repeats, a new or cleared store with Lab off, the pending cap, the digest; `record`, the notes and `clear` during a publish in flight, and two flushes of one file; the ledger's file and pruning |
 | `lab.LabSkewTest` | F17.1 through the mock relay: the Kotlin Lab sender against the v1.0, v1.1 and current JS Receivers and a JS Lab Daylight; the v1.0, v1.1 and Lab JS Senders against the Kotlin Inbox with and without `LabInbox`; two publishers (Kotlin Daylight Share, JS Lab Reader) in both handover orders; Lab extras through the on-disk spool; an ack publish answered 429 or 413 makes the Kotlin Daylight give way for the hour |
 
 The old JS peers are `share/js/test/fixtures/daylight-share-v1.0.js` and `-v1.1.js`; `src/test/js/interop.mjs` drives

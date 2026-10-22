@@ -14,8 +14,9 @@ import java.util.WeakHashMap
  * JVM: Daylight Share's Inbox and the Lab Reader use the same class.
  *
  * - [store]: its state (`files/inbox/lab-<inboxTopic>.json` in the Inbox); [relay] and [keys]: the pairing's.
- * - [info]: the Inbox's current hello: its Lab level, `android/<versionName>`, its caps, and whether Instant delivery
- *   is live. `poll` defaults to the time [notePolled] last recorded.
+ * - [info]: the Inbox's current hello: its Lab level ([Lab.LAB_LEVEL] while the Inbox's Lab is on, 0 while it is
+ *   off: a new or cleared store starts with Lab on exactly when it is 1 or more), `android/<versionName>`, its caps,
+ *   and whether Instant delivery is live. `poll` defaults to the time [notePolled] last recorded.
  * - [schedule]: asks the app to call [flush] after a delay (2 s after [record], the spacing's wait, 30 s while more
  *   waits), replacing any earlier request; null means the app flushes at its own points only. With no network, the app
  *   schedules its `lab-flush` job (a CONNECTED constraint) when [flush] answers "error".

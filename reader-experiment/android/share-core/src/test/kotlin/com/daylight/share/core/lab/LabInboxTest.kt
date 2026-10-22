@@ -289,6 +289,61 @@ class LabInboxTest {
         assertEquals(1, frames().last().inbox!!.lab)
     }
 
+    /**
+     * A new or cleared store takes Lab's on/off from [LabInboxInfo.lab], so the Inbox passes
+     * `lab = if (Prefs.lab) Lab.LAB_LEVEL else 0` (the README's wiring). With Lab off, Reset pairing (clear) and a new
+     * pairing (a new file) record nothing and publish nothing after a poll (notes, record, flush) or a digest, until Lab
+     * is turned on (LAB-PLAN 1.3: Lab off sends no hellos and no state frames).
+     */
+    @Test
+    fun aNewOrClearedStoreWithLabOffRecordsAndPublishesNothing() {
+        var labOn = true
+        val info = { LabInboxInfo(if (labOn) Lab.LAB_LEVEL else 0, "android/1.5.0", listOf("st", "tap"), live = true) }
+        fun inboxOn(store: LabStore) = LabInbox(store, relay, keys, info, "Daylight", { clock }, { scheduled += it }, { logs += it })
+        fun pollsWithLabOff(lab: LabInbox) {
+            for (n in 1..3) {
+                advance(Lab.LAB_FRAME_GAP_MS)
+                lab.notePolled()
+                lab.noteAcksFailed(false)
+                lab.noteRelayLimit(200)
+                assertFalse("nothing is recorded while Lab is off", lab.record(id(10 + n), "reader", t))
+                assertEquals(LabInbox.FlushResult(0, null, 0, "off"), lab.flush())
+            }
+            for (n in 1..5) {
+                advance(11 * 3_600_000L)
+                assertEquals(LabInbox.FlushResult(0, null, 0, "off"), lab.digest())
+            }
+            assertEquals(false, lab.debugState()["on"])
+        }
+        val dir = createTempDirectory("dls-labinbox").toFile()
+        val old = inboxOn(FileLabStore(File(dir, "lab-dls-old.json")))
+        assertEquals("hello", old.flush().kind)
+        advance(Lab.LAB_FRAME_GAP_MS)
+        assertTrue(old.record(id(1), "reader", t))
+        // Lab turned off (Prefs.lab first, then labTurnedOff), then Reset pairing.
+        labOn = false
+        assertEquals("off", old.labTurnedOff().kind)
+        val sent = frames().size
+        old.clear()
+        pollsWithLabOff(old)
+        // A new pairing while Lab is off: a new store file.
+        val fresh = inboxOn(FileLabStore(File(dir, "lab-dls-new.json")))
+        pollsWithLabOff(fresh)
+        assertEquals("no Lab frame after the clear or on the new pairing", sent, frames().size)
+        // Lab turned on (Prefs.lab first, then labTurnedOn): a hello with lab 1, then states.
+        labOn = true
+        assertEquals("hello", fresh.labTurnedOn().kind)
+        assertEquals(Lab.LAB_LEVEL, frames().last().inbox!!.lab)
+        assertTrue(fresh.record(id(20), "reader", t))
+        advance(Lab.LAB_FRAME_GAP_MS)
+        assertEquals(LabInbox.FlushResult(1, "states", 1, "sent"), fresh.flush())
+        // Why the info's lab must follow the switch: a cleared store whose info always says 1 starts with Lab on.
+        val wired1 = inbox() // hello.lab is 1
+        wired1.labTurnedOff()
+        wired1.clear()
+        assertTrue(wired1.record(id(30), "reader", t))
+    }
+
     @Test
     fun atMost500PendingEntriesTheOldestGoFirst() {
         val lab = inbox()
