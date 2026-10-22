@@ -181,7 +181,9 @@ What Lab adds to sending (LAB-PLAN 3.3). With Lab off none of it shows or runs, 
   Daylight without Lab gives exactly the plain rows (*Delivered ✓*). While a delivered row's state is still on its way,
   the open popup reads the confirmation channel every 30 s, and the background every 15 minutes for 48 hours. The
   toolbar badge shows the most recent row: **…** on its way, **✓** on your Daylight (for 6 s), **⌛** waiting for a tap
-  there, **!** not on its way.
+  there, **!** not on its way. A send that fails or makes no row (a page the extension may not send, copied text with
+  no link, nothing selected) shows **!**, as the plain app does, never an older row's ✓; a question (a PDF's site, the
+  thin-page one, Review) leaves the most recent row's mark.
 - **Pages as you see them** (F03). The page goes through `clean-html.js` (the one copy in
   [`../share/js/capture/`](../share/js/capture/), which the build copies): no scripts (JSON-LD stays), no `on…`
   attributes, no form contents, hidden or password fields, `javascript:` links or `srcdoc`; the logged-in text stays.
@@ -193,9 +195,11 @@ What Lab adds to sending (LAB-PLAN 3.3). With Lab off none of it shows or runs, 
   the card opens with the choices and nothing goes before **Send** (an extension can't tell whether a screen reader or
   switch access is on, so those two cover it). A page the extension can't read says its link will be sent. A PDF the
   extension may download only with its site's permission is asked for in the popup once the countdown ends, as **Send
-  this PDF** asks (the browser's prompt, or **Allow and send** and **Send the link**); if the popup was closed by then,
-  nobody can answer, so its link goes with the plain sentence (*Without access to the site the PDF can’t be downloaded,
-  so its link was sent.*).
+  this PDF** asks (the browser's prompt, or **Allow and send** and **Send the link**); the popup takes the question
+  first (`labHoldPdf`). If the toolbar's popup was closed by then, nobody can answer, so its link goes at once with the
+  plain sentence (*Without access to the site the PDF can’t be downloaded, so its link was sent.*); the pairing page
+  open in a tab (`popup.html?standalone=1`) doesn't count as the popup. A question no popup takes within 3 s (the
+  card's popup closed just as the countdown ended, while another window's popup is open) goes as its link the same way.
 - **Works offline** (F07). Shared while the browser is offline, an item waits (*Waiting for connection*) in **Waiting
   to send (n)** above the history, each with **Cancel**; the `dls-offline` alarm (every minute, only while something
   waits) and the popup's `online` event send them once the network is back (oldest first, at most 30 messages and 18 MB
@@ -348,8 +352,8 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   `lab/review`; the badge from the most recent row; menus, commands and the omnibox), and `lab.js` keeps the Use
   switches, the features' own settings, the timeline's data, Setup check, the activity log and diagnostics. Its
   messages: `labPopup`, `labTimeline`, `labSeen`, `labSetUse`, `labSetOption`, `labFeatureView`, `labChecks`,
-  `labActivity`, `labDiagnostics`, `labTabInfo`, `labScheduleSend`, `labCancelScheduled`, `labSendCopied`,
-  `labTestSend`, `labCheckAcks`, `labOnline`, `labReviewGet`, `labReviewSend`, `labReviewCancel`, `labOmnibox`, and
+  `labActivity`, `labDiagnostics`, `labTabInfo`, `labScheduleSend`, `labCancelScheduled`, `labHoldPdf`,
+  `labSendCopied`, `labTestSend`, `labCheckAcks`, `labOnline`, `labReviewGet`, `labReviewSend`, `labReviewCancel`, `labOmnibox`, and
   `sendTab` with `mode` and `force`. The popup's pieces are `src/lab-popup.js` (DOM only, from data: the timeline's
   rows, the check-in header, the queue, Send as, the thin question, the F02 entry point, the card, Paste and send, the
   one-time note), so the web sender's build can copy it (B1); `src/review.html` with `src/review.js` is Review.
@@ -450,8 +454,11 @@ for the extension (its Safari build is the plain one until then).
 - [ ] **F04, a PDF on a site the extension may not read** With **Send when I click the toolbar button** on: a PDF whose
   in-tab read fails (Safari's PDF view; Chrome only for a PDF the page can't fetch) brings Chrome's or Safari's own
   prompt in the card's popup after the countdown, or **Allow and send** and **Send the link**; closing the popup at once
-  sends its link with *Without access to the site the PDF can’t be downloaded, so its link was sent.* (Chrome tells an
-  open popup by `runtime.getContexts`, Safari by `extension.getViews`: check both).
+  sends its link with *Without access to the site the PDF can’t be downloaded, so its link was sent.*, also with the
+  pairing page (`popup.html?standalone=1`) open in a tab, and nothing more goes 3 s after the popup asked (Chrome tells
+  the toolbar's popup by `runtime.getContexts` with `contextTypes: ['POPUP']`, Safari by `extension.getViews` and the
+  page's address `popup.html`: check both, and that Safari's toolbar popup on the Mac and the iPhone reports exactly
+  that address).
 - [ ] **F33** Chrome asks for the clipboard permission on the first **Paste and send**, and Safari shows its Paste
   button; the host shows before anything is sent.
 - [ ] **F34.2** The four shortcuts at `chrome://extensions/shortcuts`; "dl example.com/story" in Chrome's address bar

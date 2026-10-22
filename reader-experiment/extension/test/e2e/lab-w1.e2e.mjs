@@ -614,7 +614,8 @@ test('F04: a PDF that needs its site’s permission: after the countdown the car
       ns.permissions.request = () => Promise.reject(new Error('This function must be called during a user gesture'));
       const rt = ns.runtime;
       const send = rt.sendMessage.bind(rt);
-      rt.sendMessage = (msg) => (msg?.type !== 'labScheduleSend' ? send(msg) : new Promise((resolve) => setTimeout(() => resolve({
+      globalThis.sentTypes = [];
+      rt.sendMessage = (msg) => (globalThis.sentTypes.push(msg?.type), msg?.type !== 'labScheduleSend' ? send(msg) : new Promise((resolve) => setTimeout(() => resolve({
         ok: true, result: { needsPermission: { origins: ['https://papers.example/*'] }, url: 'https://papers.example/locked.pdf', title: 'Locked paper', token: 'f'.repeat(32) },
       }), 1500)));
     });
@@ -625,6 +626,8 @@ test('F04: a PDF that needs its site’s permission: after the countdown the car
     await popup.waitForSelector('#permission:not([hidden])', { timeout: 10000 });
     assert.equal(await popup.textContent('#perm-host'), 'papers.example');
     assert.equal(await popup.textContent('#status'), '', 'no empty result in its place');
+    const sent = await popup.evaluate(() => globalThis.sentTypes);
+    assert.ok(sent.indexOf('labHoldPdf') > sent.indexOf('labScheduleSend'), 'the popup takes the question, so the background doesn’t send its link');
     assert.deepEqual(await day.receive(0), [], 'nothing before the answer');
     await axeBoth(popup, 'popup: the card asks for a PDF’s site');
     await shot(popup, 'card-permission');

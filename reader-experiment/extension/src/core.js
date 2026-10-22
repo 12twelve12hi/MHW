@@ -22,6 +22,8 @@ export const ALARM_OFFLINE = OFFLINE_ALARM;
 export const PDF_LINK_PATTERNS = LINK_PDF_PATTERNS;
 export const COMMAND_SEND = COMMANDS.page;
 const PENDING_PDF_MS = 5 * 60 * 1000;
+/** F04: how long the card's popup has to take a PDF question (labHoldPdf) before its link goes instead. */
+const POPUP_HOLD_MS = 3000;
 /** Lab's capture code (LAB-PLAN F03, F10): build.mjs copies them from share/js/capture/; injected before a capture. */
 export const CLEAN_FILES = ['clean-html.js'];
 export const ARTICLE_FILES = ['Readability.js', 'clean-html.js'];
@@ -138,6 +140,7 @@ function makeBadge(action) {
 export function createApp({
   api, target = 'chrome', storage, fetch: fetchImpl, now = () => Date.now(), log = console, pdfChunkSize = PDF_CHUNK,
   gateDeadlineMs, labBuilt = true, online = () => globalThis.navigator?.onLine !== false, countdownMs = COUNTDOWN_MS,
+  popupHoldMs = POPUP_HOLD_MS,
 } = {}) {
   storage ??= areaStorage(api.storage.local);
   const fetchFn = fetchImpl ?? ((...a) => globalThis.fetch(...a));
@@ -149,6 +152,7 @@ export function createApp({
   let osName = null;
   let pendingPdf = null; // {token, url, title, origins, at}: a PDF waiting for the user to grant a host permission
   const claimed = new Set();
+  const held = new Set(); // F04: PDF questions the card's popup took (holdPdf)
 
   // --- settings and pairing ---------------------------------------------------------------------------------------
 
@@ -480,6 +484,7 @@ export function createApp({
     if (!token) return true;
     if (claimed.has(token)) return false;
     claimed.add(token);
+    held.delete(token);
     if (pendingPdf?.token === token) pendingPdf = null;
     return true;
   }
@@ -680,29 +685,43 @@ export function createApp({
   const scheduled = new Map(); // tabId -> {timer, resolve}
 
   /**
-   * Whether a popup page is open, also popup.html opened in a tab: Chrome's runtime.getContexts (116+), or
-   * extension.getViews where the background is a page (Safari); false where it can't be told.
+   * Whether the toolbar's popup is open: Chrome's runtime.getContexts (116+, its POPUP contexts), or extension.getViews
+   * where the background is a page (Safari). Only popup.html itself counts: popup.html?standalone=1, the pairing page
+   * openPairing and Setup check open in a tab, is not the card's and never answers it. False where it can't be told.
    */
   async function popupOpen() {
     let page = '';
     try { page = api.runtime.getURL('popup.html'); } catch { return false; }
+    const toolbar = (u) => String(u ?? '').split('#')[0] === page;
     try {
       if (typeof api.runtime?.getContexts === 'function') {
-        return ((await api.runtime.getContexts({})) ?? []).some((x) => String(x?.documentUrl ?? '').startsWith(page));
+        return ((await api.runtime.getContexts({ contextTypes: ['POPUP'] })) ?? []).some((x) => toolbar(x?.documentUrl));
       }
       if (typeof api.extension?.getViews === 'function') {
-        return api.extension.getViews().some((w) => String(w?.location?.href ?? '').startsWith(page));
+        return api.extension.getViews().some((w) => toolbar(w?.location?.href));
       }
     } catch { /* can't be told */ }
     return false;
   }
 
   /**
+   * F04: the card's popup took a PDF question (labHoldPdf, as soon as the answer reaches it), so its Allow and Send the
+   * link answer it. -> {held: true}, or {handled: true} when its link already went (the popup came too late).
+   */
+  function holdPdf(token) {
+    if (!token || claimed.has(token)) return { handled: true };
+    held.add(token);
+    return { held: true };
+  }
+
+  /**
    * F04: sends the tab after `ms` (1.5 s) unless Options cancels it (cancelScheduled). Only with Lab on, F04 in use and
    * "Send when I click the toolbar button" ticked, and never for someone who needs more time (noCountdown).
    * A PDF the extension may only download with its site's permission can't be asked for here (no click any more): the
-   * answer is {needsPermission} for the popup, which asks with its Allow button, as "Send this PDF" does; with the
-   * popup gone, nobody could answer, so its link goes with v1.1's sentence for a site not allowed (never nothing).
+   * answer is {needsPermission} for the popup, which takes it (labHoldPdf) and asks with its Allow button, as "Send
+   * this PDF" does. With the toolbar's popup gone (popupOpen), nobody could answer, so its link goes at once with v1.1's
+   * sentence for a site not allowed; and when no popup takes the question within popupHoldMs (3 s), its link goes then
+   * (never nothing).
    * -> the send's answer, or {cancelled: true}
    */
   async function scheduleSend(tabId, { mode = 'page', ms = countdownMs } = {}) {
@@ -723,9 +742,17 @@ export function createApp({
         try {
           const tab = await api.tabs.get(tabId);
           let r = await withBadge(() => sendTab(tab, { mode, thin: 'page', prompt: false }));
-          if (r?.needsPermission && !(await popupOpen())) {
+          if (r?.needsPermission) {
             const p = r;
-            r = claim(p.token) ? await withBadge(() => sendUrl(p.url, p.title, 'pdf-denied')) : { handled: true };
+            const sendLink = () => (claim(p.token) ? withBadge(() => sendUrl(p.url, p.title, 'pdf-denied')) : { handled: true });
+            if (!(await popupOpen())) r = await sendLink();
+            else {
+              // The answer goes to the popup that started the countdown; if that one closed meanwhile (another popup,
+              // in another window, can't answer it), nobody holds the question, and its link goes.
+              setTimeout(() => {
+                if (!held.has(p.token)) Promise.resolve(sendLink()).catch((e) => log.warn?.('Send to Daylight: PDF link not sent', e));
+              }, popupHoldMs);
+            }
           }
           resolve(r);
         } catch (e) { reject(e); }
@@ -886,14 +913,23 @@ export function createApp({
     await badge.start();
     let outcome = 'error';
     let r;
+    let threw = true;
     try {
       r = await fn();
+      threw = false;
       outcome = r?.needsPermission || r?.thin || r?.review || r?.cancelled ? 'idle' : isTrouble(r?.row) ? 'error' : 'ok';
       return r;
     } finally {
-      // With Lab on, the most recent row's mark replaces the "…" the send showed (shown again, whatever it was).
+      // With Lab on, the most recent row's mark replaces the "…" the send showed (shown again, whatever it was). A send
+      // that failed or made no row (a page the extension may not send, no link in the copied text, no selection) shows
+      // "!" as v1.1 does: the most recent row's mark would be an older item's (a false ✓). A question, the thin-page
+      // one, Review, a cancelled countdown and a review already gone show the most recent row's mark.
       if ((await labCtx()).on) {
-        if (badge.release()) await labBadge({ force: true });
+        const asked = r?.needsPermission || r?.thin || r?.review || r?.cancelled || r?.gone || r?.handled;
+        if (badge.release()) {
+          if (threw || (!r?.row && !asked)) await badge.show(LAB_TEXT.badge.error);
+          else await labBadge({ force: true });
+        }
       } else await badge.done(outcome);
     }
   }
@@ -1119,6 +1155,7 @@ export function createApp({
       case 'labTabInfo': return tabInfo(msg.tabId);
       case 'labScheduleSend': return scheduleSend(msg.tabId, { mode: msg.mode });
       case 'labCancelScheduled': return cancelScheduled(msg.tabId);
+      case 'labHoldPdf': return holdPdf(String(msg.token ?? ''));
       case 'labSendCopied': return withBadge(() => sendCopied(msg.text));
       case 'labTestSend': return withBadge(() => sendTest());
       case 'labCheckAcks': return checkAcksNow();

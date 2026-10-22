@@ -213,7 +213,9 @@ export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenu
     api.commands = { async getAll() { return clone(list); }, onCommand: event(listeners.command) };
   }
   if (omnibox) api.omnibox = { onInputEntered: event(listeners.omnibox) };
-  if (popupApi === 'contexts') api.runtime.getContexts = async () => clone(contexts);
+  if (popupApi === 'contexts') {
+    api.runtime.getContexts = async (filter = {}) => clone(contexts.filter((c) => !filter.contextTypes || filter.contextTypes.includes(c.contextType)));
+  }
   if (popupApi === 'views') api.extension = { getViews: () => contexts.map((c) => ({ location: { href: c.documentUrl } })) };
 
   return {
@@ -230,8 +232,17 @@ export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenu
     /** Changes a tab's page (its selection, its article, …). */
     setPage: (id, patch) => Object.assign(tabs.get(id).page, patch),
     grant: (origin) => granted.add(origin),
-    /** The extension's open pages, as runtime.getContexts lists them: popupOpen(true) opens the popup. */
-    popupOpen: (open) => { contexts = open ? [{ contextType: 'POPUP', documentUrl: 'chrome-extension://fake-extension-id/popup.html' }] : []; },
+    /** The extension's open pages, as runtime.getContexts lists them: popupOpen(true) opens the toolbar's popup. */
+    popupOpen: (open) => {
+      contexts = contexts.filter((c) => c.contextType !== 'POPUP');
+      if (open) contexts.push({ contextType: 'POPUP', documentUrl: 'chrome-extension://fake-extension-id/popup.html' });
+    },
+    /** An extension page open in a tab (popup.html?standalone=1, lab.html, …); pageOpen(path, false) closes it. */
+    pageOpen: (path, open = true) => {
+      const documentUrl = `chrome-extension://fake-extension-id/${path}`;
+      contexts = contexts.filter((c) => c.documentUrl !== documentUrl);
+      if (open) contexts.push({ contextType: 'TAB', documentUrl });
+    },
     onRequest: (fn) => { requestAnswer = fn; },
   };
 }

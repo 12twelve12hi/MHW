@@ -435,9 +435,14 @@ function startCard() {
     if (r?.cancelled) return;
     card?.done();
     // A PDF the extension may download only with its site's permission: asked here, as "Send this PDF" asks (the
-    // browser's prompt, or, where the browser won't show it this long after the click, Allow and Send the link).
+    // browser's prompt, or, where the browser won't show it this long after the click, Allow and Send the link). The
+    // popup takes the question first (labHoldPdf); one it doesn't take within 3 s, the background sends as its link.
     if (r?.needsPermission) {
-      try { r = await askPermission(r); } catch (e) { setStatus(e.message, true); r = null; }
+      const hold = await call('labHoldPdf', { token: r.token }).catch(() => ({}));
+      if (hold?.handled) r = null; // its link already went: the history shows it
+      else {
+        try { r = await askPermission(r); } catch (e) { setStatus(e.message, true); r = null; }
+      }
     }
     showResult(r);
     startPolling();

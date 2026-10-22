@@ -32,7 +32,7 @@ const quiet = { warn() {}, log() {} };
 const MIN = 60000;
 const { LAB_TEXT } = L;
 
-async function setup({ target = 'chrome', paired = true, settings = {}, now, countdownMs = 60, omnibox = true, commands, popupApi } = {}) {
+async function setup({ target = 'chrome', paired = true, settings = {}, now, countdownMs = 60, popupHoldMs = 200, omnibox = true, commands, popupApi } = {}) {
   const relay = await startMockRelay();
   const fb = fakeBrowser({ os: 'mac', omnibox, popupApi, commands: commands ?? [
     { name: 'send-page', shortcut: 'Alt+Shift+D', description: 'Send this page to Daylight' },
@@ -46,7 +46,7 @@ async function setup({ target = 'chrome', paired = true, settings = {}, now, cou
     if (flags.relayDown || !flags.online) throw new TypeError('Failed to fetch');
     return fetch(url, init);
   };
-  const app = core.createApp({ api: fb.api, target, fetch: fetchFn, log: quiet, now, online: () => flags.online, countdownMs });
+  const app = core.createApp({ api: fb.api, target, fetch: fetchFn, log: quiet, now, online: () => flags.online, countdownMs, popupHoldMs });
   fb.api.runtime.onMessage.addListener(app.handleMessage);
   const secret = ds.generateSecret();
   const pairing = { secret, relay: relay.url };
@@ -385,16 +385,20 @@ for (const popupApi of ['contexts', 'views']) {
       // A PDF the tab can't read and the extension can't fetch without the site's permission (a closed port here).
       const url = 'http://127.0.0.1:9/files/locked.pdf';
       const tab = s.fb.addTab({ url, title: 'Locked paper', scriptable: false });
-      // The popup is open: the answer is for its Allow button; nothing went yet.
+      // The popup is open: the answer is for its Allow button, and the popup takes it; nothing went yet.
       s.fb.popupOpen(true);
       const ask = await s.msg({ type: 'labScheduleSend', tabId: tab, mode: 'page' });
       assert.deepEqual(ask.needsPermission, { origins: ['http://127.0.0.1/*'] });
       assert.ok(ask.token);
+      assert.deepEqual(await s.msg({ type: 'labHoldPdf', token: ask.token }), { held: true });
+      await new Promise((res) => setTimeout(res, 300)); // past the hold time: the popup has it, so nothing goes by itself
       assert.deepEqual(await s.receive(), []);
       // The popup's "Send the link" (or a refused permission): the link, with v1.1's sentence.
       const viaPopup = await s.msg({ type: 'sendPdf', url: ask.url, title: ask.title, token: ask.token });
       assert.equal(viaPopup.row.kind, 'url');
-      // The popup closed before the countdown ended: nobody can answer, so the link goes now with that sentence.
+      // The popup closed before the countdown ended: nobody can answer, so the link goes now with that sentence. The
+      // pairing page open in a tab (popup.html?standalone=1, from openPairing or Setup check) is not the card's popup.
+      s.fb.pageOpen('popup.html?standalone=1');
       s.fb.popupOpen(false);
       const r = await s.msg({ type: 'labScheduleSend', tabId: tab, mode: 'page' });
       assert.equal(r.row.kind, 'url');
@@ -407,6 +411,29 @@ for (const popupApi of ['contexts', 'views']) {
     } finally { await s.close(); }
   });
 }
+
+test('F04: a PDF question no popup takes within the hold time (the card’s popup closed, another one is open) goes as its link', async () => {
+  const s = await setup({ settings: { labClickSend: true }, countdownMs: 40, popupHoldMs: 150 });
+  try {
+    const url = 'http://127.0.0.1:9/files/locked.pdf';
+    const tab = s.fb.addTab({ url, title: 'Locked paper', scriptable: false });
+    // A toolbar popup is open (in another window, say), but the card's popup that would get the answer closed.
+    s.fb.popupOpen(true);
+    const lost = await s.msg({ type: 'labScheduleSend', tabId: tab, mode: 'page' });
+    assert.ok(lost.needsPermission);
+    assert.deepEqual(await s.receive(), [], 'nothing before the hold time');
+    await new Promise((res) => setTimeout(res, 400));
+    const items = await s.receive();
+    assert.deepEqual(items.map((i) => [i.header.kind, i.header.url]), [['url', url]]);
+    const row = (await s.rows()).find((x) => x.url === url);
+    assert.equal(row.note, 'Without access to the site the PDF can’t be downloaded, so its link was sent.');
+    // A popup that comes too late is told so, and its Allow or Send the link sends nothing more.
+    assert.deepEqual(await s.msg({ type: 'labHoldPdf', token: lost.token }), { handled: true });
+    assert.deepEqual(await s.msg({ type: 'sendPdf', url, title: 'Locked paper', token: lost.token }), { handled: true });
+    await new Promise((res) => setTimeout(res, 300));
+    assert.deepEqual(await s.receive(), []);
+  } finally { await s.close(); }
+});
 
 test('F04: where an open popup can’t be told (neither getContexts nor getViews), the link goes rather than nothing', async () => {
   const s = await setup({ settings: { labClickSend: true }, countdownMs: 40, popupApi: null });
@@ -534,6 +561,46 @@ test('F01: a document waiting for a tap shows ⌛; its row reads "Waiting for a 
     const d = L.describeLabRow(row, Date.now(), ctx(t2));
     assert.deepEqual([d.label, d.sentence, d.final], ['Handed to the Reader', 'Your Daylight passed it to the Reader. The Reader doesn’t confirm documents yet.', true]);
     assert.equal(s.fb.badge.text, '✓');
+  } finally { await s.close(); }
+});
+
+test('F01: a send that fails or makes no row shows "!" (as v1.1), never the ✓ of an older delivered row; a question shows the most recent row’s mark', async () => {
+  const s = await setup();
+  try {
+    const day = await labDaylight(s.pairing);
+    await s.app.sendUrl('https://example.com/first', 'First');
+    await day.pollOnce();
+    await s.app.tick();
+    assert.equal((await s.rows())[0].status, 'delivered');
+    assert.equal(s.fb.badge.text, '✓');
+    const settings = s.fb.addTab({ url: 'chrome://settings', title: 'Settings', scriptable: false });
+    const local = s.fb.addTab({ url: 'file:///Users/me/notes.html', title: 'notes.html', scriptable: false }); // no file access
+    const plain = s.fb.addTab({ url: 'https://news.example/plain', title: 'Plain', html: ARTICLE }); // nothing selected
+    const failed = [
+      ['Alt+Shift+D on chrome://settings', () => s.app.onCommand('send-page', { id: settings, url: 'chrome://settings', title: 'Settings' })],
+      ['the popup’s Send this page on chrome://settings', () => s.fb.api.runtime.sendMessage({ type: 'sendTab', tabId: settings })],
+      ['right-click Send page on a file:// page without file access', () => s.app.onMenu({ menuItemId: core.MENU.page }, { id: local, url: 'file:///Users/me/notes.html', title: 'notes.html' })],
+      ['Paste and send with no link', () => s.msg({ type: 'labSendCopied', text: 'Remember the milk' })],
+      ['Send selection with nothing selected', () => s.app.onCommand('send-selection', { id: plain, url: 'https://news.example/plain', title: 'Plain' })],
+    ];
+    for (const [what, act] of failed) {
+      await s.app.labBadge({ force: true });
+      assert.equal(s.fb.badge.text, '✓', `${what}: the delivered row’s mark before`);
+      const before = s.fb.badge.history.length;
+      const rowsBefore = (await s.rows()).length;
+      await act();
+      assert.equal((await s.rows()).length, rowsBefore, `${what}: no row`);
+      assert.deepEqual(s.fb.badge.history.slice(before), ['…', '!'], what);
+    }
+    // A question isn't a failure: the thin-page one leaves the most recent row's mark.
+    const thin = s.fb.addTab({ url: 'https://news.example/brief', title: 'Brief', html: ARTICLE, article: { title: 'Brief', content: '<p>x</p>', textContent: Array(40).fill('w').join(' ') } });
+    await s.app.labBadge({ force: true });
+    const before = s.fb.badge.history.length;
+    assert.deepEqual(await s.msg({ type: 'sendTab', tabId: thin, mode: 'clean' }), { thin: { n: 40 } });
+    assert.deepEqual(s.fb.badge.history.slice(before), ['…', '✓']);
+    // A send that makes a row shows that row's mark: on its way.
+    await s.msg({ type: 'sendTab', tabId: plain, mode: 'link' });
+    assert.equal(s.fb.badge.text, '…');
   } finally { await s.close(); }
 });
 

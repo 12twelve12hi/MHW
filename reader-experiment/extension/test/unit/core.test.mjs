@@ -3,9 +3,9 @@
 //
 // These are v1.1's flows. They run with Lab off here, and again with Lab on, the default (core-lab-on.test.mjs sets
 // DLS_TEST_LAB=1), so Lab's send path (labSendTab) keeps them: the same rows, retries, relay trouble and PDFs. With Lab
-// on only these differ, each by its LAB branch: the badge shows the most recent row (F01: … until it is delivered,
-// also after a send that made no row), pages go through clean-html.js (F03; the fake's stand-in here), and the menu has
-// Lab's entries (F34).
+// on only these differ, each by its LAB branch: the badge shows the most recent row (F01: … until it is delivered;
+// a send that failed or made no row shows "!" as v1.1 does), pages go through clean-html.js (F03; the fake's stand-in
+// here), and the menu has Lab's entries (F34).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { built } from '../helpers/built.mjs';
@@ -154,7 +154,7 @@ test('"Send link only" and pages that are too large or unreadable go as url item
 
     const t5 = s.fb.addTab({ url: 'chrome://settings', title: 'Settings', scriptable: false });
     await assert.rejects(s.app.onMessage({ type: 'sendTab', tabId: t5 }), /only web pages/);
-    assert.equal(s.fb.badge.text, LAB ? '…' : '!', 'Lab: no row, so the most recent one’s mark');
+    assert.equal(s.fb.badge.text, '!', 'no row: "!", with Lab on too (not the most recent row’s mark)');
 
     const items = await s.receive();
     assert.deepEqual(items.map((i) => i.header.kind).sort(), ['url', 'url', 'url', 'url']);
