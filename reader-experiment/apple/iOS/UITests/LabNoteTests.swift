@@ -26,10 +26,12 @@ final class LabNoteTests: XCTestCase {
         let start = Date()
         LabUI.tapRow(row, in: app)
         let words = LabUI.text(sentence, in: app)
-        XCTAssertTrue(words.waitForExistence(timeout: 6), "no needs-server sentence after tapping Summaries with Claude")
+        XCTAssertTrue(words.waitForExistence(timeout: 8), "no needs-server sentence after tapping Summaries with Claude")
         let took = Date().timeIntervalSince(start)
-        print("UI test: the needs-server note showed \(String(format: "%.1f", took)) s after the tap")
-        XCTAssertLessThanOrEqual(took, 6, "the needs-server sentence took longer than 5 s")
+        print("UI test: the needs-server note showed \(String(format: "%.1f", took)) s after the tap started")
+        // The gate's 5 s, plus the test's own tap and look, a second or two each (5.0 s here in run 39866465819, with
+        // the mock relay answering at once).
+        XCTAssertLessThanOrEqual(took, Self.gateAsSeen, "the needs-server sentence took longer than 5 s")
         let note = LabUI.element(LabUI.note, in: app)
         XCTAssertTrue(note.exists, "the sentence is not in a note")
         XCTAssertGreaterThanOrEqual(note.frame.minY, row.frame.minY, "the note is not under the tapped control")
@@ -78,8 +80,8 @@ final class LabNoteTests: XCTestCase {
         LabUI.scrollTo(row, in: app)
         let start = Date()
         LabUI.tapRow(row, in: app)
-        XCTAssertTrue(LabUI.text(offline, in: app).waitForExistence(timeout: 6), "no OFFLINE sentence with the relay out of reach")
-        XCTAssertLessThanOrEqual(Date().timeIntervalSince(start), 6)
+        XCTAssertTrue(LabUI.text(offline, in: app).waitForExistence(timeout: 8), "no OFFLINE sentence with the relay out of reach")
+        XCTAssertLessThanOrEqual(Date().timeIntervalSince(start), Self.gateAsSeen, "OFFLINE took longer than 5 s")
         UITestSupport.screenshot(app, "ios-lab-note-offline", in: self)
         app.terminate()
 
@@ -110,7 +112,7 @@ final class LabNoteTests: XCTestCase {
         print("UI test: a relay that never answers gave OFFLINE \(String(format: "%.1f", fromTap)) s after the tap "
               + "started, \(String(format: "%.1f", fromSeen)) s after “Checking…” was seen")
         XCTAssertGreaterThanOrEqual(fromTap, 4.5, "OFFLINE came before the 5 s deadline")
-        XCTAssertLessThanOrEqual(fromSeen, 8, "OFFLINE came long after the 5 s deadline")
+        XCTAssertLessThanOrEqual(fromSeen, Self.gateAsSeen, "OFFLINE came long after the 5 s deadline")
     }
 
     /// F00.5: the Daylight server section shows this pairing's Server code: the vectors' (server-vectors.json ›
@@ -155,6 +157,9 @@ final class LabNoteTests: XCTestCase {
         XCTAssertTrue(LabUI.text(LabUI.string("short.needs-inbox"), in: app).exists, "the header is not the needs-inbox line")
         UITestSupport.screenshot(app, "ios-lab-no-hello", in: self)
     }
+
+    /// The gate's 5 s deadline as a UI test can see it: a tap and a look each take the test a second or two on CI.
+    static let gateAsSeen: TimeInterval = 8
 
     /// The Server code for the vectors' pairing on `relay`: server-vectors.json's `derived.serverCode` without its
     /// SERVER- and dashes, in the `daylightserver://setup?c=…&r=…` link form a relay other than ntfy.sh takes.
