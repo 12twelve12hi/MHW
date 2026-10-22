@@ -148,16 +148,19 @@ While Lab is on, two rows under the switch open Lab's screens (**Back** or Esc r
     the server again. Your other devices and your Daylight find it on their own.
   - A server that was deployed again at a new address with the same pairing asks *Your Daylight server moved to {host}.
     Use it?* (**Use it**, **Cancel**), also while the old address fails or doesn't answer (a deploy with a new setup
-    link deletes the old Worker). **Use it** moves to the new address; **Cancel** changes nothing, and the question
+    link deletes the old Worker). Opening the section or *What's in Lab* reads the server's announcement on the relay
+    at once, however recent the last one is (it is otherwise kept for 6 hours), and so does a check whose server, found
+    from that kept announcement, fails or can't be reached (one more read; a server that keeps refusing this PC's
+    Server code costs no more reads). **Use it** moves to the new address; **Cancel** changes nothing, and the question
     comes back the next time the section opens. A typed Server address wins over the server's own announcement, so
     there is no question while one is typed.
 
 The server is asked only while Lab is on (but for the lock below). An answer is used for 10 minutes; a server that doesn't answer within 5
 seconds reads as *Couldn’t reach the Daylight server* (the screen says *Checking your Daylight server…* meanwhile).
 Before this PC is paired with another Daylight, a server that knows the old pairing is locked (Lab on or off), so a lost
-or replaced pairing can't use it, and a typed Server address (the old server's) is forgotten. **Unpair** forgets a
-typed Server address too, without locking anything (the same Daylight may come back): pairing another Daylight then
-finds that one's server, or says the server knows the previous pairing. Afterwards, while Lab is
+or replaced pairing can't use it, and a typed Server address and the server's last answer (the old server's) are
+forgotten. **Unpair** forgets both too, without locking anything (the same Daylight may come back): pairing another
+Daylight then asks that one's server, or says the server knows the previous pairing. Afterwards, while Lab is
 on, the send view shows the locked text with the new **Server code**, **Copy** and how to re-run the deploy, under
 *Daylight server*, until **OK** (or until the new server answers).
 
@@ -329,8 +332,11 @@ no server call with Lab off; What's in Lab's rows and short states; the gate's s
 with the Server code, `OFFLINE` at once for a refused connection and at 5 s for a relay that never answers, a server's
 own states, `later`); What's in Lab's cached states (10 minutes old or less, with nothing on the network); the server
 section for the vector pairing (its Server code and fingerprint, F00.5), a server found on the relay, a move (also when
-the old address never answers), Set up with a link and a typed address; Unpair forgetting a typed address, so another
-Daylight's pairing says `pairing-mismatch` and finds its own server; F17 (every ack-topic frame reaches the ledger, Lab
+the old address never answers, is deleted or refuses while the cached config is fresh: opening What's in Lab or the
+section reads the config topic, and a feature's check reads it once more after `SERVER_ERROR` or `OFFLINE`, after
+`BAD_AUTH` once per episode), Set up with a link and a typed address; Unpair forgetting a typed address and the cached
+status, so another Daylight's pairing says `pairing-mismatch`, finds its own server, and its gates and Settings row
+never answer from the old server's status; F17 (every ack-topic frame reaches the ledger, Lab
 on or off; a later Lab level, junk and a `lab: 0` frame are read safely; no Lab frame delays an ack); an item queued
 offline goes once back online with Lab off (F00.4); the lock before a re-pairing and its follow-up; the build's copies,
 the CSP, that the window's words are `LAB_TEXT`'s, and that the code is Wave 0 (the release gate).
@@ -341,7 +347,9 @@ only, and a click that shows exactly the feature's sentence under it, in a polit
 code** (F00.3); *Checking your Daylight server…*, then `OFFLINE` at 5 s (F00.6), and the cached states at once instead
 when the last answer is recent; the server section and **Copy**
 (F00.5), Set up with a link and its question, a typed address that answers Ready, the *moved … Use it?* question
-while the old address never answers (Cancel keeps the pin, Use it moves); no secret name or needs-setup
+while the old address never answers (Cancel keeps the pin, Use it moves), and, with a fresh cached config and the
+old Worker deleted, Settings' row, What's in Lab and the section each reading the config topic and the question
+showing at once; no secret name or needs-setup
 sentence on any screen reached without clicking a Lab feature or opening the server section (F00.7); the re-pairing
 follow-up. axe-core finds nothing on each of them, light and dark, and with Comfort at 100%, 200% and 225% text
 nothing is clipped at the narrowest window. `test/ui/lab-off-parity.test.mjs` (above) runs axe-core with Lab off.

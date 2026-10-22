@@ -19,7 +19,8 @@
 // Discovery and every server call run only with Lab on (DESIGN 4.3). A pairing change with another secret removes the
 // lab/* keys with the outbox (applyPairingChange removes the ledger's; this store can't list its keys, so
 // afterPairingChange removes this file's own); before it, a server that knows the old pairing is locked
-// (lockBeforeRepair, 2.6), Lab on or off, and a typed Server address (the old server's) is forgotten, as on Unpair.
+// (lockBeforeRepair, 2.6), Lab on or off, and a typed Server address and the cached server status (the old server's)
+// are forgotten through the module, as on Unpair.
 
 import * as ds from './daylight-share.js';
 import {
@@ -117,13 +118,16 @@ export function createLab({
   }
 
   /**
-   * The server as a whole: discovery (the pin, a move, the API level), then GET /v1/status (cached 10 minutes; force:
-   * ask now). -> {state, message, config?, status?, moved?}; state is 'ready' or a state of SERVER_WIDE.
+   * The server as a whole: discovery (the pin, a move, the API level), then GET /v1/status (cached 10 minutes).
+   * force: Lab settings opened (the server section or What's in Lab), so the config topic is read now whatever the
+   * cached config's age (server DESIGN 4.3 rule 1) and the status is asked now: a server that moved is asked about at
+   * once, not after the config's 6 hours. One relay poll at most, two when a server found from the cached config fails
+   * (below). -> {state, message, config?, status?, moved?}; state is 'ready' or a state of SERVER_WIDE.
    */
   async function probeNow(pairing, force) {
     const server = serverFor(pairing);
     let d;
-    try { d = await server.discover(); } catch (e) { return server.noteError('', e); }
+    try { d = await server.discover({ force }); } catch (e) { return server.noteError('', e); }
     if (!d) {
       const pin = await get('server/pin');
       const state = pin && pin.fingerprint !== (await server.values()).fingerprint ? 'pairing-mismatch' : 'needs-server';
@@ -137,8 +141,18 @@ export function createLab({
       return { state: 'ready', message: null, config, status, moved: d.moved };
     } catch (e) {
       // The pinned server may be gone because it moved (a deploy with "New setup link" deletes the old Worker): the
-      // move goes with the error, so the section can ask about it.
-      return { ...(await server.noteError('', e)), config, moved: d.moved };
+      // move goes with the error, so the section can ask about it. A config that came from the cache is read again
+      // from the config topic once in this check (2.6), so the move is found now: after a 401, discover() polls only
+      // on the first BAD_AUTH of an episode (noteError removed server/configAt: 2.6's "discover({force: true}) once");
+      // after a server that is gone or failing (OFFLINE, SERVER_ERROR), discover({force: true}). A forced check has
+      // read the topic already.
+      const out = await server.noteError('', e);
+      let moved = d.moved;
+      const code = e?.code;
+      if (!force && d.source === 'cache' && (code === 'BAD_AUTH' || code === 'OFFLINE' || code === 'SERVER_ERROR')) {
+        try { moved = (await server.discover(code === 'BAD_AUTH' ? {} : { force: true }))?.moved ?? moved; } catch { /* the relay is out of reach too */ }
+      }
+      return { ...out, config, moved };
     }
   }
 
@@ -392,46 +406,55 @@ export function createLab({
   /**
    * Before a pairing with another secret replaces `current` (2.6 Re-pairing): a server that knows the old pairing is
    * locked, Lab on or off, when a pin exists (or a typed Server address). The typed address is then forgotten: it is
-   * the old server's, which the next deploy replaces (DESIGN 12.7), and it would hide the new one from discovery.
-   * Never throws; gives up on the lock after `ms`. -> {known: a server was known, locked: the lock request succeeded}
+   * the old server's, which the next deploy replaces (DESIGN 12.7), and it would hide the new one from discovery; so is
+   * the cached status, the old server's too (lockBeforeRepair drops it; forgetServer whatever was sent). Never throws; gives up on the lock after `ms`. -> {known: a server was known, locked: the lock request succeeded}
    */
   async function beforeRepair(current, next, ms = 10000) {
-    // A typed address kept with no pairing is an earlier pairing's (only Unpair leaves none, and it forgets it).
-    if (!current && next) await forgetAddress(next);
+    // A typed address or a status kept with no pairing is an earlier pairing's (only Unpair leaves none, and it
+    // forgets both).
+    if (!current && next) await forgetServer(next);
     if (!current || !next || ds.samePairingSecret(current, next)) return { known: false, locked: false };
     const pin = await get('server/pin');
     const manual = await get('server/manualUrl');
-    if (!pin && !manual) return { known: false, locked: false };
-    const server = new DaylightServer({ pairing: current, storage, fetch: fetchFn, now, from, app });
-    serverCache = null;
-    probing = null;
-    const locked = await withDeadline(server.lockBeforeRepair().catch(() => false), ms, () => false);
-    if (manual) { try { await server.clearManualUrl(); } catch { /* kept: the section can clear it */ } }
-    return { known: true, locked };
+    let locked = false;
+    if (pin || manual) {
+      const server = new DaylightServer({ pairing: current, storage, fetch: fetchFn, now, from, app });
+      serverCache = null;
+      probing = null;
+      locked = await withDeadline(server.lockBeforeRepair().catch(() => false), ms, () => false);
+    }
+    // The typed address and the status are the old server's, whether a lock was sent or not.
+    await forgetServer(current);
+    return { known: !!(pin || manual), locked };
   }
 
   /**
-   * Before Unpair removes `current`: a typed Server address is forgotten, as a re-pairing forgets it (beforeRepair).
-   * It is this pairing's server, and the next pairing may be another Daylight's: kept, it would hide that one's server
-   * from discovery (the typed address wins) and answer BAD_AUTH instead of pairing-mismatch. The pin stays (it tells
-   * pairing-mismatch), and nothing is locked: unpairing is not re-pairing, and the same Daylight may come back.
-   * Never throws.
+   * Before Unpair removes `current`: a typed Server address and the server's cached status are forgotten, as a
+   * re-pairing forgets them (beforeRepair). Both are this pairing's server's, and the next pairing may be another
+   * Daylight's: a typed address kept would hide that one's server from discovery (the typed address wins) and answer
+   * BAD_AUTH instead of pairing-mismatch; a status kept (the module's server/status is not tied to a pairing) would
+   * answer that Daylight's gates and the "Daylight server ›" row for up to 10 minutes with this server's states. The
+   * pin stays (it tells pairing-mismatch), and nothing is locked: unpairing is not re-pairing, and the same Daylight
+   * may come back. Never throws.
    */
   async function beforeUnpair(current) {
-    await forgetAddress(current);
+    await forgetServer(current);
   }
 
   /**
-   * Removes a typed Server address, and the status it answered, through the module (clearManualUrl, which doesn't use
-   * the pairing it is made with); the server objects start afresh. Never throws.
+   * Removes a typed Server address and the cached server status through the module (clearManualUrl removes both, and
+   * doesn't use the pairing it is made with; nothing outside the module writes server/status, LAB-PLAN 2.6); the
+   * server objects start afresh. Never throws.
    */
-  async function forgetAddress(pairing) {
+  async function forgetServer(pairing) {
     serverCache = null;
     probing = null;
-    if (!pairing?.secret || !(await get('server/manualUrl'))) return;
+    if (!pairing?.secret) return;
+    const [manual, status] = await Promise.all([get('server/manualUrl'), get('server/status')]);
+    if (manual === undefined && status === undefined) return;
     try {
       await new DaylightServer({ pairing, storage, fetch: fetchFn, now, from, app }).clearManualUrl();
-    } catch (e) { log.warn?.('Send to Daylight: the typed Server address was kept', e); }
+    } catch (e) { log.warn?.('Send to Daylight: the old server’s address or status was kept', e); }
   }
 
   /**

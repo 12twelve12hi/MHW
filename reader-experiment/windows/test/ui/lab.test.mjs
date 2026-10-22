@@ -266,6 +266,52 @@ test('the Daylight server moved and its old address never answers: “moved … 
   await page.context().close();
 });
 
+test('the Daylight server moved within the cached config’s 6 hours and its old Worker was deleted: opening What’s in Lab or the section reads the relay and asks at once (DESIGN 4.3)', { timeout: 90000 }, async () => {
+  // A relay of its own: the config announced here must not reach the other tests' pairing.
+  const relay2 = await startMockRelay();
+  try {
+    const values = await S.deriveServerValues(await S.deriveServerSeed(FIXED_SECRET));
+    const old = 'https://daylight-aaaaaaaaaaaa.example.workers.dev';
+    const moved = 'https://daylight-bbbbbbbbbbbb.example.workers.dev';
+    // Found at `old` on the relay an hour ago: the config is cached, fresh (6 hours) and pinned.
+    const config = { server: old, api: S.SERVER_API, fingerprint: values.fingerprint, delivery: 'lab', sent: new Date(NOW - 60 * MIN).toISOString(), id: 'a' };
+    const kv = await paired({ 'server/pin': { origin: old, fingerprint: values.fingerprint }, 'server/config': config, 'server/configAt': NOW - 60 * MIN }, { relayUrl: relay2.url });
+    // The deploy with "New setup link" deleted the old Worker and announced the new one.
+    await new ds.RelayClient({ relay: relay2.url }).publish(values.configTopic, await S.buildConfigFrame(values, { server: moved, sent: new Date(NOW - MIN).toISOString() }));
+    const page = await ui.open({ kv, now: NOW });
+    const polls = [];
+    page.on('request', (r) => { if (r.url().includes(`/${values.configTopic}/json`)) polls.push(r.url()); });
+    // workers.dev answers a deleted Worker's address with a 404 page of its own. Playwright's fulfilled answer reaches
+    // the page as it is (SERVER_ERROR); a real one without CORS headers fails the fetch (OFFLINE), which re-reads the
+    // config topic the same way (the unit tests).
+    await page.route(`${old}/**`, (r) => r.fulfill({ status: 404, contentType: 'text/html; charset=utf-8', body: '<!doctype html><title>There is nothing here yet</title>' }));
+    await page.route(`${moved}/**`, (r) => r.abort('connectionrefused'));
+
+    // Settings' "Daylight server ›" row checks the server (its last answer is over 10 minutes old): the cached config
+    // names the old address, which fails, so that check reads the config topic once more (2.6).
+    await openSettings(page);
+    await page.waitForFunction(() => document.getElementById('server-sub')?.textContent !== '');
+    assert.equal(polls.length, 1, 'the row’s check read the config topic once, after the old address failed');
+    assert.deepEqual(await stored(page, 'server/pendingMove'), { origin: moved, fingerprint: values.fingerprint });
+
+    await page.getByRole('button', { name: LAB_TEXT.whatsInLab, exact: true }).click();
+    await page.waitForSelector('#view-whats:not([hidden]) #whats[data-fresh="1"]', { timeout: 15000 });
+    assert.equal(polls.length, 2, 'What’s in Lab read the config topic');
+    await page.locator('#whats-back').click();
+
+    await page.locator('#open-server').click();
+    await page.waitForSelector('#view-server:not([hidden]) #server[data-fresh="1"]', { timeout: 15000 });
+    assert.equal(polls.length, 3, 'the section read the config topic');
+    const question = L.serverMovedText(moved);
+    assert.equal(await page.getByRole('group', { name: question, exact: true }).count(), 1, 'the section asks at once');
+    assert.match(await page.textContent('.lab-server-where'), /^daylight-aaaaaaaaaaaa\.example\.workers\.dev · /, 'still on the old pin');
+    assert.equal(await page.textContent('.lab-server-state .lab-note-text'), S.errorMessage('SERVER_ERROR'));
+    await axeBoth(page, 'Daylight server, moved, old Worker deleted');
+    assert.deepEqual(page.errors.filter((e) => !/status of 404/.test(e)), [], 'only the deleted Worker’s 404s');
+    await page.context().close();
+  } finally { await relay2.close(); }
+});
+
 test('F00.5: the Daylight server section shows the vector pairing’s Server code and fingerprint, and Copy puts the code on the clipboard', { timeout: 60000 }, async () => {
   // The vectors' pairing is on ntfy.sh, which the tests never reach: the server is OFFLINE, the code derived here.
   const page = await ui.open({ kv: kvOf({ pairing: { code: VEC.pairingCode, relay: ds.normalizeRelay(undefined), name: 'Vector Daylight' } }) });

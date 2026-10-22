@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dist, load } from '../helpers/built.mjs';
-import { startFakeWorker, statusJson, hangingServer, deadAddress } from '../helpers/fake-worker.mjs';
+import { startFakeWorker, statusJson, hangingServer, deadAddress, goneWorker } from '../helpers/fake-worker.mjs';
 import { startMockRelay } from '../../../share/js/mock-relay.mjs';
 import { LAB_LIB, SERVER_LIB, serverModule } from '../../build.mjs';
 
@@ -299,8 +299,10 @@ test('a server found on the relay: its host and the v1 notice; a move asks first
     const moved = 'https://daylight-ba9876543210.example.workers.dev';
     s.flags.route[moved] = s.worker.url;
     await relay.publish(values.configTopic, await S.buildConfigFrame(values, { server: moved, delivery: 'lab' }));
-    await s.storage.set('server/configAt', 0); // the cached config is older than 6 hours
+    assert.ok(Date.now() - (await s.get('server/configAt')) < S.CONFIG_REFRESH_MS, 'the cached config is fresh');
+    const polls = s.log.filter((l) => l.includes(`/${values.configTopic}/json`)).length;
     v = await s.lab.serverView();
+    assert.equal(s.log.filter((l) => l.includes(`/${values.configTopic}/json`)).length, polls + 1, 'opening the section read the config topic');
     assert.equal(v.moved, 'Your Daylight server moved to daylight-ba9876543210.example.workers.dev. Use it?');
     assert.equal(v.host, 'daylight-0123456789ab.example.workers.dev', 'still the pinned one');
     assert.equal(await s.lab.confirmMove(), true);
@@ -316,10 +318,15 @@ test('the server moved and the old address never answers: the question still sho
   const moved = 'https://daylight-bbbbbbbbbbbb.example.workers.dev';
   try {
     const values = await S.deriveServerValues(await S.deriveServerSeed(s.secret));
-    // This pairing's server was pinned at `old`, which now never answers; the deploy's new Worker announces `moved`.
+    const relay = new ds.RelayClient({ relay: s.relay.url });
+    const announce = async (server, agoMin) => relay.publish(values.configTopic, await S.buildConfigFrame(values, { server, sent: new Date(Date.now() - agoMin * MIN).toISOString() }));
+    // This pairing's server was found at `old` on the relay an hour ago (the config is cached and fresh: 6 hours) and
+    // now never answers; the deploy's new Worker announces `moved`.
     s.flags.route = { [old]: hang.url, [moved]: s.worker.url };
     await s.storage.set('server/pin', { origin: old, fingerprint: values.fingerprint });
-    await new ds.RelayClient({ relay: s.relay.url }).publish(values.configTopic, await S.buildConfigFrame(values, { server: moved }));
+    await s.storage.set('server/config', { server: old, api: S.SERVER_API, fingerprint: values.fingerprint, delivery: 'lab', sent: new Date(Date.now() - 60 * MIN).toISOString(), id: 'a' });
+    await s.storage.set('server/configAt', Date.now() - 60 * MIN);
+    await announce(moved, 4);
     const t0 = Date.now();
     let v = await s.lab.serverView();
     assert.ok(Date.now() - t0 < 2000, 'answered at the gate’s deadline');
@@ -328,14 +335,20 @@ test('the server moved and the old address never answers: the question still sho
     assert.equal(s.worker.count('GET /v1/status'), 0, 'nothing went to the new address before Use it');
     // Asked again the next time (Cancel changes nothing).
     assert.equal((await s.lab.serverView()).moved, L.serverMovedText(moved));
+    // From here the old address refuses at once. One discovery runs at a time: the one still waiting on the old
+    // address ends with its connection, and each opening after it reads the relay afresh.
+    s.flags.route[old] = await deadAddress();
+    await hang.close();
+    assert.equal((await s.lab.probe({ force: true })).state, 'OFFLINE');
     // A typed Server address wins over discovery: no question then.
     await s.storage.set('server/manualUrl', s.worker.url);
     assert.equal((await s.lab.serverView()).moved, null);
     await s.storage.remove('server/manualUrl');
-    // Once the config names the pinned origin again, an old pendingMove asks nothing.
-    await s.storage.set('server/config', { ...(await s.get('server/config')), server: old });
+    // Once the server announces the pinned origin again, an old pendingMove asks nothing.
+    await announce(old, 3);
     assert.equal((await s.lab.serverView()).moved, null);
-    await s.storage.set('server/config', { ...(await s.get('server/config')), server: moved });
+    assert.equal((await s.get('server/config')).server, old);
+    await announce(moved, 2);
     // Use it: the module pins the new origin, and the server is ready there.
     s.worker.state.token = values.authToken;
     assert.equal(await s.lab.confirmMove(), true);
@@ -343,6 +356,101 @@ test('the server moved and the old address never answers: the question still sho
     v = await s.lab.serverView();
     assert.deepEqual([v.state, v.host, v.moved], ['ready', 'daylight-bbbbbbbbbbbb.example.workers.dev', null]);
   } finally { await s.close(); await hang.close(); }
+});
+
+test('the server moved while a fresh config is cached: opening What’s in Lab or the section reads the config topic now and asks (DESIGN 4.3, 2.6)', async () => {
+  // The config read on the relay is kept for 6 hours (CONFIG_REFRESH_MS); a deploy with "New setup link" moves the
+  // server well within them. Lab settings opening reads the config topic whatever the cached config's age.
+  const old = 'https://daylight-aaaaaaaaaaaa.example.workers.dev';
+  const moved = 'https://daylight-bbbbbbbbbbbb.example.workers.dev';
+  for (const was of ['deleted', 'refused']) {
+    const gone = await goneWorker();
+    const dead = await deadAddress();
+    const s = await setup({ status: statusJson() });
+    try {
+      const values = await S.deriveServerValues(await S.deriveServerSeed(s.secret));
+      const relay = new ds.RelayClient({ relay: s.relay.url });
+      const polls = () => s.log.filter((l) => l.includes(`/${values.configTopic}/json`)).length;
+      s.worker.state.token = values.authToken;
+      // Found at `old` on the relay and ready there: the config is cached, fresh, and pinned.
+      s.flags.route = { [old]: s.worker.url };
+      await relay.publish(values.configTopic, await S.buildConfigFrame(values, { server: old, sent: new Date(Date.now() - 2 * MIN).toISOString() }));
+      let v = await s.lab.serverView();
+      assert.deepEqual([v.state, v.host, v.moved], ['ready', 'daylight-aaaaaaaaaaaa.example.workers.dev', null]);
+      assert.equal((await s.get('server/config')).server, old);
+      assert.ok(Date.now() - (await s.get('server/configAt')) < S.CONFIG_REFRESH_MS, 'the cached config is fresh');
+
+      // The deploy deleted the old Worker (workers.dev answers 404 with its own page), or its address refuses
+      // connections; the new Worker announces itself at `moved`.
+      s.flags.route = { [old]: was === 'deleted' ? gone.url : dead, [moved]: s.worker.url };
+      await relay.publish(values.configTopic, await S.buildConfigFrame(values, { server: moved, sent: new Date(Date.now() - MIN).toISOString() }));
+      const statusAsked = s.worker.count('GET /v1/status');
+      let p = polls();
+      const o = await s.lab.overview();
+      assert.equal(polls(), p + 1, `${was}: What’s in Lab read the config topic`);
+      assert.deepEqual(await s.get('server/pendingMove'), { origin: moved, fingerprint: values.fingerprint });
+      assert.equal(o.server.state, was === 'deleted' ? 'error' : 'ready');
+      if (was === 'deleted') assert.equal(o.server.short, L.serverHeadingShort('error'));
+
+      p = polls();
+      v = await s.lab.serverView();
+      assert.equal(polls(), p + 1, `${was}: the section read the config topic`);
+      assert.equal(v.moved, L.serverMovedText(moved), `${was}: the section asks at once`);
+      assert.equal(v.host, 'daylight-aaaaaaaaaaaa.example.workers.dev', 'still on the old pin until Use it');
+      if (was === 'deleted') assert.deepEqual([v.state, v.message], ['error', S.errorMessage('SERVER_ERROR')]);
+      else assert.equal(v.state, 'ready', 'a refused connection keeps the cached status (the module’s OFFLINE fallback)');
+      assert.equal(s.worker.count('GET /v1/status'), statusAsked, 'nothing went to the new address before Use it');
+      if (was === 'deleted') assert.ok(gone.count('GET /v1/status') >= 1, 'the old address was asked');
+
+      assert.equal(await s.lab.confirmMove(), true);
+      v = await s.lab.serverView();
+      assert.deepEqual([v.state, v.host, v.moved], ['ready', 'daylight-bbbbbbbbbbbb.example.workers.dev', null]);
+      assert.equal((await s.lab.overview()).server.state, 'ready');
+    } finally { await s.close(); await gone.close(); }
+  }
+});
+
+test('a server feature tapped while a fresh config is cached: a failing server sends discovery back to the config topic (2.6)', async () => {
+  const old = 'https://daylight-aaaaaaaaaaaa.example.workers.dev';
+  const moved = 'https://daylight-bbbbbbbbbbbb.example.workers.dev';
+  for (const answer of ['SERVER_ERROR', 'BAD_AUTH']) {
+    let t = Date.now();
+    const gone = await goneWorker();
+    // The old Worker still running with another pairing's Server code answers 401 BAD_AUTH.
+    const other = await startFakeWorker({ token: 'another pairing’s token' });
+    const s = await setup({ status: statusJson(), now: () => t });
+    try {
+      const values = await S.deriveServerValues(await S.deriveServerSeed(s.secret));
+      const relay = new ds.RelayClient({ relay: s.relay.url });
+      const polls = () => s.log.filter((l) => l.includes(`/${values.configTopic}/json`)).length;
+      s.worker.state.token = values.authToken;
+      s.flags.route = { [old]: s.worker.url };
+      await relay.publish(values.configTopic, await S.buildConfigFrame(values, { server: old, sent: new Date(Date.now() - 2 * MIN).toISOString() }));
+      assert.equal((await s.lab.serverView()).state, 'ready');
+
+      s.flags.route = { [old]: answer === 'SERVER_ERROR' ? gone.url : other.url, [moved]: s.worker.url };
+      await relay.publish(values.configTopic, await S.buildConfigFrame(values, { server: moved, sent: new Date(Date.now() - MIN).toISOString() }));
+      t += 11 * MIN; // the status (10 minutes) is stale, the config (6 hours) fresh: the tap reads no config first
+      let p = polls();
+      let g = await s.lab.gate('F02');
+      assert.deepEqual([g.ready, g.state, g.message], [false, 'error', S.errorMessage(answer)]);
+      assert.equal(polls(), p + 1, `${answer}: the config topic was read once, after the server failed`);
+      assert.deepEqual(await s.get('server/pendingMove'), { origin: moved, fingerprint: values.fingerprint });
+
+      // Tapped again: a server that keeps answering 401 costs no more relay polls (server/badAuthAt, the module's
+      // episode); a server that is gone is looked for again.
+      t += MIN;
+      p = polls();
+      g = await s.lab.gate('F02');
+      assert.equal(g.state, 'error');
+      assert.equal(polls(), p + (answer === 'BAD_AUTH' ? 0 : 1));
+
+      const v = await s.lab.serverView();
+      assert.deepEqual([v.state, v.moved], ['error', L.serverMovedText(moved)]);
+      assert.equal(v.setupFirst, answer === 'BAD_AUTH', 'after a BAD_AUTH, Set up with a link comes first');
+      assert.equal(s.worker.count('GET /v1/status'), 1, 'nothing went to the new address before Use it');
+    } finally { await s.close(); await gone.close(); await other.close(); }
+  }
 });
 
 test('Set up with a link (2.6, DESIGN 3.5): read here first, sent only on Use it, then the server is pinned and ready', async () => {
@@ -590,6 +698,48 @@ test('Unpair forgets a typed Server address, so another Daylight’s pairing say
   } finally { await s.close(); }
 });
 
+test('Unpair forgets the server’s cached status: another Daylight’s gates and the Settings row ask its own server (2.6)', async () => {
+  // A's server is ready and its status cached (10 minutes); after Unpair, B is paired. B's server is announced on the
+  // relay and reports files: needs-r2 (or doesn't know B yet: 401). Nothing may answer from A's status.
+  for (const b of ['needs-r2', 'BAD_AUTH']) {
+    const s = await setup({ status: statusJson() });
+    const bWorker = await startFakeWorker({ status: statusJson({ features: { files: 'needs-r2' } }) });
+    try {
+      const relay = new ds.RelayClient({ relay: s.relay.url });
+      const values = await S.deriveServerValues(await S.deriveServerSeed(s.secret));
+      const aOrigin = 'https://daylight-aaaaaaaaaaaa.example.workers.dev';
+      const bOrigin = 'https://daylight-bbbbbbbbbbbb.example.workers.dev';
+      s.worker.state.token = values.authToken;
+      s.flags.route = { [aOrigin]: s.worker.url, [bOrigin]: bWorker.url };
+      await relay.publish(values.configTopic, await S.buildConfigFrame(values, { server: aOrigin }));
+      assert.equal((await s.lab.gate('F02')).state, 'later', 'A’s server is ready');
+      assert.deepEqual((await s.lab.state()).serverSubtitle, 'Optional · Ready');
+      assert.ok(await s.get('server/status'), 'A’s status is cached');
+
+      await s.app.unpair();
+      assert.equal(await s.get('server/status'), undefined, `${b}: the status went with the pairing`);
+      assert.deepEqual(await s.get('server/pin'), { origin: aOrigin, fingerprint: values.fingerprint }, 'the pin stays');
+      assert.equal(s.worker.count('POST /v1/admin/lock'), 0, 'unpairing locks nothing');
+
+      const other = ds.generateSecret();
+      const otherValues = await S.deriveServerValues(await S.deriveServerSeed(other));
+      bWorker.state.token = b === 'BAD_AUTH' ? 'another pairing’s token' : otherValues.authToken;
+      await relay.publish(otherValues.configTopic, await S.buildConfigFrame(otherValues, { server: bOrigin }));
+      await s.app.pair(await ds.pairingLink({ secret: other, relay: s.relay.url, name: 'Other Daylight' }));
+      const aAsked = s.worker.count('GET /v1/status');
+
+      const g = await s.lab.gate('F02');
+      if (b === 'needs-r2') assert.deepEqual([g.state, g.message], ['needs-r2', S.STATE_MESSAGES['needs-r2']], 'B’s own status');
+      else assert.deepEqual([g.state, g.message], ['error', S.errorMessage('BAD_AUTH')]);
+      assert.ok(bWorker.count('GET /v1/status') >= 1, 'B’s server was asked');
+      assert.equal(s.worker.count('GET /v1/status'), aAsked, 'A’s server wasn’t');
+      const st = await s.lab.state();
+      assert.equal(st.serverSubtitle, b === 'needs-r2' ? 'Optional · Ready' : L.serverRowSubtitle('error'));
+      assert.deepEqual(await s.get('server/pin'), { origin: bOrigin, fingerprint: otherValues.fingerprint });
+    } finally { await s.close(); await bWorker.close(); }
+  }
+});
+
 test('a typed Server address kept with no pairing is forgotten when a pairing arrives', async () => {
   const s = await setup({ paired: false });
   try {
@@ -600,6 +750,11 @@ test('a typed Server address kept with no pairing is forgotten when a pairing ar
     assert.equal(await s.get('server/status'), undefined);
     assert.equal((await s.lab.serverView()).state, 'needs-server');
     assert.equal(s.worker.hits.length, 0, 'the old address wasn’t asked');
+    // A status alone (no typed address) is an earlier pairing's too.
+    await s.app.unpair();
+    await s.storage.set('server/status', statusJson());
+    await s.app.pair(s.link);
+    assert.equal(await s.get('server/status'), undefined);
   } finally { await s.close(); }
 });
 
