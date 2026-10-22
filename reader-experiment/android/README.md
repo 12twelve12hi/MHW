@@ -223,8 +223,8 @@ With Lab on, the Lab card has two more rows:
   Daylight server. Add the Cloudflare secrets to turn this on (Lab › Daylight server shows how).", with **Copy Server
   code**), announced to TalkBack, until OK, another tap or leaving the screen. A server that does not answer within 5 s
   is "Couldn’t reach the Daylight server." On the phone the list has Wave 1's features (below), the features that
-  change how sharing behaves each with a **Use** switch, and F04's and F09's settings on their rows; the Inbox's Wave 1
-  features come with card K5.
+  change how sharing behaves each with a **Use** switch, and F04's and F09's settings on their rows; on the Inbox it
+  has Arrival notices and Setup check (card K5, below).
 - **Daylight server ›** ("Optional · Not set up"): where the server is set up, so it has the long texts, every word
   from `LAB_TEXT.serverSection` or the server module (LAB-PLAN 2.6, "The rest of the server section's copy"): its
   state (with the exact secret names); while it is not set up, **Turn it on** with the five steps, numbered (LAB_TEXT's
@@ -250,9 +250,10 @@ each Inbox said in its last hello and the latest state of this phone's items.
 
 **What the Inbox says (F17).** In the Inbox role, `inbox/LabReporter.kt` publishes Lab frames on the ack topic, last on
 the network's relay budget (LAB-PROTOCOL 2.2.4): a **hello** (`lab`, `android/<versionName>`, its caps `st` and `tap`,
-plus `reader-link` when the app links go to takes SAVE_PAGE; when it last polled; whether Instant delivery is
-connected) and the **state** of each item from a paired device: `waiting` when it is first announced (once), `held` when
-its card is answered Later or its notification swiped away, `reader` / `queued` / `handed` from the Reader's answer
+plus `reader-link` when the app links go to takes SAVE_PAGE, and `cap-kind` from Wave 1, as its rows show each item's
+kind; when it last polled; whether Instant delivery is connected) and the **state** of each item from a paired device:
+`waiting` when it is first announced (once), `held` when it is kept for later (Keep for later on its notice or card,
+Later with Lab off, or its notification swiped away), `reader` / `queued` / `handed` from the Reader's answer
 (`saved` and `duplicate` are `reader`; documents, shared links and anything unknown are `handed`) and `inbox` when it
 stays in the Inbox. It sends them after each poll or live batch once the acks are out, at the end of each hand-off and
 2 s after a state, at most one frame every 30 s and 30 a day; nothing while the last acks failed or for an hour after
@@ -368,6 +369,75 @@ it’s off, …"); TalkBack reads "Use {feature}". The one Lab switch still turn
   automation sheet scroll, Send and Close (Cancel) can be reached, and the title field stays above the keyboard on
   Android 15 (edge to edge); with TalkBack, swiping through the card never lands on the area outside it.
 
+### Wave 1 on the Inbox (card K5)
+
+With Lab on, the DC-1 Inbox has these (LAB-PLAN 3.3; every word is `LAB_TEXT`'s). The one-time note shows once on the
+Inbox from this build. With Lab off every screen, notice and hand-off is v1.1's.
+
+- **What each row is (F03, F11).** The line under a row's title says what the item is, from its header's extras (`x-cap`,
+  LAB-PROTOCOL 2.3, stored in `InboxItem.extras` with Lab on or off): "Page as you saw it", "Clean article", "Excerpt",
+  "Test article", "Link (the Reader downloads it)" or "Document · 1.3 MB", then " · from iPhone". An `x-cap` this build
+  does not know reads as none. The hello carries `cap-kind`.
+- **What the sender sees (F01).** A tap on a row's title opens its details: when it arrived and its size, "Cleaned from
+  {host}" when its sender cleaned the link (`x-orig`), and "Sender sees: {label}", the label the sender's row shows
+  ("On your Daylight ✓", "Waiting for a tap on your Daylight", "Kept for later on your Daylight", "Handed to the
+  Reader", "In your Reader ✓", …), from the last state the Inbox recorded for it (`InboxItem.labState`). Items from the
+  Daylight server and the Reader hand-off test have no sender, so no such line.
+- **Add to Reader and Keep for later (F15).** A waiting item's notice has two actions, **Add to Reader** (as its tap)
+  and **Keep for later**; the card over the Reader says **Keep for later** where v1.1 says Later. Keep for later, and
+  swiping the notice away, keep the item for later: it waits in the Inbox, its row says "Kept for later", nothing hands
+  it over by itself (opening the Inbox does not; v1.1 hands over everything waiting then), and its senders see "Kept for
+  later on your Daylight" (`held`). **Add to Reader** (the notice, the card, or the row) hands it over: `reader` for a
+  link the Reader saved, `handed` for a document. The card's Keep for later leaves the item's notice in the shade, as
+  v1.1's Later does; the notice's own Keep for later takes it away. Waiting excerpts from one sender share one notice:
+  "3 excerpts from iPhone".
+- **Saved to the Reader (F15).** An item handed over without a tap (links and pages, and documents with "Open as they
+  arrive" or "Add to the library as a batch") gets one notice, "Saved to the Reader: {title}" / "From {from}", with only
+  **Dismiss** (no state), grouped under "{n} saved from {from}" ("from your devices" for several senders). An item that
+  had a notice before (it waited for a tap) never gets another. **Arrival notices** on the Inbox screen, under "Getting
+  items to the Reader": Off, **Quiet** (the default; the channel "Arrivals", low importance) or Alert ("Arrivals
+  (alert)", high). **Quiet hours** (off): from 22:00 to 07:00 arrival notices, and waiting items' notices, go silently.
+- **Inbox health (F15).** At the top of the Inbox: "Last checked 4 min ago · Instant delivery on" ("just now" while the
+  live connection is open) and one warning at a time: "Instant delivery stopped. Turn it back on to get items within
+  seconds." with **Turn on** (Instant delivery is on, its service is not running and wrote no heartbeat for 2 minutes;
+  the service writes one every minute); "Needs notifications" with **Open Settings**; or the last poll's sentence. The
+  15-minute job posts "Instant delivery stopped …" with **Turn on** in the channel "Inbox health" at most once every 12
+  hours. Arrival notices' row in What's in Lab says "Needs notifications" while they are off.
+- **Setup check (F26).** From its row in What's in Lab: Notifications, “New items” notices (high importance),
+  Display over other apps, Battery optimisation, Instant delivery (on and running), A Reader that saves pages, and The
+  Reader’s read-later (no SAVE_PAGE refused in the last week since the last one it took), each "✓ {check}" or
+  "! {check}". An unmet one has **Open Settings** (Android's notification, channel, overlay or battery settings) or
+  **Open setting** (Instant delivery: the Inbox screen, where its switch is; the Reader: Settings, where Deliver to is);
+  the Reader's read-later is the Reader's own setting, so it has none. **Test the Reader hand-off** puts the bundled test
+  article (`SetupCheck.testArticle`, `x-cap: "test"`, `https://daylight.invalid/test/<id>`) in the Inbox and hands it
+  over the usual way (the Inbox is in front), then shows "✓ In your Reader" once the Reader saved it, and the item's own
+  words until then. **Activity log** (type, id8, kind, status, nothing else: received, waiting, held, handoff, notice,
+  test, health) and **Copy diagnostics** (`SetupCheck.diagnosticsReport`, platform "inbox", redacted).
+
+**Still to check on a device** (W1 device round on Rooted 2, with a phone and the real ntfy.sh relay):
+
+- **F03.4:** every row's kind line shows ("Page as you saw it" from the Mac or Safari, "Excerpt" from the Chrome
+  extension's Send selection, "Test article" from a phone's Setup check, "Link (the Reader downloads it)"), and TalkBack
+  reads it with the title.
+- **F01:** for a link and a PDF sent from the iPhone, the Inbox's "Sender sees: …" matches what the iPhone's row says,
+  at each step (waiting, kept for later, handed, in the Reader).
+- **F15.1:** an arrival over the Reader posts one notice (grouped when several), and TalkBack reads its title and
+  source; on the e-paper shade, **Add to Reader** gives `reader` for a link and `handed` for a PDF, **Keep for later**
+  and a swipe give `held`, and **Dismiss** on "Saved to the Reader" gives nothing (the emulator steps of E1 read the
+  states from the ack topic).
+- **F15.2:** stop the service from Android's Task Manager (Android 13+, the notification shade's "Active apps"): the
+  warning card shows on the next open (unless opening the app restarted it, which then says nothing), and the "Instant
+  delivery stopped" notice comes within 15 minutes; **Turn on** from the notice starts it again.
+- **F15.3:** the Inbox, What's in Lab and Setup check render with animations off (Developer options) exactly as with
+  them on, and no state is shown by colour alone.
+- **F15.4:** Keep for later on a link's card makes the iPhone show "Kept for later on your Daylight", and Add to Reader
+  then "In your Reader ✓".
+- **Quiet hours** at 22:00–07:00 on the DC-1's clock: nothing pops up or sounds, and items still arrive.
+- **F26.1 / F26.3:** Test the Reader hand-off with the Inbox in front reaches the Reader and ticks "✓ In your
+  Reader"; each unmet check's button opens the right screen on Android 13 and 14 (the channel's settings, "Display over
+  other apps" for Daylight Share, the battery list).
+- **F11.4:** an excerpt of a page already in the Reader arrives as a new document, not "already in your library".
+
 ## Build
 
 Requirements: JDK 17 or 21. The protocol module needs nothing else; the APK needs the Android SDK (platform 35).
@@ -466,6 +536,20 @@ unless a test says so.
 | `SharePathVectorsTest` | F16.1 and F11.5 on the phone's own share path: every share-sheet case of `normalise.json` through `parseLab` and the intake; Lab off is v1.1's path |
 | `LabScreensAccessibilityTest` | also the phone's home with the timeline and the queue, and Setup check (as shipped and with Comfort at 200 %) |
 
+### Lab tests (K5, the Inbox's Wave 1)
+
+| Test | Covers |
+|---|---|
+| `InboxExtrasTest` | 2.3: the header's extras reach `InboxItem` through a real poll and stay with Lab off, v1.1's `items.json` unchanged for items without them; F03/F11 every kind line (an unknown `x-cap` as none); F01 "Sender sees" in the sender's words for every state, none for server-lane or local items; the recorded state remembered; Keep for later marks only waiting items; Quiet hours; a refused read-later remembered for a week until the Reader takes one |
+| `InboxRowLineTest` | F03.4 (every row's kind line, read by a screen reader; v1.1's meta line gone with Lab on), F01 (details on a tap: "Sender sees", "Cleaned from"; never on the row), F15 ("Kept for later" on the row, Add to Reader clears it), Lab off: v1.1's rows |
+| `ArrivalNoticesTest` | F15.1: the notice's Add to Reader and Keep for later (Lab off: Open Inbox); Keep for later → `held`, a hand-off with the Inbox in front leaves the item, Add to Reader → `handed` (a document) or `reader` (a link); a swipe → `held`; the card's Keep for later; excerpts grouped; "Saved to the Reader" for items handed over by themselves (title, source, Dismiss only, grouped, Dismiss records nothing, never twice, never after a notice), the three channels, Alert, Off, Quiet hours on both kinds of notice; nothing with Lab off |
+| `HealthTest` | F15.2 with a fake heartbeat and clock: stopped, the warnings' order, the line, the heartbeat with Lab on only, the 15-minute job's notice at most once every 12 hours with Turn on (and `SyncWorker` running the check), the card's Turn on, notifications off, the poll's error, no card with Lab off |
+| `InboxSetupCheckTest` | 1.4 and F26 on the Inbox: What's in Lab's two features (Arrival notices "Needs notifications", its sentence and Open Settings), the arrival settings on the Inbox screen, every check and its button (F26.3), no Reader → Deliver to, Test the Reader hand-off through `HandoffActivity` to "✓ In your Reader" with no state for senders, the activity log and Copy diagnostics with no URL, title, code or topic (F26.2) |
+| `LabScreensAccessibilityTest` | also the Inbox's home with Lab's rows, health card, a kept item and an item's details, and the Inbox's Setup check (as shipped and with Comfort at 200 %) |
+
+`HandoffDecisionsTest` runs v1.1's hand-off decisions with Lab off (LAB-PLAN 1.3); `LabReporterTest` expects the
+hello's `cap-kind`.
+
 ### Layout
 
 - `share-core/`: the protocol in plain Kotlin/JVM, no Android classes, no dependencies, so the Reader can embed it:
@@ -480,7 +564,11 @@ unless a test says so.
   features, the Use switches, online, the activity log), `ShareInPlace.kt` (the card), `SendWorker.kt` and
   `FlushWorker.kt` (the `send-<id>` and `flush` jobs; `Work.kt` is the Inbox's, K5), `Notices.kt` ("Send results"),
   `Shortcuts.kt` (Direct Share) and `AutomationActivity.kt`; its screens are `ui/SenderScreen.kt` (the timeline, the
-  queue, the copied link) and `ui/LabPhone.kt` (What's in Lab's switches, the F02 entry point, Setup check).
+  queue, the copied link) and `ui/LabPhone.kt` (What's in Lab's switches, the F02 entry point, Setup check). The
+  Inbox's Wave 1 (K5) is `inbox/InboxLab.kt` (its features and checks, `Arrivals`, `InboxHealth`, `ArrivalNotices` and
+  `ArrivalActionReceiver`), with Keep for later in `Handoff.kt`, `HandoffActivity.kt` and `WaitingCard.kt`, the
+  heartbeat in `Live.kt`, the health check in `Work.kt`, and its screens in `ui/InboxScreen.kt` (the rows, the health
+  card, Arrival notices, Setup check).
 
 ### Debug builds: setup without the UI
 
@@ -506,14 +594,24 @@ received <id> -> notification dismissed: waits in the Inbox
 received <id> kind=<...> -> kept in inbox (no reader installed) status=no_reader
 ```
 
-With Lab on, the Inbox also logs its Lab frames (LAB-PLAN F17):
+With Lab on, the Inbox also logs its Lab frames (LAB-PLAN F17) and its Wave 1 (K5):
 
 ```
 lab: state <id> <waiting|held|inbox|handed|failed|queued|reader>
-lab: hello caps=<st,tap[,reader-link]>
+lab: hello caps=<st,tap[,reader-link],cap-kind>
 lab: states n=<k> published
 lab: hello lab=0
+received <id> -> kept for later: waits in the Inbox
+received <id> -> arrival notice: saved to the Reader (<quiet|alert>)
+received <id> -> arrival notice dismissed
+lab: reader hand-off test <id> stored
+lab: instant delivery stopped (no heartbeat for 2 minutes)
 ```
+
+The card's Keep for later still logs `card: later for <ids>: waits in the Inbox`. On an emulator, a waiting item's
+notice actions are in the shade (`adb shell cmd statusbar expand-notifications`, then the action's words: **Add to
+Reader**, **Keep for later**); its broadcast (`com.daylight.share.action.KEEP_FOR_LATER`, data
+`daylightshare-item:<id>`) goes to an unexported receiver, so only root can send it.
 
 `docs=` (documents only) is the **Documents** choice at the time; `by=` says whether the Inbox was in front, handed
 over in the background on its own, a notification was tapped, or the card's **Add to Reader**. "waiting for a tap" is

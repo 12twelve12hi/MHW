@@ -393,6 +393,7 @@ class ArrivalNoticesTest {
     /** During Quiet hours a waiting item's notice does not pop up either. */
     @Test
     fun quietHoursHushTheWaitingNotices() {
+        ShadowSettings.setCanDrawOverlays(false) // no card: the notice itself would pop up
         inboxWith(pdf)
         app.prefs.labQuietHours = true
         InboxLab.clock = { at(23) }

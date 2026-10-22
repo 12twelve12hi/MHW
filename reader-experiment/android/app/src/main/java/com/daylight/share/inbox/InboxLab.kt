@@ -347,6 +347,8 @@ object ArrivalNotices {
         if (!Handoff.notificationsAllowed(app)) return false
         ensureChannels(app)
         val alert = mode == Arrivals.ALERT
+        // Quiet hours: posted silently (it does not alert, in its group or alone).
+        val silent = InboxLab.quietHoursNow(app, now)
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         val open = PendingIntent.getActivity(app, 4, Intent(app, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), flags)
         val dismiss = PendingIntent.getBroadcast(
@@ -361,13 +363,13 @@ object ArrivalNotices {
             .setWhen(now)
             .setShowWhen(true)
             .setGroup(GROUP)
-            .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
+            .setGroupAlertBehavior(if (silent) NotificationCompat.GROUP_ALERT_SUMMARY else NotificationCompat.GROUP_ALERT_CHILDREN)
             .setOnlyAlertOnce(true)
             .setAutoCancel(true)
             .setContentIntent(open)
             .addAction(0, LabText["arrivals.dismiss"], dismiss)
             .addExtras(Bundle().apply { putString(EXTRA_FROM, Notices.sender(item)) })
-        if (InboxLab.quietHoursNow(app, now)) b.setSilent(true)
+        if (silent) b.setSilent(true)
         val shown = runCatching { NotificationManagerCompat.from(app).notify(item.id, ITEM_NOTIFICATION, b.build()) }
             .onFailure { logw("notification not shown", it) }.isSuccess
         if (!shown) return false

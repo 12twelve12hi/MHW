@@ -87,7 +87,7 @@ data class InboxItem(
             else -> "Waiting"
         }
 
-    fun toJson(): Map<String, Any?> = linkedMapOf(
+    fun toJson(): Map<String, Any?> = linkedMapOf<String, Any?>(
         "id" to id, "kind" to kind, "url" to url, "title" to title, "name" to name, "mime" to mime, "size" to size,
         "from" to from, "app" to app, "sent" to sent, "received" to received, "file" to file, "state" to state,
         "deliveredTo" to deliveredTo, "via" to via, "readerStatus" to readerStatus, "handedAt" to handedAt,
