@@ -185,3 +185,10 @@ test('localStorageAdapter reports a failed write, so a file whose re-send copy c
     await relay.close();
   }
 });
+
+test('web/lab-wave.json names no Lab wave, or one the release gate knows (LAB-PLAN 6.2)', () => {
+  const read = (rel) => JSON.parse(fs.readFileSync(new URL(rel, import.meta.url), 'utf8'));
+  const gate = read('../../../lab-release-gate.json');
+  const { wave } = read('../../../web/lab-wave.json');
+  assert.ok(wave === null || typeof gate[wave] === 'boolean', `web/lab-wave.json: unknown wave ${wave}`);
+});

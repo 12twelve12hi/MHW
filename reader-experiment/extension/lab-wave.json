@@ -1,0 +1,4 @@
+{
+  "about": "LAB-PLAN 6.2: the Lab wave of the code in this folder, which the release gate (../lab-release-gate.json) checks before rx-extension.yml publishes this build. null: no Lab code yet, so the build is published as before. The first Lab card here (X0 for the extension, B0 for the web sender) sets \"w0\"; X1 and B1 set \"w1\".",
+  "wave": null
+}

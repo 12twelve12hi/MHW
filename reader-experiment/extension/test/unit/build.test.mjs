@@ -104,3 +104,9 @@ test('the classic bundler refuses module forms it does not handle', () => {
   const out = bundleClassic(path.join(tmp, 'a.js'));
   assert.equal(new Function(`${out.replace('(() => {', 'return (() => {').replace(/\}\)\(\);\n$/, '').replace(/^\/\/.*\n/, '')}; return __module0.a(); })();`)(), 2);
 });
+
+test('lab-wave.json names no Lab wave, or one the release gate knows (LAB-PLAN 6.2)', () => {
+  const gate = JSON.parse(fs.readFileSync(path.join(here, '..', '..', '..', 'lab-release-gate.json'), 'utf8'));
+  const { wave } = JSON.parse(fs.readFileSync(path.join(here, '..', '..', 'lab-wave.json'), 'utf8'));
+  assert.ok(wave === null || typeof gate[wave] === 'boolean', `extension/lab-wave.json: unknown wave ${wave}`);
+});

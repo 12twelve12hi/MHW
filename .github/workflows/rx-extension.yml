@@ -3,6 +3,15 @@ name: Reader experiment - extension and web sender
 # Builds and tests the Send to Daylight browser extension (Chrome and Safari) and the web sender page, then publishes
 # send-to-daylight-chrome.zip and send-to-daylight-web.zip to the "reader-experiment-latest" release and, once GitHub
 # Pages is switched on (Settings > Pages > Source: GitHub Actions), serves the web sender at <pages URL>/send/.
+#
+# Lanes (LAB-PLAN 6.1): every job carries a "# lane: <name>" comment and a lane edits only its own blocks. The ext lane
+# owns the shared parts (triggers, env, permissions, concurrency and the publish job).
+#
+# Lab release gate (LAB-PLAN 6.2): the extension's and the web sender's Lab builds reach the release (and Pages) only
+# after the iPhone and Mac builds of the same wave. Each folder's lab-wave.json names the Lab wave of its code (null
+# before any Lab code); while reader-experiment/lab-release-gate.json has that wave false, the build is tested but not
+# uploaded, and the log says so. Flipping the gate starts this workflow, which then publishes the held builds.
+
 on:
   push:
     branches: [claude/sweet-goldberg-ej1nb0]
@@ -11,6 +20,7 @@ on:
       - 'reader-experiment/web/**'
       - 'reader-experiment/share/**'
       - '!reader-experiment/share/**/*.md'
+      - 'reader-experiment/lab-release-gate.json'
       - '.github/workflows/rx-extension.yml'
   workflow_dispatch:
 
@@ -23,8 +33,68 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-test:
-    name: Build and test
+  # lane: ext
+  ext:
+    name: Extension (Chrome, Safari)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: reader-experiment/extension
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: reader-experiment/extension/package-lock.json
+
+      - name: Install Playwright and axe-core
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Build the extension (Chrome, Safari, test build)
+        run: node build.mjs
+
+      - name: Unit tests (with the Safari background bundle)
+        run: node --test $(ls test/unit/*.test.mjs | grep -v '/web')
+
+      - name: End-to-end tests in Chromium (popup, accessibility, Lab-off parity)
+        run: node --test --test-concurrency=1 $(ls test/e2e/*.e2e.mjs | grep -v '/web')
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: send-to-daylight-chrome
+          path: reader-experiment/extension/dist/send-to-daylight-chrome.zip
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: send-to-daylight-safari
+          path: reader-experiment/extension/dist/safari
+          if-no-files-found: error
+
+      - name: Keep the accessibility screenshots (F27.4, for review)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rx-extension-a11y-screenshots
+          path: reader-experiment/extension/test-results/a11y
+          if-no-files-found: ignore
+
+      - name: Keep screenshots and test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rx-extension-test-results
+          path: reader-experiment/extension/test-results
+          if-no-files-found: ignore
+
+  # lane: web
+  web:
+    name: Web sender
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -44,28 +114,14 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Build the extension (Chrome, Safari, test build) and the web sender
-        run: |
-          node build.mjs
-          node ../web/build.mjs
+      - name: Build the web sender
+        run: node ../web/build.mjs
 
-      - name: Unit tests
-        run: node --test test/unit/*.test.mjs
+      - name: Unit tests (web)
+        run: node --test test/unit/*web*.test.mjs
 
-      - name: End-to-end tests in Chromium (extension and web sender against the mock relay)
-        run: node --test --test-concurrency=1 test/e2e/*.e2e.mjs
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: send-to-daylight-chrome
-          path: reader-experiment/extension/dist/send-to-daylight-chrome.zip
-          if-no-files-found: error
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: send-to-daylight-safari
-          path: reader-experiment/extension/dist/safari
-          if-no-files-found: error
+      - name: End-to-end tests in Chromium (web sender against the mock relay, Lab-off parity)
+        run: node --test --test-concurrency=1 test/e2e/*web*.e2e.mjs
 
       - uses: actions/upload-artifact@v4
         with:
@@ -83,13 +139,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rx-extension-test-results
+          name: rx-web-test-results
           path: reader-experiment/extension/test-results
           if-no-files-found: ignore
 
+  # lane: ext (shared: the release step)
   publish:
     name: Publish to the release
-    needs: build-test
+    needs: [ext, web]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -106,18 +163,45 @@ jobs:
           name: send-to-daylight-web
           path: out
 
-      - name: Upload send-to-daylight-chrome.zip and send-to-daylight-web.zip
+      - name: Check the Lab release gate (LAB-PLAN 6.2)
+        id: gate
+        run: |
+          set -euo pipefail
+          gate=reader-experiment/lab-release-gate.json
+          files=""
+          # <what> <lab-wave.json> <file>: a build with no Lab code always goes; a Lab build only once its wave is open.
+          check() {
+            wave=$(jq -r '.wave // ""' "$2")
+            if [ -z "$wave" ]; then
+              echo "$1: no Lab code in this build (wave none in $2): publishing $3."
+              files="$files $3"
+            elif [ "$(jq -r --arg w "$wave" '.[$w] == true' "$gate")" = true ]; then
+              echo "$1: Lab wave $wave is open in $gate: publishing $3."
+              files="$files $3"
+            else
+              echo "::notice title=Lab release gate::$1: NOT publishing $3. Its Lab wave $wave waits for the iPhone and Mac builds of that wave ($gate has \"$wave\": false). The tests ran."
+            fi
+          }
+          check "Chrome extension" reader-experiment/extension/lab-wave.json out/send-to-daylight-chrome.zip
+          check "Web sender" reader-experiment/web/lab-wave.json out/send-to-daylight-web.zip
+          [ -n "$files" ] || echo "Lab release gate: nothing to publish from this run."
+          echo "files=${files# }" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the builds the gate lets through
+        if: steps.gate.outputs.files != ''
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: bash .github/scripts/rx-publish.sh out/send-to-daylight-chrome.zip out/send-to-daylight-web.zip
+        run: bash .github/scripts/rx-publish.sh ${{ steps.gate.outputs.files }}
 
+  # lane: web
   # Optional: deploys the web sender to GitHub Pages at <pages URL>/send/. Pages also serves the highlights prototype
   # (highlights-prototype.yml) at the root, so this job deploys both together instead of replacing it. Until Pages is
   # switched on, and this branch may deploy to the github-pages environment, the job fails without failing the run.
+  # A web Lab build is held back from Pages exactly as from the release (the gate above).
   pages:
     name: Deploy to GitHub Pages (optional)
-    needs: build-test
+    needs: web
     runs-on: ubuntu-latest
     continue-on-error: true
     permissions:
@@ -130,7 +214,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check the Lab release gate (LAB-PLAN 6.2)
+        id: gate
+        run: |
+          set -euo pipefail
+          gate=reader-experiment/lab-release-gate.json
+          wave=$(jq -r '.wave // ""' reader-experiment/web/lab-wave.json)
+          if [ -z "$wave" ] || [ "$(jq -r --arg w "$wave" '.[$w] == true' "$gate")" = true ]; then
+            echo "Web sender: deploying to Pages (Lab wave ${wave:-none})."
+            echo "open=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Lab release gate::Web sender: NOT deploying to Pages. Its Lab wave $wave waits for the iPhone and Mac builds of that wave ($gate has \"$wave\": false). The tests ran."
+            echo "open=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Get the latest highlights prototype
+        if: steps.gate.outputs.open == 'true'
         continue-on-error: true
         uses: actions/checkout@v4
         with:
@@ -139,11 +238,13 @@ jobs:
           sparse-checkout: highlights-prototype/www
 
       - uses: actions/download-artifact@v4
+        if: steps.gate.outputs.open == 'true'
         with:
           name: send-to-daylight-web-site
           path: web-site
 
       - name: Assemble the site (highlights prototype at the root, web sender under /send/)
+        if: steps.gate.outputs.open == 'true'
         run: |
           src=highlights-prototype/www
           if [ -f highlights-branch/highlights-prototype/www/index.html ]; then src=highlights-branch/highlights-prototype/www; fi
@@ -153,9 +254,11 @@ jobs:
           ls -la _site _site/send
 
       - uses: actions/upload-pages-artifact@v3
+        if: steps.gate.outputs.open == 'true'
         with:
           path: _site
 
       - id: deploy
+        if: steps.gate.outputs.open == 'true'
         continue-on-error: true
         uses: actions/deploy-pages@v4
