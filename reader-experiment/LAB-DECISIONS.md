@@ -42,3 +42,21 @@ The rules every Lab build follows. Each line is the user's decision (Oct 20, 202
 ## Priority
 
 - **iPhone and Mac first**, then Chrome, Android phone, web, and the DC-1 inbox.
+
+## Answers to the Lab plan's open questions (Oct 22)
+
+- **Excerpts (LAB-PLAN 6.5 Q1): only explicit selections.** Text becomes an excerpt only when the user clearly
+  selected it: the Chrome/Safari context menu, Selection mode, a Safari selection, or "Send as excerpt".
+  Ordinary "headline + link" shares stay links.
+- **Per-feature switches (Q5): yes.** Features that change how sharing behaves (share in place, the copied-link
+  prompt, clean links, the "Send as" hints, and similar) each get a **Use** switch in What's in Lab, on by default. The
+  one Lab switch still turns all of Lab off.
+- **Mac signing (Q6): not now; keep ad-hoc builds.** But build the whole Developer ID path now (signing, hardened
+  runtime, notarization, a team-prefixed App Group), switched on only when the secrets exist. The user has an Apple
+  Developer account and will add them. Tracked in LOOSE-ENDS.md.
+- **Requests to the main Reader (Q8): all three.** Ask the Reader session on the Mac mini for:
+  - (a) the ImportActivity race fix;
+  - (b) a quiet import entry point for documents that imports without opening and reports the outcome;
+  - (c) keeping the Daylight Share item id with what it saves.
+
+  Each is proved first in the side-by-side Lab Reader on the lab tablet.
