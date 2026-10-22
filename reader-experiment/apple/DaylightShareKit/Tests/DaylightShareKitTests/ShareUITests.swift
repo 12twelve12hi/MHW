@@ -30,6 +30,11 @@ final class ShareUITests: XCTestCase {
     func testWhatEachPayloadSends() throws {
         let big = String(repeating: "x", count: DLS.maxPageHTML + 1)
         XCTAssertEqual(try ShareExtensionModel.input(for: .page(html: big, url: "https://e.com/p", title: "P")).kind, .url)
+        // CHANGES-v1.1 2.5: a page over 8 MiB goes as its link, and the share sheet says so.
+        XCTAssertEqual(ShareExtensionModel.note(for: [.page(html: big, url: "https://e.com/p", title: "P")]),
+                       "The page is larger than 8 MB, so its link was sent.")
+        XCTAssertNil(ShareExtensionModel.note(for: [.page(html: "<p>hi</p>", url: "https://e.com/p", title: "P")]))
+        XCTAssertNil(ShareExtensionModel.note(for: [.link(url: "https://e.com/p", title: nil)]))
         let page = try ShareExtensionModel.input(for: .page(html: "<p>hi</p>", url: "https://e.com/p", title: "P"))
         XCTAssertEqual(page.kind, .page)
         XCTAssertEqual(page.content, Data("<p>hi</p>".utf8))
@@ -171,6 +176,46 @@ final class ShareUITests: XCTestCase {
         XCTAssertNil(text.sentence)
         XCTAssertEqual(OutboxStore(store: store).rows.first?.url, "https://example.com/from-the-share-sheet")
         await fulfillment(of: [finished], timeout: 10)
+    }
+
+    /// A page over 8 MiB from Safari goes as its link, and the share sheet says so and stays open until Done
+    /// (CHANGES-v1.1 2.5: "The page is larger than 8 MB, so its link was sent."). Needs the mock relay.
+    @MainActor
+    func testABigPageGoesAsItsLinkAndTheShareSheetSaysSo() async throws {
+        guard let relay = ProcessInfo.processInfo.environment["DLS_E2E_RELAY"], !relay.isEmpty else {
+            throw XCTSkip("DLS_E2E_RELAY is not set")
+        }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("dls-ui-\(UUID().uuidString)")
+        let suite = "dls-tests-\(UUID().uuidString)"
+        defer {
+            UserDefaults.standard.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let store = SharedStore(defaults: UserDefaults(suiteName: suite)!, directory: dir)
+        await store.pair(try Pairing.generate(relay: relay, name: "CI Daylight"))
+        let model = ShareExtensionModel(store: store)
+        var finished = false
+        model.onFinish = { finished = true }
+        let html = "<p>" + String(repeating: "x", count: DLS.maxPageHTML) + "</p>"
+        let results: NSDictionary = ["url": "https://example.com/a-very-big-page", "title": "Big page", "html": html]
+        let item = NSExtensionItem()
+        item.attachments = [NSItemProvider(item: [SharePayloadReader.jsResultsKey: results] as NSDictionary,
+                                           typeIdentifier: SharePayloadReader.propertyList)]
+        model.start(inputItems: [item])
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline {
+            if case .sent = model.phase { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .sent = model.phase else { return XCTFail("not sent: \(model.phase)") }
+        XCTAssertEqual(model.note, "The page is larger than 8 MB, so its link was sent.")
+        let row = try XCTUnwrap(OutboxStore(store: store).rows.first)
+        XCTAssertEqual(row.kind, .url)
+        XCTAssertEqual(row.url, "https://example.com/a-very-big-page")
+        try await Task.sleep(nanoseconds: 2_500_000_000)
+        XCTAssertFalse(finished, "the note stays until Done")
+        model.done()
+        XCTAssertTrue(finished)
     }
 
     @MainActor

@@ -238,6 +238,9 @@ public final class ShareExtensionModel: ObservableObject {
 
     @Published public private(set) var phase: Phase = .reading
     @Published public private(set) var summary = ""
+    /// A line about how something went, shown under the result: "The page is larger than 8 MB, so its link was
+    /// sent." (CHANGES-v1.1 2.5) when a page went as its link.
+    @Published public private(set) var note: String?
     @Published public private(set) var daylightName = "your Daylight"
     /// False when this extension keeps its own pairing (no App Group in this build: ad-hoc and unsigned Mac builds),
     /// so the pairing screen explains that the code is needed here once.
@@ -359,6 +362,7 @@ public final class ShareExtensionModel: ObservableObject {
             }
         }
         cleanUpTemporaryFiles()
+        note = Self.note(for: payloads)
         if problems.isEmpty, let first = sent.first {
             // The row's own words: it reached the relay and waits for the Daylight ("Sent · waiting for your
             // Daylight"), not that it arrived.
@@ -371,6 +375,8 @@ public final class ShareExtensionModel: ObservableObject {
             if now.count == ids.count, now.allSatisfy({ $0.status == .delivered }), let row = now.first {
                 phase = .sent(RowText(row: row))
             }
+            // A note ("…so its link was sent.") stays until Done: there is more to read than the label.
+            guard note == nil else { return }
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             onFinish()
         } else {
@@ -421,6 +427,16 @@ public final class ShareExtensionModel: ObservableObject {
         }
     }
 
+    /// "The page is larger than 8 MB, so its link was sent." when a shared page is over `DLS.maxPageHTML` (it goes as
+    /// its link, `input(for:)`), else nil.
+    nonisolated static func note(for payloads: [SharePayload]) -> String? {
+        let bigPage = payloads.contains { payload in
+            if case let .page(html, _, _) = payload { return html.utf8.count > DLS.maxPageHTML }
+            return false
+        }
+        return bigPage ? ShareText.pageSentAsLinkMessage : nil
+    }
+
     static func describe(_ payloads: [SharePayload]) -> String {
         guard let first = payloads.first else { return "" }
         if payloads.count > 1 { return "\(payloads.count) files" }
@@ -462,6 +478,10 @@ public struct ShareExtensionView: View {
                 if let sentence = text.sentence {
                     Text(sentence).font(.callout).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                 }
+                noteText
+                if model.note != nil {
+                    Button("Done") { model.done() }.buttonStyle(.borderedProminent)
+                }
             case let .result(title, message):
                 Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 40)).foregroundColor(.orange)
                 Text(title).font(.headline).multilineTextAlignment(.center)
@@ -469,6 +489,7 @@ public struct ShareExtensionView: View {
                 if !message.isEmpty {
                     Text(message).font(.callout).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                 }
+                noteText
                 Button("Done") { model.done() }.buttonStyle(.borderedProminent)
             case let .confirmPairing(confirmation):
                 PairingConfirmationView(confirmation: confirmation, onConfirm: { model.confirmPairing() },
@@ -505,6 +526,12 @@ public struct ShareExtensionView: View {
         #else
         return "This copy of Send to Daylight can’t share the app’s pairing with the share sheet. Paste your pairing code here once; it is remembered."
         #endif
+    }
+
+    @ViewBuilder private var noteText: some View {
+        if let note = model.note {
+            Text(note).font(.callout).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     @ViewBuilder private var summaryText: some View {

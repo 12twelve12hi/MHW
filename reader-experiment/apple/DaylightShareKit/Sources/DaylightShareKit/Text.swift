@@ -157,6 +157,10 @@ public enum ShareText {
         "Too big to send. Files can be up to 9 MB; this one is \(formatMB(size)) MB."
     }
 
+    /// The share-time message when a web page over `DLS.maxPageHTML` went as its link (CHANGES-v1.1 2.5, the same
+    /// words as the extension's).
+    public static let pageSentAsLinkMessage = "The page is larger than 8 MB, so its link was sent."
+
     // MARK: URLs
 
     typealias Scalars = ArraySlice<Unicode.Scalar>
