@@ -205,6 +205,9 @@ class ShareInPlaceTest {
                         "back" -> {
                             s.onActivity { it.onBackPressedDispatcher.onBackPressed() }
                             PhoneKit.until(what = "back: the card to finish") { a.isFinishing }
+                            // Robolectric's Back only marks the card finishing (its shadow skips the activity's own
+                            // finish()); on a device the activity is then destroyed, as here.
+                            s.moveToState(Lifecycle.State.DESTROYED)
                         }
                         else -> s.moveToState(Lifecycle.State.DESTROYED)
                     }
