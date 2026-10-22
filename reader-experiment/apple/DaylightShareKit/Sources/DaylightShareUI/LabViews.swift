@@ -667,13 +667,7 @@ public struct ServerSettingsView: View {
         Section {
             ForEach(Array(LabText.serverSteps.enumerated()), id: \.offset) { i, step in
                 let line = "\(i + 1). \(step)"
-                #if os(macOS)
-                // Not selectable on the Mac, where the accessibility audit reads selectable 13 pt text in a form as
-                // failing contrast (black on white: runs 39844619890 and 39848557119); the plain text passes.
-                Text(line).listRowText(line)
-                #else
                 Text(line).listRowText(line).textSelection(.enabled)
-                #endif
             }
             Text(S("stepsMore")).dlsFont(.footnote).dlsSecondary().listRowText(S("stepsMore"))
         } header: {
