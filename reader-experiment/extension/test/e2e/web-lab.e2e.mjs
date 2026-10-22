@@ -157,7 +157,10 @@ test('a fresh page has Lab on and no one-time note in W0; Settings starts with t
     assert.equal(await page.getByText(LAB_TEXT.note).count(), 0, 'no one-time note in a W0 build');
     await store(page, { settings: { from: 'Parity web', lab: true } });
     await expectBaseline(page, 'web-pair');
-    await pairStored(page, { code: await ds.formatCode(FIXED_SECRET), name: 'Parity Daylight', extra: { outbox: parityRows() } });
+    // An upgrade from the last non-Lab build (a pairing, a history, settings without lab): Lab on, the rest kept (F00.1).
+    await pairStored(page, { code: await ds.formatCode(FIXED_SECRET), name: 'Parity Daylight', extra: { outbox: parityRows(), settings: { from: 'Parity web' } } });
+    assert.deepEqual(await storageGet(page, 'settings'), { from: 'Parity web', lab: true });
+    assert.equal(await page.locator('#history li').count(), 6, 'the history is kept');
     await expectBaseline(page, 'web-send');
     assert.equal(await page.getByText(LAB_TEXT.note).count(), 0);
 
@@ -402,6 +405,9 @@ test('What’s in Lab’s header follows the Daylight: nothing heard, a v1.1 Day
     await openLabView(page, 'whats');
     assert.equal(await page.textContent('.lab-inbox'), 'Needs Lab on your Daylight · checked in just now');
     assert.equal((await storageGet(page, 'outbox'))[0].status, 'delivered');
+    // The ack check What's in Lab ran updated the history too (and announced it), before the send view is drawn again.
+    assert.equal(await page.textContent('#history li .st'), 'Delivered ✓', 'the history follows the check');
+    await page.waitForFunction(() => document.getElementById('announce').textContent.startsWith('Delivered ✓: '), null, { timeout: 2000 });
     await page.getByRole('button', { name: '‹ Back' }).click();
     await page.click('#close-settings');
     assert.equal(await page.textContent('#history li .st'), 'Delivered ✓', 'a v1.1 row');

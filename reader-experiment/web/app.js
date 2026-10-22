@@ -573,7 +573,14 @@ async function startLab() {
   lab = createWebLab({
     storage, run: settingsRun, getPairing: () => ds.loadPairing(storage), getSettings: () => storage.get('settings'),
     deviceName: async () => settings.from || defaultFrom, appId: APP,
-    refreshAcks: async () => { if (sender) { const s = sender; await lock(() => s.checkAcks()); } },
+    // What's in Lab opening reads the ack topic (1.4). An ack it finds delivers rows, so the history (announcing
+    // Delivered) and the other tabs follow at once, as after a tick, not only when the send view is drawn again.
+    refreshAcks: async () => {
+      if (!sender) return;
+      const s = sender;
+      await lock(() => s.checkAcks());
+      await changed();
+    },
   });
   labPage = createLabPage({
     lab, $, show,

@@ -481,17 +481,23 @@ test('web/lab-wave.json names the code’s wave (not behind it), and the publish
   const { wave } = JSON.parse(fs.readFileSync(path.join(WEB, 'lab-wave.json'), 'utf8'));
   assert.equal(wave, 'w0', 'the web sender has Lab code from B0 on');
   assert.equal(typeof gate[wave], 'boolean');
-  const { declared, code, hold, why } = holdFor();
-  assert.ok(waveRank(declared) >= waveRank(code), `web/lab-wave.json says ${declared}, but the code is ${code} (${why.join('; ')})`);
-  assert.equal(hold, 'w0');
-  assert.deepEqual(releaseGate().open, gate.w0 === true);
-  // A gate file with w0 open lets it through; closed holds it.
+  const { declared, code, own, hold, why } = holdFor();
+  assert.ok(waveRank(declared) >= waveRank(own), `web/lab-wave.json says ${declared}, but this folder's code is ${own} (${why.join('; ')})`);
+  assert.equal(hold, waveRank(code) > waveRank(declared) ? code : declared, 'held for the later of the two');
+  assert.ok(waveRank(hold) >= waveRank('w0'));
+  assert.deepEqual(releaseGate().open, gate[hold] === true);
+  // A gate file with the wave open lets it through; closed holds it.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dls-gate-'));
   for (const open of [false, true]) {
     const g = path.join(tmp, `gate-${open}.json`);
-    fs.writeFileSync(g, JSON.stringify({ w0: open, w1: false }));
-    assert.deepEqual(releaseGate({ gate: g }), { hold: 'w0', open, why });
+    fs.writeFileSync(g, JSON.stringify({ w0: open, w1: open }));
+    assert.deepEqual(releaseGate({ gate: g }), { hold, open, why });
   }
+  // Extension code the build copies holds the build for its wave too, without failing this folder's --check.
+  const copied = path.join(tmp, 'lab-ui.js');
+  fs.writeFileSync(copied, `${fs.readFileSync(COPIED['lab-ui.js'], 'utf8')}\nconst LIST = ['F34'];\n`);
+  const h = holdFor(WEB, LAB_LIB, { ...COPIED, 'lab-ui.js': copied });
+  assert.deepEqual([h.code, h.own, h.hold], ['w1', 'w0', 'w1']);
   // The publish job (ext lane) holds send-to-daylight-web.zip by this script; the Pages job (web lane) holds the deploy
   // by it too, and both say why in the log.
   const wf = fs.readFileSync(path.join(WEB, '..', '..', '.github', 'workflows', 'rx-extension.yml'), 'utf8');

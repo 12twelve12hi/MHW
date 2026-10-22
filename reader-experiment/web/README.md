@@ -153,8 +153,9 @@ baselines `../extension/test/e2e/lab-off-baseline/web-*.yml` (re-recorded only w
 the release or Pages. `lab-wave.json` names the Lab wave of this folder's code (`w0` from B0), and
 `scripts/lab-wave.mjs` reads it from the code too (this folder's page files and the extension files the build copies
 in), so a `lab-wave.json` left behind can't let a later wave through: `node scripts/lab-wave.mjs` prints the wave the
-build is held for, `--check` fails when `lab-wave.json` is behind the code, and it exits 2 when it can't tell (then
-nothing is published). While `../lab-release-gate.json` has that wave `false`, CI builds and tests the page but
+build is held for (the later of the two), `--check` fails when `lab-wave.json` is behind this folder's own code (the
+copied extension code holds the build without failing it: only this lane edits `lab-wave.json`), and it exits 2 when
+it can't tell (then nothing is published). While `../lab-release-gate.json` has that wave `false`, CI builds and tests the page but
 uploads neither `send-to-daylight-web.zip` nor the Pages site, and its log says why.
 
 ## GitHub Pages

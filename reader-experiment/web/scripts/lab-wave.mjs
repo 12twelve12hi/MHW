@@ -5,7 +5,10 @@
 //                                        lab-wave.json's and the code's, or nothing when neither has Lab code. Says why
 //                                        on stderr. Exits 2 when it can't tell (daylight-lab.js changed shape, or the
 //                                        code names a Lab feature of a wave this script doesn't know yet).
-//   node scripts/lab-wave.mjs --check    the same, but exits 1 when lab-wave.json is behind the code.
+//   node scripts/lab-wave.mjs --check    the same, but exits 1 when lab-wave.json is behind this folder's own code.
+//                                        (Code the build copies from the extension holds the build all the same, but
+//                                        doesn't fail the check: the ext lane changes it, and only this lane edits
+//                                        lab-wave.json. The log says so.)
 //
 // What counts: this folder's own page files (*.js, *.html, *.css, *.json, *.webmanifest at its top level, build.mjs
 // included; not dist/ or scripts/), and the files build.mjs copies in from the extension (logic.js and lab-ui.js),
@@ -104,12 +107,19 @@ export function readTree(root = ROOT, copied = COPIED) {
   return files;
 }
 
-/** -> {declared, code, why, hold}: hold is the wave to hold the build for (null: no Lab code anywhere). Throws: can't tell. */
+/**
+ * -> {declared, code, own, why, hold}: code is the wave of everything the build ships, own that of this folder's files
+ * alone (what lab-wave.json must not fall behind), hold the wave to hold the build for (null: no Lab code anywhere).
+ * Throws: can't tell.
+ */
 export function holdFor(root = ROOT, labLib = LAB_LIB, copied = COPIED) {
   const declared = JSON.parse(fs.readFileSync(path.join(root, 'lab-wave.json'), 'utf8')).wave ?? null;
   waveRank(declared);
-  const { wave: code, why } = codeWave(readTree(root, copied), { w1: w1Names(fs.readFileSync(labLib, 'utf8')) });
-  return { declared, code, why, hold: laterWave(declared, code) };
+  const w1 = w1Names(fs.readFileSync(labLib, 'utf8'));
+  const tree = readTree(root, copied);
+  const { wave: code, why } = codeWave(tree, { w1 });
+  const { wave: own } = codeWave(tree.filter((f) => !Object.hasOwn(copied, f.name)), { w1 });
+  return { declared, code, own, why, hold: laterWave(declared, code) };
 }
 
 /**
@@ -124,11 +134,13 @@ export function releaseGate({ root = ROOT, labLib = LAB_LIB, gate = GATE, copied
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const { declared, code, why, hold } = holdFor();
+    const { declared, code, own, why, hold } = holdFor();
     console.error(`web/lab-wave.json: ${declared ?? 'none'}; the code: ${code ?? 'no Lab code'}${why.length ? ` (${why.slice(0, 6).join('; ')})` : ''}`);
-    if (waveRank(code) > waveRank(declared)) {
-      console.error(`web/lab-wave.json is behind the code: it must say "${code}". Holding the build for ${code}.`);
+    if (waveRank(own) > waveRank(declared)) {
+      console.error(`web/lab-wave.json is behind this folder's code: it must say "${own}". Holding the build for ${hold}.`);
       if (process.argv.includes('--check')) process.exit(1);
+    } else if (waveRank(code) > waveRank(declared)) {
+      console.error(`The extension files the build copies are Lab wave ${code}: holding the build for ${code}. Set web/lab-wave.json to "${code}" when this folder's code is.`);
     }
     console.log(hold ?? '');
   } catch (e) {
