@@ -613,7 +613,9 @@ public struct ShareExtensionView: View {
     }
 
     /// The card's own settings, where it keeps its own storage (`ShareExtensionModel.showsCardSettings`): Comfort,
-    /// with LAB_TEXT's words. The ad-hoc Mac build's own Lab switch joins it here (LAB-PLAN 1.1, card A2).
+    /// with LAB_TEXT's words. The ad-hoc Mac build's own Lab switch joins it here (LAB-PLAN 1.1, card A2), inside
+    /// `#if os(macOS)`: iOS compiles this view too, and the iPhone's share sheet has no Lab switch of its own (it follows
+    /// the app's). The UI tests' parity walk allows a Lab switch only on the Mac's `needs-pairing` card.
     @ViewBuilder private var cardSettings: some View {
         if model.showsCardSettings {
             Divider()

@@ -1,7 +1,8 @@
 import XCTest
 
-/// LAB-PLAN F27.2: Xcode's accessibility audit passes on the Mac app's main window, its Settings and the pairing screen
-/// (macOS 14 and later), with Comfort off and on.
+/// LAB-PLAN F27.2: Xcode's accessibility audit passes on the Mac app's main window (empty, and with the sample
+/// history: a row in every state, its status label, sentence and "Retry now" or "Try again", at the top of the history
+/// and after every step to its end), its Settings and the pairing screen (macOS 14 and later), with Comfort off and on.
 final class AccessibilityAuditTests: XCTestCase {
     /// Issues the app cannot fix because the system draws the element; each names why. Everything else fails.
     @available(macOS 14.0, *)
@@ -63,13 +64,23 @@ final class AccessibilityAuditTests: XCTestCase {
         continueAfterFailure = true
         for comfort in [false, true] {
             let suffix = comfort ? " (Comfort)" : ""
+            let history = UITestSupport.launch(paired: true, comfort: comfort, history: true)
+            XCTAssertTrue(history.windows.firstMatch.waitForExistence(timeout: 30), "no window")
+            XCTAssertTrue(history.windows.firstMatch.buttons["Settings"].waitForExistence(timeout: 30),
+                          "the main window did not show")
+            XCTAssertTrue(UITestSupport.waitForHistory(history), "the sample history did not show")
+            UITestSupport.screenshot(history, comfort ? "mac-main-comfort" : "mac-main", in: self)
+            try UITestSupport.auditHistory(history, "main" + suffix, allowed: Self.allowed)
+            UITestSupport.screenshot(history, comfort ? "mac-main-end-comfort" : "mac-main-end", in: self)
+            history.terminate()
+
             let app = UITestSupport.launch(paired: true, comfort: comfort)
             let window = app.windows.firstMatch
             XCTAssertTrue(window.waitForExistence(timeout: 30), "no window")
             let settings = window.buttons["Settings"]
             XCTAssertTrue(settings.waitForExistence(timeout: 30), "the main window did not show")
-            UITestSupport.screenshot(app, comfort ? "mac-main-comfort" : "mac-main", in: self)
-            try UITestSupport.audit(app, "main" + suffix, allowed: Self.allowed)
+            UITestSupport.screenshot(app, comfort ? "mac-main-empty-comfort" : "mac-main-empty", in: self)
+            try UITestSupport.audit(app, "main-empty" + suffix, allowed: Self.allowed)
 
             settings.click()
             let sheet = window.sheets.firstMatch

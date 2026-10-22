@@ -1,7 +1,8 @@
 import XCTest
 
-/// LAB-PLAN F27.2: Xcode's accessibility audit passes on the iPhone app's Home, Settings and pairing screens (iOS 17
-/// and later), at the default text size and with Comfort at the largest text size.
+/// LAB-PLAN F27.2: Xcode's accessibility audit passes on the iPhone app's Home (empty, and with the sample history: a
+/// row in every state, its status label, sentence and "Retry now" or "Try again"), Settings and the pairing screen
+/// (iOS 17 and later), at the default text size and with Comfort at the largest text size.
 final class AccessibilityAuditTests: XCTestCase {
     /// Issues allowed on `screen`, each with why; everything else fails. A navigation bar's button (the system draws it
     /// and caps its size), and Dynamic Type reports on the texts `DynamicTypeWaivers` names for the screen (the audit
@@ -25,6 +26,13 @@ final class AccessibilityAuditTests: XCTestCase {
         }
     }
 
+    /// The audits of Home with the sample history leave Dynamic Type out: at the largest size the audit loses every
+    /// row that was on screen (the list scrolls them away) and reports each of its texts. Each text of every row is
+    /// measured growing with the text size by `TruncationAuditTests.testEveryTextGrowsWithTheTextSize` (Home with the
+    /// same rows), and the empty Home is audited with Dynamic Type.
+    @available(iOS 17.0, *)
+    static var withoutDynamicType: XCUIAccessibilityAuditType { XCUIAccessibilityAuditType.all.subtracting(.dynamicType) }
+
     @MainActor
     func testHomeSettingsAndPairingPassTheAudit() throws {
         guard #available(iOS 17.0, *) else { throw XCTSkip("performAccessibilityAudit needs iOS 17 or later") }
@@ -32,8 +40,8 @@ final class AccessibilityAuditTests: XCTestCase {
         let app = UITestSupport.launch(paired: true)
         let settings = app.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 30), "Home did not show")
-        UITestSupport.screenshot(app, "ios-home", in: self)
-        try UITestSupport.audit(app, "home", allowed: Self.allowed(on: "home"))
+        UITestSupport.screenshot(app, "ios-home-empty", in: self)
+        try UITestSupport.audit(app, "home-empty", allowed: Self.allowed(on: "home-empty"))
 
         settings.tap()
         XCTAssertTrue(app.switches["comfort"].waitForExistence(timeout: 10), "Settings did not open")
@@ -47,6 +55,19 @@ final class AccessibilityAuditTests: XCTestCase {
         try UITestSupport.audit(unpaired, "pair", allowed: Self.allowed(on: "pair"))
     }
 
+    /// Home with a row in every state, at its top and after every step to its end.
+    @MainActor
+    func testHomeWithARowInEveryStatePassesTheAudit() throws {
+        guard #available(iOS 17.0, *) else { throw XCTSkip("performAccessibilityAudit needs iOS 17 or later") }
+        continueAfterFailure = true
+        let app = UITestSupport.launch(paired: true, history: true)
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 30), "Home did not show")
+        XCTAssertTrue(UITestSupport.waitForHistory(app), "the sample history did not show")
+        UITestSupport.screenshot(app, "ios-home", in: self)
+        try UITestSupport.auditHistory(app, "home", types: Self.withoutDynamicType, allowed: Self.allowed(on: "home"))
+        UITestSupport.screenshot(app, "ios-home-end", in: self)
+    }
+
     /// Comfort at the largest text size (Comfort keeps it at accessibility3). Dynamic Type is audited in the run above,
     /// with Comfort off; here it is left out because Comfort holds the text between xxLarge and accessibility3 on
     /// purpose (the F27 table), so text that stops growing past accessibility3 is what Comfort is for.
@@ -55,12 +76,20 @@ final class AccessibilityAuditTests: XCTestCase {
         guard #available(iOS 17.0, *) else { throw XCTSkip("performAccessibilityAudit needs iOS 17 or later") }
         continueAfterFailure = true
         let largest = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
-        let types = XCUIAccessibilityAuditType.all.subtracting(.dynamicType)
+        let types = Self.withoutDynamicType
+        let history = UITestSupport.launch(paired: true, comfort: true, history: true, extra: largest)
+        XCTAssertTrue(history.buttons["Settings"].waitForExistence(timeout: 30), "Home did not show")
+        XCTAssertTrue(UITestSupport.waitForHistory(history), "the sample history did not show")
+        UITestSupport.screenshot(history, "ios-home-comfort", in: self)
+        try UITestSupport.auditHistory(history, "home (Comfort)", types: types, allowed: Self.allowed(on: "home"))
+        UITestSupport.screenshot(history, "ios-home-end-comfort", in: self)
+        history.terminate()
+
         let app = UITestSupport.launch(paired: true, comfort: true, extra: largest)
         let settings = app.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 30), "Home did not show")
-        UITestSupport.screenshot(app, "ios-home-comfort", in: self)
-        try UITestSupport.audit(app, "home (Comfort)", types: types, allowed: Self.allowed(on: "home"))
+        UITestSupport.screenshot(app, "ios-home-empty-comfort", in: self)
+        try UITestSupport.audit(app, "home-empty (Comfort)", types: types, allowed: Self.allowed(on: "home-empty"))
 
         settings.tap()
         XCTAssertTrue(app.switches["comfort"].waitForExistence(timeout: 10), "Settings did not open")

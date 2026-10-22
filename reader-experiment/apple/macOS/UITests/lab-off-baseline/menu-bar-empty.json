@@ -32,5 +32,5 @@
     }
   ],
   "platform" : "macos",
-  "screen" : "menu-bar"
+  "screen" : "menu-bar-empty"
 }

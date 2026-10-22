@@ -24,9 +24,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MainWindow.shared.show()
         AppModel.shared.startAutoRefresh()
         Task {
-            await AppModel.shared.handleLaunchArguments()
+            await AppModel.shared.handleLaunchArguments(sampleHistory: Self.sampleHistory)
             await AppModel.shared.refresh()
         }
+    }
+
+    /// `-DLSSampleHistory` with `-DLSTestStorage` (Debug builds only, for the UI tests' walks and audits): the history
+    /// shows `HistorySample`'s rows, a row in every state, and keeps them as they are.
+    nonisolated static var sampleHistory: Bool {
+        #if DEBUG
+        return HistorySample.isRequested()
+        #else
+        return false
+        #endif
     }
 
     /// Files, links and `daylightshare://` links (which ask in the main window before they pair).

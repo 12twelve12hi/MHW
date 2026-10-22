@@ -4,14 +4,14 @@ name: Reader experiment – Apple apps
 # cross-platform vectors, a fake relay, an end-to-end run against the mock ntfy relay and the JavaScript receiver, and
 # the checks that storage resolution never blocks the main thread and that the app model never reads storage on it),
 # builds the iOS app for the simulator and for devices (unsigned .ipa for sideloading) and the Mac app (ad-hoc signed
-# .zip, no App Group), smoke-tests both (the Mac one gates the release: launches responsive, pairs, sends, shows
-# Delivered), runs each app's UI tests and truncation audit (the accessibility baseline, LAB-PLAN F27.2 and F27.4, and
+# .zip, no App Group), smoke-tests both (each gates the release: launches responsive, pairs, sends, shows Delivered),
+# runs each app's UI tests and truncation audit (the accessibility baseline, LAB-PLAN F27.2 and F27.4, and
 # the Lab-off parity baselines, F00.2), and publishes both apps to the "reader-experiment-latest" release. With App
 # Store Connect secrets it also uploads to TestFlight (see reader-experiment/apple/README.md).
 #
 # Lanes (LAB-PLAN 6.1): every job carries a "# lane: <name>" comment and a lane edits only its own blocks. kit:
-# DaylightShareKit and apple/Shared (swift test); ios: the iPhone builds, its UI tests and the .ipa; mac: the Mac builds,
-# the smoke test, its UI tests and the zip. The kit lane owns the shared parts (triggers, permissions, the publish job).
+# DaylightShareKit and apple/Shared (swift test); ios: the iPhone builds, its smoke test, its UI tests and the .ipa; mac:
+# the Mac builds, the smoke test, its UI tests and the zip. The kit lane owns the shared parts (triggers, permissions, the publish job).
 # Screenshots from the UI tests and the truncation audit are uploaded as artifacts for review, never compared.
 on:
   push:
@@ -138,52 +138,11 @@ jobs:
           cp -R "$APP" build/ipa/Payload/
           (cd build/ipa && zip -qry ../../Send-to-Daylight-unsigned.ipa Payload)
           ls -l Send-to-Daylight-unsigned.ipa
-      # The smoke tests drive the real apps: pair with a fresh pairing on the mock relay (launch arguments, as a
-      # QR code scan would), send a link, check with the JavaScript receiver that it arrived intact (which acks it),
-      # and check that the app then shows it delivered. Screenshots go into the log as base64 JPEGs.
-      - name: Smoke test the iPhone app in the Simulator
-        continue-on-error: true
+      # The simulator the smoke test and the UI tests use (the Lab-off baselines are its accessibility trees): an
+      # iPhone 16 on iOS 18, else the last iPhone listed. The log names it (re-record the baselines if it changed). It
+      # is started, and has finished starting, before either step.
+      - name: Pick and start the iPhone simulator
         run: |
-          set -o pipefail
-          shot() { xcrun simctl io "$DEVICE" screenshot "build/$1.png" >/dev/null 2>&1 && sips -Z 480 -s format jpeg -s formatOptions 55 "build/$1.png" --out "build/$1.jpg" >/dev/null && echo "=====BEGIN $1=====" && base64 -i "build/$1.jpg" && echo "=====END $1====="; }
-          DEVICE=$(xcrun simctl list devices available -j | python3 -c '
-          import json, sys
-          d = json.load(sys.stdin)["devices"]
-          ids = [x["udid"] for k, v in d.items() if "iOS" in k for x in v if x["name"].startswith("iPhone")]
-          print(ids[-1] if ids else "")')
-          if [ -z "$DEVICE" ]; then echo "::warning::no iPhone simulator available"; exit 0; fi
-          xcrun simctl boot "$DEVICE" || true
-          xcrun simctl bootstatus "$DEVICE" -b > /dev/null
-          xcrun simctl install "$DEVICE" "build/dd-sim/Build/Products/Debug-iphonesimulator/Send to Daylight.app"
-          curl -fsS "http://127.0.0.1:$RELAY_PORT/v1/health" >/dev/null 2>&1 || { node ../share/js/mock-relay.mjs --port "$RELAY_PORT" > "$RUNNER_TEMP/mock-relay-2.log" 2>&1 & sleep 2; }
-          LINK=$(node scripts/ci-pairing-link.mjs "http://127.0.0.1:$RELAY_PORT" "CI Daylight")
-          CODE=$(echo "$LINK" | sed -E 's/.*[?&]c=([A-Z2-7]+).*/\1/')
-          xcrun simctl launch "$DEVICE" com.daylight.share -DLSPairLink "$LINK" -DLSSendLink "https://example.com/from-the-iphone-app"
-          sleep 15
-          shot ios-sent
-          node scripts/e2e-receiver.mjs "http://127.0.0.1:$RELAY_PORT" "$CODE" | tee build/ios-received.json
-          grep -q '"url":"https://example.com/from-the-iphone-app"' build/ios-received.json \
-            || { echo "::error::the link sent by the iPhone app did not reach the JS receiver"; exit 1; }
-          # Relaunch: the app reads the ack when it becomes active.
-          xcrun simctl terminate "$DEVICE" com.daylight.share || true
-          sleep 2
-          xcrun simctl launch "$DEVICE" com.daylight.share
-          sleep 12
-          shot ios-delivered
-          xcrun simctl spawn "$DEVICE" launchctl list | grep -i com.daylight.share || { echo "::error::the iPhone app is not running"; exit 1; }
-
-      # The accessibility baseline (LAB-PLAN F27) and the Lab-off parity baselines (F00.2, 1.7): XCUITest audits of Home,
-      # Settings and pairing, with Comfort off and on (F27.2); the baseline's rules (Comfort in Settings, off by default;
-      # the share card's own Comfort; typed-code pairing); the tree walk of Home, Settings, pairing and the share card in
-      # each state against iOS/UITests/lab-off-baseline (a missing or changed baseline is printed between
-      # "=====BEGIN lab-off-baseline" markers, and the test fails), with the walk's own tests; and the truncation and
-      # Dynamic Type audit hosted in the app (F27.4). The apps run on their own empty storage (-DLSTestStorage) and a
-      # relay nobody listens on. Tests are not re-run: each of those test classes must pass first time and none may be
-      # skipped (an iOS older than 17 skips the audits), which ci-test-summary.sh checks.
-      - name: iPhone UI tests and truncation audit (F27.2, F27.4, F00.2)
-        run: |
-          # The same simulator every run (the Lab-off baselines are its accessibility trees): an iPhone 16 on iOS 18,
-          # else the last iPhone listed. The log names the one used (re-record the baselines if it changed).
           DEVICE=$(xcrun simctl list devices available -j | python3 -c '
           import json, sys
           d = json.load(sys.stdin)["devices"]
@@ -193,9 +152,60 @@ jobs:
               print(pick[0][1]["udid"])
               print("simulator:", pick[0][1]["name"], pick[0][0], file=sys.stderr)')
           [ -n "$DEVICE" ] || { echo "::error::no iPhone simulator"; exit 1; }
-          # Started (and finished starting) before the tests, so the first UI test does not meet a simulator whose
-          # accessibility server is still coming up.
+          echo "IOS_DEVICE=$DEVICE" >> "$GITHUB_ENV"
           xcrun simctl boot "$DEVICE" 2>/dev/null || true
+          xcrun simctl bootstatus "$DEVICE" -b > /dev/null
+
+      # The smoke test drives the real iPhone app: pair with a fresh pairing on the mock relay (launch arguments, as a
+      # QR code scan would), send a link, check with the JavaScript receiver that it arrived intact (which acks it), and
+      # check that the app, launched again, shows it delivered. The app reports its state through -DLSStatusDump
+      # (AppModel.noteRendered: a JSON file in its data container with its history rows and a main-thread heartbeat),
+      # so each check waits for the state it needs (as the Mac's does) instead of a fixed time. Screenshots go into the
+      # log as base64 JPEGs. A failure fails the job, and so the release.
+      - name: Smoke test the iPhone app in the Simulator (launch, pair, send, Delivered)
+        run: |
+          set -o pipefail
+          shot() { xcrun simctl io "$IOS_DEVICE" screenshot "build/$1.png" >/dev/null 2>&1 && sips -Z 480 -s format jpeg -s formatOptions 55 "build/$1.png" --out "build/$1.jpg" >/dev/null && echo "=====BEGIN $1=====" && base64 -i "build/$1.jpg" && echo "=====END $1====="; }
+          failed() { shot "$1" || true; xcrun simctl terminate "$IOS_DEVICE" com.daylight.share >/dev/null 2>&1 || true; exit 1; }
+          xcrun simctl install "$IOS_DEVICE" "build/dd-sim/Build/Products/Debug-iphonesimulator/Send to Daylight.app"
+          DATA=$(xcrun simctl get_app_container "$IOS_DEVICE" com.daylight.share data)
+          STATUS="$DATA/Library/Application Support/DaylightShare/debug-status.json"
+          rm -f "$STATUS"
+          curl -fsS "http://127.0.0.1:$RELAY_PORT/v1/health" >/dev/null 2>&1 || { node ../share/js/mock-relay.mjs --port "$RELAY_PORT" > "$RUNNER_TEMP/mock-relay-2.log" 2>&1 & sleep 2; }
+          LINK=$(node scripts/ci-pairing-link.mjs "http://127.0.0.1:$RELAY_PORT" "CI Daylight")
+          CODE=$(echo "$LINK" | sed -E 's/.*[?&]c=([A-Z2-7]+).*/\1/')
+          SENT_URL="https://example.com/from-the-iphone-app"
+          xcrun simctl launch "$IOS_DEVICE" com.daylight.share -DLSStatusDump -DLSPairLink "$LINK" -DLSSendLink "$SENT_URL"
+          # 1. The app renders and its main thread keeps running (a first launch on a simulator can be slow).
+          node scripts/ci-app-status.mjs render "$STATUS" 120 || failed ios-not-rendered
+          # 2. Paired and sent (the relay has it); the JS receiver gets it intact and acks it.
+          node scripts/ci-app-status.mjs row "$STATUS" "$SENT_URL" sent,delivered 120 || failed ios-not-sent
+          shot ios-sent || true
+          node scripts/e2e-receiver.mjs "http://127.0.0.1:$RELAY_PORT" "$CODE" | tee build/ios-received.json
+          grep -q "\"url\":\"$SENT_URL\"" build/ios-received.json \
+            || { echo "::error::the link sent by the iPhone app did not reach the JS receiver"; failed ios-not-received; }
+          # 3. Launched again, the app reads the ack as it becomes active: the history shows "Delivered ✓".
+          xcrun simctl terminate "$IOS_DEVICE" com.daylight.share || true
+          rm -f "$STATUS"
+          xcrun simctl launch "$IOS_DEVICE" com.daylight.share -DLSStatusDump
+          node scripts/ci-app-status.mjs row "$STATUS" "$SENT_URL" delivered 120 || failed ios-not-delivered
+          shot ios-delivered || true
+          xcrun simctl terminate "$IOS_DEVICE" com.daylight.share || true
+
+      # The accessibility baseline (LAB-PLAN F27) and the Lab-off parity baselines (F00.2, 1.7): XCUITest audits of Home
+      # (empty, and with the sample history: a row in every state, from its top to its end), Settings and pairing, with
+      # Comfort off and on (F27.2); the baseline's rules (Comfort in Settings, off by default; the share card's own
+      # Comfort; typed-code pairing); the tree walk of Home (with the history at its top and end, and empty), Settings,
+      # pairing and the share card in each state against iOS/UITests/lab-off-baseline (a missing or changed baseline is
+      # printed between "=====BEGIN lab-off-baseline" markers, and the test fails), with the walk's own tests; and the
+      # truncation and Dynamic Type audit hosted in the app (F27.4). The apps run on their own empty storage
+      # (-DLSTestStorage, with -DLSSampleHistory for the history) and a relay nobody listens on. Tests are not re-run: each of those test classes must pass first time and none may be
+      # skipped (an iOS older than 17 skips the audits), which ci-test-summary.sh checks.
+      - name: iPhone UI tests and truncation audit (F27.2, F27.4, F00.2)
+        run: |
+          # The simulator picked and started above, so the first UI test does not meet a simulator whose accessibility
+          # server is still coming up.
+          DEVICE="$IOS_DEVICE"
           xcrun simctl bootstatus "$DEVICE" -b > /dev/null
           mkdir -p build/shots build/baselines
           run_tests() {
@@ -393,10 +403,12 @@ jobs:
           pkill -f "smoke/Send to Daylight" || true
 
       # The accessibility baseline (LAB-PLAN F27) and the Lab-off parity baselines (F00.2, 1.7) on the Mac: XCUITest
-      # audits of the main window, Settings and pairing, with Comfort off and on (F27.2); the baseline's rules; the tree
-      # walk of the main window, Settings, pairing, the Share menu card in each state and the menu bar item's menu
-      # against macOS/UITests/lab-off-baseline, with the walk's own tests; and the truncation audit hosted in the app
-      # (F27.4). A Debug build, signed ad hoc so the test runner may drive it; the app runs on its own empty storage.
+      # audits of the main window (empty, and with the sample history from its top to its end), Settings and pairing,
+      # with Comfort off and on (F27.2); the baseline's rules; the tree walk of the main window (with the history at its
+      # top and end, and empty), Settings, pairing, the Share menu card in each state and the menu bar item's menu (with
+      # the history and empty) against macOS/UITests/lab-off-baseline, with the walk's own tests; and the truncation
+      # audit hosted in the app (F27.4). A Debug build, signed ad hoc so the test runner may drive it; the app runs on
+      # its own empty storage (with -DLSSampleHistory for the history).
       # Tests are not re-run: each of those test classes must pass first time and none may be skipped (macOS older than
       # 14 skips the audits), which ci-test-summary.sh checks.
       - name: Mac UI tests and truncation audit (F27.2, F27.4, F00.2)

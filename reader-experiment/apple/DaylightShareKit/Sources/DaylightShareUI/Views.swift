@@ -141,6 +141,14 @@ public struct HistoryRowView: View {
     @Environment(\.comfort) private var comfort
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// The accessibility identifier of a row's age ("2 days, 3 hr", which counts on by itself): the UI tests' Lab-off
+    /// walk writes its words as "<when>" (`AXTree.rowTimeID`).
+    public static let timeID = "history-row-time"
+
+    /// The name the truncation audit knows a row's age by. Its words change every second, so the probe takes a fixed
+    /// name, one per row, and compares whatever the text says at the time it is measured.
+    public static func timeProbe(_ row: OutboxRow) -> String { "the age of row \(row.id)" }
+
     public init(row: OutboxRow, onRetry: @escaping () -> Void) {
         self.row = row
         self.onRetry = onRetry
@@ -165,7 +173,8 @@ public struct HistoryRowView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         StatusLabel(row: row)
                         Text(row.created, style: .relative).dlsFont(.caption2).dlsSecondary()
-                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier(Self.timeID)
+                            .wrapping(Self.timeProbe(row))
                     }
                     if let sentence = text.sentence {
                         Text(sentence).dlsFont(.caption2).dlsSecondary().listRowText(sentence)
@@ -174,11 +183,12 @@ public struct HistoryRowView: View {
             }
             if !stacked { Spacer(minLength: 4) }
             if let title = text.buttonTitle {
+                // The window's control size: regular, or large in Comfort (`ComfortModifier`); never small, which is
+                // too small a target.
                 Button(action: onRetry) {
                     Text(title).listRowText(title).comfortTarget()
                 }
                 .buttonStyle(.bordered)
-                .controlSize(comfort ? .large : .small)
                 .comfortBorder()
             }
         }

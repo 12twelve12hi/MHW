@@ -255,6 +255,62 @@ final class AccessibilityBaselineTests: XCTestCase {
                                            "“past the edge” runs past the edge (200…380 of 320)"])
     }
 
+    // MARK: The UI tests' sample history (-DLSSampleHistory)
+
+    /// One row for each kind of label, sentence and button (CHANGES-v1.1 2.5), each a different age, newest first; the
+    /// UI tests find the history by its first label and its end by its last sentence (`UITestSupport.historyFirst`,
+    /// `historyLast`). Requested only together with the UI tests' own storage.
+    func testTheSampleHistoryHasARowInEveryState() {
+        let now = Date()
+        let rows = HistorySample.rows(now: now)
+        let texts = rows.map { RowText(row: $0, now: now) }
+        XCTAssertEqual(texts.map(\.label), ["Sending…", "Waiting to send", "Not delivered", "Delivered ✓",
+                                            "Sent · waiting for your Daylight", "Not delivered"])
+        XCTAssertEqual(texts.map(\.buttonTitle), [nil, "Retry now", nil, nil, nil, "Try again"])
+        XCTAssertEqual(texts.compactMap(\.sentence).count, 5, "every row but Sending… has its sentence")
+        XCTAssertEqual(texts.first?.label, "Sending…")
+        XCTAssertEqual(texts.last?.sentence, "Your Daylight didn’t pick this up within a week. Is it on and online?")
+        XCTAssertEqual(Set(rows.map(\.created)).count, rows.count, "two rows of the same age could swap places")
+        XCTAssertEqual(rows.map(\.created), rows.map(\.created).sorted(by: >), "newest first")
+        XCTAssertEqual(Set(rows.map(\.id)).count, rows.count)
+
+        XCTAssertTrue(HistorySample.isRequested(["app", "-DLSTestStorage", "-DLSSampleHistory"]))
+        XCTAssertFalse(HistorySample.isRequested(["app", "-DLSSampleHistory"]), "never into a real history")
+        XCTAssertFalse(HistorySample.isRequested(["app", "-DLSTestStorage"]))
+    }
+
+    /// With `sampleHistory`, the launch's pairing comes first (a new pairing empties the outbox), then the sample rows,
+    /// and they stay as they are: a refresh reads no acks and re-sends nothing, and Retry does nothing. The relay is
+    /// one nothing listens on, so any attempt would change the failed row.
+    @MainActor
+    func testTheSampleHistoryFollowsThePairingAndIsHeld() async throws {
+        let store = makeStore()
+        let model = AppModel(store: store, arguments: [])
+        try await waitFor("the first read") { model.isLoaded }
+        let link = try Pairing.generate(relay: "http://127.0.0.1:9", name: "Test Daylight").link
+        await model.handleLaunchArguments(["app", "-DLSTestStorage", "-DLSPairLink", link], sampleHistory: true)
+        XCTAssertTrue(model.holdsSampleHistory)
+        XCTAssertTrue(model.isPaired)
+        XCTAssertEqual(model.rows.map(\.id), HistorySample.rows().map(\.id))
+        XCTAssertEqual(model.rows.map(\.status), [.sending, .failed, .expired, .delivered, .sent, .expired])
+        let held = model.rows
+        await model.refresh()
+        let failed = try XCTUnwrap(held.first { $0.status == .failed })
+        await model.retry(failed)
+        await model.reloadNow()
+        XCTAssertEqual(model.rows, held, "the sample history changed")
+
+        // Without it, nothing is written and nothing is held (a store of its own: makeStore() shares one directory).
+        let suite = "dls-tests-\(UUID().uuidString)"
+        suites.append(suite)
+        let other = SharedStore(defaults: UserDefaults(suiteName: suite)!, directory: root.appendingPathComponent("plain"))
+        let plain = AppModel(store: other, arguments: [])
+        try await waitFor("the first read") { plain.isLoaded }
+        await plain.handleLaunchArguments(["app", "-DLSPairLink", link])
+        XCTAssertFalse(plain.holdsSampleHistory)
+        XCTAssertEqual(plain.rows, [])
+    }
+
     // MARK: The UI tests' storage
 
     /// `-DLSTestStorage` gives a fresh, empty store of the process's own; without it there is none.

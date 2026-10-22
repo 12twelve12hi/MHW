@@ -192,9 +192,11 @@ CI ([`.github/workflows/rx-apple.yml`](../../.github/workflows/rx-apple.yml)) ha
 runs its UI tests and truncation audit; `mac` checks the Mac App Group build settings with and without a team, builds
 the Mac app (and fails if the ad-hoc build carries an App Group), smoke-tests it and runs its UI tests and truncation
 audit. Once all three pass, `publish` puts `Send-to-Daylight-unsigned.ipa` and `Send-to-Daylight-mac.zip` on the
-release. The Mac smoke test gates the release: the app must render within
-10 s and keep a main-thread heartbeat, pair through a `daylightshare://` launch argument, send a link the JavaScript
-receiver gets and acks, and then show that history row as *Delivered ✓*.
+release. Both smoke tests gate the release, and each waits for the state it checks in the app's `-DLSStatusDump` file
+rather than a fixed time: the app must render (the Mac within 10 s; the iPhone, on a simulator that may have just
+started, within 120 s) and keep a main-thread heartbeat, pair through a `daylightshare://` launch argument, send a link
+the JavaScript receiver gets and acks, and then show that history row as *Delivered ✓* (the iPhone app once launched
+again, as it reads acks when it becomes active).
 
 `StorageResolutionTests` is the regression test for the 1.0 launch hang: with a container check that takes a second
 (or never answers in time), the app model must be created within 100 ms, the check must run off the main thread, and
@@ -214,6 +216,7 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
 | `-DLSStatusDump` | Writes `debug-status.json` (storage, pairing, Comfort, history rows with their labels, and a once-a-second heartbeat) to the app's Application Support folder, on the Mac `~/Library/Containers/com.daylight.share.mac/Data/Library/Application Support/DaylightShare/`. |
 | `-DLSComfort 0\|1` | Turns Comfort off or on before the first render (and saves it), LAB-PLAN 1.7. |
 | `-DLSTestStorage` | Runs on fresh, empty storage of its own (`DaylightShare-UITest` next to the app's own folder, a separate defaults suite, no App Group), emptied at every launch: the UI tests never see or touch a real pairing or history. |
+| `-DLSSampleHistory` | Debug builds only, and only with `-DLSTestStorage`: once the launch's pairing is in place, the history holds the sample rows (`HistorySample`: a row in every state, newest first — *Sending…*; *Waiting to send* with *Retry now*; *Not delivered* as too large; *Delivered ✓*; *Sent · waiting for your Daylight* a day on; *Not delivered* within a week, with *Try again*), and the app reads no acks and re-sends nothing, so each row stays in its state. For the UI tests' walks and audits. |
 | `-DLSLab 0\|1` | Reserved for the Lab builds (LAB-PLAN 1.7); the UI tests already pass `-DLSLab 0`. |
 | `-DLSShareCard <name>` | Debug builds only: shows the share card (`ShareExtensionView`) in one of its states in place of the window, with sample words and its own empty storage, for the UI tests' walk: `reading`, `sent`, `sent-note`, `result-note`, `needs-pairing` (a card without an App Group, with its own Comfort switch) or `confirm-pairing` (`ShareCardSample`). |
 
@@ -225,7 +228,13 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
 - `SendToDaylightUITests-iOS` and `SendToDaylightUITests-macOS` (XCUITest; the tree walk and helpers are in
   `Shared/UITests`):
   - `AccessibilityAuditTests` run Xcode's `performAccessibilityAudit()` on Home (the Mac's main window), Settings and
-    the pairing screen, with Comfort off and on (iOS 17+, macOS 14+; F27.2). Every issue is printed as an `AUDIT` line
+    the pairing screen, with Comfort off and on (iOS 17+, macOS 14+; F27.2). Home and the main window are audited
+    empty and with the sample history (`-DLSSampleHistory`): at the top of the history and again after every step
+    of scrolling it to its end (`UITestSupport.auditHistory`), so every row's status label, age, sentence and *Retry
+    now* or *Try again* button is audited where it shows. On the iPhone the history runs leave Dynamic Type out: at
+    the largest size the audit loses every row that was on screen (the list scrolls it away) and reports each of its
+    texts, so each row text is measured growing by `testEveryTextGrowsWithTheTextSize` instead (Home with the same
+    rows), and the empty Home keeps the audit's Dynamic Type check. Every issue is printed as an `AUDIT` line
     with the element's value, frame and contents; an issue can be allowed only with a stated reason (`allowed`), which
     is printed too. An audit the system stops before it finishes ("Audit failed to complete in time", seen on the
     first audit after the simulator starts) is run again, at most twice; issues are never run again. Allowed today: on the Mac, the system's Touch Bar and its emoji item, the Settings button's
@@ -233,7 +242,7 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     report that names no element, and text the open Settings sheet covers or has scrolled partly out of view (the
     audit measures it where it is hidden); on the iPhone, a navigation-bar button's capped text size, and Dynamic
     Type reports on exactly the texts `iOS/UITests/DynamicTypeWaivers.swift` names for the screen (today *Nothing
-    sent yet.* on Home and the device name's footer in Settings, which the audit loses at the largest size). That
+    sent yet.* on the empty Home and the device name's footer in Settings, which the audit loses at the largest size). That
     file is compiled into the unit tests too, and `testEveryTextGrowsWithTheTextSize` fails unless it measures each
     named text growing with the text size; any other Dynamic Type report fails the audit. The Comfort run leaves
     Dynamic Type out on purpose: Comfort holds text between xxLarge and accessibility3 (the F27 table). What the
@@ -245,9 +254,14 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     without an App Group has its own Comfort switch; typing the code pairs.
   - `LabOffParityTests` (F00.2): an explicit walk of the accessibility tree (element type, label or title, and value,
     in order; never `debugDescription`) compared with `iOS/UITests/lab-off-baseline/*.json` and
-    `macOS/UITests/lab-off-baseline/*.json`: Home (the Mac's main window), Settings, pairing, the share card in each
-    of its states (`-DLSShareCard`), and on the Mac the menu bar item's menu. The baselines were recorded from the P0
-    close-out (protocol 1.1 and this accessibility baseline) and are re-recorded only with a matching non-Lab change.
+    `macOS/UITests/lab-off-baseline/*.json`: Home (the Mac's main window) with the sample history at its top (`home`,
+    `main`) and at its end (`home-end`, `main-end`; the list holds only the rows on screen) and empty (`home-empty`,
+    `main-empty`), Settings, pairing, the share card in each of its states (`-DLSShareCard`), and on the Mac the menu
+    bar item's menu with the sample history (`menu-bar`, its six rows) and empty (`menu-bar-empty`). The rows are the
+    ones W1's timeline (F01) changes: with Lab off they must read exactly as v1.1's. Each row's age (*2 days, 3 hr*),
+    which counts on by itself, carries the identifier `history-row-time` (`HistoryRowView.timeID`) and is written
+    `<when>`, as Android's walk does. The baselines were recorded from the P0 close-out (protocol 1.1 and this
+    accessibility baseline) and are re-recorded only with a matching non-Lab change.
     The walk keeps every element that has a label, title or value, whatever its type, and every control even without
     one; it leaves out only containers without words and the system's scroll bars, and writes what depends on the
     build or the runner in fixed words: the app's version as `<version>` (a version bump is not a screen change) and
@@ -255,9 +269,13 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
   - **The Lab switch** (for A1 and A2): give the Lab `Toggle` itself `.accessibilityIdentifier("lab-switch")`
     (`AXTree.labSwitchID`, as Android's test tag) and its name `LAB_TEXT.lab`, and nothing else that identifier. With
     Lab off the walk leaves out that one element (with what is inside it) and texts with exactly its words ("Lab" as
-    a label or a "LAB" header, and `LAB_TEXT.switchFooter`), and checks that it shows once, only in Settings or the
-    share card's own settings, as one switch named "Lab", off, with nothing else inside. What's in Lab and Daylight
-    server are rows of their own, outside that element: shown with Lab off, they change the compared tree.
+    a label or a "LAB" header, and `LAB_TEXT.switchFooter`), and checks that it shows once, only where it lives, as
+    one switch named "Lab", off, with nothing else inside. Where it lives: Settings on both platforms, and on the Mac
+    the Share menu card's own settings, which of the card's samples only `needs-pairing` shows (the ad-hoc build,
+    LAB-PLAN 1.1). The iPhone's share sheet follows the app's switch and has none of its own, so the iPhone's card
+    walks allow no Lab switch at all. A2: put the card's Lab switch inside `ShareExtensionView.cardSettings` (shown
+    only with `model.showsCardSettings`) and inside `#if os(macOS)`, since iOS compiles that view too. What's in Lab and
+    Daylight server are rows of their own, outside that element: shown with Lab off, they change the compared tree.
   - `TreeWalkTests`: the walk's own rules on trees built by hand (the Lab row and its words, labelled elements of
     any type, the version, the type names, `LAB_TEXT`'s words from `share/vectors/lab-vectors.json`).
   - When a baseline is missing or differs, the test fails and prints the new tree between
@@ -267,14 +285,18 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
   (F27.4). `AuditScreens` hosts each main screen with a history row in every state, and the share card in each state
   (`ShareCardSample`), at the narrowest width (320 pt, an iPad's one-third split; the Mac window's 440 pt minimum, the
   460 pt Settings sheet and the Share menu card's 360 pt) with Comfort on and accessibility3, and every text that
-  carries a `truncationProbe` (all of them, through `wrapping(_:)`) reports its frame and the size it needs; a text
-  that got less, or runs past the window's edge, fails the test. The audit checks itself on a deliberately cut text
+  carries a `truncationProbe` reports its frame and the size it needs; a text that got less, or runs past the
+  window's edge, fails the test. Every text the apps lay out carries one: through `wrapping(_:)` or
+  `listRowText(_:)`, or a probe of its own where the text keeps a line limit outside Comfort (a row's title and link,
+  the share card's summary). A row's age (`Text(date, style: .relative)`), whose words change every second, is probed
+  under a fixed name per row (`HistoryRowView.timeProbe`), so the audit compares the same text whatever it says when
+  measured. Not measured: the system's own texts (confirmation dialogs, the menu bar item's menu). The audit checks itself on a deliberately cut text
   first. On the iPhone, `testEveryTextGrowsWithTheTextSize` also measures every text of those screens (and of an
   empty Home) at the default size and at accessibility3, and fails on one that does not grow. The menu bar item's
   menu is drawn by the system at the width its items need, so it is not measured.
 
 The UI tests run the app on its own storage (`-DLSTestStorage`) paired with the vectors' code and a relay nobody
-listens on, so every screen reads the same on every run. Screenshots of every screen (and of the truncation audit's
+listens on, empty or with the sample history (`-DLSSampleHistory`), so every screen reads the same on every run. Screenshots of every screen (and of the truncation audit's
 windows) are uploaded as the `rx-apple-ios-screenshots` and `rx-apple-mac-screenshots` artifacts for review; they are
 never compared. A runner image that changes the iOS or macOS version can change a tree: the test then prints the new
 one, ready to copy. Each launch waits until the app answers accessibility queries (a simulator that has just started

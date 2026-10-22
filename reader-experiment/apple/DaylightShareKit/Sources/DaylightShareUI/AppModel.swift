@@ -24,6 +24,9 @@ public final class AppModel: ObservableObject {
     /// Comfort (LAB-PLAN F27): larger text and buttons, more contrast, no motion. Off by default; not a Lab setting.
     /// The windows apply it with `.comfort(model.comfort)`; Settings changes it with `setComfort(_:)`.
     @Published public private(set) var comfort = false
+    /// Whether the history holds the UI tests' sample rows (`HistorySample`; `-DLSSampleHistory` in the apps' Debug
+    /// builds): the model then reads no acks and re-sends nothing, so each row stays in its state.
+    public private(set) var holdsSampleHistory = false
     /// A short status line ("Sent · waiting for your Daylight", an error, …), cleared after a few seconds.
     @Published public var banner: Banner?
     /// A pairing that waits for the user's confirmation (PROTOCOL 1.3): a link from outside the app, or a code that
@@ -416,9 +419,9 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    /// "Retry now" or "Try again" on a row.
+    /// "Retry now" or "Try again" on a row (not on the UI tests' sample history, which stays as it is).
     public func retry(_ row: OutboxRow) async {
-        guard let sender = await sender() else { return }
+        guard !holdsSampleHistory, let sender = await sender() else { return }
         sendingCount += 1
         defer { sendingCount -= 1 }
         let r = await sender.retry(row.id)
@@ -445,9 +448,16 @@ public final class AppModel: ObservableObject {
     /// (only someone who starts the app can pass it) and `-DLSSendLink <url>` sends a link, once per launch.
     /// (`-DLSStatusDump` is read by `noteRendered()`, `-DLSComfort 0|1` by `init`, `-DLSTestStorage` by
     /// `SharedStore.shared`.)
-    public func handleLaunchArguments(_ args: [String] = ProcessInfo.processInfo.arguments) async {
+    ///
+    /// `sampleHistory` (the apps pass `HistorySample.isRequested()` in Debug builds only: `-DLSSampleHistory` with
+    /// `-DLSTestStorage`) puts `HistorySample.rows` in the history once the pairing is in place, and holds them there
+    /// (`holdsSampleHistory`).
+    public func handleLaunchArguments(_ args: [String] = ProcessInfo.processInfo.arguments,
+                                      sampleHistory: Bool = false) async {
         guard !launchArgumentsHandled else { return }
         launchArgumentsHandled = true
+        // Set before the pairing below: a refresh that finds that pairing finds this set too, and leaves the rows be.
+        if sampleHistory { holdsSampleHistory = true }
         func value(_ flag: String) -> String? {
             guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
             return args[i + 1]
@@ -460,15 +470,24 @@ public final class AppModel: ObservableObject {
                 show((error as? ShareError)?.message ?? error.localizedDescription, error: true)
             }
         }
+        if sampleHistory {
+            // After the pairing, which empties the outbox when it is a new one.
+            let now = Date()
+            await write { store in
+                OutboxStore(store: store).update { $0.rows = HistorySample.rows(now: now) }
+            }
+        }
         if let url = value("-DLSSendLink") { await sendLink(url) }
     }
 
     // MARK: Maintenance (PROTOCOL 3.3)
 
-    /// Reads acks and re-sends what is due.
+    /// Reads acks and re-sends what is due (not while the history holds the UI tests' sample rows).
     public func refresh() async {
         await reloadNow()
-        guard let sender = await sender() else { return }
+        // Checked once the sender is known: there is one only after the launch's pairing, which comes after
+        // `holdsSampleHistory` is set.
+        guard let sender = await sender(), !holdsSampleHistory else { return }
         _ = await sender.tick()
         await reloadNow()
     }

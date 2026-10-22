@@ -9,8 +9,9 @@
 /// the largest size, name it here.
 enum DynamicTypeWaivers {
     static let texts: [String: [String]] = [
-        // The last text on an empty Home, near the bottom at the default size.
-        "home": ["Nothing sent yet."],
+        // The last text on an empty Home, near the bottom at the default size. (Home with the sample history is
+        // audited without Dynamic Type: AccessibilityAuditTests.withoutDynamicType says why.)
+        "home-empty": ["Nothing sent yet."],
         // The device name's footer, the last text Settings shows at the default size.
         "settings": ["Shown on the Daylight as who sent each item."],
     ]

@@ -51,7 +51,8 @@ enum AuditScreens {
         return (cut, wrapped)
     }
 
-    /// A model on its own storage: paired with a long-named Daylight and a history row in every state, or not paired.
+    /// A model on its own storage: paired with a long-named Daylight and a history row in every state (`HistorySample`,
+    /// the rows the UI tests show with `-DLSSampleHistory`), or not paired.
     static func sampleModel(paired: Bool) async -> AppModel {
         let id = UUID().uuidString
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dls-audit-\(id)", isDirectory: true)
@@ -63,31 +64,11 @@ enum AuditScreens {
                 await store.pair(pairing)
             }
             let outbox = OutboxStore(store: store)
-            for row in sampleRows() { outbox.save(row) }
+            for row in HistorySample.rows() { outbox.save(row) }
         }
         let model = AppModel(store: store, arguments: [])
         await model.reloadNow()
         return model
-    }
-
-    /// One row per kind of label, sentence and button (CHANGES-v1.1 2.5), with a long title and link.
-    static func sampleRows(now: Date = Date()) -> [OutboxRow] {
-        let title = "A very long article title that goes on for a while, to see that it wraps instead of being cut short"
-        let url = "https://example.com/a/very/long/path/that-keeps-going/and-going?with=a&query=string&that=is-long"
-        let cases: [(OutboxRow.Status, String, TimeInterval)] = [
-            (.sending, "", 0),
-            (.sent, "", 2 * 86_400),
-            (.delivered, "", 3_600),
-            (.failed, "network", 600),
-            (.expired, "", 8 * 86_400),
-            (.expired, "too-large", 600),
-        ]
-        return cases.enumerated().map { i, c in
-            let id = String(format: "%032x", i + 1)
-            let header = ItemHeader(id: id, kind: .url, url: url, title: title, sent: "")
-            return OutboxRow(id: id, kind: .url, title: title, url: url, size: 14_200_000, header: header,
-                             created: now.addingTimeInterval(-c.2), status: c.0, errorCode: c.1)
-        }
     }
 
     /// Hosts `view` in a window `width` wide with Comfort on and accessibility3, lets it settle, and reports the

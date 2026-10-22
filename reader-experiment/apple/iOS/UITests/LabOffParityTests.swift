@@ -5,17 +5,36 @@ import XCTest
 /// Comfort). Baselines: `lab-off-baseline/<screen>.json` next to this file, re-recorded only with a matching non-Lab
 /// change. Without one the test prints the tree between `=====BEGIN lab-off-baseline …=====` markers and fails.
 ///
-/// The Lab switch row (`AXTree.labSwitchID`) is the one thing Lab off adds, in Settings and in the share card's own
-/// settings: it is left out of the compared tree and checked to hold only the switch, off (LAB-PLAN 1.1).
+/// Home is walked with the sample history (`-DLSSampleHistory`: a row in every state, the rows W1's timeline changes)
+/// at its top (`home`) and at its end (`home-end`; the list holds only the rows on screen), and empty (`home-empty`).
+/// Each row's age, which counts on by itself, is written "<when>".
+///
+/// The Lab switch row (`AXTree.labSwitchID`) is the one thing Lab off adds, and on the iPhone only in Settings: it is
+/// left out of the compared tree and checked to hold only the switch, off (LAB-PLAN 1.1). The share sheet follows the
+/// app's switch and has none of its own, so its cards may show no Lab switch at all.
 final class LabOffParityTests: XCTestCase {
     @MainActor
-    func testHomeAndSettingsMatchTheLabOffBaseline() throws {
+    func testHomeWithARowInEveryStateMatchesTheLabOffBaseline() throws {
+        continueAfterFailure = true
+        let app = UITestSupport.launch(paired: true, history: true)
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 30), "Home did not show")
+        XCTAssertTrue(UITestSupport.waitForHistory(app), "the sample history did not show")
+        UITestSupport.screenshot(app, "ios-lab-off-home", in: self)
+        try UITestSupport.checkBaseline(app, screen: "home")
+
+        try UITestSupport.scrollHistoryToEnd(app)
+        UITestSupport.screenshot(app, "ios-lab-off-home-end", in: self)
+        try UITestSupport.checkBaseline(app, screen: "home-end")
+    }
+
+    @MainActor
+    func testTheEmptyHomeAndSettingsMatchTheLabOffBaseline() throws {
         continueAfterFailure = true
         let app = UITestSupport.launch(paired: true)
         let settings = app.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 30), "Home did not show")
-        UITestSupport.screenshot(app, "ios-lab-off-home", in: self)
-        try UITestSupport.checkBaseline(app, screen: "home")
+        UITestSupport.screenshot(app, "ios-lab-off-home-empty", in: self)
+        try UITestSupport.checkBaseline(app, screen: "home-empty")
 
         settings.tap()
         XCTAssertTrue(app.switches["comfort"].waitForExistence(timeout: 10), "Settings did not open")
@@ -32,7 +51,7 @@ final class LabOffParityTests: XCTestCase {
     }
 
     /// The share sheet's card (`ShareExtensionView`) in each of its states (`-DLSShareCard`, Debug builds): with Lab
-    /// off it is exactly v1.1's (the F00 table), and W1 changes it the most.
+    /// off it is exactly v1.1's (the F00 table), and W1 changes it the most. No card may show a Lab switch.
     @MainActor
     func testTheShareCardMatchesTheLabOffBaseline() throws {
         continueAfterFailure = true
@@ -40,7 +59,7 @@ final class LabOffParityTests: XCTestCase {
             let app = UITestSupport.launchShareCard(card)
             XCTAssertTrue(app.staticTexts.firstMatch.waitForExistence(timeout: 30), "the \(card) card did not show")
             UITestSupport.screenshot(app, "ios-lab-off-share-\(card)", in: self)
-            try UITestSupport.checkBaseline(app, screen: "share-\(card)", labSwitch: true)
+            try UITestSupport.checkBaseline(app, screen: "share-\(card)", labSwitch: false)
             app.terminate()
         }
     }

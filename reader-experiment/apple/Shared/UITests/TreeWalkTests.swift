@@ -130,6 +130,39 @@ final class TreeWalkTests: XCTestCase {
         XCTAssertTrue(walk.nodes.contains(AXNode(type: "staticText", label: "Version, <version>", value: "")))
     }
 
+    /// A history row's age is written "<when>" (its words count on by themselves), as a label on the iPhone and as a
+    /// value on the Mac; the identifier is the one `HistoryRowView` gives it, and the sample history's words are the
+    /// shared copy's.
+    @MainActor
+    func testARowsAgeIsWrittenAsWhen() throws {
+        let tree = E(.window, label: "Send to Daylight", [
+            E(.cell, [
+                E(.staticText, label: "Delivered ✓"),
+                E(.staticText, id: AXTree.rowTimeID, label: "1 hr, 2 min"),
+                E(.staticText, id: AXTree.rowTimeID, value: "3 days, 4 hr"),
+                E(.staticText, id: AXTree.rowTimeID),
+                E(.staticText, label: "12 sec"),
+            ]),
+        ])
+        XCTAssertEqual(AXTree.walk(tree).nodes, [
+            AXNode(type: "window", label: "Send to Daylight", value: ""),
+            AXNode(type: "staticText", label: "Delivered ✓", value: ""),
+            AXNode(type: "staticText", label: AXTree.when, value: ""),
+            AXNode(type: "staticText", label: "", value: AXTree.when),
+            AXNode(type: "staticText", label: "12 sec", value: ""),
+        ])
+        let ui = URL(fileURLWithPath: #filePath) // …/reader-experiment/apple/Shared/UITests/<this file>
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("DaylightShareKit/Sources/DaylightShareUI", isDirectory: true)
+        let views = try String(contentsOf: ui.appendingPathComponent("Views.swift"), encoding: .utf8)
+        XCTAssertTrue(views.contains("public static let timeID = \"\(AXTree.rowTimeID)\""),
+                      "HistoryRowView.timeID is not AXTree.rowTimeID")
+        let copy = try String(contentsOf: ui.deletingLastPathComponent().appendingPathComponent("DaylightShareKit/Copy.swift"),
+                              encoding: .utf8)
+        XCTAssertTrue(copy.contains("\"\(UITestSupport.historyFirst)\""))
+        XCTAssertTrue(copy.contains("\"\(UITestSupport.historyLast)\""))
+    }
+
     /// The type names follow the enum's raw values.
     func testTypeNamesMatchTheCases() {
         let cases: [(XCUIElement.ElementType, String)] = [

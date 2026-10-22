@@ -17,7 +17,7 @@ struct SendToDaylightApp: App {
             RootView()
                 .environmentObject(model)
                 .onOpenURL { url in Task { await model.handleOpen([url]) } }
-                .task { await model.handleLaunchArguments() }
+                .task { await model.handleLaunchArguments(sampleHistory: Self.sampleHistory) }
         }
         .onChange(of: scenePhase) { phase in
             switch phase {
@@ -40,6 +40,16 @@ struct SendToDaylightApp: App {
                 Self.scheduleRefresh()
             }
         }
+    }
+
+    /// `-DLSSampleHistory` with `-DLSTestStorage` (Debug builds only, for the UI tests' walks and audits): the history
+    /// shows `HistorySample`'s rows, a row in every state, and keeps them as they are.
+    nonisolated static var sampleHistory: Bool {
+        #if DEBUG
+        return HistorySample.isRequested()
+        #else
+        return false
+        #endif
     }
 
     /// Asks iOS for a background refresh in about 15 minutes when something still waits for an ack or a re-send.
