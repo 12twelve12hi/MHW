@@ -11,8 +11,8 @@ and travel through an ntfy relay to the **Daylight Share** inbox on the tablet, 
 | **Send to Daylight** (iPhone, iOS 16+) | Pair by scanning the Daylight's QR code, typing/pasting the code, or opening a `daylightshare://pair?…` link (which asks first). Send a link or a file (PDF, EPUB, DOCX, Markdown, HTML, text… up to 9 MB). History with the same words as every Send to Daylight app (*Sent · waiting for your Daylight*, *Delivered ✓*, *Waiting to send*, *Not delivered*, with *Retry now* or *Try again* where they help). Settings: this device's name, the relay, unpair, and Comfort (see [Accessibility and Comfort](#accessibility-and-comfort)). Re-sends what the Daylight has not acknowledged on launch, while open, and with background app refresh. |
 | **Daylight** share sheet item (iOS Share Extension) | In the share sheet of Safari and other apps for web pages, links and documents. From Safari it sends the page as you see it (its HTML, captured by `GetPage.js`), so paywalled and logged-in articles work; links from other apps go as links; files as files (up to 9 MB, refused at once above). Shows "Sending to <your Daylight>…", then the item's status in the words the app's history uses (*Sent · waiting for your Daylight*: it reached the relay, not yet the Daylight; *Delivered ✓* if the Daylight already acknowledged it) and closes, or the item's status and sentence when it could not go yet (or *This device is out of space, so it can’t send this.* when the file cannot be copied). If the app isn't paired yet, you can paste the code right there; a shared `daylightshare://` link pairs after you confirm. |
 | **Send to Daylight** Safari extension (iOS) | The shared WebExtension from [`../extension`](../extension) packaged for Safari on iPhone. It reads the pairing from the app, so you pair once. |
-| **Send to Daylight** (Mac, macOS 13+) | A window and a menu bar item. Pair by pasting the code or a `daylightshare://` link. Drop PDFs, documents, `.webloc` files or links on the window or on the Dock icon; "Send Clipboard Link" (⇧⌘L in the menu bar item); history; settings, Comfort included. Re-sends unacknowledged items every minute while it runs. |
-| **Daylight** Share menu item (macOS Share Extension) | Share › Daylight in Safari, Finder, Preview and other apps: links, pages and files. Team-signed builds use the app's pairing; the released (ad-hoc) build asks for the code once and remembers it. |
+| **Send to Daylight** (Mac, macOS 13+) | A window and a menu bar item. Pair by pasting the code or a `daylightshare://` link. Drop PDFs, documents, `.webloc` files or links on the window or on the Dock icon; "Send Clipboard Link" (⇧⌘L in the menu bar item); history; settings, Comfort included, with **Lab** first (see [Lab on the Mac](#lab-on-the-mac)). Re-sends unacknowledged items every minute while it runs. |
+| **Daylight** Share menu item (macOS Share Extension) | Share › Daylight in Safari, Finder, Preview and other apps: links, pages and files. Team-signed builds use the app's pairing (and its Lab switch); the released (ad-hoc) build asks for the code once and remembers it, and has its own Lab switch. |
 | **Send to Daylight** Safari extension (Mac) | The same WebExtension in Safari on the Mac; its native handler answers the extension's `getPairing` message with the app's pairing. |
 | `DaylightShareKit` (Swift package) | The protocol: pairing codes and links, SHA-256 and AES-256-GCM (CryptoKit), raw DEFLATE (Apple's Compression `COMPRESSION_ZLIB`, which is RFC 1951 raw deflate — the tests check it against zlib and the JS vectors), base32/base64, frames, reassembly, the ntfy relay client, the outbox with acks and re-sends, and shared storage. `DaylightShareUI` holds the SwiftUI pieces the apps and extensions share. |
 
@@ -114,6 +114,68 @@ Every build, with Lab on or off, has the same accessibility baseline (LAB-PLAN F
 - **Typing the pairing code is always offered**, next to the QR code on the iPhone, as the way to pair on the Mac,
   and in the share sheet.
 
+## Lab on the Mac
+
+Lab (LAB-PLAN 1, card A2: Wave 0, F00 and F17) is a switch at the top of Settings, **on by default**, in the main
+window's Settings sheet and in the Settings window (⌘,). Every word is LAB_TEXT's (`share/js/daylight-lab.js`), through
+the kit's views (`DaylightShareKit/README.md`); `macOS/App/MacLab.swift` puts them in the Mac's settings.
+
+- **Lab** with its footer (*New features we’re trying out. …*). While it is on, two rows under it: **What’s in Lab ›**
+  and **Daylight server ›**, subtitled *Optional · {short state}* (*Optional · Pair first*, *Optional · Not set up*,
+  …). With Lab off only the switch shows; nothing is deleted, and Comfort stays as it was. Settings sits in a
+  navigation stack for these rows; each page they open has its own **Back** button (⌘[) and title, since a Mac sheet
+  has no toolbar for them.
+- **What’s in Lab**: the Daylight's Lab state first (*Needs Lab on your Daylight* until a Lab hello arrives, then *Your
+  Daylight: Lab on · checked in …*), then *With your Daylight server (optional)*: the server's short state and the four
+  server features (Files over 9 MB, Summaries with Claude, Email-in address, Feeds and daily digest). Nothing spells out
+  setup until a row is clicked; a click shows its one sentence under the row (*Pair with your Daylight first: …*,
+  *Needs your Daylight server. …* with **Copy Server code**, *Couldn’t reach the Daylight server. …* after 5 s), said to
+  VoiceOver, with OK. W0 builds none of the four, so a ready server answers *In a later update*.
+  **Ad-hoc builds** (the released zip: no App Group) end the list with *This copy of the Mac app isn’t signed with a
+  team, so Share › Daylight keeps its own pairing and Lab switch, its sends don’t show here, and it waits until an item
+  is sent before closing.* A build signed with a team (the Developer ID path, below) shares the App Group with the Share
+  menu item, and the line does not show. The rule is where the app keeps its storage (`MacLab.whatsInLabFooter`):
+  its own, so the line; the App Group, no line.
+- **Daylight server**: the section where setup happens (LAB-PLAN 2.6): the state's long text, *Set up with a link*, the
+  steps while there is no server, the server's host and fingerprint, the delivery mode, this pairing's **Server code**
+  with **Copy**, the Lab Inbox and AI lines, the optional Server address and the re-run help.
+- **The Share menu card** of an ad-hoc build is an app of its own (LAB-PLAN 1.1): under its pairing form its settings
+  start with its **own Lab switch**, on by default, then Comfort (the kit's `ShareExtensionView`). W0 puts nothing
+  under it: no Lab feature acts in the Share menu before F04 (W1). With the App Group it follows the app's switch and
+  shows none. The menu bar item gets no Lab row.
+- **The one-time note** (*Lab is on. …*) waits for a build with F01 or F04: `MacLab.noteEnabled` (`LAB_NOTE_ENABLED`)
+  is false in W0, and `LabFirstRunNote` at the top of the main window shows nothing.
+- **F17**: the sender's ledger hears every ack-topic message, Lab on or off (the kit's `LabLedger`); the history keeps
+  v1.1's words in W0 (*Delivered ✓*), and What's in Lab's first line says whether the Daylight runs Lab.
+
+How it is checked, in the `mac` job of `rx-apple.yml`:
+
+- the UI tests in `macOS/UITests/LabTests.swift`: `LabFirstRunTests` (a first start has Lab on and no note, after an
+  update too, with the pairing and history kept, F00.1; no screen reachable without a click on a Lab feature names a
+  secret or shows a needs-setup sentence, F00.7; the switch hides and brings back its rows and leaves Comfort, F27.6),
+  `LabNoteTests` (a Daylight that never said hello: *Delivered ✓* rows and *Needs Lab on your Daylight*, F17.2; not
+  paired: *Pair first* and its sentence under the clicked row, F00.3; the Share menu card's own switch),
+  `LabServerNoteTests` (with no server on a mock relay: *Not set up*, the needs-server sentence and Copy Server code,
+  and the Daylight server section's Server code, which equal `server/vectors` › `derived`, F00.3, F00.5, F00.6; on a
+  relay that never answers: *Checking your Daylight server…*, then OFFLINE at 5 s, F00.6) and
+  `LabAccessibilityAuditTests` (the audit of Settings with Lab on, What's in Lab with and without a note, the Daylight
+  server section and the Share menu card with its Lab switch, Comfort off and on, F27.2). The job starts the two relays
+  these need (`$DLS_LAB_RELAY`, `$DLS_SILENT_RELAY`);
+- `LabOffParityTests` (F00.2): with Lab off, Settings and the Share menu card equal their P0 baselines, the Lab switch
+  row aside;
+- the truncation audit (F27.4) measures Settings with Lab on, What's in Lab and the Daylight server section too, and
+  `testWhatsInLabEndsWithTheAdHocLineOnlyWithoutAnAppGroup` renders What's in Lab on its own storage (the line) and on
+  a team's App Group (no line);
+- the smoke test on the zip that is released (`scripts/mac-smoke-test.sh`, also on the Developer ID build): Lab is on
+  at the first start, with `lab`, `caps` and `labStates` in `debug-status.json`; a Lab Daylight
+  (`e2e-receiver.mjs --lab`) is heard, its caps and the link's state (*reader*), with the history still saying
+  *Delivered ✓*; and F00.4: a link shared while the relay cannot be reached waits, Lab is turned off (`-DLSLab 0`), the
+  relay comes back and the link is sent and delivered with Lab off, still paired, the ledger still learning, and with
+  Lab on again its state is there at once. (No Daylight server runs in CI, so the server pin's part of F00.4 is the
+  kit's `DaylightServerTests`.)
+
+F17.4 (a real Daylight turning Lab on) is a device check (DEVICE-CHECKS.md, the W0 round on Rooted 2).
+
 ## Install on a Mac
 
 1. Download **`Send-to-Daylight-mac.zip`** from the
@@ -188,16 +250,17 @@ signing steps as a dry run on every build so the path stays proven.
 The Safari extension is its own app in both builds (LAB-PLAN 1.1). Only its pairing comes from the app, through its
 native handler (`getPairing`). Its Lab switch, its settings and its history stay in the extension's own storage.
 
-**Moving from the ad-hoc build.** Replace the app in Applications and open it. The first time, it moves its pairing,
-this Mac's name and its history (the outbox) into the shared group (`SharedStore.migrate`), but only when it was
-paired. From then on the Share menu item and the Safari extension use that pairing. Today nothing else moves:
-- Comfort and the Lab switch start at their defaults (Comfort off, Lab on);
-- the one-time Lab note (LAB-PLAN 1.6) shows again;
-- what Lab learned about deliveries (the Lab ledger, `lab.json`) and the Daylight server's pin and notices
-  (`server.json`) stay unused in the app's own storage.
+**Moving from the ad-hoc build.** Replace the app in Applications and open it. The first time, it moves what it kept
+in its own storage into the shared group (`SharedStore.migrate`, kit commits 6b354a7 and 05c590b), as LAB-PLAN 1.2
+and 1.3 ask of an update:
+- paired or not, Comfort, the Lab switch, the one-time Lab note's answer and this Mac's name, each unless the group
+  already has its own;
+- when the group has no pairing: the pairing with its history (the outbox), what Lab learned about deliveries (the Lab
+  ledger, `lab.json`), the Daylight server's pin and notices (`server.json`) and a re-pairing follow-up; unpaired, the
+  server's pin and notices.
 
-LAB-PLAN 1.2 and 1.3 say updates keep all of these, so `SharedStore.migrate` must carry them before the secrets are
-added (LOOSE-ENDS.md).
+From then on the Share menu item and the Safari extension use that pairing, and Share › Daylight follows the app's Lab
+switch: What's in Lab no longer ends with the ad-hoc build's line (see [Lab on the Mac](#lab-on-the-mac)).
 
 ### Turn it on (one time)
 
@@ -380,11 +443,11 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
 |---|---|
 | `-DLSPairLink <link>` | Pairs without asking. |
 | `-DLSSendLink <url>` | Sends a link. |
-| `-DLSStatusDump` | Writes `debug-status.json` (storage, pairing, Comfort, history rows with their labels, and a once-a-second heartbeat) to the app's Application Support folder, on the Mac `~/Library/Containers/com.daylight.share.mac/Data/Library/Application Support/DaylightShare/`. |
+| `-DLSStatusDump` | Writes `debug-status.json` (storage, pairing, Comfort, Lab's `lab`, `caps` and `labStates` (LAB-PLAN 1.7), history rows with their labels, and a once-a-second heartbeat) to the app's Application Support folder, on the Mac `~/Library/Containers/com.daylight.share.mac/Data/Library/Application Support/DaylightShare/`. |
 | `-DLSComfort 0\|1` | Turns Comfort off or on before the first render (and saves it), LAB-PLAN 1.7. |
 | `-DLSTestStorage` | Runs on fresh, empty storage of its own (`DaylightShare-UITest` next to the app's own folder, a separate defaults suite, no App Group), emptied at every launch: the UI tests never see or touch a real pairing or history. |
 | `-DLSSampleHistory [n,…]` | Debug builds only, and only with `-DLSTestStorage`: once the launch's pairing is in place, the history holds the sample rows (or only those numbered after it, 1 the newest: `-DLSSampleHistory 3,4`) (`HistorySample`: a row in every state, newest first — *Sending…*; *Waiting to send* with *Retry now*; *Not delivered* as too large; *Delivered ✓*; *Sent · waiting for your Daylight* a day on; *Not delivered* within a week, with *Try again*), and the app reads no acks and re-sends nothing, so each row stays in its state. For the UI tests' walks and audits. |
-| `-DLSLab 0\|1` | Reserved for the Lab builds (LAB-PLAN 1.7); the UI tests already pass `-DLSLab 0`. |
+| `-DLSLab 0\|1` | Turns Lab off or on before the first render, and saves it (LAB-PLAN 1.7; `LabSettings.launchValue`). The share card samples (`-DLSShareCard`) take it too. The Lab-off walks pass `-DLSLab 0`; without it a start on `-DLSTestStorage` is a first start, Lab on. |
 | `-DLSShareCard <name>` | Debug builds only: shows the share card (`ShareExtensionView`) in one of its states in place of the window, with sample words and its own empty storage, for the UI tests' walk: `reading`, `sent`, `sent-note`, `result-note`, `needs-pairing` (a card without an App Group, with its own Comfort switch) or `confirm-pairing` (`ShareCardSample`). |
 
 ### UI tests, the truncation audit and the Lab-off baselines
@@ -457,9 +520,9 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     one switch named "Lab", off, with nothing else inside. Where it lives: Settings on both platforms, and on the Mac
     the Share menu card's own settings, which of the card's samples only `needs-pairing` shows (the ad-hoc build,
     LAB-PLAN 1.1). The iPhone's share sheet follows the app's switch and has none of its own, so the iPhone's card
-    walks allow no Lab switch at all. A2: put the card's Lab switch inside `ShareExtensionView.cardSettings` (shown
-    only with `model.showsCardSettings`) and inside `#if os(macOS)`, since iOS compiles that view too. What's in Lab and
-    Daylight server are rows of their own, outside that element: shown with Lab off, they change the compared tree.
+    walks allow no Lab switch at all. The card's Lab switch is the kit's (`ShareExtensionView.cardSettings`, Mac only,
+    `showsCardLabSwitch`). What's in Lab and Daylight server are rows of their own, outside that element: shown with Lab
+    off, they change the compared tree.
   - `TreeWalkTests`: the walk's own rules on trees built by hand (the Lab row and its words, labelled elements of
     any type, the version, the type names, `LAB_TEXT`'s words from `share/vectors/lab-vectors.json`).
   - When a baseline is missing or differs, the test fails and prints the new tree between
@@ -484,8 +547,9 @@ windows) are uploaded as the `rx-apple-ios-screenshots` and `rx-apple-mac-screen
 never compared. A runner image that changes the iOS or macOS version can change a tree: the test then prints the new
 one, ready to copy. Each launch waits until the app answers accessibility queries (a simulator that has just started
 can take a while; CI also starts it before the tests). CI does not re-run failed tests, and `scripts/ci-test-summary.sh` fails the job unless
-`AccessibilityAuditTests`, `BaselineTests`, `LabOffParityTests`, `TreeWalkTests` and `TruncationAuditTests` each ran
-with every test passed and none skipped (so a runner whose simulator is older than iOS 17, or a macOS older than 14,
+`AccessibilityAuditTests`, `BaselineTests`, `LabOffParityTests`, `TreeWalkTests` and `TruncationAuditTests` (on the Mac
+also `LabFirstRunTests`, `LabNoteTests`, `LabServerNoteTests` and `LabAccessibilityAuditTests`, [Lab on the
+Mac](#lab-on-the-mac)) each ran with every test passed and none skipped (so a runner whose simulator is older than iOS 17, or a macOS older than 14,
 cannot turn the audits into skips).
 
 ### Notes

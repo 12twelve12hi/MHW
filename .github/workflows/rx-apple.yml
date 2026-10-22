@@ -378,7 +378,7 @@ jobs:
       # (with the label the history shows), the storage accesses made on its main thread (StorageAudit) and a
       # once-a-second heartbeat from the main thread. Ad-hoc signed: its own storage, no App Group (and so no privacy
       # prompt). scripts/mac-smoke-test.sh, which the Developer ID job runs on its build too. This step gates the release.
-      - name: Smoke test the Mac app (launch, responsive, pair, send, Delivered)
+      - name: Smoke test the Mac app (launch, responsive, pair, send, Delivered, Lab)
         run: bash scripts/mac-smoke-test.sh Send-to-Daylight-mac.zip private
 
       # The accessibility baseline (LAB-PLAN F27) and the Lab-off parity baselines (F00.2, 1.7) on the Mac: XCUITest
@@ -388,14 +388,23 @@ jobs:
       # the history and empty) against macOS/UITests/lab-off-baseline, with the walk's own tests; and the truncation
       # audit hosted in the app (F27.4). A Debug build, signed ad hoc so the test runner may drive it; the app runs on
       # its own empty storage (with -DLSSampleHistory for the history).
+      # Lab (F00, F17; macOS/UITests/LabTests.swift): the first start (F00.1, F00.7), the switch, What's in Lab's notes
+      # (F00.3), F17.2, the Share menu card's own Lab switch, and the audits of every Lab screen. Two relays for them:
+      # a mock ntfy relay with no Daylight server on it ($DLS_LAB_RELAY: needs-server, the Server code, F00.5 and F00.6)
+      # and one that takes connections and never answers ($DLS_SILENT_RELAY: OFFLINE at 5 s, F00.6).
       # Tests are not re-run: each of those test classes must pass first time and none may be skipped (macOS older than
       # 14 skips the audits), which ci-test-summary.sh checks.
-      - name: Mac UI tests and truncation audit (F27.2, F27.4, F00.2)
+      - name: Mac UI tests and truncation audit (F27.2, F27.4, F00, F17.2)
         run: |
           mkdir -p build/shots build/baselines
+          node ../share/js/mock-relay.mjs --port 8790 > build/lab-relay.log 2>&1 &
+          node -e 'require("net").createServer(() => {}).listen(8791, "127.0.0.1")' > build/silent-relay.log 2>&1 &
+          for i in $(seq 1 20); do curl -fsS http://127.0.0.1:8790/v1/health > /dev/null 2>&1 && break; sleep 0.5; done
+          curl -fsS http://127.0.0.1:8790/v1/health > /dev/null || { echo "::error::the mock relay for the Lab tests did not start"; cat build/lab-relay.log; exit 1; }
           run_tests() {
             rm -rf build/mac-tests.xcresult
             TEST_RUNNER_DLS_SHOTS="$PWD/build/shots" TEST_RUNNER_DLS_BASELINE_OUT="$PWD/build/baselines" \
+            TEST_RUNNER_DLS_LAB_RELAY="http://127.0.0.1:8790" TEST_RUNNER_DLS_SILENT_RELAY="http://127.0.0.1:8791" \
               xcodebuild test -project SendToDaylight.xcodeproj -scheme SendToDaylight-macOS -configuration Debug \
               -destination 'platform=macOS' -derivedDataPath build/dd-mac-test -resultBundlePath build/mac-tests.xcresult \
               CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
@@ -418,7 +427,8 @@ jobs:
           xcrun xcresulttool export attachments --path build/mac-tests.xcresult --output-path build/shots/attachments \
             > /dev/null 2>&1 || echo "::warning::could not export the result bundle's attachments"
           bash scripts/ci-test-summary.sh build/mac-tests.log build/baselines "$status" \
-            AccessibilityAuditTests BaselineTests LabOffParityTests TreeWalkTests TruncationAuditTests
+            AccessibilityAuditTests BaselineTests LabOffParityTests TreeWalkTests TruncationAuditTests \
+            LabFirstRunTests LabNoteTests LabServerNoteTests LabAccessibilityAuditTests
 
       - uses: actions/upload-artifact@v4
         if: always()

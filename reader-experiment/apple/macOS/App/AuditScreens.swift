@@ -4,11 +4,13 @@ import DaylightShareKit
 import DaylightShareUI
 import SwiftUI
 
-/// The truncation audit (LAB-PLAN F27.4), run by `SendToDaylightTests-macOS`: each main screen with sample data, and
-/// the Share menu's card in each of its states (`ShareCardSample`), hosted at its narrowest width (the window's
-/// minimum, 440 pt; the Settings sheet, 460 pt; the card, 360 pt) with Comfort on (larger text on the Mac) and
-/// accessibility3, and every probed text's frame compared with the size it needs (`TruncationRecorder`). Debug builds
-/// only. The menu bar item's menu is drawn by the system at the width its items need, so it is not measured here.
+/// The truncation audit (LAB-PLAN F27.4), run by `SendToDaylightTests-macOS`: each main screen with sample data (Lab on,
+/// as on a first start: Settings with its Lab section, and the two pages that section opens, What's in Lab and the
+/// Daylight server section), and the Share menu's card in each of its states (`ShareCardSample`; its own Lab switch
+/// on), hosted at its narrowest width (the window's minimum, 440 pt; the Settings sheet, 460 pt; the card, 360 pt) with
+/// Comfort on (larger text on the Mac) and accessibility3, and every probed text's frame compared with the size it
+/// needs (`TruncationRecorder`). Debug builds only. The menu bar item's menu is drawn by the system at the width its
+/// items need, so it is not measured here.
 @MainActor
 enum AuditScreens {
     struct Report {
@@ -19,16 +21,27 @@ enum AuditScreens {
 
     static var shareCardNames: [String] { ShareCardSample.allCases.map { "share-\($0.rawValue)" } }
 
-    /// The main window (with a history row in every state), Settings, the pairing screen and the Share menu's card in
-    /// each state (the card applies its model's Comfort itself, so its model has Comfort on).
+    /// The main window (with a history row in every state), Settings (Lab on), What's in Lab (with the ad-hoc line: the
+    /// sample model keeps its own storage) and the Daylight server section, the pairing screen and the Share menu's card
+    /// in each state (the card applies its model's Comfort itself, so its model has Comfort on).
     static func reports(shots: URL?) async -> [Report] {
         let paired = await sampleModel(paired: true)
         let unpaired = await sampleModel(paired: false)
+        // What the two Lab pages show once asked (the relay nobody listens on: the server is OFFLINE), so they are
+        // measured with their content, not "Checking your Daylight server…".
+        await paired.lab.loadOverview(refresh: true)
+        await paired.lab.loadServerView()
         var out: [Report] = []
         out.append(await measure("main", AnyView(MacHomeView().environmentObject(paired)),
                                  width: MacRootView.minWidth, height: 2400, shots: shots))
         out.append(await measure("settings", AnyView(MacSettingsView().environmentObject(paired)),
                                  width: MacRootView.settingsWidth, height: 2000, shots: shots))
+        out.append(await measure("whats-in-lab",
+                                 AnyView(MacLabPage(title: LabText.whatsInLab) { MacWhatsInLab() }.environmentObject(paired)),
+                                 width: MacRootView.settingsWidth, height: 2400, shots: shots))
+        out.append(await measure("server",
+                                 AnyView(MacLabPage(title: LabText.serverRow) { MacServerSection() }.environmentObject(paired)),
+                                 width: MacRootView.settingsWidth, height: 3200, shots: shots))
         out.append(await measure("pair", AnyView(MacPairView().environmentObject(unpaired)),
                                  width: MacRootView.minWidth, height: 1400, shots: shots))
         for sample in ShareCardSample.allCases {
@@ -71,13 +84,45 @@ enum AuditScreens {
         return model
     }
 
+    /// LAB-PLAN 1.4: What's in Lab's closing line about what an ad-hoc build lacks (`LabText.adHocMac`).
+    static var adHocLine: String { LabText.adHocMac }
+    /// What's in Lab's server heading (1.4), which every version of the list shows.
+    static var serverHeading: String { LabText.serverHeading }
+
+    /// The texts What's in Lab shows, paired, for a build whose storage is the App Group `appGroup` (the Developer ID
+    /// build: `<TEAMID>.com.daylight.share`) or, with nil, its own (the ad-hoc build): its words, as the truncation
+    /// probes report them.
+    static func whatsInLabTexts(appGroup: String?) async -> [String] {
+        let id = UUID().uuidString
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dls-lab-\(id)", isDirectory: true)
+        let defaults = UserDefaults(suiteName: "dls-lab-\(id)") ?? .standard
+        let store = SharedStore(defaults: defaults, directory: directory, appGroup: appGroup)
+        if let pairing = try? Pairing(secret: Data(repeating: 7, count: 16), relay: "http://127.0.0.1:9", name: "Test Daylight") {
+            await store.pair(pairing)
+        }
+        let model = AppModel(store: store, arguments: [])
+        await model.reloadNow()
+        await model.lab.loadOverview(refresh: false)
+        let recorder = await render(AnyView(MacWhatsInLab().environmentObject(model)), width: MacRootView.settingsWidth,
+                                    height: 2400, comfort: false, shots: nil, name: "whats-in-lab-\(appGroup ?? "own-storage")")
+        return Array(recorder.neededSizes.keys)
+    }
+
     /// Hosts `view` in a window `width` wide with Comfort on and accessibility3, lets it settle, and reports the
     /// probed texts that are cut. Writes a screenshot to `shots` when given.
     static func measure(_ screen: String, _ view: AnyView, width: CGFloat, height: CGFloat, shots: URL?) async -> Report {
+        let recorder = await render(view, width: width, height: height, comfort: true, shots: shots, name: screen)
+        return Report(screen: screen, measured: recorder.measured, problems: recorder.problems)
+    }
+
+    /// Hosts `view` in a window `width` wide (with Comfort and accessibility3 when `comfort`), lets it settle for two
+    /// seconds and returns what its probed texts reported. Writes a screenshot to `shots` when given.
+    static func render(_ view: AnyView, width: CGFloat, height: CGFloat, comfort: Bool, shots: URL?,
+                     name screen: String) async -> TruncationRecorder {
         let recorder = TruncationRecorder(width: width)
         let root = view
-            .comfort(true)
-            .dynamicTypeSize(.accessibility3)
+            .comfort(comfort)
+            .dynamicTypeSize(comfort ? .accessibility3 : .large)
             .environment(\.truncationRecorder, recorder)
             .frame(width: width, height: height)
         let host = NSHostingView(rootView: root)
@@ -95,10 +140,9 @@ enum AuditScreens {
             try? FileManager.default.createDirectory(at: shots, withIntermediateDirectories: true)
             try? rep.representation(using: .png, properties: [:])?.write(to: shots.appendingPathComponent("truncation-mac-\(screen).png"))
         }
-        let report = Report(screen: screen, measured: recorder.measured, problems: recorder.problems)
         window.orderOut(nil)
         window.contentView = nil
-        return report
+        return recorder
     }
 }
 #endif

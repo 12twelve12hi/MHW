@@ -60,7 +60,8 @@ struct MacRootView: View {
         .appSheets(model) { sheet in
             if sheet == .settings {
                 VStack(spacing: 0) {
-                    MacSettingsView()
+                    // In a navigation stack: the Lab section's rows open What's in Lab and Daylight server in it.
+                    MacSettingsStack()
                     HStack {
                         Spacer()
                         Button { model.sheet = nil } label: {
@@ -125,6 +126,8 @@ struct MacHomeView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            // The one-time Lab note (LAB-PLAN 1.6), only in builds with F01 or F04 (`MacLab.noteEnabled`): never in W0.
+            LabFirstRunNote(lab: model.lab)
             HStack {
                 Text("Sending to \(model.daylightName)").dlsFont(.headline).wrapping("Sending to \(model.daylightName)")
                     .accessibilityAddTraits(.isHeader)
@@ -331,6 +334,8 @@ struct MacSettingsView: View {
 
     var body: some View {
         Form {
+            // Lab first (LAB-PLAN 1.1): with Lab off only its switch and footer show.
+            MacLabSection()
             Section {
                 InfoRow("Daylight", value: model.isPaired ? model.daylightName : "Not paired")
                 TextField("Relay", text: $relay)

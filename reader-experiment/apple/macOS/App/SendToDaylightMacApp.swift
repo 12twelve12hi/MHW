@@ -13,7 +13,7 @@ struct SendToDaylightMacApp: App {
             MenuBarContent().environmentObject(model)
         }
         Settings {
-            MacSettingsView().environmentObject(model).frame(width: MacRootView.settingsWidth).comfort(model.comfort)
+            MacSettingsStack().environmentObject(model).frame(width: MacRootView.settingsWidth).comfort(model.comfort)
         }
     }
 }
@@ -21,6 +21,8 @@ struct SendToDaylightMacApp: App {
 /// Opens files and links dropped on the Dock icon or sent with "Open With", and `daylightshare://` pairing links.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // LAB_NOTE_ENABLED (LAB-PLAN 1.2), before the first render: false in W0.
+        AppModel.shared.lab.noteEnabled = MacLab.noteEnabled
         MainWindow.shared.show()
         AppModel.shared.startAutoRefresh()
         Task {
