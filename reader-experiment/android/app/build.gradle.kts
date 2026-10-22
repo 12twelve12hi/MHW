@@ -115,4 +115,5 @@ dependencies {
     testImplementation(platform("androidx.compose:compose-bom:2025.05.01"))
     testImplementation("androidx.compose.ui:ui-test-junit4")
     testImplementation("androidx.compose.ui:ui-test-junit4-accessibility:1.8.2")
+    testImplementation("com.google.android.apps.common.testing.accessibility.framework:accessibility-test-framework:4.1.1")
 }

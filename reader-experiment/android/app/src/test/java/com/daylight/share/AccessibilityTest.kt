@@ -113,9 +113,14 @@ class AccessibilityTest {
             }
         }
         compose.waitForIdle()
+        val (errors, seen) = ScreenKit.atfErrors(compose)
         compose.enableAccessibilityChecks()
         val failure = runCatching { compose.onRoot().tryPerformAccessibilityChecks() }.exceptionOrNull()
-        assertNotNull("an unlabelled 20 dp button passed the checks: they do not run under Robolectric", failure)
+        assertTrue(
+            "an unlabelled 20 dp button passed the checks. Framework errors: $errors; Compose's checks: ${failure?.javaClass?.simpleName}; " +
+                "the framework saw ${seen.size} elements:\n${seen.joinToString("\n")}",
+            errors.isNotEmpty() && failure != null,
+        )
     }
 
     /** The F27.4 measure itself: a text cut to one line is caught, a short line in a wide column is not. */

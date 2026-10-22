@@ -24,6 +24,9 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import com.daylight.share.core.FileOutboxStore
+import com.google.android.apps.common.testing.accessibility.framework.AccessibilityCheckPreset
+import com.google.android.apps.common.testing.accessibility.framework.AccessibilityCheckResult
+import com.google.android.apps.common.testing.accessibility.framework.uielement.AccessibilityHierarchyAndroid
 import com.daylight.share.core.ItemHeader
 import com.daylight.share.core.Kind
 import com.daylight.share.core.OutboxRow
@@ -222,6 +225,23 @@ object ScreenKit {
             }
         }
         return out
+    }
+
+    /**
+     * The Accessibility Test Framework's checks (its latest preset), run on the app's window as the framework builds it
+     * from the views and Compose's accessibility nodes. Returns the errors, and how many elements the framework saw.
+     */
+    fun atfErrors(compose: AppRule): Pair<List<String>, List<String>> {
+        lateinit var hierarchy: AccessibilityHierarchyAndroid
+        compose.runOnUiThread { hierarchy = AccessibilityHierarchyAndroid.newBuilder(compose.activity.window.decorView).build() }
+        val seen = hierarchy.activeWindow.allViews.map { v ->
+            "${v.className}${v.contentDescription?.let { " \"$it\"" } ?: ""}${v.text?.let { " '$it'" } ?: ""}"
+        }
+        val errors = AccessibilityCheckPreset.getAccessibilityHierarchyChecksForPreset(AccessibilityCheckPreset.LATEST)
+            .flatMap { it.runCheckOnHierarchy(hierarchy) }
+            .filter { it.type == AccessibilityCheckResult.AccessibilityCheckResultType.ERROR }
+            .map { r -> "${r.sourceCheckClass.simpleName}: ${r.element?.className} ${r.element?.text ?: r.element?.contentDescription ?: ""}" }
+        return errors to seen
     }
 
     /** Every control (merged tree) smaller than [minDp] in either direction. */
