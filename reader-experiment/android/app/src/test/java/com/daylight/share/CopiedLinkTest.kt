@@ -54,6 +54,52 @@ class CopiedLinkTest {
         compose.waitForIdle()
     }
 
+    /** The window gains or loses input focus, as Android tells the activity. */
+    private fun focus(has: Boolean) {
+        compose.runOnUiThread { compose.activity.onWindowFocusChanged(has) }
+        compose.waitForIdle()
+    }
+
+    /**
+     * Android 10 and later answer an app's clipboard questions only while its window has focus, and focus comes after
+     * onResume (and after the first frame): back from Chrome, the resume reads an empty clipboard. The window gaining
+     * focus reads it again, so the chip comes then; a resume before focus keeps what shows until focus says.
+     */
+    @Test
+    fun theChipComesWhenTheWindowGainsFocusAfterTheResume() {
+        PhoneKit.phone(app, relay)
+        // Away in Chrome: the window has no focus. Back: onResume reads before focus returns, and Android answers as if
+        // nothing were copied.
+        focus(false)
+        clip(ClipData.newPlainText("", ""))
+        resume()
+        assertTrue(chips().isEmpty())
+        // Focus arrives, and with it Android's answer: the link copied in Chrome.
+        clip(uriList("https://example.com/copied-in-chrome"))
+        focus(true)
+        compose.waitUntil(5_000) { chips().isNotEmpty() }
+        // Away again and back: the resume before focus leaves the chip as it is (no flicker) ...
+        focus(false)
+        resume()
+        assertTrue(chips().isNotEmpty())
+        // ... and the focus that follows reads again: text that is not a link now, so the chip goes.
+        clip(ClipData.newPlainText("note", "Buy milk"))
+        focus(true)
+        compose.waitUntil(5_000) { chips().isEmpty() }
+    }
+
+    /** A cold start: the first check runs before Android has said anything about focus, and again once it has. */
+    @Test
+    fun aColdStartChecksAgainWhenFocusComes() {
+        PhoneKit.phone(app, relay)
+        clip(ClipData.newPlainText("", ""))
+        resume()
+        assertTrue(chips().isEmpty())
+        clip(uriList("https://example.com/cold"))
+        focus(true)
+        compose.waitUntil(5_000) { chips().isNotEmpty() }
+    }
+
     @Test
     fun aCopiedLinkIsOfferedReadOnTapAndSentAfterTheHostIsShown() {
         PhoneKit.phone(app, relay)

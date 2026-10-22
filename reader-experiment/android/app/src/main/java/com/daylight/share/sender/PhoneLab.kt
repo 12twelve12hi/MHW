@@ -15,6 +15,7 @@ import com.daylight.share.Role
 import com.daylight.share.core.Json
 import com.daylight.share.core.lab.Lab
 import com.daylight.share.core.lab.LabText
+import com.daylight.share.core.lab.Normalise
 import com.daylight.share.core.lab.SetupCheck
 import java.io.File
 
@@ -33,17 +34,38 @@ object PhoneLab {
     const val PLATFORM = "android"
 
     /**
-     * The phone's Lab features in What's in Lab (1.4), in LAB_TEXT's order: the delivery timeline, the link-only hint
-     * (F03), share in place, works offline, the Direct Share row, automation, a selection as an excerpt (F11, after 6.5
-     * Q1: "Send as excerpt" in the share card's Options), clean links, Setup check and the copied link.
+     * The phone's Lab features in What's in Lab (1.4), in LAB_TEXT's order: the delivery timeline, share in place, works
+     * offline, the Direct Share row, automation, a selection as an excerpt (F11, after 6.5 Q1: "Send as excerpt" in the
+     * share card's Options), clean links, Setup check and the copied link.
+     *
+     * Not F03: 1.4 lists "Pages as you see them" for the iPhone, Chrome and Safari only. Its name, sentence and Use
+     * footer speak of pages captured as you see them, which the phone never sends (it sends links). The phone has only
+     * F03's link-only hint (3.3 F03), shown once whenever Lab is on ([linkOnlyHintOnce]) and then listed in Setup check.
      */
     val FEATURES: List<String> = run {
-        val phone = setOf("F01", "F03", "F04", "F07", "F08", "F09", "F11", "F16", "F26", "F33")
+        val phone = setOf("F01", "F04", "F07", "F08", "F09", "F11", "F16", "F26", "F33")
         LabText.FEATURE_ORDER.filter { it in phone }
     }
 
-    /** The phone's features with a Use switch (6.5 Q5): F03's hint, share in place, the Direct Share row, clean links, the copied link. */
+    /** The phone's features with a Use switch (6.5 Q5): share in place, the Direct Share row, clean links, the copied link. */
     val USE: List<String> = Lab.USE_FEATURES.filter { it in FEATURES }
+
+    /** Whether a share is one link and nothing else came through: a link, or text whose only content is a link and its headline (F03). */
+    fun linkOnly(items: List<Shared>): Boolean = items.singleOrNull()?.let { s ->
+        s is Shared.Link || (s is Shared.Text && Normalise.classifyShare(s.text, "", s.subject ?: "", "").kind == Normalise.Kinds.LINK)
+    } ?: false
+
+    /**
+     * F03's link-only hint (3.3 F03, Android): "Only the link came through. For pages behind a login, send from your
+     * computer’s browser with the Send to Daylight extension.", for the first such share on this device with Lab on,
+     * on whichever card the share used (share in place's, or the v1.1 card with F04's Use switch off). Marks it shown,
+     * so Setup check lists it from then on. -> the hint, or null.
+     */
+    fun linkOnlyHintOnce(app: App, items: List<Shared>): String? {
+        if (!app.prefs.lab || app.prefs.labLinkOnlyShown || !linkOnly(items)) return null
+        app.prefs.labLinkOnlyShown = true
+        return LabText["linkOnly.android"]
+    }
 
     /** Quick sends from other apps (F09): at most this many a minute; past that, the confirmation shows. */
     const val QUICK_SENDS_PER_MINUTE = 10

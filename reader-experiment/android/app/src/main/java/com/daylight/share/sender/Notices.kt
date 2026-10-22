@@ -29,7 +29,7 @@ import com.daylight.share.ui.MainActivity
  * - "In your Reader ✓: {title}", quietly, when the ledger confirms `reader`, only with "Tell me when it’s in my Reader".
  *
  * Each is posted once per item, only with Lab on, and never without notification permission (F04's row in What's in
- * Lab then says "Needs notifications"). Tapping one opens the app, whose list starts with the row.
+ * Lab then says "Needs notifications"). Tapping one opens the app at its row: the home screen, scrolled to it.
  */
 object Notices {
     /** The channel id; its name is LAB_TEXT's `shareInPlace.channel` ("Send results"). */
@@ -107,7 +107,10 @@ object Notices {
         ensureChannel(app)
         val open = PendingIntent.getActivity(
             app, id.hashCode(),
-            Intent(app, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            // Opens the app at the row (F04): the home screen, scrolled to it.
+            Intent(app, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_ROW, id)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val n = NotificationCompat.Builder(app, CHANNEL)

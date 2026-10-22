@@ -6,7 +6,10 @@ import android.net.Uri
 import android.os.Looper
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -15,6 +18,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.daylight.share.core.lab.LabText
 import com.daylight.share.sender.AutomationActivity
 import com.daylight.share.sender.SendWorker
+import com.daylight.share.ui.LAB_OPENED_SETTING_TAG
 import com.daylight.share.ui.MainActivity
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -119,6 +123,36 @@ class AutomationActivityTest {
             val a = s.activity()
             PhoneKit.until(what = "a quick result") { answer(a).first == Activity.RESULT_OK && a.isFinishing }
             assertEquals("https://example.com/quick", rows().single().url)
+        }
+    }
+
+    /**
+     * 1.5: the needs-quick-sends note's "Open setting" opens What's in Lab at "Allow quick sends from other apps",
+     * brought into view with its footer, and never turns it on by itself.
+     */
+    @Test
+    fun openSettingOpensTheQuickSendsSetting() {
+        PhoneKit.phone(app, relay)
+        PhoneKit.grantNotifications(app)
+        ActivityScenario.launchActivityForResult<AutomationActivity>(sendUrl("https://example.com/q", quick = true)).use { s ->
+            val a = s.activity()
+            compose.onNode(hasText(LabText.button("needs-quick-sends")!!) and hasClickAction()).performClick()
+            PhoneKit.until(what = "the sheet to finish") { a.isFinishing }
+        }
+        var started: Intent? = null
+        while (true) {
+            val i = shadowOf(app).nextStartedActivity ?: break
+            if (i.component?.className == MainActivity::class.java.name) started = i
+        }
+        assertEquals(AutomationActivity.quickSendsSetting(app).getStringExtra(MainActivity.EXTRA_LAB_PAGE), started!!.getStringExtra(MainActivity.EXTRA_LAB_PAGE))
+        assertEquals("F09", started.getStringExtra(MainActivity.EXTRA_LAB_FOCUS))
+        ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java).putExtras(started)).use {
+            compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag(LAB_OPENED_SETTING_TAG)).fetchSemanticsNodes().isNotEmpty() }
+            compose.waitForIdle()
+            compose.onNode(hasTestTag(LAB_OPENED_SETTING_TAG)).assertIsDisplayed()
+            compose.onNode(isToggleable() and hasText(LabText["automation.quickSends"])).assertIsDisplayed().assertIsOff()
+            compose.onNodeWithText(LabText["automation.quickSendsFooter"], substring = true).assertIsDisplayed()
+            assertFalse(app.prefs.labQuickSends)
         }
     }
 

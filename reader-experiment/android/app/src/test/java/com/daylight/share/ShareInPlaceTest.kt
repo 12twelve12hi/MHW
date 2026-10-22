@@ -19,6 +19,7 @@ import com.daylight.share.core.ItemHeader
 import com.daylight.share.core.Kind
 import com.daylight.share.core.OutboxRow
 import com.daylight.share.core.lab.LabText
+import com.daylight.share.sender.PhoneLab
 import com.daylight.share.sender.SendWorker
 import com.daylight.share.sender.ShareActivity
 import com.daylight.share.sender.ShareInPlace
@@ -26,6 +27,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -115,13 +117,19 @@ class ShareInPlaceTest {
         }
     }
 
-    /** F04.5 and F27.5: with Comfort (or "Always show Options before sending") the card opens with Send and no countdown. */
+    /**
+     * F04.5 and F27.5: with Comfort, TalkBack (touch exploration), Switch Access (among the enabled accessibility
+     * services; the flags stubbed) or "Always show Options before sending", the card opens with Send and no countdown.
+     */
     @Test
     fun noTimerForSomeoneWhoNeedsTime() {
-        for (how in listOf("comfort", "always")) {
+        assertTrue("the stub is Switch Access", PhoneKit.switchAccess().id.orEmpty().contains("switchaccess"))
+        for (how in listOf("comfort", "talkback", "switch", "always")) {
             PhoneKit.phone(app, relay)
             app.setComfort(how == "comfort")
             app.prefs.labAlwaysOptions = how == "always"
+            PhoneKit.accessibility(app, touchExploration = how == "talkback", switchAccess = how == "switch")
+            assertTrue(how, ShareActivity.needsTime(app) || how == "always")
             share("Take your time https://example.com/$how").use { s ->
                 val a = s.activity()
                 compose.onNode(hasText(LabText["shareInPlace.send"]) and hasClickAction()).assertIsDisplayed()
@@ -134,6 +142,105 @@ class ShareInPlaceTest {
         }
         app.setComfort(false)
         app.prefs.labAlwaysOptions = false
+        PhoneKit.accessibility(app)
+        // Nothing of the kind: the countdown runs.
+        assertFalse(ShareActivity.needsTime(app))
+    }
+
+    /**
+     * F04.6: each item is remembered for its "Send results" notice before its `send-<id>` job is asked for, so a job
+     * that ends at once (a fast 413) still finds it; here with two items.
+     */
+    @Test
+    fun eachItemIsRememberedBeforeItsJobIsAsked() {
+        PhoneKit.phone(app, relay)
+        val noted = java.util.Collections.synchronizedList(ArrayList<Boolean>())
+        PhoneLab.jobs = object : ArrayList<String>() {
+            override fun add(element: String): Boolean {
+                if (element.startsWith("send-")) noted += app.prefs.labInPlaceIds().contains(element.removePrefix("send-"))
+                return super.add(element)
+            }
+        }
+        val a = File(System.getProperty("java.io.tmpdir"), "k4-a-${System.nanoTime()}.txt").apply { writeText("first") }
+        val b = File(System.getProperty("java.io.tmpdir"), "k4-b-${System.nanoTime()}.txt").apply { writeText("second") }
+        try {
+            val i = Intent(app, ShareActivity::class.java).setAction(Intent.ACTION_SEND_MULTIPLE).setType("text/plain")
+                .putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(Uri.fromFile(a), Uri.fromFile(b)))
+            ActivityScenario.launch<ShareActivity>(i).use { s ->
+                val act = s.activity()
+                waitMs(ShareInPlace.COUNTDOWN_MS)
+                PhoneKit.until(what = "the card to finish") { act.isFinishing }
+            }
+            assertEquals(2, rows().size)
+            assertEquals("both jobs asked for, each after its id was remembered", listOf(true, true), noted.toList())
+        } finally {
+            a.delete()
+            b.delete()
+        }
+    }
+
+    /**
+     * A card that goes before it sends (Close in Options, Back during the countdown, or the activity destroyed) leaves
+     * no copy of the shared file in private storage; a copy that was stopped half way deletes what it wrote; and copies
+     * left by a process that died are swept at the next start.
+     */
+    @Test
+    fun aCardThatGoesLeavesNoCopyBehind() {
+        PhoneKit.phone(app, relay)
+        val f = File(System.getProperty("java.io.tmpdir"), "k4-doc-${System.nanoTime()}.pdf").apply { writeBytes(ByteArray(300_000) { (it % 251).toByte() }) }
+        fun shareFile() = ActivityScenario.launch<ShareActivity>(
+            Intent(app, ShareActivity::class.java).setAction(Intent.ACTION_SEND).setType("application/pdf").putExtra(Intent.EXTRA_STREAM, Uri.fromFile(f)),
+        )
+        try {
+            for (how in listOf("close", "back", "destroyed")) {
+                shareFile().use { s ->
+                    val a = s.activity()
+                    PhoneKit.until(what = "$how: the copy") { PhoneKit.incoming(app).isNotEmpty() }
+                    when (how) {
+                        "close" -> {
+                            compose.onNode(hasText(LabText["shareInPlace.options"]) and hasClickAction()).performClick()
+                            compose.onNode(hasText("Close") and hasClickAction()).performClick()
+                            PhoneKit.until(what = "close: the card to finish") { a.isFinishing }
+                        }
+                        "back" -> {
+                            s.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+                            PhoneKit.until(what = "back: the card to finish") { a.isFinishing }
+                        }
+                        else -> s.moveToState(Lifecycle.State.DESTROYED)
+                    }
+                    PhoneKit.until(what = "$how: the copy to go") { PhoneKit.incoming(app).isEmpty() }
+                }
+                waitMs(5_000)
+                assertTrue("$how: nothing sent", rows().isEmpty())
+                assertTrue("$how: no copy", PhoneKit.incoming(app).isEmpty())
+            }
+            // A copy that is stopped (its card went) deletes what it wrote.
+            try {
+                app.sender.copyIn(Uri.fromFile(f), "application/pdf") { false }
+                fail("a stopped copy throws")
+            } catch (e: com.daylight.share.core.ShareException) {
+                assertEquals("cancelled", e.code)
+            }
+            assertTrue(PhoneKit.incoming(app).isEmpty())
+            // What a process that died left: swept at the next start, unless it may still be in use.
+            val dir = File(app.filesDir, "outbox-incoming").apply { mkdirs() }
+            val old = File(dir, "old").apply { writeText("x"); setLastModified(System.currentTimeMillis() - 2 * 3_600_000L) }
+            val fresh = File(dir, "fresh").apply { writeText("y") }
+            assertEquals(1, app.sender.sweepIncoming())
+            assertFalse(old.exists())
+            assertTrue(fresh.exists())
+            fresh.delete()
+            // And a card that sends keeps nothing either: the copy moved into the outbox.
+            shareFile().use { s ->
+                val a = s.activity()
+                waitMs(ShareInPlace.COUNTDOWN_MS)
+                PhoneKit.until(what = "the card to finish") { a.isFinishing }
+            }
+            assertEquals(1, rows().size)
+            assertTrue(PhoneKit.incoming(app).isEmpty())
+        } finally {
+            f.delete()
+        }
     }
 
     /**
@@ -247,6 +354,65 @@ class ShareInPlaceTest {
         } finally {
             big.delete()
         }
+    }
+
+    /** F02e.1, with a ready server (stubbed): "Send files over 9 MB ›" says F02 comes to this app in a later update. */
+    @Test
+    fun aFileOver9MbWithAReadyServerSaysLater() {
+        val server = ReadyServer(relay)
+        PhoneKit.phone(app, relay, labHttp = server)
+        PhoneKit.readyServer(app)
+        val big = File(System.getProperty("java.io.tmpdir"), "k4-big-${System.nanoTime()}.pdf")
+        RandomAccessFile(big, "rw").use { it.setLength(14_200_000) }
+        try {
+            val i = Intent(app, ShareActivity::class.java).setAction(Intent.ACTION_SEND).setType("application/pdf").putExtra(Intent.EXTRA_STREAM, Uri.fromFile(big))
+            ActivityScenario.launch<ShareActivity>(i).use { s ->
+                val a = s.activity()
+                waitMs(ShareInPlace.COUNTDOWN_MS)
+                PhoneKit.until(what = "the too-big sentence") { compose.onAllNodes(hasText(LabText["bigFiles"]) and hasClickAction()).fetchSemanticsNodes().isNotEmpty() }
+                compose.onNode(hasText(LabText["bigFiles"]) and hasClickAction()).performClick()
+                val later = LabText.needsMessage("later", platform = "android", feature = "F02")!!
+                assertEquals("Your Daylight server is ready. Files over 9 MB comes to this app in a later Lab update.", later)
+                PhoneKit.until(10_000, "the later sentence") { compose.onAllNodes(hasText(later)).fetchSemanticsNodes().isNotEmpty() }
+                assertTrue("the server was asked", server.statusRequests > 0)
+                // No button: nothing on this device can fix it.
+                assertTrue(compose.onAllNodes(hasText(LabText.button("needs-server")!!)).fetchSemanticsNodes().isEmpty())
+                assertTrue(rows().isEmpty())
+                assertFalse("the card stays", a.isFinishing)
+            }
+        } finally {
+            big.delete()
+        }
+    }
+
+    /**
+     * F03.3 with F04's Use switch off: the v1.1 card shows the link-only hint the first time too, and stays until OK;
+     * later link shares close as before.
+     */
+    @Test
+    fun theLinkOnlyHintShowsOnTheV11CardToo() {
+        PhoneKit.phone(app, relay)
+        app.prefs.setLabUse("F04", false)
+        app.prefs.labLinkOnlyShown = false
+        val hint = LabText["linkOnly.android"]
+        share("https://example.com/v11-first").use { s ->
+            val a = s.activity()
+            PhoneKit.until(what = "the hint") { compose.onAllNodes(hasText(hint)).fetchSemanticsNodes().isNotEmpty() }
+            assertEquals("https://example.com/v11-first", rows().single().url)
+            waitMs(10_000)
+            assertFalse("it stays to be read", a.isFinishing)
+            compose.onNodeWithText(LabText.NOTE_BUTTON).performClick()
+            PhoneKit.until { a.isFinishing }
+        }
+        assertTrue(app.prefs.labLinkOnlyShown)
+        share("https://example.com/v11-second").use { s ->
+            val a = s.activity()
+            PhoneKit.until(what = "the result") { compose.onAllNodes(hasText("Sent · waiting for your Daylight")).fetchSemanticsNodes().isNotEmpty() }
+            assertTrue(compose.onAllNodes(hasText(hint)).fetchSemanticsNodes().isEmpty())
+            waitMs(5_000)
+            assertTrue("it closes as before", a.isFinishing)
+        }
+        app.prefs.setLabUse("F04", true)
     }
 
     /** F04's Use switch off: the v1.1 card, which stays until the item is sent. */

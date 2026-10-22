@@ -31,7 +31,10 @@ import com.daylight.share.core.lab.Normalise
 import com.daylight.share.core.lab.SetupCheck
 import com.daylight.share.Role
 import com.daylight.share.logi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -90,6 +93,22 @@ class SenderRepo(private val app: App) {
         // F08: the Direct Share shortcut goes when Lab goes off, and in the Inbox role (it comes back with the next send).
         app.scope.launch { app.labOn.collect { on -> if (!on) Shortcuts.remove(app) } }
         app.scope.launch { app.role.collect { r -> if (r == Role.INBOX) Shortcuts.remove(app) } }
+        // Copies a share left behind when the process died while it was being prepared.
+        app.scope.launch(Dispatchers.IO) { sweepIncoming() }
+    }
+
+    /**
+     * Deletes the copies in `outbox-incoming` that no share is still preparing: those older than [INCOMING_MAX_AGE_MS]
+     * (a share stores or deletes its copy within seconds; one the process died with stays until this runs, at start).
+     * -> how many went.
+     */
+    @VisibleForTesting
+    internal fun sweepIncoming(now: Long = System.currentTimeMillis()): Int {
+        val old = incoming.listFiles()?.filter { it.isFile && now - it.lastModified() > INCOMING_MAX_AGE_MS }.orEmpty()
+        var n = 0
+        for (f in old) if (f.delete()) n++
+        if (n > 0) logi("sender: $n copies left from shares that never finished were deleted")
+        return n
     }
 
     /** The HTTP of the outbox's relay client (tests plug in a fake relay); null: the app's own. */
@@ -447,8 +466,21 @@ class SenderRepo(private val app: App) {
     /** A shared stream copied into private storage: the file, its name, type and title. */
     class Copy(val file: File, val name: String, val mime: String, val title: String?)
 
-    /** Copies a shared stream now, off the main thread (the share card does it while its countdown runs). */
-    suspend fun copy(uri: Uri, mimeHint: String?): Copy = withContext(Dispatchers.IO) { copyIn(uri, mimeHint) }
+    /**
+     * Copies a shared stream now, off the main thread (the share card does it while its countdown runs). Cancelling the
+     * caller stops the copy between chunks and deletes what it wrote, and a copy that finished as the caller was
+     * cancelled is deleted too: nothing is left in `outbox-incoming` for a share that went.
+     */
+    suspend fun copy(uri: Uri, mimeHint: String?): Copy {
+        val job = currentCoroutineContext()[Job]
+        var made: Copy? = null
+        try {
+            return withContext(Dispatchers.IO) { copyIn(uri, mimeHint) { job?.isActive != false }.also { made = it } }
+        } catch (e: CancellationException) {
+            made?.file?.delete()
+            throw e
+        }
+    }
 
     /** The size a content or file URI says it has (OpenableColumns.SIZE, or the file's length); null when unknown. */
     @VisibleForTesting
@@ -466,7 +498,7 @@ class SenderRepo(private val app: App) {
      * when its size is known, and as soon as the copy passes the limit when it is not.
      */
     @VisibleForTesting
-    internal fun copyIn(uri: Uri, mimeHint: String?): Copy {
+    internal fun copyIn(uri: Uri, mimeHint: String?, keepGoing: () -> Boolean = { true }): Copy {
         val cr = app.contentResolver
         if (uri.scheme == ContentResolver.SCHEME_FILE) {
             // Never send our own private files (an app could ask us to share our settings with the paired Daylight).
@@ -492,7 +524,7 @@ class SenderRepo(private val app: App) {
         try {
             incoming.mkdirs()
             val input = cr.openInputStream(uri) ?: throw ShareException("content", "Couldn’t read that file.")
-            input.use { copyCapped(it, tmp) }
+            input.use { copyCapped(it, tmp, keepGoing) }
         } catch (e: SecurityException) {
             tmp.delete()
             throw ShareException("content", "Daylight Share isn’t allowed to read that file.")
@@ -514,6 +546,9 @@ class SenderRepo(private val app: App) {
         /** A stream of unknown size over 9 MB is read on (not stored) up to this many bytes to tell its size. */
         const val MAX_MEASURED = 100_000_000L
 
+        /** A copy in `outbox-incoming` older than this belongs to no share still being prepared ([sweepIncoming]). */
+        const val INCOMING_MAX_AGE_MS = 60L * 60_000
+
         /** "Save relay" on a sender that is not paired: the relay comes with the pairing. */
         const val NOT_PAIRED_RELAY = "Pair with your Daylight first. The relay comes with its code."
 
@@ -526,10 +561,11 @@ class SenderRepo(private val app: App) {
         /**
          * Copies [input] to [dest], stopping the copy as soon as it passes [Limits.MAX_ITEM] bytes ("too-large", with the
          * shared sentence and the size when the rest of the stream, read without storing it, ends by [MAX_MEASURED]). A
-         * write that fails is "storage" ("This device is out of space…"), a read that fails is "content". On failure
-         * [dest] may be left for the caller to delete.
+         * write that fails is "storage" ("This device is out of space…"), a read that fails is "content", and a copy
+         * stopped because [keepGoing] said no (the share went) is "cancelled". On failure [dest] may be left for the
+         * caller to delete.
          */
-        fun copyCapped(input: java.io.InputStream, dest: File) {
+        fun copyCapped(input: java.io.InputStream, dest: File, keepGoing: () -> Boolean = { true }) {
             val out = try {
                 dest.outputStream()
             } catch (e: IOException) {
@@ -539,6 +575,7 @@ class SenderRepo(private val app: App) {
                 val buf = ByteArray(256 * 1024)
                 var total = 0L
                 while (true) {
+                    if (!keepGoing()) throw ShareException("cancelled", "The share was closed before it was sent.")
                     val n = try {
                         input.read(buf)
                     } catch (e: IOException) {

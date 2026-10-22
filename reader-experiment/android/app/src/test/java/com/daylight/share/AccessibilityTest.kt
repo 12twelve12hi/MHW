@@ -410,6 +410,15 @@ class AccessibilityTest {
         am.setEnabled(true)
         am.setTouchExplorationEnabled(true)
         assertTrue("TalkBack", ShareActivity.needsTime(app))
+        // Switch Access: among the enabled accessibility services (its id names it), without touch exploration.
+        am.setTouchExplorationEnabled(false)
+        assertFalse("another service alone", ShareActivity.needsTime(app))
+        val switchAccess = PhoneKit.switchAccess()
+        assertTrue(switchAccess.id.orEmpty().contains("switchaccess"))
+        am.setEnabledAccessibilityServiceList(listOf(switchAccess))
+        assertTrue("Switch Access", ShareActivity.needsTime(app))
+        am.setEnabledAccessibilityServiceList(emptyList())
+        am.setEnabled(false)
     }
 
     // -------------------------------------------------------------------------------- announcements and labels

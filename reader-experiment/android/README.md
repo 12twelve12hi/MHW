@@ -280,11 +280,19 @@ Inbox's waits for its own Wave 1 build).
   or "Always show Options before sending", the card opens with the choices and **Send**, and nothing goes until Send. A
   share-in-place item that ends failed or expired posts "Couldn’t send ‘{title}’ to {name}" / "Open to try again." in the
   channel **Send results** ("Tell me when a send fails", on); "Tell me when it’s in my Reader" (off) posts a quiet "In your
-  Reader ✓: {title}". Without notification permission nothing is posted and F04's row says "Needs notifications"; the
-  app asks once, after a share in place (Android 13 and later). F04's Use switch off: the v1.1 card.
-- **Pages as you see them, the hint (F03).** The first share that brings only a link shows once: "Only the link came
+  Reader ✓: {title}". Tapping a notice opens the app at its row (the home screen, scrolled to it, its details shown).
+  Each item is remembered for its notice before its job is asked for, so a job that fails at once still posts it.
+  Without notification permission nothing is posted and F04's row says "Needs notifications"; the app asks once, after
+  a share in place (Android 13 and later). A shared file is copied into `files/outbox-incoming` while the card is up; a
+  card that goes before it sends (a tap outside, Back, Close in Options) deletes that copy, a copy cut short deletes
+  what it wrote, and copies a dead process left behind go at the next start. F04's Use switch off: the v1.1 card.
+- **The link-only hint (F03).** The first share that brings only a link shows once, on whichever card the share used
+  (share in place's, or the v1.1 card with F04's Use switch off), and the card stays until OK: "Only the link came
   through. For pages behind a login, send from your computer’s browser with the Send to Daylight extension." After that
-  it is listed in Setup check.
+  it is listed in Setup check. F03 has no row in What's in Lab on the phone: LAB-PLAN 1.4 lists "Pages as you see them"
+  for the iPhone, Chrome and Safari only, and its sentence and Use footer speak of pages sent as you see them, which
+  the phone never does (it sends links). Should the hint get a row and a Use switch here, LAB_TEXT needs an Android
+  sentence and footer for it first (the share lane's).
 - **Works offline (F07).** A share while offline is stored as waiting for a connection (`defer`) and listed under "Waiting
   to send ({n})" with **Cancel**; the job `flush` (`sender/FlushWorker.kt`, `CONNECTED`) sends it when the network is
   back (`flushNetwork`: oldest first, at most 30 frames and 18 MB a pass, passes 3 minutes apart). With Lab off, v1.1's
@@ -296,11 +304,15 @@ Inbox's waits for its own Wave 1 build).
   `EXTRA_TITLE`, boolean `com.daylight.share.extra.QUICK`; it answers `RESULT_OK` with `id` and `status`) and
   `daylightshare://send?url=…&title=…[&text=…][&quick=1]` (through MainActivity; never a file path). A sheet asks "Send to
   {name}?" with the title and host, unless "Allow quick sends from other apps" (off; under Shortcuts and automation in
-  What's in Lab) is on, at most 10 a minute. Lab off: "Turn on Lab in Daylight Share to use this."
+  What's in Lab) is on, at most 10 a minute. Asked for a quick send while that is off, the sheet says so with **Open
+  setting**, which opens What's in Lab at that setting, brought into view with its footer and focused, never turned on
+  by itself. Lab off: "Turn on Lab in Daylight Share to use this."
 - **Send a selection (F11, 6.5 Q1 = b).** Text becomes an excerpt only when the share card's Options say **Send as
   excerpt** (an HTML document with the source link and a `#:~:text=` fragment, `x-cap: "excerpt"`); the first one shows
   once "Excerpts wait for a tap on your Daylight for now." Every "headline + link" share stays a link with the headline
-  as its title; text without a link goes as a Markdown note.
+  as its title; text without a link goes as a Markdown note. Options are share in place's, so with F04's Use switch off
+  F11's row in What's in Lab says "Use Share in place" (LAB_TEXT's `use.a11y`, the switch's own name) and a tap opens
+  that switch with its footer; it never turns it on by itself.
 - **Clean links (F16).** Every link and text share goes through `Normalise.normaliseShare`: the first link, unwrapped
   (AMP, Google, Facebook, LinkedIn, Substack) and without tracking parameters, the URL as shared in `x-orig`. F16's Use
   switch off: links go exactly as shared.
@@ -310,12 +322,14 @@ Inbox's waits for its own Wave 1 build).
   redacted (`SetupCheck.diagnosticsReport`).
 - **Send copied link (F33).** On resume only the clipboard's description is read (a `text/uri-list` clip, or on Android
   12+ a text Android's classifier is at least 0.5 sure is a URL), so no "pasted from" notice shows; **Send copied link**
-  reads it on tap and asks "Send {host} to {name}?" with **Send** and **Cancel**.
+  reads it on tap and asks "Send {host} to {name}?" with **Send** and **Cancel**. Android 10 and later answer only a
+  window that has focus, and focus comes after onResume, so the description is read again each time the window gains
+  focus; a resume before focus leaves the chip as it is until then.
 - **Files over 9 MB (the F02 entry point).** Under the too-big sentence, on the share card and on the home screen: **Send
   files over 9 MB ›**, which shows the needs-server sentence (with Copy Server code) until a Daylight server exists, and
   "In a later update" once one is ready (F02 comes to Android in Wave S).
 
-The **Use** switches (6.5 Q5) are on the rows of F03, F04, F08, F16 and F33, on by default, each with its footer ("When
+The **Use** switches (6.5 Q5) are on the rows of F04, F08, F16 and F33, on by default, each with its footer ("When
 it’s off, …"); TalkBack reads "Use {feature}". The one Lab switch still turns all of Lab off.
 
 **Still to check on a device** (W1 device round on Rooted 2, with an Android 13 or 14 phone and the real ntfy.sh relay):
@@ -323,7 +337,9 @@ it’s off, …"); TalkBack reads "Use {feature}". The one Lab switch still turn
 - **F04.4:** from Chrome, the card closes within 1 s of the countdown, and the upload completes with the app swiped away.
 - **F04.6:** the relay answering 413 after the card closed posts the "Send results" notice (here the mock relay drives
   it); the permission question after the first share in place.
-- **F04.5 / F27.3 (TalkBack):** with TalkBack on, the card opens with Options and Send and reads "Sending to {name}".
+- **F04.5 / F27.3 (TalkBack, Switch Access):** with TalkBack on, the card opens with Options and Send and reads "Sending
+  to {name}"; the same with Switch Access on (Robolectric stubs both flags; this checks the real services' ids).
+- **F04 (notices):** tapping a "Send results" notice opens the app at its row, also from a cold start.
 - **F07.1:** in flight mode a share reads "Waiting for connection", and goes within a minute once the network is back,
   with the app open and with it closed (WorkManager's `CONNECTED` job).
 - **F08.1, F08.2 (Android 13 and 14):** after one send the Daylight's name is in Chrome's Direct Share row, a tap there
@@ -331,7 +347,12 @@ it’s off, …"); TalkBack reads "Use {feature}". The one Lab switch still turn
   keeps the id `daylight` across an update.
 - **F09:** an automation app (Tasker, or `adb shell am start -a com.daylight.share.action.SEND_URL --es
   android.intent.extra.TEXT https://example.com`) gets the sheet; a `daylightshare://send` link from a web page asks.
+- **F33.1 (Android 10 and later):** copy a link in Chrome, switch back to Daylight Share: the chip appears (the clipboard
+  is read again when the window gains focus); the same from a cold start, and after the notification shade is pulled
+  down and closed.
 - **F33.2 (Android 13):** no "pasted from" toast before the chip is tapped.
+- **1.5 "Open setting" (F09):** from the automation sheet's note, What's in Lab opens at "Allow quick sends from other
+  apps" with its footer, and TalkBack starts there.
 - **F11.5:** an NYT "headline + link" shared from Chrome arrives as a link the Reader downloads; Chrome's "Share" of a
   selection (`#:~:text=`) arrives as a link unless sent as an excerpt.
 - **F01.1, F01.2, F26.1:** a link reaching "In your Reader ✓", a PDF reading "Waiting for a tap on your Daylight" then
@@ -421,12 +442,13 @@ unless a test says so.
 | Test | Covers |
 |---|---|
 | `SenderTimelineTest` | F01.3 (the check-in header), F01.4 (no Delivered or In your Reader without an ack; failed rows keep v1.1's sentence and button), F01.5 (a v1.1 Inbox's rows), F01.6 (three rows: the step line only on the newest and the unfinished, "{label}. {sentence}" for TalkBack, the step line hidden from it, details on tap), F07.1/F07.2 ("Waiting for connection" in "Waiting to send (n)", Cancel), the one-time note |
-| `ShareInPlaceTest` | F04.4 and F04.5 on Robolectric's clock (nothing in the 1.5 s countdown, then the outbox and `send-<id>`, the card gone; Options stops it; Comfort and "Always show Options before sending" wait for Send; a card that goes, or comes back from saved state, sends nothing), F03.3 (the hint once), F11 (a headline + link stays a link; "Send as excerpt"), F02e.1 (a 14.2 MB file: the too-big sentence and "Send files over 9 MB ›" with its needs-server sentence), F04's Use switch off |
+| `ShareInPlaceTest` | F04.4 and F04.5 on Robolectric's clock (nothing in the 1.5 s countdown, then the outbox and `send-<id>`, the card gone; Options stops it; Comfort, TalkBack and Switch Access (flags stubbed) and "Always show Options before sending" wait for Send; a card that goes, or comes back from saved state, sends nothing), F04.6's order (each item remembered for its notice before its job is asked for), no copy left behind (Close, Back, destroyed, a stopped copy, the sweep at start), F03.3 (the hint once, on share in place's card and on the v1.1 card), F11 (a headline + link stays a link; "Send as excerpt"), F02e.1 (a 14.2 MB file: "Send files over 9 MB ›" with its needs-server sentence, and with a ready server (stubbed) `later`), F04's Use switch off |
 | `PhoneJobsTest` | F04.6 (413 after the card closed: the "Send results" notice, once; off, or without permission: none; a network failure waits instead; "In your Reader ✓" only when asked; nothing with Lab off; the job through `TestListenableWorkerBuilder`), F07 (`defer`, the flush when the network is back, passes 3 minutes apart, nothing with Lab off) |
 | `ShortcutsTest` | F08: pushed on a send with the name (short label cut at 10), updated with the name, removed on Unpair, Lab off, F08's Use switch off and the Inbox role; the share target in `shortcuts.xml` |
-| `AutomationActivityTest` | F09.3: the sheet before anything goes, `RESULT_OK` with id and status, Cancel, quick sends only with the setting (and the note that says how), 10 a minute, Lab off, unpaired, not a link; `daylightshare://send` routed from MainActivity, and a web page cannot send silently |
-| `CopiedLinkTest` | F33.1-F33.3: the chip from the clipboard's description only, the host before Send, Cancel, no chip for text that is not a URL, the classifier's confidence (API 31+), the Use switch and Lab off |
-| `WhatsInLabPhoneTest` | 1.4 and 6.5 Q5 on the phone: its features, the Use switches (on by default, "Use {feature}", one feature off at a time), F04's and F09's settings; F04's needs-notifications note with Open Settings; F26 (the checks, the test article followed to ✓ Delivered and ✓ In your Reader, the activity log, Copy diagnostics with no URL, title, code or topic; a hint shown once stays listed) |
+| `AutomationActivityTest` | F09.3: the sheet before anything goes, `RESULT_OK` with id and status, Cancel, quick sends only with the setting (and the note that says how; its **Open setting** opens What's in Lab at that setting, in view with its footer, unchanged), 10 a minute, Lab off, unpaired, not a link; `daylightshare://send` routed from MainActivity, and a web page cannot send silently |
+| `CopiedLinkTest` | F33.1-F33.3: the chip from the clipboard's description only, read again when the window gains focus (a resume before focus keeps it), the host before Send, Cancel, no chip for text that is not a URL, the classifier's confidence (API 31+), the Use switch and Lab off |
+| `SendResultsNoticeTest` | F04: tapping a "Send results" notice opens the app at its row, below a dozen newer ones; Lab off ignores it |
+| `WhatsInLabPhoneTest` | 1.4 and 6.5 Q5 on the phone: its features (no F03 row), the Use switches (on by default, "Use {feature}", one feature off at a time), F04's and F09's settings; F11's row with F04's Use switch off ("Use Share in place", a tap opens that switch); F04's needs-notifications note with Open Settings; F26 (the checks, the test article followed to ✓ Delivered and ✓ In your Reader, the activity log, Copy diagnostics with no URL, title, code or topic; a hint shown once stays listed) |
 | `SharePathVectorsTest` | F16.1 and F11.5 on the phone's own share path: every share-sheet case of `normalise.json` through `parseLab` and the intake; Lab off is v1.1's path |
 | `LabScreensAccessibilityTest` | also the phone's home with the timeline and the queue, and Setup check (as shipped and with Comfort at 200 %) |
 

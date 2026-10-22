@@ -6,8 +6,12 @@ import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -19,7 +23,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
@@ -28,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.daylight.share.App
 import com.daylight.share.BuildConfig
+import com.daylight.share.LabRepo
 import com.daylight.share.core.Status
 import com.daylight.share.core.lab.LabGate
 import com.daylight.share.core.lab.LabRowText
@@ -54,24 +62,46 @@ const val LAB_TEST_TAG = "lab-test"
 /**
  * The switches under a phone feature's row in What's in Lab: its Use switch (6.5 Q5: on by default; the footer says
  * what turning it off does), F04's three settings and F09's "Allow quick sends from other apps" with its footer.
- * -> null for a feature with none.
+ * [focus]: when not null, the row's setting is opened (1.5 "Open setting": F09's quick sends, F04's Use switch),
+ * brought into view with its footer and focused, and never changed by itself; a new value opens it again.
+ * [onUseChanged]: after the Use switch changes. -> null for a feature with none.
  */
-fun phoneRowExtras(app: App, feature: String): (@Composable () -> Unit)? {
+fun phoneRowExtras(app: App, feature: String, focus: Int? = null, onUseChanged: () -> Unit = {}): (@Composable () -> Unit)? {
     val use = feature in PhoneLab.USE
     if (!use && feature != "F04" && feature != "F09") return null
-    return { PhoneRowExtras(app, feature, use) }
+    return { PhoneRowExtras(app, feature, use, focus, onUseChanged) }
 }
 
+/** The test tag of the setting What's in Lab opened with ("Open setting", 1.5). */
+const val LAB_OPENED_SETTING_TAG = "lab-opened-setting"
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PhoneRowExtras(app: App, feature: String, use: Boolean) {
+private fun PhoneRowExtras(app: App, feature: String, use: Boolean, focus: Int?, onUseChanged: () -> Unit) {
+    // The setting "Open setting" opens: F09's quick sends, else the row's Use switch.
+    val opened = focus != null
+    val shows = remember { BringIntoViewRequester() }
+    val focuses = remember { FocusRequester() }
+    LaunchedEffect(focus) {
+        if (focus == null) return@LaunchedEffect
+        // After the layout that placed it: then into view (at once, no motion) and focused.
+        withFrameNanos { }
+        runCatching { shows.bringIntoView() }
+        runCatching { focuses.requestFocus() }
+    }
+    fun Modifier.ifOpened(setting: Boolean): Modifier =
+        if (opened && setting) this.bringIntoViewRequester(shows).focusRequester(focuses).testTag(LAB_OPENED_SETTING_TAG) else this
     Column(Modifier.fillMaxWidth()) {
         if (use) {
             var on by remember(feature) { mutableStateOf(app.prefs.labUse(feature)) }
-            SwitchRow(LabText["use.label"], on, detail = LabText.useFooter(feature), a11yLabel = LabText.useA11y(feature)) {
-                app.prefs.setLabUse(feature, it)
-                on = it
-                // F08 off: your Daylight leaves the share sheet's top row (it comes back with the next send).
-                if (feature == "F08" && !it) Shortcuts.remove(app)
+            Box(Modifier.fillMaxWidth().ifOpened(feature != "F09")) {
+                SwitchRow(LabText["use.label"], on, detail = LabText.useFooter(feature), a11yLabel = LabText.useA11y(feature)) {
+                    app.prefs.setLabUse(feature, it)
+                    on = it
+                    // F08 off: your Daylight leaves the share sheet's top row (it comes back with the next send).
+                    if (feature == "F08" && !it) Shortcuts.remove(app)
+                    onUseChanged()
+                }
             }
         }
         when (feature) {
@@ -85,13 +115,43 @@ private fun PhoneRowExtras(app: App, feature: String, use: Boolean) {
             }
             "F09" -> {
                 var quick by remember { mutableStateOf(app.prefs.labQuickSends) }
-                SwitchRow(LabText["automation.quickSends"], quick, detail = LabText["automation.quickSendsFooter"]) {
-                    app.prefs.labQuickSends = it
-                    quick = it
+                Box(Modifier.fillMaxWidth().ifOpened(true)) {
+                    SwitchRow(LabText["automation.quickSends"], quick, detail = LabText["automation.quickSendsFooter"]) {
+                        app.prefs.labQuickSends = it
+                        quick = it
+                    }
                 }
             }
         }
     }
+}
+
+/**
+ * What's in Lab's rows on the phone where they depend on each other (card K4). F11's "Send as excerpt" is a choice in
+ * Share in place's Options (F04, 6.5 Q1): while F04's Use switch is off, F11's row says "Use Share in place" (LAB_TEXT's
+ * `use.a11y`, the switch's own name) and a tap opens that switch with its footer instead of running F11's gate.
+ */
+object PhoneLabRows {
+    /** The feature whose setting a tap on [feature]'s row opens instead of its gate, or null. */
+    fun opensInstead(app: App, feature: String): String? =
+        if (feature == "F11" && app.prefs.lab && app.prefs.role == com.daylight.share.Role.SENDER && !PhoneLab.useOn(app, "F04")) "F04" else null
+
+    /** [row] as the phone shows it now; [uses] (the Use switch count) only makes a caller read it again. */
+    @Suppress("UNUSED_PARAMETER")
+    fun row(app: App, row: LabRepo.Row, uses: Int): LabRepo.Row {
+        val instead = opensInstead(app, row.id) ?: return row
+        return row.copy(short = LabText.useA11y(instead))
+    }
+}
+
+/**
+ * A hint shown once on a share card (F03's "Only the link came through. …" on the v1.1 card, with F04's Use switch
+ * off), announced, with OK; the card stays until OK.
+ */
+@Composable
+fun CardHint(text: String, onOk: () -> Unit) {
+    Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced())
+    Buttons { TextAction(LabText.NOTE_BUTTON) { onOk() } }
 }
 
 /** Opens this app's notification settings (the needs-notifications note's "Open Settings"). */

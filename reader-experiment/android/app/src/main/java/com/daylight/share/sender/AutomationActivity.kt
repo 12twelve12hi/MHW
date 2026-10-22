@@ -198,13 +198,12 @@ class AutomationActivity : ComponentActivity() {
         }
     }
 
-    /** "Open setting": What's in Lab, where "Allow quick sends from other apps" is under Shortcuts and automation. */
+    /**
+     * "Open setting" (1.5): What's in Lab, opened at "Allow quick sends from other apps" (under Shortcuts and automation),
+     * brought into view with its footer and focused; it is never changed from here.
+     */
     private fun openQuickSendsSetting() {
-        startActivity(
-            Intent(this, MainActivity::class.java)
-                .putExtra(MainActivity.EXTRA_LAB_PAGE, LabPage.WHATS_IN_LAB.name)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-        )
+        startActivity(quickSendsSetting(this))
         finish()
     }
 
@@ -230,6 +229,13 @@ class AutomationActivity : ComponentActivity() {
             quickTimes.addLast(now)
             return true
         }
+
+        /** The intent of the needs-quick-sends note's "Open setting": What's in Lab at F09's quick sends setting. */
+        fun quickSendsSetting(context: Context): Intent =
+            Intent(context, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_LAB_PAGE, LabPage.WHATS_IN_LAB.name)
+                .putExtra(MainActivity.EXTRA_LAB_FOCUS, "F09")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
 
         /** Forgets the quick sends counted so far (tests). */
         @Synchronized

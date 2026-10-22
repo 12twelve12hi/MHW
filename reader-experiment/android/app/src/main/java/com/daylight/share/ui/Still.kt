@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -153,10 +154,12 @@ fun ScreenColumn(padding: Dp, content: @Composable ColumnScope.() -> Unit) {
     }
 }
 
-/** A screen that is a list (the phone's home screen, the Inbox), still where it should be. */
+/**
+ * A screen that is a list (the phone's home screen, the Inbox), still where it should be. [list]: its scroll state, for
+ * a screen that scrolls it itself (Lab, F04: a notice opens the phone's home screen at its row).
+ */
 @Composable
-fun ScreenList(content: LazyListScope.() -> Unit) {
-    val list = rememberLazyListState()
+fun ScreenList(list: LazyListState = rememberLazyListState(), content: LazyListScope.() -> Unit) {
     val still = rememberStillScroll(list)
     CompositionLocalProvider(LocalStillScroll provides still) {
         LazyColumn(

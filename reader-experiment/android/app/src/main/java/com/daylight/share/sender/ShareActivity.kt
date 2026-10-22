@@ -25,6 +25,7 @@ import com.daylight.share.core.lab.LabRowText
 import com.daylight.share.logi
 import com.daylight.share.logw
 import com.daylight.share.ui.BigFilesEntry
+import com.daylight.share.ui.CardHint
 import com.daylight.share.ui.DaylightTheme
 import com.daylight.share.ui.MainActivity
 import com.daylight.share.ui.StatusCard
@@ -43,7 +44,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  * With Lab on and F04's Use switch on, it shares in place ([ShareInPlace], LAB-PLAN F04): "Sending to {name}" with
  * Options for 1.5 s, then the item goes into the outbox, a `send-<id>` job publishes it, and the card goes. With Lab
  * on, links and text also go through smart intake (F16) and F11's rule, and a share while offline waits for a
- * connection (F07); F04 off is the v1.1 card, which stays until the item is sent.
+ * connection (F07); F04 off is the v1.1 card, which stays until the item is sent, and shows F03's link-only hint once
+ * as share in place's card does.
  */
 class ShareActivity : ComponentActivity() {
     private val text = mutableStateOf("Preparing…")
@@ -54,6 +56,8 @@ class ShareActivity : ComponentActivity() {
     private val bigFiles = mutableStateOf(false)
     /** Lab: share in place (F04), or null for the v1.1 card. */
     private val inPlace = mutableStateOf<ShareInPlace?>(null)
+    /** Lab, F04's Use switch off: F03's link-only hint on the v1.1 card, shown once on this device, until OK. */
+    private val hint = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,12 +67,17 @@ class ShareActivity : ComponentActivity() {
                 if (card != null) {
                     card.Content()
                 } else {
-                    val extra: (@Composable ColumnScope.() -> Unit)? = if (bigFiles.value) {
-                        { BigFilesEntry(App.of(this@ShareActivity)) }
-                    } else {
-                        null
+                    val h = hint.value
+                    val extra: (@Composable ColumnScope.() -> Unit)? = when {
+                        bigFiles.value -> {
+                            { BigFilesEntry(App.of(this@ShareActivity)) }
+                        }
+                        h != null -> {
+                            { CardHint(h) { finish() } }
+                        }
+                        else -> null
                     }
-                    StatusCard(text.value, action.value, onDismiss = ::finish, close = action.value != null || stays.value, extra = extra)
+                    StatusCard(text.value, action.value, onDismiss = ::finish, close = h == null && (action.value != null || stays.value), extra = extra)
                 }
             }
         }
@@ -125,6 +134,8 @@ class ShareActivity : ComponentActivity() {
                 fail(error ?: "Nothing was sent.", stay = bigEntry)
                 return@launch
             }
+            // Lab (F03): the first share on this device that brings only a link says so, once; the card then stays.
+            val once = if (app.prefs.lab && error == null) PhoneLab.linkOnlyHintOnce(app, shared) else null
             // Publish in the app's scope so it carries on if the card goes away; WorkManager backs it up.
             val job = app.scope.async { ids.map { app.sender.publish(it) } }
             Work.syncNow(app)
@@ -133,8 +144,15 @@ class ShareActivity : ComponentActivity() {
             text.value = if (app.prefs.lab) resultText(rows, ids.size, daylight, online = PhoneLab.online(app)) else resultText(rows, ids.size, daylight)
             if (error != null) text.value += "\n$error"
             bigFiles.value = bigEntry
-            if (bigEntry) stays.value = true else closeAfter(if (allSent && error == null) 1_200 else 3_500)
+            hint.value = once
+            if (bigEntry || once != null) stays.value = true else closeAfter(if (allSent && error == null) 1_200 else 3_500)
         }
+    }
+
+    override fun onDestroy() {
+        // Lab (F04): a card that goes without sending leaves no copy behind.
+        inPlace.value?.discard()
+        super.onDestroy()
     }
 
     private fun fail(msg: String, stay: Boolean = false) {

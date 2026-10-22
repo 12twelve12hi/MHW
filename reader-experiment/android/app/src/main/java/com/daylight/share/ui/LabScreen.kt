@@ -106,16 +106,17 @@ private fun LabNavRow(label: String, detail: String? = null, onClick: () -> Unit
 /**
  * What's in Lab, the Daylight server section or Setup check; back to Settings when Lab goes off meanwhile. [onOpen]
  * opens another Lab page (What's in Lab opens Setup check, which goes back to What's in Lab); [onExit] leaves Settings
- * for the home screen (Setup check's "Pairing" button).
+ * for the home screen (Setup check's "Pairing" button). [focus]: the feature whose setting What's in Lab opens with
+ * (1.5 "Open setting": "F09" for "Allow quick sends from other apps").
  */
 @Composable
-fun LabScreen(activity: MainActivity, page: LabPage, onBack: () -> Unit, onOpen: (LabPage) -> Unit = {}, onExit: () -> Unit = onBack) {
+fun LabScreen(activity: MainActivity, page: LabPage, onBack: () -> Unit, onOpen: (LabPage) -> Unit = {}, onExit: () -> Unit = onBack, focus: String? = null) {
     val app = App.of(activity)
     val lab by app.labOn.collectAsStateWithLifecycle()
     LaunchedEffect(lab) { if (!lab) onBack() }
     if (!lab) return
     when (page) {
-        LabPage.WHATS_IN_LAB -> WhatsInLab(activity, onBack, onOpen)
+        LabPage.WHATS_IN_LAB -> WhatsInLab(activity, onBack, onOpen, focus)
         LabPage.SERVER -> ServerSection(activity, onBack)
         LabPage.SETUP -> PhoneSetupCheck(activity, onBack = { onOpen(LabPage.WHATS_IN_LAB) }, onExit = onExit)
     }
@@ -130,15 +131,20 @@ private data class Note(val feature: String, val text: String, val button: Strin
  * state under the heading; a server feature's row shows its own short state only when it differs. It shows the
  * cached states at once and asks the server and the ack topic as it opens (each within 5 s). A tap runs the feature's
  * gate: when something is missing, exactly one sentence shows under the row (1.5) until OK, another control or
- * leaving the screen.
+ * leaving the screen. [focus]: a feature whose setting the list opens with, brought into view with its footer (the
+ * automation sheet's "Open setting" asks for F09's "Allow quick sends from other apps").
  */
 @Composable
-private fun WhatsInLab(activity: MainActivity, onBack: () -> Unit, onOpen: (LabPage) -> Unit = {}) {
+private fun WhatsInLab(activity: MainActivity, onBack: () -> Unit, onOpen: (LabPage) -> Unit = {}, focus: String? = null) {
     val app = App.of(activity)
     var overview by remember { mutableStateOf<LabRepo.Overview?>(null) }
     var refreshing by remember { mutableStateOf(true) }
     var note by remember { mutableStateOf<Note?>(null) }
     var tapped by remember { mutableIntStateOf(0) }
+    // The phone (K4): the setting to bring into view (feature id and a count, so asking again brings it again), and a
+    // count of Use switch changes (F11's row follows F04's Use switch).
+    var shown by remember(focus) { mutableStateOf(focus?.let { it to 0 }) }
+    var uses by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         overview = app.lab.overviewCached()
@@ -149,6 +155,12 @@ private fun WhatsInLab(activity: MainActivity, onBack: () -> Unit, onOpen: (LabP
     fun tap(row: LabRepo.Row) {
         val n = ++tapped
         note = null
+        // The phone: F11's "Send as excerpt" is in Share in place's Options; with F04's Use switch off the row opens
+        // that switch, with its footer, and never changes it by itself.
+        PhoneLabRows.opensInstead(app, row.id)?.let { f ->
+            shown = f to (shown?.second ?: 0) + 1
+            return
+        }
         scope.launch {
             val gate = scope.async { app.lab.gateNow(row.id) }
             // A cached answer comes at once; otherwise the note says so while the server is asked (at most 5 s).
@@ -191,10 +203,11 @@ private fun WhatsInLab(activity: MainActivity, onBack: () -> Unit, onOpen: (LabP
             Section {
                 for ((i, f) in o.features.withIndex()) {
                     if (i > 0 && phone) HorizontalDivider(color = Ink)
-                    LabFeatureRow(f, note?.takeIf { it.feature == f.id }, onTap = { tap(f) }, onButton = ::noteButton, onOk = {
+                    val row = if (phone) PhoneLabRows.row(app, f, uses) else f
+                    LabFeatureRow(row, note?.takeIf { it.feature == f.id }, onTap = { tap(f) }, onButton = ::noteButton, onOk = {
                         tapped++
                         note = null
-                    }, use = if (phone) phoneRowExtras(app, f.id) else null)
+                    }, use = if (phone) phoneRowExtras(app, f.id, shown?.takeIf { it.first == f.id }?.second, onUseChanged = { uses++ }) else null)
                 }
             }
         }

@@ -17,6 +17,7 @@ import com.daylight.share.core.ItemHeader
 import com.daylight.share.core.lab.LabText
 import com.daylight.share.sender.PhoneLab
 import com.daylight.share.sender.Shared
+import com.daylight.share.ui.LAB_OPENED_SETTING_TAG
 import com.daylight.share.ui.LAB_TEST_TAG
 import com.daylight.share.ui.MainActivity
 import kotlinx.coroutines.runBlocking
@@ -68,9 +69,12 @@ class WhatsInLabPhoneTest {
         PhoneKit.grantNotifications(app)
         openWhatsInLab()
         for (f in PhoneLab.FEATURES) compose.onNode(hasText(LabText.featureName(f)) and hasClickAction()).assertIsDisplayed()
-        assertEquals(listOf("F01", "F03", "F04", "F07", "F08", "F09", "F11", "F16", "F26", "F33"), PhoneLab.FEATURES)
+        // Not F03: 1.4 lists "Pages as you see them" for the iPhone, Chrome and Safari; the phone has only its hint.
+        assertEquals(listOf("F01", "F04", "F07", "F08", "F09", "F11", "F16", "F26", "F33"), PhoneLab.FEATURES)
+        assertTrue(compose.onAllNodes(hasText(LabText.featureName("F03"))).fetchSemanticsNodes().isEmpty())
+        assertTrue(compose.onAllNodes(hasText(LabText.useFooter("F03")!!, substring = true)).fetchSemanticsNodes().isEmpty())
         // A Use switch on each feature that changes how sharing behaves, on by default, with its footer.
-        assertEquals(listOf("F03", "F04", "F08", "F16", "F33"), PhoneLab.USE)
+        assertEquals(listOf("F04", "F08", "F16", "F33"), PhoneLab.USE)
         for (f in PhoneLab.USE) {
             useSwitch(f).assertIsOn()
             compose.onNodeWithText(LabText.useFooter(f)!!, substring = true).assertIsDisplayed()
@@ -105,6 +109,36 @@ class WhatsInLabPhoneTest {
         compose.waitForIdle()
         val cleaned = runBlocking { app.sender.add(Shared.Text("Read this https://example.com/a?utm_source=x&id=1", null)) }
         assertEquals("https://example.com/a?id=1", cleaned.url)
+    }
+
+    /**
+     * F11 on the phone is "Send as excerpt" in Share in place's Options (6.5 Q1): with F04's Use switch off its row says
+     * "Use Share in place", and a tap opens that switch with its footer (never changing it); with F04 back on, Ready.
+     */
+    @Test
+    fun aSelectionFollowsShareInPlacesUseSwitch() {
+        PhoneKit.phone(app, relay)
+        PhoneKit.grantNotifications(app)
+        openWhatsInLab()
+        val f11 = hasText(LabText.featureName("F11")) and hasClickAction()
+        compose.waitUntil(10_000) { compose.onAllNodes(f11 and hasText(LabText.READY)).fetchSemanticsNodes().isNotEmpty() }
+        useSwitch("F04").performClick()
+        compose.waitForIdle()
+        val instead = LabText.useA11y("F04")
+        assertEquals("Use Share in place", instead)
+        compose.onNode(f11 and hasText(instead)).assertIsDisplayed()
+        assertTrue(compose.onAllNodes(hasTestTag(LAB_OPENED_SETTING_TAG)).fetchSemanticsNodes().isEmpty())
+        compose.onNode(f11).performClick()
+        compose.waitForIdle()
+        compose.onNode(hasTestTag(LAB_OPENED_SETTING_TAG)).assertIsDisplayed()
+        compose.onNodeWithText(LabText.useFooter("F04")!!, substring = true).assertIsDisplayed()
+        // No note: the switch is the answer. And it was not changed.
+        assertTrue(compose.onAllNodes(hasTestTag(com.daylight.share.ui.LAB_NOTE_TAG)).fetchSemanticsNodes().isEmpty())
+        useSwitch("F04").assertIsOff()
+        assertFalse(app.prefs.labUse("F04"))
+        useSwitch("F04").performClick()
+        compose.waitForIdle()
+        compose.onNode(f11 and hasText(LabText.READY)).assertIsDisplayed()
     }
 
     /** F04 without notification permission: "Needs notifications", and the sentence with Open Settings when tapped. */

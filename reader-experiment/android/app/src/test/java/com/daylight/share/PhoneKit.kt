@@ -16,6 +16,16 @@ import com.daylight.share.core.lab.LabInboxInfo
 import com.daylight.share.core.lab.LabState
 import com.daylight.share.sender.PhoneLab
 import org.junit.Assert.fail
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.ComponentName
+import android.view.accessibility.AccessibilityManager
+import com.daylight.share.core.Bytes
+import com.daylight.share.core.Http
+import com.daylight.share.core.Json
+import com.daylight.share.core.server.FileServerStore
+import com.daylight.share.core.server.ServerCode
+import com.daylight.share.core.server.ServerKeys
+import java.net.URI
 import org.robolectric.Shadows.shadowOf
 import java.io.File
 
@@ -29,9 +39,11 @@ object PhoneKit {
     /**
      * The phone, paired with the server vectors' pairing ("Kitchen Daylight") on [relay], in the sender role; Lab on, the
      * one-time note seen (unless [noteSeen] is false) and the link-only hint shown; [online] as Android would say.
+     * [labHttp]: what the Daylight server client talks to instead of [relay] ([ReadyServer]).
      */
-    fun phone(app: App, relay: FakeRelay, pairing: Pairing = LabKit.vectorPairing, online: Boolean = true, noteSeen: Boolean = true) {
+    fun phone(app: App, relay: FakeRelay, pairing: Pairing = LabKit.vectorPairing, online: Boolean = true, noteSeen: Boolean = true, labHttp: Http? = null) {
         LabKit.useRelay(app, relay)
+        labHttp?.let { app.lab.http = it }
         app.prefs.askedNotifications = true
         app.prefs.deviceName = "Test phone"
         app.prefs.labNoteShown = noteSeen
@@ -93,6 +105,44 @@ object PhoneKit {
     /** The jobs asked for so far. */
     fun jobs(): List<String> = PhoneLab.jobs?.let { synchronized(it) { it.toList() } } ?: emptyList()
 
+    /** The copies of shared files waiting in private storage (`files/outbox-incoming`). */
+    fun incoming(app: App): List<File> = File(app.filesDir, "outbox-incoming").listFiles()?.filter { it.isFile }.orEmpty()
+
+    /**
+     * A Daylight server, deployed and ready for every feature, for [phone]'s pairing: its config as discovery cached it
+     * (the server lane's vector fingerprint), and [ReadyServer] answering GET /v1/status.
+     */
+    fun readyServer(app: App) {
+        @Suppress("UNCHECKED_CAST")
+        val derived = LabKit.serverVectors["derived"] as Map<String, Any?>
+        val store = FileServerStore(File(app.filesDir, "server.json"))
+        store.set(
+            ServerKeys.CONFIG,
+            linkedMapOf("server" to ReadyServer.ORIGIN, "api" to ServerCode.SERVER_API, "fingerprint" to derived["fingerprint"], "delivery" to "lab", "sent" to "2026-10-22T08:00:00.000Z", "id" to "c1"),
+        )
+        store.set(ServerKeys.CONFIG_AT, System.currentTimeMillis())
+    }
+
+    /**
+     * An accessibility service that is Switch Access, as Android lists it (its id is its component,
+     * "com.google.android.accessibility.switchaccess/…"); `setComponentName` is a test API, called by reflection.
+     */
+    fun switchAccess(): AccessibilityServiceInfo {
+        val info = AccessibilityServiceInfo()
+        val cn = ComponentName("com.google.android.accessibility.switchaccess", "com.android.switchaccess.SwitchAccessService")
+        runCatching { AccessibilityServiceInfo::class.java.getMethod("setComponentName", ComponentName::class.java).invoke(info, cn) }
+            .recoverCatching { AccessibilityServiceInfo::class.java.getDeclaredField("mComponentName").apply { isAccessible = true }.set(info, cn) }
+        return info
+    }
+
+    /** Turns Android's accessibility on with TalkBack ([touchExploration]) and/or Switch Access ([switchAccess]), or off. */
+    fun accessibility(app: App, touchExploration: Boolean = false, switchAccess: Boolean = false) {
+        val am = shadowOf(app.getSystemService(AccessibilityManager::class.java))
+        am.setEnabled(touchExploration || switchAccess)
+        am.setTouchExplorationEnabled(touchExploration)
+        am.setEnabledAccessibilityServiceList(if (switchAccess) listOf(switchAccess()) else emptyList())
+    }
+
     /** Runs the main looper (without moving the clock) until [cond] holds, for at most [ms] of real time. */
     fun until(ms: Long = 8_000, what: String = "the condition", cond: () -> Boolean) {
         val end = System.currentTimeMillis() + ms
@@ -101,5 +151,27 @@ object PhoneKit {
             if (System.currentTimeMillis() > end) fail("timed out waiting for $what")
             Thread.sleep(15)
         }
+    }
+}
+
+/**
+ * A Daylight server at [ORIGIN] that is deployed and ready for every feature (GET /v1/status), in front of [relay],
+ * which answers everything else (LAB-PLAN 3.1 F02e.1: "`later` with a ready server (stubbed)").
+ */
+class ReadyServer(private val relay: FakeRelay) : Http by relay {
+    override fun send(method: String, url: String, headers: Map<String, String>, body: ByteArray?, maxResponseBytes: Long, readTimeoutMs: Int): Http.Response {
+        if (method == "GET" && url.startsWith(ORIGIN) && URI(url).rawPath == "/v1/status") {
+            statusRequests++
+            val features = ServerCode.FEATURES.associateWith { linkedMapOf("state" to "ready") }
+            return Http.Response(200, mapOf("Content-Type" to "application/json"), Bytes.utf8(Json.write(linkedMapOf("features" to features))))
+        }
+        return relay.send(method, url, headers, body, maxResponseBytes, readTimeoutMs)
+    }
+
+    /** How many times the server was asked for its status. */
+    @Volatile var statusRequests = 0
+
+    companion object {
+        const val ORIGIN = "https://daylight-0123456789ab.example.workers.dev"
     }
 }

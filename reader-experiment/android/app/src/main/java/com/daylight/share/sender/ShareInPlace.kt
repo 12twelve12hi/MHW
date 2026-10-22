@@ -44,6 +44,7 @@ import com.daylight.share.ui.TextAction
 import com.daylight.share.ui.announced
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -57,11 +58,14 @@ import kotlinx.coroutines.withContext
  * show Options before sending", the card opens with the choices and Send, and nothing goes until Send (WCAG 2.2.1).
  *
  * While the countdown runs, shared files are copied into private storage (the grant lives with this activity). At the
- * countdown's end (or Send) the items go into the outbox (offline: waiting for a connection, F07), a `send-<id>` job
- * publishes each ([SendWorker]), and the card closes. Tapping outside it before that sends nothing; process death
- * during the countdown queues nothing (no half rows). A refused share (too big, unreadable) shows its sentence on the
- * card, with the F02 entry point under the too-big one. The first link-only share on this device shows F03's hint
- * once, and the first excerpt "Excerpts wait for a tap on your Daylight for now."; the card then stays until OK.
+ * countdown's end (or Send) the items go into the outbox (offline: waiting for a connection, F07), each is remembered
+ * for its "Send results" notice and then handed to its `send-<id>` job ([SendWorker]), and the card closes. Tapping
+ * outside it before that, Back, Close in Options or the card going sends nothing, and the copies made meanwhile are
+ * deleted ([discard]); process death during the countdown queues nothing (no half rows; what it left in
+ * `outbox-incoming` goes at the next start, [SenderRepo.sweepIncoming]). A refused share (too big, unreadable) shows
+ * its sentence on the card, with the F02 entry point under the too-big one. The first link-only share on this device
+ * shows F03's hint once, and the first excerpt "Excerpts wait for a tap on your Daylight for now."; the card then
+ * stays until OK.
  */
 class ShareInPlace(
     private val activity: ShareActivity,
@@ -93,16 +97,14 @@ class ShareInPlace(
         s is Shared.Text && Normalise.classifyShare(s.text, "", s.subject ?: "", "").let { it.kind == Normalise.Kinds.LINK && it.text.isNotEmpty() }
     } ?: false
 
-    /** Whether the share is one link and nothing else came through (F03's hint). */
-    private val linkOnly: Boolean = items.singleOrNull()?.let { s ->
-        s is Shared.Link || (s is Shared.Text && Normalise.classifyShare(s.text, "", s.subject ?: "", "").kind == Normalise.Kinds.LINK)
-    } ?: false
-
     /** Only one item has a title to edit. */
     val titled: Boolean = items.size == 1
 
     private val copies: List<Deferred<Result<SenderRepo.Copy>>?>
     private var countdown: Job? = null
+
+    /** Whether [commit] took the copies (it deletes what it does not store); until then [discard] does. */
+    private var committed = false
 
     init {
         copies = items.map { s ->
@@ -160,14 +162,34 @@ class ShareInPlace(
     }
 
     /**
+     * The card goes without [commit] having taken the copies (tapped outside, Back, Close, or destroyed): the copies
+     * still running stop, and the files already copied are deleted. Nothing was stored, so nothing else is left.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun discard() {
+        if (committed) return
+        countdown?.cancel()
+        countdown = null
+        for (c in copies) {
+            if (c == null) continue
+            // A copy still running stops between chunks and deletes what it wrote (SenderRepo.copy); one that had
+            // finished (now, or just before the cancel) is deleted here.
+            c.cancel()
+            c.invokeOnCompletion { cause -> if (cause == null) runCatching { c.getCompleted().getOrNull()?.file?.delete() } }
+        }
+    }
+
+    /**
      * Puts the items into the outbox and hands each to its `send-<id>` job, in the app's scope so it finishes if the
-     * card goes; then closes the card, or shows what went wrong, or the one-time hint.
+     * card goes; then closes the card, or shows what went wrong, or the one-time hint. Each item is remembered for its
+     * "Send results" notice before its job is asked for, so a job that ends at once still finds it (F04.6).
      */
     fun commit() {
         if (sending) return
         countdown?.cancel()
         countdown = null
         sending = true
+        committed = true
         optionsOpen = false
         val edited = title.trim().takeIf { titled && titleEdited && it.isNotEmpty() }
         val excerpt = asExcerpt
@@ -177,11 +199,13 @@ class ShareInPlace(
             var tooBig = false
             var excerptSent = false
             items.forEachIndexed { i, s ->
+                var copy: SenderRepo.Copy? = null
                 try {
-                    val copy = copies[i]?.await()?.getOrThrow()
+                    copy = copies[i]?.await()?.getOrThrow()
                     val row = app.sender.add(s, ShareOptions(title = edited, asExcerpt = excerpt, copied = copy, sourceApp = sourceApp))
                     ids += row.id
                     if (excerpt) excerptSent = true
+                    app.sender.noteInPlace(listOf(row.id))
                     if (!FlushWorker.waiting(row)) SendWorker.enqueue(app, row.id)
                 } catch (e: ShareException) {
                     failed = e.message
@@ -189,14 +213,15 @@ class ShareInPlace(
                 } catch (e: Exception) {
                     logw("share failed", e)
                     failed = "Couldn’t read that (${e.message ?: e.javaClass.simpleName})."
+                } finally {
+                    // Stored, the copy has moved into the outbox; refused (or the pairing changed), it goes.
+                    copy?.file?.delete()
                 }
             }
-            app.sender.noteInPlace(ids)
             val once = when {
                 ids.isEmpty() -> null
                 excerptSent && !app.prefs.labExcerptNoteShown -> LabText["excerpt.waitsOnce"].also { app.prefs.labExcerptNoteShown = true }
-                linkOnly && !excerpt && PhoneLab.useOn(app, "F03") && !app.prefs.labLinkOnlyShown ->
-                    LabText["linkOnly.android"].also { app.prefs.labLinkOnlyShown = true }
+                !excerpt -> PhoneLab.linkOnlyHintOnce(app, items)
                 else -> null
             }
             withContext(Dispatchers.Main) {

@@ -52,12 +52,31 @@ class MainActivity : ComponentActivity() {
     /** Lab: a Lab page to open in Settings (the automation sheet's "Open setting" opens What's in Lab), or null. */
     val openLab = mutableStateOf<LabPage?>(null)
 
+    /**
+     * Lab: the setting [openLab] opens with its footer (1.5 "Open setting"): a feature id whose row's setting What's in
+     * Lab brings into view ("F09": "Allow quick sends from other apps"), or null.
+     */
+    val openLabFocus = mutableStateOf<String?>(null)
+
+    /** Lab (F04): the history row a "Send results" notice opens the app at, or null. */
+    val openRow = mutableStateOf<String?>(null)
+
+    /**
+     * Whether this activity's window has input focus: null until Android first says. Android 10 and later answer an
+     * app's clipboard questions only while its window has focus, which comes after onResume (F33).
+     */
+    val windowFocus = mutableStateOf<Boolean?>(null)
+
+    /** Bumped each time the window gains focus, so the copied-link chip reads the clipboard's description again (F33). */
+    val focusGains = mutableIntStateOf(0)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         app = App.of(this)
         if (savedInstanceState == null) {
             handleLink(intent)
             handleLabPage(intent)
+            handleRow(intent)
         }
         setContent { AppContent() }
     }
@@ -77,6 +96,13 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         handleLink(intent)
         handleLabPage(intent)
+        handleRow(intent)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        windowFocus.value = hasFocus
+        if (hasFocus) focusGains.intValue++
     }
 
     override fun onStart() {
@@ -123,8 +149,19 @@ class MainActivity : ComponentActivity() {
 
     private fun handleLabPage(intent: Intent?) {
         val page = intent?.getStringExtra(EXTRA_LAB_PAGE)?.let { runCatching { LabPage.valueOf(it) }.getOrNull() } ?: return
+        val focus = intent.getStringExtra(EXTRA_LAB_FOCUS)
         intent.removeExtra(EXTRA_LAB_PAGE)
-        if (app.prefs.lab) openLab.value = page
+        intent.removeExtra(EXTRA_LAB_FOCUS)
+        if (!app.prefs.lab) return
+        openLabFocus.value = focus
+        openLab.value = page
+    }
+
+    /** Lab (F04): a "Send results" notice opens the app at its row (the home screen, scrolled to it). */
+    private fun handleRow(intent: Intent?) {
+        val id = runCatching { intent?.getStringExtra(EXTRA_ROW) }.getOrNull() ?: return
+        intent?.removeExtra(EXTRA_ROW)
+        if (app.prefs.lab && app.prefs.role == Role.SENDER) openRow.value = id
     }
 
     /**
@@ -203,25 +240,51 @@ class MainActivity : ComponentActivity() {
         val role by app.role.collectAsStateWithLifecycle()
         var settings by remember { mutableStateOf(false) }
         var labPage by remember { mutableStateOf<LabPage?>(null) }
-        BackHandler(enabled = settings) { if (labPage != null) labPage = null else settings = false }
+        // Lab: the setting the page opens with ("Open setting"), until the user goes elsewhere.
+        var labFocus by remember { mutableStateOf<String?>(null) }
+        BackHandler(enabled = settings) {
+            labFocus = null
+            if (labPage != null) labPage = null else settings = false
+        }
         // Lab: a page asked for from outside (the automation sheet's "Open setting").
         val asked = openLab.value
         LaunchedEffect(asked) {
             if (asked != null) {
                 settings = true
                 labPage = asked
+                labFocus = openLabFocus.value
                 openLab.value = null
+                openLabFocus.value = null
+            }
+        }
+        // Lab (F04): a notice opens the home screen, where the list scrolls to its row.
+        val row = openRow.value
+        LaunchedEffect(row) {
+            if (row != null) {
+                labPage = null
+                labFocus = null
+                settings = false
             }
         }
         val page = labPage
         when {
             role == null -> RoleScreen(this, onPick = { r -> app.setRole(r) })
             settings && page != null -> LabScreen(
-                this, page, onBack = { labPage = null }, onOpen = { labPage = it },
+                this, page,
+                onBack = {
+                    labFocus = null
+                    labPage = null
+                },
+                onOpen = {
+                    labFocus = null
+                    labPage = it
+                },
                 onExit = {
+                    labFocus = null
                     labPage = null
                     settings = false
                 },
+                focus = labFocus,
             )
             settings -> SettingsScreen(this, onBack = { settings = false }, onLab = { labPage = it })
             role == Role.INBOX -> InboxScreen(this, onSettings = { settings = true })
@@ -246,6 +309,12 @@ class MainActivity : ComponentActivity() {
 
         /** Lab: the extra that opens a Lab page in Settings ([LabPage]'s name). */
         const val EXTRA_LAB_PAGE = "com.daylight.share.extra.LAB_PAGE"
+
+        /** Lab: with [EXTRA_LAB_PAGE], the feature whose setting the page opens with ("F09"). */
+        const val EXTRA_LAB_FOCUS = "com.daylight.share.extra.LAB_FOCUS"
+
+        /** Lab (F04): the outbox id of the row a "Send results" notice opens the app at. */
+        const val EXTRA_ROW = "com.daylight.share.extra.ROW"
 
         /** Added to the pairing question on a device set up as the Inbox. */
         const val INBOX_LINE = "This device is set up as the Daylight Inbox. Pairing makes it a sender instead; it stops receiving."

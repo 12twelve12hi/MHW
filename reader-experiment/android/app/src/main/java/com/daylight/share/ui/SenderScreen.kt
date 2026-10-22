@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
@@ -33,6 +34,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -134,24 +136,58 @@ fun SenderScreen(activity: MainActivity, onSettings: () -> Unit) {
     }
 
     // F33: the copied link. Only the clipboard's description is read on resume (no "pasted from" notice); the link is
-    // read when the chip is tapped, and its host shown with Send and Cancel before anything goes.
+    // read when the chip is tapped, and its host shown with Send and Cancel before anything goes. Android 10 and later
+    // answer only a window that has focus (an unfocused one reads as an empty clipboard), and focus comes after
+    // onResume: so the description is read again when the window gains focus, and a resume before focus keeps what
+    // shows until then.
     var clipOffered by remember { mutableStateOf(false) }
     var clipAsk by remember { mutableStateOf<String?>(null) }
     var clipText by remember { mutableStateOf<String?>(null) }
     var clipNone by remember { mutableStateOf(false) }
-    LaunchedEffect(lab, pairing, activity.resumes.intValue) {
-        clipOffered = lab && pairing != null && PhoneLab.useOn(app, "F33") && CopiedLink.offered(activity)
+    LaunchedEffect(lab, pairing, activity.resumes.intValue, activity.focusGains.intValue) {
+        val use = lab && pairing != null && PhoneLab.useOn(app, "F33")
+        if (use && activity.windowFocus.value == false) return@LaunchedEffect
+        clipOffered = use && CopiedLink.offered(activity)
         if (!clipOffered) {
             clipAsk = null
             clipNone = false
         }
     }
 
+    // Lab: what waits for a connection (F07), listed first, and the history after it (F01).
+    val waiting = if (lab) rows.filter { FlushWorker.waiting(it) || (it.status == Status.SENDING && !online) } else emptyList()
+    val history = if (lab) rows.filter { it !in waiting } else rows
+
+    // Lab (F04): a "Send results" notice opens the app at its row. Once the row is listed, the list goes to it at once
+    // (no motion) and the row opens its details. The list ends with the history ("Sent", the check-in line, its rows);
+    // the queue comes just before that.
+    val list = rememberLazyListState()
+    var openedRow by remember { mutableStateOf<String?>(null) }
+    val wanted = activity.openRow.value
+    LaunchedEffect(wanted, rows, lab, online) {
+        val id = wanted ?: return@LaunchedEffect
+        if (!lab || pairing == null) {
+            activity.openRow.value = null
+            return@LaunchedEffect
+        }
+        val h = history.indexOfFirst { it.id == id }
+        val w = waiting.indexOfFirst { it.id == id }
+        // Not listed yet (the outbox is still being read): this runs again with the rows.
+        if (h < 0 && w < 0) return@LaunchedEffect
+        // After the layout of these rows.
+        withFrameNanos { }
+        val total = list.layoutInfo.totalItemsCount
+        val at = if (h >= 0) total - history.size + h else total - history.size - (if (history.isEmpty()) 1 else 0) - 2 - waiting.size + w
+        if (at in 0 until total) list.scrollToItem(at)
+        openedRow = id
+        activity.openRow.value = null
+    }
+
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) sendShared(Shared.Stream(uri, null))
     }
 
-    ScreenList {
+    ScreenList(list) {
         item {
             HeaderRow(title = {
                 Text("Daylight Share", style = MaterialTheme.typography.headlineSmall)
@@ -245,8 +281,6 @@ fun SenderScreen(activity: MainActivity, onSettings: () -> Unit) {
                 // Lab (F07, F01): what waits for a connection first, with Cancel; then the check-in header and the
                 // history as the delivery timeline.
                 val now = System.currentTimeMillis()
-                val waiting = rows.filter { FlushWorker.waiting(it) || (it.status == Status.SENDING && !online) }
-                val history = rows.filter { it !in waiting }
                 val newest = history.maxByOrNull { it.created }?.id
                 if (waiting.isNotEmpty()) {
                     item(key = "lab-queue") {
@@ -257,7 +291,7 @@ fun SenderScreen(activity: MainActivity, onSettings: () -> Unit) {
                         )
                     }
                     items(waiting, key = { "q-" + it.id }) { row ->
-                        LabRowView(row, labText(row, now, snapshot, online), showAll = true, remove = LabText["queue.cancel"],
+                        LabRowView(row, labText(row, now, snapshot, online), showAll = true, remove = LabText["queue.cancel"], opened = row.id == openedRow,
                             onRetry = { scope.launch { app.sender.retry(row.id) } }, onRemove = { scope.launch { app.sender.remove(row.id) } })
                     }
                 }
@@ -274,7 +308,7 @@ fun SenderScreen(activity: MainActivity, onSettings: () -> Unit) {
                     Text("Nothing sent yet.", style = MaterialTheme.typography.bodyMedium)
                 }
                 items(history, key = { it.id }) { row ->
-                    LabRowView(row, labText(row, now, snapshot, online), showAll = row.id == newest, remove = "Remove",
+                    LabRowView(row, labText(row, now, snapshot, online), showAll = row.id == newest, remove = "Remove", opened = row.id == openedRow,
                         onRetry = { scope.launch { app.sender.retry(row.id) } }, onRemove = { scope.launch { app.sender.remove(row.id) } })
                 }
             }
@@ -381,10 +415,11 @@ private fun labText(row: OutboxRow, now: Long, snapshot: LabLedger.Snapshot?, on
  * shows. A screen reader reads the label as "{label}. {sentence}", announced when it changes, with no step count; the
  * step line ("Sent ✓ · On your Daylight ✓ · In the Reader …") is hidden from it, as the label says it. v1.1's button
  * only where it helps (Retry now, Try again); every row can be removed ([remove]: "Remove", or "Cancel" in the queue).
+ * [opened]: the row a notice opened the app at shows its details.
  */
 @Composable
-private fun LabRowView(row: OutboxRow, t: LabRowText, showAll: Boolean, remove: String, onRetry: () -> Unit, onRemove: () -> Unit) {
-    var open by remember(row.id) { mutableStateOf(false) }
+private fun LabRowView(row: OutboxRow, t: LabRowText, showAll: Boolean, remove: String, opened: Boolean = false, onRetry: () -> Unit, onRemove: () -> Unit) {
+    var open by remember(row.id, opened) { mutableStateOf(opened) }
     Section {
         val title = row.title.ifEmpty { if (row.kind == Kind.FILE) row.name else row.url }
         Row(
