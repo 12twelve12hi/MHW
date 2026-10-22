@@ -155,7 +155,9 @@ final class AppModelTests: XCTestCase {
             if case .repaired? = model.presented { return true }
             return false
         }
-        XCTAssertEqual(model.pairing, second)
+        // The pairing is published by the newest storage read, which a change notification may have started after
+        // the switch's own: wait for it rather than read it at once.
+        try await waitFor("the new pairing") { model.pairing == second }
         let locks = Self.lockRequests(net)
         XCTAssertEqual(locks.count, 1)
         XCTAssertEqual(locks.first?.value(forHTTPHeaderField: "Authorization"), "Bearer \(try Self.token(first))",
@@ -192,7 +194,7 @@ final class AppModelTests: XCTestCase {
         try await waitFor("the question") { model.pendingPairing != nil }
         model.confirmPairing()
         try await waitFor("the banner") { model.banner?.text == "Paired with Kitchen Daylight." }
-        XCTAssertEqual(model.pairing, second)
+        try await waitFor("the new pairing") { model.pairing == second }
         XCTAssertEqual(Self.lockRequests(net).first?.value(forHTTPHeaderField: "Authorization"), "Bearer \(try Self.token(first))")
         await lab.reloadNow()
         XCTAssertNil(model.presented, "Lab off: no follow-up")
