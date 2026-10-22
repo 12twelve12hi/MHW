@@ -23,6 +23,8 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.tryPerformAccessibilityChecks
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -96,6 +98,22 @@ class AccessibilityTest {
         compose.onRoot().tryPerformAccessibilityChecks()
         val unlabelledComfort = ScreenKit.unlabelledControls(compose)
         assertTrue("${screen.file}, Comfort: controls without a label:\n${unlabelledComfort.joinToString("\n")}", unlabelledComfort.isEmpty())
+    }
+
+    /** The Accessibility Test Framework really runs here: an unlabelled 20 dp button fails its checks. */
+    @Test
+    fun theAccessibilityChecksRunHere() {
+        compose.runOnUiThread {
+            compose.activity.setContent {
+                androidx.compose.foundation.layout.Box(
+                    androidx.compose.ui.Modifier.size(20.dp).clickable { },
+                )
+            }
+        }
+        compose.waitForIdle()
+        compose.enableAccessibilityChecks()
+        val failure = runCatching { compose.onRoot().tryPerformAccessibilityChecks() }.exceptionOrNull()
+        assertNotNull("an unlabelled 20 dp button passed the checks: they do not run under Robolectric", failure)
     }
 
     /** The F27.4 measure itself: a text cut to one line is caught, a short line in a wide column is not. */
