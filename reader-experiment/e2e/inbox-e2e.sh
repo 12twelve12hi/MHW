@@ -278,17 +278,23 @@ notice_up() { share_notices | grep -qF "|$SHARE_PKG|$2|$1|"; }
 # How many notices of number $2 item $1 has up (F15.1: one).
 notices_of() { share_notices | grep -cF "|$SHARE_PKG|$2|$1|" || true; }
 
-# Snoozes, for an hour, every summary and "Saved to the Reader" notice of Daylight Share but item $1's, so its own
-# notice comes first in the shade, where SystemUI shows the first one expanded with its actions. A waiting item's
-# notice is never snoozed or swiped here: a swiped one is kept for later.
+# Snoozes, for an hour, every other "Saved to the Reader" notice of Daylight Share (number 11), so item $1's own is
+# the group's only child in the shade, where SystemUI shows the first notice expanded with its actions. Never the
+# summary (snoozing a summary snoozes its children, and every child posted later) and never a waiting item's notice
+# (a swiped one is kept for later). unsnooze_others puts them back.
+snoozed=()
 alone_in_shade() {
   local k
   while IFS= read -r k; do
     [ -n "$k" ] || continue
-    case "$k" in *"|$1|"*) continue ;; esac
-    case "$k" in *"|$SHARE_PKG|10|"*|*"|$SHARE_PKG|11|"*|*"|$SHARE_PKG|12|"*) ;; *) continue ;; esac
-    adb shell "cmd notification snooze --for 3600000 '$k'" >/dev/null 2>&1 || true
+    case "$k" in *"|$1|"*) continue ;; *"|$SHARE_PKG|11|"*) ;; *) continue ;; esac
+    if adb shell "cmd notification snooze --for 3600000 '$k'" >/dev/null 2>&1; then snoozed+=("$k"); fi
   done < <(share_notices)
+}
+unsnooze_others() {
+  local k
+  for k in "${snoozed[@]}"; do adb shell "cmd notification unsnooze '$k'" >/dev/null 2>&1 || true; done
+  snoozed=()
 }
 
 # Opens the shade and taps the action matching $2 (a JS regex) on the notice whose text matches $1, from SystemUI's
@@ -298,7 +304,7 @@ shade_action() {
   local title="$1" action="$2" xy
   adb shell cmd statusbar expand-notifications >/dev/null 2>&1 || true
   sleep 3
-  for _ in 1 2 3; do
+  for _ in 1 2 3 4; do
     if ui_dump; then
       if xy="$(node "$here/ui-find.mjs" node "$OUT/ui-last.xml" "$action" com.android.systemui)"; then
         shot "$OUT/shade-$(date +%s).png"
@@ -364,6 +370,17 @@ list_shortcuts() {
 share_text() {
   local text="$1" subject="${2:-}"; shift 2 || shift $#
   adb shell "am start -a android.intent.action.SEND -t text/plain --es android.intent.extra.TEXT '$text'${subject:+ --es android.intent.extra.SUBJECT '$subject'} $* -n $SHARE_PKG/.sender.ShareActivity" >/dev/null
+}
+
+# What is in front and what the Reader said, when a hand-off does not come (a Reader card waiting for a tap holds it).
+handoff_diag() {
+  echo "--- activities ---"
+  adb shell dumpsys activity activities 2>/dev/null | tr -d '\r' | grep -E 'topResumedActivity|mResumedActivity|\* Hist #|Task\{' | head -24 || true
+  echo "--- the Reader's read-later and import ---"
+  adb logcat -d -v threadtime -s ReaderReadLater:* ReaderImport:* 2>/dev/null | tr -d '\r' | tail -12 || true
+  echo "--- the Inbox, last lines ---"
+  inbox_log | tail -8
+  shot "$OUT/handoff-diag-$(date +%s).png"
 }
 
 # Opens the Inbox's Setup check (LAB-PLAN F26) through MainActivity's Lab page extra.
@@ -705,7 +722,8 @@ f15_wait() {
 
 # 13. F15 (K5): each action on a waiting item's notice publishes its state on the ack topic, and the phone reads it.
 #     Documents = Ask, no "Display over other apps" and the Reader in front: links and documents both wait. One item
-#     at a time, so its notice is the only one waiting and comes first in the shade, shown with its two actions.
+#     at a time, so its notice is the only one waiting: the only alerting notice, first in the shade, where SystemUI
+#     shows it expanded with its two actions.
 echo "== 13. Lab, arrival notices (F15): Add to Reader, Keep for later and a swipe, each to its state"
 setup_inbox "&docs=ask&to=$READER_PKG"
 adb shell appops set "$SHARE_PKG" SYSTEM_ALERT_WINDOW deny
@@ -715,7 +733,6 @@ reader_front
 f15add="$(send send-url 'https://example.com/?f15=add' 'F15 link to add')"; sent+=("$f15add"); expect[$f15add]='reader|queued'
 echo "sent link $f15add (Reader in front, Documents = Ask, no overlay)"
 f15_wait "$f15add" url
-alone_in_shade "$f15add"
 if shade_action 'F15 link to add' "$ADD_RE"; then shade_ok+=("Add to Reader (link)"); else
   echo "note: the notice's Add to Reader was not found in the shade"; shade_hook+=("Add to Reader (link)"); root_tap "$f15add"
 fi
@@ -730,7 +747,6 @@ reader_front
 n="$(count)"
 f15doc="$(send send-pdf f15-add)"; sent+=("$f15doc"); expect[$f15doc]=handed; echo "sent pdf $f15doc"
 f15_wait "$f15doc" file
-alone_in_shade "$f15doc"
 if shade_action 'Test PDF \(f15-add\)' "$ADD_RE"; then shade_ok+=("Add to Reader (PDF)"); else
   echo "note: the notice's Add to Reader was not found in the shade"; shade_hook+=("Add to Reader (PDF)"); root_tap "$f15doc"
 fi
@@ -746,7 +762,6 @@ reader_front
 f15keep="$(send send-url 'https://example.com/?f15=keep' 'F15 link to keep')"; sent+=("$f15keep"); expect[$f15keep]='reader|queued'
 echo "sent link $f15keep"
 f15_wait "$f15keep" url
-alone_in_shade "$f15keep"
 if shade_action 'F15 link to keep' "$KEEP_RE"; then shade_ok+=("Keep for later"); else
   echo "note: the notice's Keep for later was not found in the shade"; shade_hook+=("Keep for later")
   root_broadcast .inbox.ArrivalActionReceiver com.daylight.share.action.KEEP_FOR_LATER "$f15keep"
@@ -759,7 +774,6 @@ if [ "$notices_listed" = 1 ] && notice_up "$f15keep" 9; then failed "the notice 
 reader_front
 f15swipe="$(send send-pdf f15-swipe)"; sent+=("$f15swipe"); expect[$f15swipe]=handed; echo "sent pdf $f15swipe"
 f15_wait "$f15swipe" file
-alone_in_shade "$f15swipe"
 if shade_swipe 'Test PDF \(f15-swipe\)' && wait_log "received $f15swipe -> notification dismissed" 20; then shade_ok+=("swipe"); else
   echo "note: the notice could not be swiped away in the shade"; shade_hook+=("swipe")
   root_broadcast .inbox.NoticeDismissedReceiver com.daylight.share.action.NOTICE_DISMISSED "$f15swipe"
@@ -836,6 +850,7 @@ if shade_action 'F15 link saved by itself' "$DISMISS_RE"; then shade_ok+=("Dismi
   root_broadcast .inbox.ArrivalActionReceiver com.daylight.share.action.ARRIVAL_DISMISS "$f15saved"
 fi
 wait_log "received $f15saved -> arrival notice dismissed" 30 || failed "Dismiss on the notice of $f15saved did nothing"
+unsnooze_others
 sleep 2
 if [ "$notices_listed" = 1 ] && notice_up "$f15saved" 11; then failed "the notice of $f15saved stayed after Dismiss"; fi
 adb shell cmd statusbar collapse >/dev/null 2>&1 || true
@@ -891,7 +906,10 @@ shot "$OUT/54-phone.png"
 
 # F11.5 and Q1: an NYT headline + link from the share sheet goes as a link (the headline its title, the link cleaned,
 # the URL as shared in x-orig), exactly as the JS reference makes it; share in place sends it after its countdown.
-NYT_TEXT='Opinion | The Real Reason Inflation Is Still Too High, According to Economists https://www.nytimes.com/2026/10/22/opinion/inflation-economists.html?smid=nytcore-android-share'
+# The link is on example.com: the emulator's Reader saves it unattended. One it cannot fetch (www.nytimes.com from CI)
+# ends in its "problem" card, which waits for a tap and holds the Inbox's hand-off; normalise.json's vectors cover
+# the NYT links themselves (nyti.ms, smid).
+NYT_TEXT='Opinion | The Real Reason Inflation Is Still Too High, According to Economists https://example.com/?story=inflation-economists&utm_source=nytcore-android-share'
 inplace0="$(inbox_log | grep -c 'lab: share in place' || true)"
 share_text "$NYT_TEXT" ""
 wait_count 'lab: share in place, 1 item' $((inplace0 + 1)) 30 || failed "the share sheet's share did not open share in place (F04)"
@@ -996,6 +1014,7 @@ for id in $nyt $direct $phoneex; do
     fi
   else
     failed "no hand-off for $id, sent from this emulator as the phone"
+    handoff_diag
   fi
 done
 if [ "$grow" -gt 0 ]; then
