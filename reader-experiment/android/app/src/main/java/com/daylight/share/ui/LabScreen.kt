@@ -272,11 +272,12 @@ fun LabNote(text: String, button: String? = null, onButton: (() -> Unit)? = null
 }
 
 /**
- * The Daylight server section (2.6): where setup happens, so it carries the long texts. The state ("Ready", or the
- * state's message with the secret names), a move to answer, the server's host and fingerprint, the v1 notice, the
- * Server code with Copy, when the Lab Inbox was last seen, today's AI use, the optional Server address and the re-run
- * help. On the Inbox the server lane comes in Wave S: its section says how to set the server up and shows the Server
- * code.
+ * The Daylight server section (2.6): where setup happens, so it carries the long texts, every word from
+ * LAB_TEXT.serverSection or the server module. The state ("Ready", or the state's message with the secret names);
+ * while the state is needs-server, "Turn it on" with the five steps numbered and where every step is; "Your server"
+ * (`hostLineText`), "Delivery" with the Lab or v1 line and then the v1 notice; when the Lab Inbox was last seen and
+ * today's AI use; a move to answer; the Server code with Copy; the optional Server address with its footer; the re-run
+ * help. On the Inbox the server lane comes in Wave S: its section shows the steps and the Server code.
  */
 @Composable
 private fun ServerSection(activity: MainActivity, onBack: () -> Unit) {
@@ -349,11 +350,36 @@ private fun ServerSectionBody(
 ) {
     Section {
         Text(v.message, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.announced())
-        val where = listOf(v.host, v.fingerprint).filter { it.isNotEmpty() }.joinToString(" · ")
-        if (where.isNotEmpty()) Text(where, style = MaterialTheme.typography.bodyMedium)
-        v.v1Notice?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-        v.labInbox?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-        v.aiToday?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+    }
+    // "Turn it on" (2.6): the five steps, numbered, only while the server is not set up; step 2 is the server module's
+    // RERUN_HELP, word for word. The list is LAB_TEXT's own (never its joined form split on ",").
+    if (v.state == "needs-server") {
+        Section(LabText["serverSection.stepsHeading"]) {
+            LabText.SERVER_STEPS.forEachIndexed { i, step ->
+                Text("${i + 1}. $step", style = MaterialTheme.typography.bodyMedium)
+            }
+            Text(LabText["serverSection.stepsMore"], style = MaterialTheme.typography.bodySmall)
+        }
+    }
+    val where = LabText.hostLineText(v.host, v.fingerprint)
+    if (where.isNotEmpty() || v.delivery != null || v.labInbox != null || v.aiToday != null) {
+        Section {
+            if (where.isNotEmpty()) {
+                SubHeading(LabText["serverSection.hostLabel"])
+                Text(where, style = MaterialTheme.typography.bodyMedium)
+            }
+            // The delivery mode, then under v1 delivery the v1 notice (DESIGN 14.3).
+            if (v.delivery == "lab" || v.delivery == "v1") {
+                SubHeading(LabText["serverSection.deliveryLabel"])
+                Text(
+                    LabText[if (v.delivery == "v1") "serverSection.deliveryV1" else "serverSection.deliveryLab"],
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            v.v1Notice?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+            v.labInbox?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+            v.aiToday?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+        }
     }
     val moved = v.moved
     if (moved != null && !moveAnswered) {
@@ -381,13 +407,14 @@ private fun ServerSectionBody(
             Field(
                 value = address, onValueChange = onAddress,
                 label = LabText["serverSection.serverAddress"],
-                placeholder = "https://",
+                placeholder = LabText["serverSection.addressPlaceholder"],
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
                 errorText = addressError,
                 modifier = Modifier.fillMaxWidth(),
             )
+            Text(LabText["serverSection.addressFooter"], style = MaterialTheme.typography.bodySmall)
             addressError?.let { Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced()) }
-            SecondaryButton("Save", enabled = !saving) { onSave() }
+            SecondaryButton(LabText["serverSection.addressSave"], enabled = !saving) { onSave() }
         }
     }
     Text(ServerMessages.RERUN_HELP, style = MaterialTheme.typography.bodySmall)
@@ -432,6 +459,12 @@ fun LabRepairedCard(activity: MainActivity, repaired: LabRepo.Repaired, onOk: ()
         if (copied) Text(LabText["setup.copied"], style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced())
         Text(repaired.rerun, style = MaterialTheme.typography.bodySmall)
     }
+}
+
+/** A small heading inside a section ("Your server", "Delivery"): bold, and a heading for a screen reader. */
+@Composable
+private fun SubHeading(text: String) {
+    Text(text, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold), modifier = Modifier.semantics { heading() })
 }
 
 /** Puts [text] on the clipboard under [label] (Android 13 and later say so themselves). */

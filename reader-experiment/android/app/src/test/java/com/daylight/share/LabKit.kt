@@ -21,6 +21,13 @@ object LabKit {
         Json.parse(File(path).readText()) as Map<String, Any?>
     }
 
+    /** The shared Lab vectors (`share/vectors/lab-vectors.json`). */
+    @Suppress("UNCHECKED_CAST")
+    val labVectors: Map<String, Any?> by lazy {
+        val path = System.getProperty("dls.labVectors") ?: error("dls.labVectors not set")
+        Json.parse(File(path).readText()) as Map<String, Any?>
+    }
+
     /** The server vectors' pairing (on ntfy.sh, whose Server code is `derived.serverCode`). */
     val vectorPairing: Pairing by lazy { Pairing(Bytes.fromHex(serverVectors["secretHex"] as String), Limits.DEFAULT_RELAY, "Kitchen Daylight") }
 

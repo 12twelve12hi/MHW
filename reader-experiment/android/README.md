@@ -224,13 +224,19 @@ With Lab on, the Lab card has two more rows:
   code**), announced to TalkBack, until OK, another tap or leaving the screen. A server that does not answer within 5 s
   is "Couldn’t reach the Daylight server." Wave 0 has no Lab feature of its own on Android yet (the delivery timeline
   and the rest come with Wave 1), and no one-time note (it comes with the first Wave 1 build).
-- **Daylight server ›** ("Optional · Not set up"): where the server is set up, so it has the long texts: its state
-  (with the exact secret names), the server's address and fingerprint, the **Server code** with **Copy** (the deploy's
-  `DAYLIGHT_SERVER_CODE`; the `daylightserver://` form when the relay is not ntfy.sh), when the server last heard from
-  the Lab Inbox, today's AI use, an optional **Server address**, and how to re-run the deploy. A server that moved asks
-  "Your Daylight server moved to {host}. Use it?". The setup link of the iPhone and Mac apps comes to Android in Wave S;
-  until then paste it there. On the Inbox the server lane comes in Wave S: its section shows how to set the server up
-  and the Server code.
+- **Daylight server ›** ("Optional · Not set up"): where the server is set up, so it has the long texts, every word
+  from `LAB_TEXT.serverSection` or the server module (LAB-PLAN 2.6, "The rest of the server section's copy"): its
+  state (with the exact secret names); while it is not set up, **Turn it on** with the five steps, numbered (LAB_TEXT's
+  own list, never its joined form split on ",") and where every step is explained; **Your server** with its address
+  and fingerprint (`hostLineText`); **Delivery** ("Through Lab on your Daylight, end-to-end encrypted", or "Through your
+  pairing (v1 delivery)" and then the v1 notice); the **Server code** with **Copy** (the deploy's
+  `DAYLIGHT_SERVER_CODE`; the `daylightserver://` form when the relay is not ntfy.sh); when the server last heard from
+  the Lab Inbox; today's AI use; an optional **Server address** (placeholder "https://", **Save**, and its footer "Only
+  needed when your Daylight server has an address of its own. Leave it empty and your apps find it."); and how to
+  re-run the deploy. A server that moved asks "Your Daylight server moved to {host}. Use it?". Step 4 says to paste the
+  setup link in **Set up with a link**: that row comes to Android in Wave S (Kotlin's `parseSetupLink` comes with S0),
+  so until then paste it in the iPhone or Mac app, as the server's README says. On the Inbox the server lane comes in
+  Wave S: its section shows the same steps and the Server code.
 
 The phone finds its Daylight server only with Lab on, and keeps what it knows in `files/server.json` (outside the
 outbox, so a server that still has your old pairing shows "pairing-mismatch"). Pairing with another Daylight first locks

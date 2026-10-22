@@ -67,8 +67,11 @@ class LabRepo(private val app: App) {
         val state: String,
         /** "Ready", or the state's long message (DESIGN 14.1, with the secret names). */
         val message: String,
+        /** The server's origin ("" while none is found): "Your server" reads `hostLineText(host, fingerprint)`. */
         val host: String = "",
         val fingerprint: String = "",
+        /** The server's delivery mode, "lab" or "v1"; null while no server is found (no Delivery line). */
+        val delivery: String? = null,
         val v1Notice: String? = null,
         /** "Your Daylight server moved to {host}. Use it?" while a move waits for an answer. */
         val moved: String? = null,
@@ -301,8 +304,9 @@ class LabRepo(private val app: App) {
             paired = true,
             state = p.state,
             message = if (p.state == "ready") LabText.READY else p.message ?: ServerMessages.localMessage(p.state),
-            host = config?.server?.let { hostOf(it) }.orEmpty(),
+            host = config?.server.orEmpty(),
             fingerprint = ServerCode.showFingerprint(s.values.fingerprint),
+            delivery = config?.delivery,
             v1Notice = if (config?.delivery == "v1") ServerMessages.noticeText("v1") else null,
             moved = (p.moved ?: pendingMove(s))?.let { LabText.serverMovedText(it) },
             serverCode = code,

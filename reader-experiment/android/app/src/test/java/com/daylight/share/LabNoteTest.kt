@@ -2,18 +2,21 @@ package com.daylight.share
 
 import androidx.activity.compose.setContent
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import com.daylight.share.core.FileOutboxStore
 import com.daylight.share.core.Pairing
 import com.daylight.share.core.Relay
@@ -199,6 +202,59 @@ class LabNoteTest {
         compose.waitForIdle()
         assertEquals(LabKit.vectorServerCode, LabKit.clipboard(app))
         compose.onNodeWithText(LabText["setup.copied"]).assertIsDisplayed()
+    }
+
+    /**
+     * 2.6 "The rest of the server section's copy": every line in LAB_TEXT.serverSection's words. While the server is
+     * not set up, "Turn it on" and the five steps, numbered, pinned element by element against the Lab vectors' list
+     * (never the joined string split on ","), then where every step is; "Your server" with hostLineText; "Delivery"
+     * with the v1 line and then the v1 notice; the Server address field's placeholder, Save and footer.
+     */
+    @Test
+    fun theServerSectionSpeaksLabTextsWords() {
+        vectorPhone()
+        openSettings()
+        waitForText(LabText.serverRowSubtitle("needs-server"))
+        compose.onNodeWithText("${LabText.SERVER_ROW} ›", substring = true).performClick()
+        waitForText(LabKit.vectorServerCode)
+
+        // Not set up: "Turn it on" and the five steps, numbered, as the vectors' list has them.
+        val steps = (((LabKit.labVectors["labText"] as Map<*, *>)["serverSection"] as Map<*, *>)["steps"] as List<*>).map { it as String }
+        assertEquals(5, steps.size)
+        assertEquals(steps, LabText.SERVER_STEPS)
+        compose.onNodeWithText(LabText["serverSection.stepsHeading"]).assertIsDisplayed()
+        steps.forEachIndexed { i, step -> compose.onNodeWithText("${i + 1}. $step").assertIsDisplayed() }
+        compose.onNodeWithText(LabText["serverSection.stepsMore"]).assertIsDisplayed()
+        // Step 2 is the server module's re-run help, word for word.
+        assertEquals(ServerMessages.RERUN_HELP, steps[1])
+        // No server found yet: "Your server" is the fingerprint alone, and there is no Delivery line.
+        val derived = LabKit.serverVectors["derived"] as Map<*, *>
+        val fingerprint = ServerCode.showFingerprint(derived["fingerprint"] as String)
+        compose.onNodeWithText(LabText["serverSection.hostLabel"]).assertIsDisplayed()
+        compose.onNodeWithText(LabText.hostLineText("", fingerprint)).assertIsDisplayed()
+        assertTrue(compose.onAllNodes(hasText(LabText["serverSection.deliveryLabel"])).fetchSemanticsNodes().isEmpty())
+        compose.onNodeWithText(LabText["serverSection.addressFooter"]).assertIsDisplayed()
+        compose.onNodeWithText(LabText["serverSection.addressSave"]).assertIsDisplayed()
+        // The placeholder shows in the focused, empty field.
+        compose.onNode(hasSetTextAction()).performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.waitForIdle()
+        compose.onNodeWithText(LabText["serverSection.addressPlaceholder"]).assertExists()
+        compose.onNodeWithText("Done").performClick()
+        compose.waitForIdle()
+
+        // A server this pairing knows, with v1 delivery: "Your server" with its host, "Delivery" with the v1 line and
+        // then the v1 notice; the steps go (its state is no longer needs-server).
+        val origin = "https://daylight-0123456789ab.example.workers.dev"
+        FileServerStore(File(app.filesDir, "server.json")).set(
+            ServerKeys.CONFIG,
+            linkedMapOf("server" to origin, "api" to ServerCode.SERVER_API, "fingerprint" to derived["fingerprint"], "delivery" to "v1", "sent" to "2026-10-22T08:00:00.000Z", "id" to "c1"),
+        )
+        compose.onNodeWithText("${LabText.SERVER_ROW} ›", substring = true).performClick()
+        waitForText(LabText.hostLineText(origin, fingerprint))
+        compose.onNodeWithText(LabText["serverSection.deliveryLabel"]).assertIsDisplayed()
+        compose.onNodeWithText(LabText["serverSection.deliveryV1"]).assertIsDisplayed()
+        compose.onNodeWithText(ServerMessages.noticeText("v1")!!).assertIsDisplayed()
+        assertTrue(compose.onAllNodes(hasText(LabText["serverSection.stepsHeading"])).fetchSemanticsNodes().isEmpty())
     }
 
     // ------------------------------------------------------------------------------------------- F17.2 on the phone
