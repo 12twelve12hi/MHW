@@ -16,7 +16,7 @@
     "v1Safety: each labFrames frame as a v1.0 or v1.1 ack reader sees it: it opens as an ack whose ids are [], so it acks nothing and no row changes. Kotlin's AckHeader.idsOf and Swift's AckHeader.ids(in:) must return [] for each.",
     "W1 (L1; LAB-PROTOCOL 2.9). normalise.json holds smart intake (F16). labText also has: kindLines (inboxKindLine: the line under an Inbox row, F03), cleanedFrom (cleanedFromText(orig): \"Cleaned from {host}\" or null), use (labUseOn(settings, feature): Lab on and the feature's Use switch not off; a missing key is on) and useFeatures (the features with a Use switch, their footers and the switch's accessibility label). Copy added Oct 22 (LAB-PLAN 1.6), in strings: setup.steps.toolbarButton (Chrome's Toolbar button check) and setup.steps.readerReadLater (the Inbox's read-later check; its button is setup.readerTest), arrivals.quietHoursFooter, arrivals.excerptOne (one waiting excerpt, {from} filled as in excerptsGroup), and handover.* (K6, LAB-PLAN 5.3.4 word for word: letReceive, the Settings › Lab row that arms the grant; armed, the line while it is armed; receivingElsewhere, the handover line; receiveHereAgain, its button; unreachable, the line while the Lab Reader cannot be asked).",
     "labExcerpt (F11): items: excerptItem(input) -> the item to send ({kind, mime, name, url?, title, content, extras}) or null; sanitize: sanitizeExcerptHtml(html, maxChars) -> {html, trimmed}; textHtml: excerptTextHtml(text, maxChars); fragments: textFragment(url, text) (null for a URL that fails the web URL rule); dates: excerptDate(date) (\"\" when the date is not a valid YYYY-MM-DD); fileNames: excerptFileName(text, {note}); classify: classifyShare(input) -> {kind, url, text} (6.5 Q1 = b: rules 1-3 only); limits: the input text is textRepeat repeated `times` times, then trimmed; excerptItem (text alone, and with html \"<p>\" + text + \"</p>\") and excerptMarkdown must give a content of `length` UTF-16 units with that SHA-256 (of its UTF-8) and that ending.",
-    "diagnostics (F26): redact: redactDiagnostics(text) -> expect; activity: activityEvent(input) -> event, activityLine(event) -> line; reports: diagnosticsReport(input) -> expect (input.now is the clock for the check-in's relative time).",
+    "diagnostics (F26): redact: redactDiagnostics(text) -> expect; activity: activityEvent(input) -> event, activityLine(event) -> line; reports: diagnosticsReport(input) -> expect (input.now is the clock for the check-in's relative time). rowHttp: an outbox row's http, the HTTP status of its last failed publish (413, 429, another 4xx, or 408 and 5xx after the in-call retries; 0 without an HTTP answer, after a publish that goes, and on a delivered row; a stored row without the field reads as 0: legacy). Each case runs a Sender on a fresh store, paired with vector-secret-1 to `relay`, whose clock is each step's `at`; its publishes are answered from `answers` in order (an HTTP status, its 2xx body {\"id\":\"msg\",\"time\":<at in s>}; or \"network\": no answer), the in-call retries waiting retryDelaysMs, and every answer must be asked for. op: send or defer (send(item, {defer})), retry (retry(id)), flushNetwork() or resendDue(), with default caps. items: the item of each key (a file's content is `bytes` bytes, byte i being i % 251). expect: returned (the keys of the rows the call returned, in order), rows (every stored row's status, errorCode and http) and lines (each returned row's activityLine of activityEvent({time: at, type: op, id, kind, status: \"{status}/{errorCode}\" or the status alone, http})).",
     "testArticle (F26): testArticle({id, device}) -> the item to send ({id, kind, url, title, content, extras})."
   ],
   "constants": {
@@ -8207,7 +8207,731 @@
         },
         "expect": "Send to Daylight diagnostics\nApp: Send to Daylight 1.5.0 (iphone)\nLab: off\nLab caps from your Daylight: nothing heard\nLast check-in: never\nOutbox: sending 0 · sent 0 · delivered 0 · failed 0 · expired 0\nRelay: custom relay\nRecent events, oldest first:\nnone\n"
       }
-    ]
+    ],
+    "rowHttp": {
+      "relay": "https://relay.example.org",
+      "retryDelaysMs": [
+        0,
+        0,
+        0
+      ],
+      "items": {
+        "a": {
+          "id": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "kind": "url",
+          "url": "https://example.com/a",
+          "title": "A"
+        },
+        "b": {
+          "id": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+          "kind": "url",
+          "url": "https://example.com/b",
+          "title": "B"
+        },
+        "f": {
+          "id": "f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3",
+          "kind": "file",
+          "name": "big.pdf",
+          "mime": "application/pdf",
+          "bytes": 20000,
+          "content": "byte i is i % 251"
+        }
+      },
+      "cases": [
+        {
+          "name": "a publish that goes: 0",
+          "steps": [
+            {
+              "op": "send",
+              "item": "a",
+              "answers": [
+                200
+              ],
+              "at": 1792659600000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "sent",
+                    "errorCode": "",
+                    "http": 0
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:00.000Z send a1a1a1a1 url sent -"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "413: the relay is full",
+          "steps": [
+            {
+              "op": "send",
+              "item": "a",
+              "answers": [
+                413
+              ],
+              "at": 1792659600000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "full",
+                    "http": 413
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:00.000Z send a1a1a1a1 url failed/full 413"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "429: rate-limited, never retried within the call",
+          "steps": [
+            {
+              "op": "send",
+              "item": "a",
+              "answers": [
+                429
+              ],
+              "at": 1792659600000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 429
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:00.000Z send a1a1a1a1 url failed/network 429"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "503 after the three in-call retries",
+          "steps": [
+            {
+              "op": "send",
+              "item": "a",
+              "answers": [
+                503,
+                503,
+                503,
+                503
+              ],
+              "at": 1792659600000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 503
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:00.000Z send a1a1a1a1 url failed/network 503"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "408 after the three in-call retries",
+          "steps": [
+            {
+              "op": "send",
+              "item": "a",
+              "answers": [
+                408,
+                408,
+                408,
+                408
+              ],
+              "at": 1792659600000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 408
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:00.000Z send a1a1a1a1 url failed/network 408"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "502, then 200 within the call: 0",
+          "steps": [
+            {
+              "op": "send",
+              "item": "a",
+              "answers": [
+                502,
+                200
+              ],
+              "at": 1792659600000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "sent",
+                    "errorCode": "",
+                    "http": 0
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:00.000Z send a1a1a1a1 url sent -"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "no answer at all: 0",
+          "steps": [
+            {
+              "op": "send",
+              "item": "a",
+              "answers": [
+                "network",
+                "network",
+                "network",
+                "network"
+              ],
+              "at": 1792659600000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 0
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:00.000Z send a1a1a1a1 url failed/network -"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403: the relay refused it",
+          "steps": [
+            {
+              "op": "send",
+              "item": "a",
+              "answers": [
+                403
+              ],
+              "at": 1792659600000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "refused",
+                    "http": 403
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:00.000Z send a1a1a1a1 url failed/refused 403"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "a deferred row (offline): 0, nothing published",
+          "steps": [
+            {
+              "op": "defer",
+              "item": "a",
+              "answers": [],
+              "at": 1792659600000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 0
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:00.000Z defer a1a1a1a1 url failed/network -"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Retry now: back to 0 once a publish goes",
+          "steps": [
+            {
+              "op": "send",
+              "item": "a",
+              "answers": [
+                429
+              ],
+              "at": 1792659600000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 429
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:00.000Z send a1a1a1a1 url failed/network 429"
+                ]
+              }
+            },
+            {
+              "op": "retry",
+              "item": "a",
+              "answers": [
+                200
+              ],
+              "at": 1792659660000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "sent",
+                    "errorCode": "",
+                    "http": 0
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:01:00.000Z retry a1a1a1a1 url sent -"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "a later failure replaces it",
+          "steps": [
+            {
+              "op": "send",
+              "item": "a",
+              "answers": [
+                413
+              ],
+              "at": 1792659600000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "full",
+                    "http": 413
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:00.000Z send a1a1a1a1 url failed/full 413"
+                ]
+              }
+            },
+            {
+              "op": "resendDue",
+              "answers": [
+                503,
+                503,
+                503,
+                503
+              ],
+              "at": 1792670700000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 503
+                  }
+                },
+                "lines": [
+                  "2026-10-22T12:05:00.000Z resendDue a1a1a1a1 url failed/network 503"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "resendDue after the back-off: the 5xx row goes",
+          "steps": [
+            {
+              "op": "send",
+              "item": "a",
+              "answers": [
+                500,
+                500,
+                500,
+                500
+              ],
+              "at": 1792659600000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 500
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:00.000Z send a1a1a1a1 url failed/network 500"
+                ]
+              }
+            },
+            {
+              "op": "resendDue",
+              "answers": [
+                200
+              ],
+              "at": 1792659720000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "sent",
+                    "errorCode": "",
+                    "http": 0
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:02:00.000Z resendDue a1a1a1a1 url sent -"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "resendDue: a 429 ends the pass, the next row keeps its own",
+          "steps": [
+            {
+              "op": "send",
+              "item": "a",
+              "answers": [
+                503,
+                503,
+                503,
+                503
+              ],
+              "at": 1792659600000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 503
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:00.000Z send a1a1a1a1 url failed/network 503"
+                ]
+              }
+            },
+            {
+              "op": "send",
+              "item": "b",
+              "answers": [
+                503,
+                503,
+                503,
+                503
+              ],
+              "at": 1792659601000,
+              "expect": {
+                "returned": [
+                  "b"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 503
+                  },
+                  "b": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 503
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:01.000Z send b2b2b2b2 url failed/network 503"
+                ]
+              }
+            },
+            {
+              "op": "resendDue",
+              "answers": [
+                429
+              ],
+              "at": 1792660200000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 429
+                  },
+                  "b": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 503
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:10:00.000Z resendDue a1a1a1a1 url failed/network 429"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "flushNetwork: a 429 ends the pass, the next row keeps 0",
+          "steps": [
+            {
+              "op": "defer",
+              "item": "a",
+              "answers": [],
+              "at": 1792659600000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 0
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:00.000Z defer a1a1a1a1 url failed/network -"
+                ]
+              }
+            },
+            {
+              "op": "defer",
+              "item": "b",
+              "answers": [],
+              "at": 1792659601000,
+              "expect": {
+                "returned": [
+                  "b"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 0
+                  },
+                  "b": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 0
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:01.000Z defer b2b2b2b2 url failed/network -"
+                ]
+              }
+            },
+            {
+              "op": "flushNetwork",
+              "answers": [
+                429
+              ],
+              "at": 1792659602000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 429
+                  },
+                  "b": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 0
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:02.000Z flushNetwork a1a1a1a1 url failed/network 429"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "flushNetwork: a 413 on the attachment, then the link goes",
+          "steps": [
+            {
+              "op": "defer",
+              "item": "f",
+              "answers": [],
+              "at": 1792659600000,
+              "expect": {
+                "returned": [
+                  "f"
+                ],
+                "rows": {
+                  "f": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 0
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:00.000Z defer f3f3f3f3 file failed/network -"
+                ]
+              }
+            },
+            {
+              "op": "defer",
+              "item": "a",
+              "answers": [],
+              "at": 1792659601000,
+              "expect": {
+                "returned": [
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 0
+                  },
+                  "f": {
+                    "status": "failed",
+                    "errorCode": "network",
+                    "http": 0
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:01.000Z defer a1a1a1a1 url failed/network -"
+                ]
+              }
+            },
+            {
+              "op": "flushNetwork",
+              "answers": [
+                413,
+                200
+              ],
+              "at": 1792659602000,
+              "expect": {
+                "returned": [
+                  "f",
+                  "a"
+                ],
+                "rows": {
+                  "a": {
+                    "status": "sent",
+                    "errorCode": "",
+                    "http": 0
+                  },
+                  "f": {
+                    "status": "failed",
+                    "errorCode": "full",
+                    "http": 413
+                  }
+                },
+                "lines": [
+                  "2026-10-22T09:00:02.000Z flushNetwork f3f3f3f3 file failed/full 413",
+                  "2026-10-22T09:00:02.000Z flushNetwork a1a1a1a1 url sent -"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "legacy": {
+        "stored": {
+          "id": "c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4",
+          "kind": "url",
+          "title": "C",
+          "url": "https://example.com/c",
+          "name": "",
+          "mime": "",
+          "size": 0,
+          "sent": "2026-10-22T09:00:00.000Z",
+          "created": 1792659600000,
+          "status": "failed",
+          "errorCode": "full",
+          "attempts": 1,
+          "slowFails": 1,
+          "lastPublish": 1792659600000,
+          "attemptStarted": 1792659600000,
+          "attachment": false,
+          "error": "HTTP 413",
+          "delivered": 0
+        },
+        "expect": {
+          "http": 0
+        }
+      }
+    }
   },
   "testArticle": [
     {

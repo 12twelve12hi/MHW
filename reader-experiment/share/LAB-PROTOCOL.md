@@ -462,6 +462,11 @@ must not change:
   - It returns the rows it attempted.
   - Callers space passes at least 3 minutes apart. In that time ntfy.sh's request bucket refills by 36, so a pass of
     30 never meets an empty bucket.
+- Outbox rows carry `http` (F26's activity log; *added Oct 22 after the WIN1 review*): the HTTP status of the row's
+  last failed publish, which is the `status` of the publish's `ShareError`: 413, 429 or another 4xx, or 408 and 5xx
+  after the in-call retries. It is 0 when that failure had no HTTP answer (no connection, a timeout), 0 again after a
+  publish of the row that goes, and 0 on a delivered row. It is kept as it is when a row expires. `send`, `retry`,
+  `resendDue` and `flushNetwork` return it on their rows. A row stored without the field (v1.0, v1.1) reads as 0.
 - `applyPairingChange` also removes every `lab/*` key when the secret differs.
 - `Receiver.pollOnce()` returns `limited`: `429` or `413` when the relay refused the poll's ack publish for its
   limits, else `429` when it answered an attachment download with `429`, else `0`. It is the receive side's report
@@ -569,7 +574,9 @@ the protocol vectors' secret:
   X, and Chrome on Android's "Title\nURL". They also include `x-orig` over 1,024 characters (left out).
 - A `labExcerpt` section: selection inputs → HTML, Markdown, file name and URL (F11). It includes the `classifyShare`
   cases of F11: the four excerpt rules, and the headline + link shares above as links.
-- A `diagnostics` section: a log fixture → its redacted text (F26).
+- A `diagnostics` section: a log fixture → its redacted text (F26). Its `rowHttp` part (Oct 22) runs a Sender against
+  scripted relay answers and pins each row's `status`, `errorCode` and `http` after every step, with the activity line
+  of each row the step returned.
 
 **`server/vectors/server-vectors.json`** (server lane, SV0) gains `serverState`: status JSON or error JSON in,
 `{state, message}` out.
@@ -748,7 +755,8 @@ requested extras on the row (`row.extras`, only when there are any), so every re
 - `activityEvent({time, type, id, kind, status, http})` keeps only `{time, type, id8 (the id's first 8 characters),
   kind, status, http}`: no title, URL, name or `from` ever enters the log. `appendActivity` keeps the last 200.
   `activityLine(e)`: ISO time, type, id8, kind, status and http joined with spaces, `-` for an empty field (and for
-  `http` 0).
+  `http` 0). An event about an outbox row takes `http` from the row's `http` (2.7.1), so a 413 or a 429 shows in the
+  log, and not only as "failed/full" or "failed/network".
 - `diagnosticsReport({app, version, platform, lab, caps, checkedIn, rows, relay, log, now})`: the lines of
   `LAB_TEXT.diagnostics` in order (heading; app; Lab on/off; caps joined with ", " or "nothing heard"; the check-in as
   ISO time and its relative time, or "never"; the outbox counts "sending n · sent n · delivered n · failed n ·

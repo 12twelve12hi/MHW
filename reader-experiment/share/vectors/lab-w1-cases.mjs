@@ -296,6 +296,93 @@ export const REPORT_INPUT = {
   rows: [{ status: 'sent' }, { status: 'delivered' }, { status: 'delivered' }, { status: 'failed' }, { status: 'expired' }, { status: 'sending' }],
 };
 
+// The outbox row's `http` (F26's activity log; WIN1 review, Oct 22): the HTTP status of the row's last failed publish.
+// Each case runs a Sender on a fresh store, paired with vector-secret-1 to ROW_HTTP_RELAY, whose publishes are answered
+// from the steps' `answers` in order (an HTTP status, or "network": no answer), with the in-call retries waiting 0 ms,
+// and its clock at each step's `at`. A file item's content is `bytes` bytes, byte i being i % 251 (application/pdf is
+// not compressed, so it goes as an attachment).
+export const ROW_HTTP_RELAY = 'https://relay.example.org';
+export const ROW_HTTP_T = Date.UTC(2026, 9, 22, 9, 0, 0);
+export const ROW_HTTP_ITEMS = {
+  a: { id: 'a1'.repeat(16), kind: 'url', url: 'https://example.com/a', title: 'A' },
+  b: { id: 'b2'.repeat(16), kind: 'url', url: 'https://example.com/b', title: 'B' },
+  f: { id: 'f3'.repeat(16), kind: 'file', name: 'big.pdf', mime: 'application/pdf', bytes: 20000 },
+};
+const S = 1000, M = 60000;
+const x4 = (a) => [a, a, a, a]; // the first try and the three in-call retries
+// [name, steps]; a step is [op, item key or null, answers, ms after ROW_HTTP_T]
+export const ROW_HTTP_CASES = [
+  ['a publish that goes: 0', [['send', 'a', [200], 0]]],
+  ['413: the relay is full', [['send', 'a', [413], 0]]],
+  ['429: rate-limited, never retried within the call', [['send', 'a', [429], 0]]],
+  ['503 after the three in-call retries', [['send', 'a', x4(503), 0]]],
+  ['408 after the three in-call retries', [['send', 'a', x4(408), 0]]],
+  ['502, then 200 within the call: 0', [['send', 'a', [502, 200], 0]]],
+  ['no answer at all: 0', [['send', 'a', x4('network'), 0]]],
+  ['403: the relay refused it', [['send', 'a', [403], 0]]],
+  ['a deferred row (offline): 0, nothing published', [['defer', 'a', [], 0]]],
+  ['Retry now: back to 0 once a publish goes', [['send', 'a', [429], 0], ['retry', 'a', [200], M]]],
+  ['a later failure replaces it', [['send', 'a', [413], 0], ['resendDue', null, x4(503), 185 * M]]],
+  ['resendDue after the back-off: the 5xx row goes', [['send', 'a', x4(500), 0], ['resendDue', null, [200], 2 * M]]],
+  ['resendDue: a 429 ends the pass, the next row keeps its own', [['send', 'a', x4(503), 0], ['send', 'b', x4(503), S],
+    ['resendDue', null, [429], 10 * M]]],
+  ['flushNetwork: a 429 ends the pass, the next row keeps 0', [['defer', 'a', [], 0], ['defer', 'b', [], S],
+    ['flushNetwork', null, [429], 2 * S]]],
+  ['flushNetwork: a 413 on the attachment, then the link goes', [['defer', 'f', [], 0], ['defer', 'a', [], S],
+    ['flushNetwork', null, [413, 200], 2 * S]]],
+];
+// A row stored by v1.0 or v1.1 has no http: it reads as 0
+export const ROW_HTTP_LEGACY = {
+  id: 'c4'.repeat(16), kind: 'url', title: 'C', url: 'https://example.com/c', name: '', mime: '', size: 0, sent: '2026-10-22T09:00:00.000Z',
+  created: ROW_HTTP_T, status: 'failed', errorCode: 'full', attempts: 1, slowFails: 1, lastPublish: ROW_HTTP_T,
+  attemptStarted: ROW_HTTP_T, attachment: false, error: 'HTTP 413', delivered: 0,
+};
+
+/** The activity log's status for a row, as the apps write it: "{status}/{errorCode}", or the status alone. */
+export const rowActivityStatus = (row) => (row.errorCode ? `${row.status}/${row.errorCode}` : row.status);
+
+/**
+ * Runs one ROW_HTTP_CASES case. -> its steps with `expect`: returned (the item keys of the rows the call returned),
+ * rows (each stored row's status, errorCode and http) and lines (the activity line of each returned row: type = op,
+ * time = at, status = rowActivityStatus, http = the row's http).
+ */
+export async function runRowHttpCase(steps) {
+  const answers = [];
+  let now = ROW_HTTP_T;
+  const fetchStub = async (url, init) => {
+    if (!answers.length) throw new Error(`no answer left for ${init?.method} ${url}`);
+    const a = answers.shift();
+    if (a === 'network') throw new TypeError('fetch failed');
+    return new Response(a >= 200 && a < 300 ? JSON.stringify({ id: 'msg', time: Math.floor(now / 1000) }) : '', { status: a });
+  };
+  const sender = new ds.Sender({ pairing: { secret: KEY_SECRET, relay: ROW_HTTP_RELAY }, storage: new ds.MemoryStorage(),
+    from: 'Vectors', app: 'vectors/1', fetch: fetchStub, now: () => now, retryDelaysMs: [0, 0, 0] });
+  const keyOf = (id) => Object.keys(ROW_HTTP_ITEMS).find((k) => ROW_HTTP_ITEMS[k].id === id);
+  const itemOf = (key) => {
+    const { bytes, ...item } = ROW_HTTP_ITEMS[key];
+    if (bytes) item.content = Uint8Array.from({ length: bytes }, (_, i) => i % 251);
+    return item;
+  };
+  const out = [];
+  for (const [op, key, stepAnswers, after] of steps) {
+    now = ROW_HTTP_T + after;
+    answers.push(...stepAnswers);
+    let returned;
+    if (op === 'send' || op === 'defer') returned = [await sender.send(itemOf(key), { defer: op === 'defer' })];
+    else if (op === 'retry') returned = [await sender.retry(ROW_HTTP_ITEMS[key].id)];
+    else if (op === 'flushNetwork') returned = await sender.flushNetwork();
+    else if (op === 'resendDue') returned = await sender.resendDue();
+    else throw new Error(`unknown op ${op}`);
+    assert.equal(answers.length, 0, `${op}: every answer was asked for`);
+    const rows = Object.fromEntries((await sender.list()).sort((x, y) => (keyOf(x.id) < keyOf(y.id) ? -1 : 1))
+      .map((r) => [keyOf(r.id), { status: r.status, errorCode: r.errorCode, http: r.http }]));
+    const lines = returned.map((r) => lab.activityLine(lab.activityEvent({ time: now, type: op, id: r.id, kind: r.kind,
+      status: rowActivityStatus(r), http: r.http })));
+    out.push({ op, ...(key ? { item: key } : {}), answers: stepAnswers, at: now, expect: { returned: returned.map((r) => keyOf(r.id)), rows, lines } });
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Building the expectations
 
@@ -421,7 +508,34 @@ export async function buildW1() {
     expect: lab.diagnosticsReport({ ...REPORT_INPUT, lab: false, caps: [], checkedIn: null, relay: 'https://relay.example.org:8443', rows: [], log: [] }) };
   assert.ok(!report.expect.includes('ntfy.sh/') && report.expect.includes('Relay: ntfy.sh'));
   assert.ok(reportCustom.expect.includes('Relay: custom relay') && !reportCustom.expect.includes('relay.example.org'));
-  const diagnostics = { redact, activity, reports: [report, reportCustom] };
+  // the outbox row's http (F26's activity log): the status of the last failed publish
+  const rowHttpCases = [];
+  for (const [name, steps] of ROW_HTTP_CASES) rowHttpCases.push({ name, steps: await runRowHttpCase(steps) });
+  const last = (name) => rowHttpCases.find((c) => c.name === name).steps.at(-1).expect;
+  assert.deepEqual(last('413: the relay is full').rows.a, { status: 'failed', errorCode: 'full', http: 413 });
+  assert.deepEqual(last('429: rate-limited, never retried within the call').rows.a, { status: 'failed', errorCode: 'network', http: 429 });
+  assert.deepEqual(last('503 after the three in-call retries').rows.a, { status: 'failed', errorCode: 'network', http: 503 });
+  assert.deepEqual(last('no answer at all: 0').rows.a, { status: 'failed', errorCode: 'network', http: 0 });
+  assert.deepEqual(last('403: the relay refused it').rows.a, { status: 'failed', errorCode: 'refused', http: 403 });
+  assert.deepEqual(last('Retry now: back to 0 once a publish goes').rows.a, { status: 'sent', errorCode: '', http: 0 });
+  assert.deepEqual(last('a later failure replaces it').rows.a, { status: 'failed', errorCode: 'network', http: 503 });
+  assert.deepEqual(last('resendDue: a 429 ends the pass, the next row keeps its own'),
+    { returned: ['a'], rows: { a: { status: 'failed', errorCode: 'network', http: 429 }, b: { status: 'failed', errorCode: 'network', http: 503 } },
+      lines: ['2026-10-22T09:10:00.000Z resendDue a1a1a1a1 url failed/network 429'] });
+  assert.deepEqual(last('flushNetwork: a 413 on the attachment, then the link goes').returned, ['f', 'a']);
+  assert.deepEqual(last('flushNetwork: a 413 on the attachment, then the link goes').rows.f, { status: 'failed', errorCode: 'full', http: 413 });
+  assert.equal(last('a publish that goes: 0').lines[0], '2026-10-22T09:00:00.000Z send a1a1a1a1 url sent -');
+  const legacyStore = new ds.MemoryStorage();
+  await legacyStore.set('outbox', [ROW_HTTP_LEGACY]);
+  const legacyRow = (await new ds.Sender({ pairing: { secret: KEY_SECRET, relay: ROW_HTTP_RELAY }, storage: legacyStore }).list())[0];
+  assert.equal(legacyRow.http, 0);
+  const rowHttp = {
+    relay: ROW_HTTP_RELAY, retryDelaysMs: [0, 0, 0],
+    items: Object.fromEntries(Object.entries(ROW_HTTP_ITEMS).map(([k, v]) => [k, v.bytes ? { ...v, content: 'byte i is i % 251' } : v])),
+    cases: rowHttpCases,
+    legacy: { stored: ROW_HTTP_LEGACY, expect: { http: legacyRow.http } },
+  };
+  const diagnostics = { redact, activity, reports: [report, reportCustom], rowHttp };
 
   // testArticle (F26)
   const testArticle = [

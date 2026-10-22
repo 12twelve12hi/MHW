@@ -1001,17 +1001,23 @@ function normRow(r) {
     title: r.title ?? '', url: r.url ?? '', name: r.name ?? '', mime: r.mime ?? '', size: r.size ?? 0, sent: r.sent ?? '',
     created: r.created ?? 0, errorCode: r.errorCode ?? '', attempts: r.attempts ?? 0, slowFails: r.slowFails ?? 0,
     lastPublish: r.lastPublish ?? 0, attemptStarted: r.attemptStarted ?? 0, attachment: !!r.attachment,
-    error: r.error ?? '', delivered: r.delivered ?? 0,
+    error: r.error ?? '', delivered: r.delivered ?? 0, http: Number(r.http) || 0,
   };
 }
+
+/** The HTTP status a failed publish carries for the row's `http`: ShareError's `status`, 0 without an HTTP answer. */
+const httpOf = (error) => { const s = Number(error?.status); return Number.isInteger(s) && s >= 100 && s <= 599 ? s : 0; };
 
 /**
  * The outbox lives in storage under 'outbox' (a list of small rows, newest first), 'outbox/<id>' (the content, base64,
  * kept until delivered, removed or 14 days after the share) and 'ackSince' (the ack cursor).
  * Row: {id, kind, title, url, name, mime, size, sent, created, status, errorCode, attempts, slowFails, lastPublish,
- *       attemptStarted, attachment, error, delivered, extras?}
+ *       attemptStarted, attachment, error, delivered, http, extras?}
  * status: sending | sent | delivered | failed | expired. errorCode, for failed and expired: '' | 'network' | 'full' |
- * 'refused' | 'too-large' | 'gone'. `error` is technical detail for logs; show describeRow(row) instead. `extras`
+ * 'refused' | 'too-large' | 'gone'. `error` is technical detail for logs; show describeRow(row) instead. `http` (Lab,
+ * F26's activity log) is the HTTP status of the row's last failed publish: 413, 429, another 4xx or a 5xx (408 and 5xx
+ * after the in-call retries); 0 when that failure had no HTTP answer (no connection, a timeout), and 0 again once a
+ * publish of the row goes or it is delivered. Rows stored without it (v1.0, v1.1) read as 0. `extras`
  * (only on rows shared with Lab header fields, item.extras) is what every attempt writes: labHeaderFields.
  * Every public method runs under a lock shared by all Senders on the same storage object.
  *
@@ -1078,7 +1084,7 @@ export class Sender {
       id: built.id, kind: item.kind, title: built.header.title ?? '', url: built.header.url ?? '',
       name: built.header.name ?? '', mime: built.header.mime ?? '', size: built.header.size ?? 0,
       sent: built.header.sent, created: now, status: 'sending', errorCode: '', attempts: 0, slowFails: 0,
-      lastPublish: 0, attemptStarted: now, attachment: built.attachment, error: '', delivered: 0,
+      lastPublish: 0, attemptStarted: now, attachment: built.attachment, error: '', delivered: 0, http: 0,
     };
     const extras = labHeaderFields(item.extras);
     if (extras['x-cap'] || extras['x-orig']) row.extras = extras; // re-sends carry the same Lab fields (LAB-PLAN 1.3)
@@ -1110,13 +1116,14 @@ export class Sender {
       }
     } catch (e) { error = e; }
     if (!error) {
-      Object.assign(row, { status: 'sent', errorCode: '', attempts: 0, slowFails: 0, error: '' });
+      Object.assign(row, { status: 'sent', errorCode: '', attempts: 0, slowFails: 0, error: '', http: 0 });
     } else {
       const code = ['network', 'full', 'refused'].includes(error.code) ? error.code : 'network';
       row.status = 'failed'; row.errorCode = code; row.attempts += 1;
       row.slowFails = SLOW_CODES.has(code) ? row.slowFails + 1 : 0;
       if (row.slowFails >= SLOW_FAIL_LIMIT) row.status = 'expired';
       row.error = String(error?.message ?? error);
+      row.http = httpOf(error);
     }
     row.lastPublish = this.now();
     await this._saveRow(row);
@@ -1203,7 +1210,7 @@ export class Sender {
     const delivered = [];
     for (const row of rows) {
       if (row.status !== 'delivered' && acked.has(row.id)) {
-        Object.assign(row, { status: 'delivered', delivered: now, errorCode: '' });
+        Object.assign(row, { status: 'delivered', delivered: now, errorCode: '', http: 0 });
         delivered.push(row.id);
       }
     }

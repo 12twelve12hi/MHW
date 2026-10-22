@@ -390,6 +390,72 @@ test('flushNetwork follows the pass rules: after a 429 nothing more, after a 413
   } finally { await relay.close(); }
 });
 
+test('lab vectors: an outbox row’s http is the HTTP status of its last failed publish (F26’s activity log)', async () => {
+  const R = V.diagnostics.rowHttp;
+  assert.ok(R.cases.length >= 15);
+  const ids = Object.fromEntries(Object.entries(R.items).map(([k, v]) => [v.id, k]));
+  for (const c of R.cases) {
+    const answers = [];
+    let now = 0;
+    const fetchStub = async (url, init) => {
+      assert.ok(answers.length, `${c.name}: an answer for ${init?.method} ${url}`);
+      const a = answers.shift();
+      if (a === 'network') throw new TypeError('fetch failed');
+      return new Response(a >= 200 && a < 300 ? JSON.stringify({ id: 'msg', time: Math.floor(now / 1000) }) : '', { status: a });
+    };
+    const sender = new ds.Sender({ pairing: { secret: secret1, relay: R.relay }, storage: new ds.MemoryStorage(), from: 'Vectors',
+      app: 'vectors/1', fetch: fetchStub, now: () => now, retryDelaysMs: R.retryDelaysMs });
+    const item = (key) => {
+      const { bytes, content: _rule, ...it } = R.items[key];
+      return bytes ? { ...it, content: Uint8Array.from({ length: bytes }, (_, i) => i % 251) } : it;
+    };
+    for (const step of c.steps) {
+      now = step.at;
+      answers.push(...step.answers);
+      const returned = step.op === 'send' || step.op === 'defer' ? [await sender.send(item(step.item), { defer: step.op === 'defer' })]
+        : step.op === 'retry' ? [await sender.retry(R.items[step.item].id)] : await sender[step.op]();
+      const where = `${c.name}: ${step.op}`;
+      assert.equal(answers.length, 0, `${where}: every answer was asked for`);
+      assert.deepEqual(returned.map((r) => ids[r.id]), step.expect.returned, where);
+      const rows = Object.fromEntries((await sender.list()).map((r) => [ids[r.id], { status: r.status, errorCode: r.errorCode, http: r.http }]));
+      assert.deepEqual(rows, step.expect.rows, where);
+      assert.deepEqual(returned.map((r) => lab.activityLine(lab.activityEvent({ time: now, type: step.op, id: r.id, kind: r.kind,
+        status: r.errorCode ? `${r.status}/${r.errorCode}` : r.status, http: r.http }))), step.expect.lines, where);
+    }
+  }
+  // a row stored without the field (v1.0, v1.1) reads as 0
+  const storage = new ds.MemoryStorage();
+  await storage.set('outbox', [R.legacy.stored]);
+  const [legacy] = await new ds.Sender({ pairing: { secret: secret1, relay: R.relay }, storage }).list();
+  assert.equal(legacy.http, R.legacy.expect.http);
+  assert.equal(legacy.http, 0);
+});
+
+test('an outbox row’s http: a 429 from the mock relay on a re-send, then the ack: the delivered row is back to 0; v1.1 reads these rows', async () => {
+  const { relay, sender, receiver, hooks, advance, pairing } = await setup();
+  try {
+    const row = await sender.send({ kind: 'url', url: 'https://example.com/http' });
+    assert.deepEqual([row.status, row.http], ['sent', 0]);
+    advance(ds.RESEND_MESSAGE_MS);
+    hooks.publish = () => 429;
+    const [again] = await sender.resendDue();
+    assert.deepEqual([again.id, again.status, again.errorCode, again.http], [row.id, 'failed', 'network', 429]);
+    const line = lab.activityLine(lab.activityEvent({ time: T0, type: 'resend', id: again.id, kind: again.kind, status: `${again.status}/${again.errorCode}`, http: again.http }));
+    assert.ok(line.endsWith(' resend ' + row.id.slice(0, 8) + ' url failed/network 429'), line);
+    // the rows a v1.1 Sender stored lack http; the rows this one stores are still v1.1's to read
+    const v11 = await import('./fixtures/daylight-share-v1.1.js');
+    const old = new v11.Sender({ pairing, storage: sender.storage, now: () => T0 });
+    const [read] = await old.list();
+    assert.equal(read.http, 429, 'kept as it is');
+    assert.deepEqual(v11.describeRow(read, T0), ds.describeRow(again, T0), 'the row text is v1.1’s');
+    hooks.publish = null;
+    await receiver.pollOnce(); // the first publish arrived: the Daylight acks it
+    assert.equal(await sender.checkAcks(), 1);
+    const [delivered] = await sender.list();
+    assert.deepEqual([delivered.status, delivered.errorCode, delivered.http], ['delivered', '', 0]);
+  } finally { await relay.close(); }
+});
+
 test('applyPairingChange removes the Lab ledger with the outbox when the secret changes, and keeps it otherwise', async () => {
   const storage = new ds.MemoryStorage();
   const a = { secret: ds.generateSecret(), relay: 'https://ntfy.sh' };
