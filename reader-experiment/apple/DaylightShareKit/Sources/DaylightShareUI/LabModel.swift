@@ -25,6 +25,10 @@ public final class LabModel: ObservableObject {
     @Published public private(set) var overview: LabCenter.Overview?
     /// The Daylight server section (2.6), or nil while it is being asked for.
     @Published public private(set) var serverView: LabCenter.ServerView?
+    /// The re-pairing follow-up (2.6, DESIGN 12.7): the locked text with the new Server code and the re-run help, after
+    /// this device re-paired while it knew a Daylight server, until OK (`dismissRepaired`) or a ready server; nil with
+    /// Lab off.
+    @Published public private(set) var repaired: LabCenter.Repaired?
     /// `LAB_NOTE_ENABLED` (1.2): the one-time note shows only in builds whose app has F01 or F04 (false in W0).
     public var noteEnabled: Bool
     /// `-DLSLab 0|1` (1.7): applied before the first render.
@@ -63,6 +67,7 @@ public final class LabModel: ObservableObject {
         var lab: Bool
         var noteShown: Bool
         var ledger: LabLedger.Snapshot
+        var repaired: LabCenter.Repaired?
     }
 
     /// Reads the switch, the note and the ledger again (in the background) and publishes them.
@@ -86,12 +91,14 @@ public final class LabModel: ObservableObject {
         let read = await Self.off(center) { c -> Read in
             // The first start of a build with Lab writes lab = true when the key is missing (1.2); -DLSLab sets it.
             if let launch { LabSettings.setOn(launch, store: c.store) } else { LabSettings.ensureDefault(store: c.store) }
-            return Read(lab: c.isOn(), noteShown: c.store.labNoteShown, ledger: c.ledger().snapshot())
+            return Read(lab: c.isOn(), noteShown: c.store.labNoteShown, ledger: c.ledger().snapshot(), repaired: c.repaired())
         }
         guard seq == readSeq else { return }
         if writes == 0 && read.lab != isOn { isOn = read.lab }
         if read.noteShown != noteShown { noteShown = read.noteShown }
         if read.ledger != ledger { ledger = read.ledger }
+        let follow = isOn ? read.repaired : nil
+        if follow != repaired { repaired = follow }
         if !isLoaded { isLoaded = true }
         if !isOn {
             overview = nil
@@ -108,6 +115,7 @@ public final class LabModel: ObservableObject {
         if !on {
             overview = nil
             serverView = nil
+            repaired = nil
         }
         writes += 1
         Task {
@@ -127,6 +135,12 @@ public final class LabModel: ObservableObject {
         Task { await Self.off(center) { c in c.store.labNoteShown = true } }
     }
 
+    /// OK on the re-pairing follow-up: it is not shown again (until another re-pairing).
+    public func dismissRepaired() {
+        repaired = nil
+        Task { await Self.off(center) { c in c.repairSeen() } }
+    }
+
     // MARK: The Daylight server row and What's in Lab
 
     /// The "Daylight server ›" row's subtitle, "Optional · Not set up", or nil while the state is not known.
@@ -138,6 +152,13 @@ public final class LabModel: ObservableObject {
         guard isOn else { return }
         let state = await Self.off(center) { c in await c.serverRowState(refresh: refresh) }
         if isOn, let state { serverRowState = state }
+    }
+
+    /// What's in Lab opened (1.5): the cached states at once (nothing goes on the network for them), then the ack topic
+    /// is read and the server asked now, and the list follows.
+    public func openOverview() async {
+        await loadOverview(refresh: false)
+        await loadOverview(refresh: true)
     }
 
     /// Works out What's in Lab (1.4). `refresh`: the list opened, so the ack topic is read and the server asked now.
@@ -157,6 +178,7 @@ public final class LabModel: ObservableObject {
         guard isOn else { return }
         serverView = v
         if let v { serverRowState = v.state == "ready" || LabCenter.serverWide.contains(v.state) ? v.state : "error" }
+        await reloadNow() // a ready server ends the re-pairing follow-up
     }
 
     /// A feature's gate (1.5): ready, or the one sentence to show under the tapped control.

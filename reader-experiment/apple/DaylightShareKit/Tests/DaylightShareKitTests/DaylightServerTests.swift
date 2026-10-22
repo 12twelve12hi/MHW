@@ -309,17 +309,170 @@ final class DaylightServerTests: XCTestCase {
         XCTAssertEqual(p.state, "OFFLINE")
     }
 
-    func testLockBeforeRepair() async throws {
-        let (store, pairing) = try await paired()
+    // MARK: Re-pairing (2.6, DESIGN 3.4 and 12.7)
+
+    /// What the lock request saw: the stored pairing's code when it arrived.
+    final class Seen: @unchecked Sendable {
+        private let lock = NSLock()
+        private var codes: [String?] = []
+        func add(_ code: String?) { lock.lock(); codes.append(code); lock.unlock() }
+        var all: [String?] { lock.lock(); defer { lock.unlock() }; return codes }
+    }
+
+    func lockRequests(_ net: StubNet) -> [URLRequest] {
+        net.requests.filter { $0.url?.path == "/v1/admin/lock" && $0.httpMethod == "POST" }
+    }
+
+    /// The reviewer's case: a pinned server, then a pairing with another Daylight. The old server is locked with the old
+    /// token before the pairing changes; the typed address and the status go, the pin stays; the follow-up shows the
+    /// locked text with the new Server code and the re-run help, until OK.
+    func testRePairingLocksTheOldServerFirstAndKeepsTheFollowUp() async throws {
+        let (store, first) = try await paired()
         let net = StubNet()
-        try announce(net, pairing, server: origin)
+        try announce(net, first, server: origin)
+        net.json("GET", "\(origin)/v1/status", status())
+        let seen = Seen()
+        net.route("POST", "\(origin)/v1/admin/lock") { _ in
+            seen.add(store.pairing?.code)
+            return (200, Data("{\"ok\":true}".utf8))
+        }
+        let c = center(store, net)
+        let ready = await c.probe(force: true)
+        XCTAssertEqual(ready.state, "ready")
+        XCTAssertNotNil(FileServerStore(store: store).get(ServerKeys.status))
+        XCTAssertNil(c.repaired(), "no re-pairing yet")
+
+        let second = try Pairing.generate(relay: "https://relay.test", name: "Kitchen Daylight")
+        let r = await c.pair(second)
+        XCTAssertEqual(r, LabCenter.RepairLock(known: true, locked: true))
+        let locks = lockRequests(net)
+        XCTAssertEqual(locks.count, 1)
+        XCTAssertEqual(locks.first?.value(forHTTPHeaderField: "Authorization"), "Bearer \(try values(first).authToken)",
+                       "the old pairing's token")
+        XCTAssertEqual(seen.all, [first.code], "locked before the pairing changed")
+        XCTAssertEqual(store.pairing, second)
+        let files = FileServerStore(store: store)
+        XCTAssertEqual(files.get(ServerKeys.pin)?["origin"]?.string, origin, "the pin stays: it tells pairing-mismatch")
+        XCTAssertNil(files.get(ServerKeys.status), "the old server's status is gone")
+        XCTAssertEqual(store.labRepairedAt, now)
+
+        let follow = try XCTUnwrap(c.repaired())
+        XCTAssertEqual(follow.message, ServerMessages.stateMessages["locked"])
+        XCTAssertEqual(follow.message, "The Daylight server was locked when this device was re-paired. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or copy the new Server code into DAYLIGHT_SERVER_CODE.")
+        XCTAssertEqual(follow.serverCode, try ServerCode.format(seed: ServerCode.deriveSeed(secret: second.secret), relay: second.relay),
+                       "the new pairing's Server code")
+        XCTAssertNotEqual(follow.serverCode, try ServerCode.format(seed: ServerCode.deriveSeed(secret: first.secret), relay: first.relay))
+        XCTAssertEqual(follow.rerun, ServerMessages.rerunHelp)
+
+        // The new pairing has no server yet (nothing on its config topic): the section says so, with the new Server code.
+        net.route("GET", "https://relay.test/") { _ in (200, Data()) }
+        let vAnswer = await c.serverView(deadlineMs: 1_000)
+        let v = try XCTUnwrap(vAnswer)
+        XCTAssertEqual(v.state, "pairing-mismatch")
+        XCTAssertEqual(v.serverCode, follow.serverCode)
+        XCTAssertNotNil(c.repaired(), "only OK or a ready server ends the follow-up")
+
+        c.repairSeen()
+        XCTAssertNil(c.repaired())
+        XCTAssertNil(store.labRepairedAt)
+    }
+
+    /// Lab off: the lock still goes (2.6: "whether Lab is on or off"), and nothing shows until Lab is on again.
+    func testRePairingWithLabOffStillLocksAndShowsNothing() async throws {
+        let (store, first) = try await paired()
+        let net = StubNet()
+        try announce(net, first, server: origin)
+        net.json("GET", "\(origin)/v1/status", status())
         net.json("POST", "\(origin)/v1/admin/lock", ["ok": true])
         let c = center(store, net)
-        let none = await c.lockBeforeRepair()
-        XCTAssertFalse(none, "no pin: nothing to lock")
         _ = await c.probe(force: true)
-        let locked = await c.lockBeforeRepair()
-        XCTAssertTrue(locked)
-        XCTAssertTrue(net.requests.contains { $0.url?.path == "/v1/admin/lock" && $0.httpMethod == "POST" })
+        LabSettings.setOn(false, store: store)
+        let r = await c.pair(try Pairing.generate(relay: "https://relay.test"))
+        XCTAssertEqual(r, LabCenter.RepairLock(known: true, locked: true))
+        XCTAssertEqual(lockRequests(net).count, 1)
+        XCTAssertNil(c.repaired(), "Lab off: nothing shows")
+        LabSettings.setOn(true, store: store)
+        XCTAssertNotNil(c.repaired(), "Lab on again: the follow-up shows until OK or a ready server")
+    }
+
+    /// A ready answer from the new pairing's server ends the follow-up.
+    func testAReadyServerEndsTheFollowUp() async throws {
+        let (store, first) = try await paired()
+        let net = StubNet()
+        try announce(net, first, server: origin)
+        net.json("GET", "\(origin)/v1/status", status())
+        net.json("POST", "\(origin)/v1/admin/lock", ["ok": true])
+        let c = center(store, net)
+        _ = await c.probe(force: true)
+        let second = try Pairing.generate(relay: "https://relay.test")
+        await c.pair(second)
+        XCTAssertNotNil(c.repaired())
+        // The deploy ran again: the new Worker announces itself on the new pairing's config topic.
+        try announce(net, second, server: origin)
+        let p = await c.probe(force: true)
+        XCTAssertEqual(p.state, "ready")
+        XCTAssertNil(c.repaired())
+        XCTAssertNil(store.labRepairedAt)
+    }
+
+    /// No server known, or the same secret: no lock, no follow-up. A typed Server address alone is a known server: it
+    /// is locked there and forgotten. A server that does not answer holds the pairing up for the lock's deadline only.
+    func testOnlyAKnownServerIsLockedAndNeverForLong() async throws {
+        let (store, first) = try await paired()
+        let net = StubNet()
+        net.json("POST", "\(origin)/v1/admin/lock", ["ok": true])
+        let c = center(store, net)
+
+        // The same secret on another relay.
+        let moved = try Pairing(secret: first.secret, relay: "https://relay2.test")
+        let same = await c.pair(moved)
+        XCTAssertEqual(same, .noServer)
+        XCTAssertTrue(net.requests.isEmpty, "the same Daylight: nothing goes to any server")
+
+        // Another Daylight, no server known.
+        let none = await c.pair(try Pairing.generate(relay: "https://relay.test"))
+        XCTAssertEqual(none, .noServer)
+        XCTAssertTrue(net.requests.isEmpty)
+        XCTAssertNil(store.labRepairedAt)
+        XCTAssertNil(c.repaired())
+
+        // A typed Server address.
+        FileServerStore(store: store).set(ServerKeys.manualUrl, .string(origin))
+        let typed = await c.pair(try Pairing.generate(relay: "https://relay.test"))
+        XCTAssertEqual(typed, LabCenter.RepairLock(known: true, locked: true))
+        XCTAssertEqual(lockRequests(net).first?.url?.absoluteString, "\(origin)/v1/admin/lock")
+        XCTAssertNil(FileServerStore(store: store).get(ServerKeys.manualUrl), "the old server's address is forgotten")
+        XCTAssertNotNil(c.repaired())
+
+        // A server that never answers: the pairing changes after the lock's deadline, and the follow-up still shows.
+        FileServerStore(store: store).set(ServerKeys.manualUrl, .string(origin))
+        net.hang = true
+        let started = Date()
+        let next = try Pairing.generate(relay: "https://relay.test")
+        let hung = await c.pair(next, lockDeadlineMs: 300)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+        XCTAssertEqual(hung, LabCenter.RepairLock(known: true, locked: false))
+        XCTAssertEqual(store.pairing, next)
+        XCTAssertNotNil(c.repaired())
+    }
+
+    /// Unpair forgets a typed Server address and the status, keeps the pin, locks nothing and ends the follow-up.
+    func testUnpairForgetsTheTypedAddressAndKeepsThePin() async throws {
+        let (store, first) = try await paired()
+        let net = StubNet()
+        try announce(net, first, server: origin)
+        net.json("GET", "\(origin)/v1/status", status())
+        let c = center(store, net)
+        _ = await c.probe(force: true)
+        let files = FileServerStore(store: store)
+        files.set(ServerKeys.manualUrl, .string(origin))
+        store.labRepairedAt = now
+        await c.unpair()
+        XCTAssertNil(store.pairing)
+        XCTAssertNil(files.get(ServerKeys.manualUrl))
+        XCTAssertNil(files.get(ServerKeys.status))
+        XCTAssertNotNil(files.get(ServerKeys.pin))
+        XCTAssertNil(store.labRepairedAt)
+        XCTAssertTrue(lockRequests(net).isEmpty, "unpairing is not re-pairing")
     }
 }

@@ -129,6 +129,35 @@ final class LabViewTests: XCTestCase {
         XCTAssertEqual(events.list, ["checking", "OFFLINE"])
     }
 
+    // MARK: What's in Lab opening (1.5)
+
+    /// What's in Lab uses the cached states when it opens and then refreshes (1.5, the JS `labOverview` with refresh
+    /// false, then true): after a recent answer (the Settings row's), the server group shows its short state at once,
+    /// even while the server is slow to answer now, and the fresh answer follows.
+    @MainActor
+    func testWhatsInLabShowsTheCachedStatesAtOnce() async throws {
+        let store = makeStore("cached")
+        await store.pair(try Pairing.generate(relay: "https://relay.test", name: "Desk Daylight"))
+        let net = StubNet()
+        net.route("GET", "https://relay.test/") { _ in (200, Data()) } // nothing on the config topic: needs-server
+        let center = LabCenter(store: store, platform: "mac", fetch: net.fetch)
+        let lab = LabModel(center: center, arguments: [])
+        try await waitFor("the first read") { lab.isLoaded }
+        await lab.refreshServerRow()
+        XCTAssertEqual(lab.serverRowState, "needs-server")
+        XCTAssertNil(lab.overview)
+
+        net.hang = true // the server and the relay are slow now
+        let opening = Task { await lab.openOverview() }
+        try await waitFor("the cached states", timeout: 1.5) { lab.overview != nil }
+        XCTAssertEqual(lab.overview?.serverState, "needs-server")
+        XCTAssertEqual(lab.overview?.serverShort, "Not set up")
+        XCTAssertEqual(lab.overview?.fresh, true)
+        XCTAssertEqual(lab.overview?.serverRows.map(\.id), ["F02", "F37", "F19", "F36"])
+        await opening.value
+        XCTAssertEqual(lab.overview?.serverState, "OFFLINE", "then the server is asked, within the gate's 5 s")
+    }
+
     // MARK: The share card's own Lab switch (1.1, F00's Mac edge case)
 
     /// The card that keeps its own storage (the ad-hoc Mac build's Share menu item) has its own Lab switch on the Mac,

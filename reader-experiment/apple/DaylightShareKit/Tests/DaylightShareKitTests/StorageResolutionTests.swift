@@ -231,6 +231,73 @@ final class StorageResolutionTests: XCTestCase {
         XCTAssertNotNil(own2.data(forKey: "dls.pairing"))
     }
 
+    /// The ad-hoc Mac app updated to the Developer ID one (LOOSE-ENDS, LAB-PLAN 1.2 and 1.3): the move into the App
+    /// Group keeps this device's settings (Comfort, the Lab switch, the one-time Lab note) and everything that belongs to
+    /// the pairing (Lab's ledger, the Daylight server's pin and notices, the re-pairing follow-up), not only the pairing,
+    /// the name and the history.
+    func testAnUpdateIntoTheGroupKeepsLabAndComfort() async throws {
+        let own = makeDefaults()
+        let ownDir = root.appendingPathComponent("own")
+        let earlier = SharedStore(defaults: own, directory: ownDir)
+        let pairing = try Pairing.generate(relay: "https://relay.test", name: "Desk")
+        await earlier.pair(pairing)
+        earlier.lab = false
+        earlier.labNoteShown = true
+        earlier.comfort = true
+        earlier.labRepairedAt = 1_792_486_800_000
+        // Lab's ledger: the Daylight said hello on the ack topic.
+        LabLedger(outbox: OutboxStore(store: earlier)).record(header: .object(["kind": .string("ack")]), time: 1_792_486_800)
+        let ledgerFile = ownDir.appendingPathComponent(LabLedger.fileName)
+        let ledgerBytes = try Data(contentsOf: ledgerFile)
+        // The Daylight server: pinned, and its first-use notice shown.
+        let pin: JSONValue = .object(["origin": .string("https://daylight-0123456789ab.example.workers.dev"),
+                                      "fingerprint": .string("3f9a1c2e")])
+        FileServerStore(store: earlier).set(ServerKeys.pin, pin)
+        FileServerStore(store: earlier).set(ServerKeys.notices, .object(["ai": .bool(true)]))
+
+        let groupDefaults = makeDefaults()
+        let store = SharedStore(resolver: resolver(delay: 0, probe: Probe(), groupDefaults: groupDefaults),
+                                privateDefaults: own, privateDirectory: ownDir)
+        await store.ready()
+        XCTAssertTrue(store.isShared)
+        XCTAssertEqual(store.pairing, pairing)
+        XCTAssertFalse(store.lab, "Lab stays off")
+        XCTAssertTrue(store.labIsStored)
+        XCTAssertTrue(store.labNoteShown)
+        XCTAssertTrue(store.comfort)
+        XCTAssertEqual(store.labRepairedAt, 1_792_486_800_000)
+        XCTAssertEqual(try Data(contentsOf: store.directory.appendingPathComponent(LabLedger.fileName)), ledgerBytes,
+                       "the ledger moves with the outbox and its ack cursor")
+        XCTAssertEqual(LabLedger(outbox: OutboxStore(store: store)).checkedIn(), 1_792_486_800_000)
+        let files = FileServerStore(store: store)
+        XCTAssertEqual(files.get(ServerKeys.pin), pin)
+        XCTAssertEqual(files.get(ServerKeys.notices)?["ai"]?.bool, true)
+        LabSettings.ensureDefault(store: store)
+        XCTAssertFalse(LabSettings.isOn(store: store), "the new build's first start does not turn Lab back on")
+        // Moved, not copied.
+        for key in ["dls.lab", "dls.labNoteShown", "dls.comfort", "dls.labRepaired", "dls.pairing"] {
+            XCTAssertNil(own.object(forKey: key), key)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ledgerFile.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ownDir.appendingPathComponent(FileServerStore.fileName).path))
+
+        // A group with settings of its own keeps them; this device's settings move even without a pairing.
+        let own2 = makeDefaults()
+        let earlier2 = SharedStore(defaults: own2, directory: root.appendingPathComponent("own2"))
+        earlier2.lab = false
+        earlier2.comfort = true
+        let group2 = makeDefaults()
+        group2.set(true, forKey: "dls.lab")
+        let store2 = SharedStore(resolver: resolver(delay: 0, probe: Probe(), groupDefaults: group2),
+                                 privateDefaults: own2, privateDirectory: root.appendingPathComponent("own2"))
+        await store2.ready()
+        XCTAssertTrue(store2.isShared)
+        XCTAssertTrue(store2.lab, "the group's own switch stays")
+        XCTAssertEqual(own2.object(forKey: "dls.lab") as? Bool, false, "and this process's is left where it was")
+        XCTAssertTrue(store2.comfort, "Comfort, which the group did not have, moves")
+        XCTAssertNil(store2.pairing)
+    }
+
     @MainActor
     func testTheShareExtensionAsksForTheCodeOnceWithoutAnAppGroup() async throws {
         let store = SharedStore(resolver: resolver(declared: [], delay: 0, probe: Probe(), groupDefaults: makeDefaults()),

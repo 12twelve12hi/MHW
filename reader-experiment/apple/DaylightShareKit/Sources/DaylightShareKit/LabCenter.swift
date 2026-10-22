@@ -91,13 +91,18 @@ public final class LabCenter: @unchecked Sendable {
     }
 
     /// Asks the server now. `force`: Lab settings opened (the section or What's in Lab), so the config topic is read now
-    /// whatever the cached config's age (DESIGN 4.3 rule 1) and the status is asked now.
+    /// whatever the cached config's age (DESIGN 4.3 rule 1) and the status is asked now. A ready answer for the stored
+    /// pairing ends the re-pairing follow-up (`repaired()`), as in the JS ports.
     public func probe(force: Bool = false) async -> Probe {
         guard let pairing = store.pairing, let server = self.server() else {
             return Probe(state: "needs-pairing", message: LabText.needsMessage("needs-pairing", platform: platform))
         }
+        let asked = now()
         let p = await Self.probeNow(server, force: force)
         remember(p, key: "\(pairing.code)|\(pairing.relay)")
+        if p.state == "ready", let at = store.labRepairedAt, at <= asked, store.pairing?.code == pairing.code {
+            store.labRepairedAt = nil
+        }
         return p
     }
 
@@ -391,14 +396,115 @@ public final class LabCenter: @unchecked Sendable {
         }
     }
 
-    /// Before replacing a pairing while a server pin exists (2.6 "Re-pairing"), whether Lab is on or off: POST
-    /// /v1/admin/lock with the old pairing's token. -> whether the server took it. Call it before `SharedStore.pair`
-    /// with another secret; afterwards show the new Server code and the re-run help (DESIGN 12.7).
+    // MARK: Pairing changes (2.6 "Re-pairing", DESIGN 3.4 and 12.7)
+
+    /// How long a re-pairing waits for the old server to take the lock (10 s, as the JS ports).
+    public static let lockDeadlineMs: Int64 = 10_000
+
+    /// What a pairing change did about the Daylight server (the JS ports' `beforeRepair` answer): whether a server
+    /// knew the old pairing (a pin, or a typed Server address), and whether the lock request got through.
+    public struct RepairLock: Equatable, Sendable {
+        public var known: Bool
+        public var locked: Bool
+
+        public init(known: Bool, locked: Bool) {
+            self.known = known
+            self.locked = locked
+        }
+
+        /// No server knew the old pairing (or the same Daylight paired again): nothing was sent.
+        public static let noServer = RepairLock(known: false, locked: false)
+    }
+
+    /// Pairs with `next` the way every pairing change must (the app's Pair and Switch, the Share extension, the Safari
+    /// extension's native handler; the JS ports' `pair`): with another secret than the stored pairing's, a Daylight
+    /// server that knows the old pairing (a pin, or a typed Server address) is locked first with the old pairing's
+    /// token, Lab on or off (DESIGN 3.4), waiting at most `lockDeadlineMs`; the typed address and the cached status go
+    /// (they are the old server's; the pin stays, it tells pairing-mismatch); then `SharedStore.pair`. When a server
+    /// was known, the follow-up is kept (`repaired()`: the locked text with the new Server code and the re-run help,
+    /// DESIGN 12.7), whether the lock got through or not. The same secret (a new relay or name) touches no server.
+    /// Never throws. Touches storage and the network: off the main thread.
     @discardableResult
-    public func lockBeforeRepair() async -> Bool {
-        guard let server = self.server(), server.store.get(ServerKeys.pin) != nil else { return false }
+    public func pair(_ next: Pairing, lockDeadlineMs: Int64 = LabCenter.lockDeadlineMs) async -> RepairLock {
+        await store.ready()
+        let r = await beforeRepair(current: store.pairing, next: next, deadlineMs: lockDeadlineMs)
+        await store.pair(next)
         forgetProbe()
-        return await server.lockBeforeRepair()
+        if r.known { store.labRepairedAt = now() }
+        return r
+    }
+
+    /// Unpairs (the outbox goes too, `SharedStore.unpair`) the way every Unpair must (the JS ports' `beforeUnpair`): a
+    /// typed Server address and the cached status are forgotten first. They are this pairing's server's, and the next
+    /// pairing may be another Daylight's: kept, a typed address would hide that one's server from discovery. The pin
+    /// stays (it tells pairing-mismatch), and nothing is locked: the same Daylight may come back. Never throws.
+    public func unpair() async {
+        await store.ready()
+        if let current = store.pairing { forgetServer(current) }
+        forgetProbe()
+        await store.unpair()
+    }
+
+    /// Before `next` replaces `current` (2.6 "Re-pairing"). Another secret, with a server that knows the old pairing:
+    /// POST /v1/admin/lock with the old token (`DaylightServer.lockBeforeRepair`), Lab on or off, within `deadlineMs`;
+    /// then the typed address and the status are forgotten whether the lock got through or not. No current pairing
+    /// (after Unpair): a typed address or a status kept from an earlier pairing is forgotten. Never throws.
+    func beforeRepair(current: Pairing?, next: Pairing, deadlineMs: Int64) async -> RepairLock {
+        if let current, current.secret == next.secret { return .noServer }
+        let files = FileServerStore(store: store)
+        let known = files.get(ServerKeys.pin) != nil || files.get(ServerKeys.manualUrl) != nil
+        forgetProbe()
+        guard let current else {
+            forgetServer(next)
+            return .noServer
+        }
+        var locked = false
+        if known, let old = try? DaylightServer(pairing: current, store: files, fetch: fetch, now: now) {
+            locked = (try? await Deadline.run(ms: deadlineMs, onTimeout: { false }) { await old.lockBeforeRepair() }) ?? false
+        }
+        forgetServer(current)
+        return RepairLock(known: known, locked: locked)
+    }
+
+    /// Removes a typed Server address and the cached status through the server module (`clearManualUrl`, which does not
+    /// use the pairing it is made with); nothing when there is neither.
+    private func forgetServer(_ pairing: Pairing) {
+        let files = FileServerStore(store: store)
+        guard files.get(ServerKeys.manualUrl) != nil || files.get(ServerKeys.status) != nil else { return }
+        (try? DaylightServer(pairing: pairing, store: files, fetch: fetch, now: now))?.clearManualUrl()
+    }
+
+    /// The re-pairing follow-up (2.6, DESIGN 12.7): after this device re-paired with another Daylight while it knew a
+    /// Daylight server, which it locked first, the window shows the `locked` text with the new pairing's Server code,
+    /// Copy and the re-run help, until OK (`repairSeen`) or until the server answers ready (`probe`).
+    public struct Repaired: Equatable, Sendable {
+        /// When the re-pairing happened (ms).
+        public let at: Int64
+        /// `ServerMessages.localMessage("locked")`.
+        public let message: String
+        /// The new pairing's Server code.
+        public let serverCode: String
+        /// `ServerMessages.rerunHelp`.
+        public let rerun: String
+
+        public init(at: Int64, message: String, serverCode: String, rerun: String) {
+            self.at = at
+            self.message = message
+            self.serverCode = serverCode
+            self.rerun = rerun
+        }
+    }
+
+    /// The follow-up while Lab is on and paired, until OK or a ready server; nil otherwise. Nothing goes on the network.
+    public func repaired() -> Repaired? {
+        guard isOn(), let at = store.labRepairedAt, let server = self.server() else { return nil }
+        return Repaired(at: at, message: ServerMessages.localMessage("locked"), serverCode: server.serverCode(),
+                        rerun: ServerMessages.rerunHelp)
+    }
+
+    /// OK on the follow-up: it is not shown again (until another re-pairing).
+    public func repairSeen() {
+        if store.labRepairedAt != nil { store.labRepairedAt = nil }
     }
 
     /// Forgets the cached answer (the pairing, the server or the address changed).

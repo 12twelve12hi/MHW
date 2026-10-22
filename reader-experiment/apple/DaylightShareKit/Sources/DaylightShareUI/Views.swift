@@ -344,11 +344,14 @@ public struct PairingConfirmationView: View {
 }
 
 /// Every sheet of an app window, from one presentation point: `model.presented`, which is the pairing question when
-/// one waits (PROTOCOL 1.3) and otherwise `model.sheet`. SwiftUI shows one sheet at a time, and a sheet presented from
-/// a view that already shows one does not appear; with a single `sheet(item:)`, a pairing link that arrives while
-/// Settings, the file picker or the scanner is open replaces it with the question.
+/// one waits (PROTOCOL 1.3), otherwise `model.sheet`, otherwise the re-pairing follow-up (LAB-PLAN 2.6, while Lab is
+/// on). SwiftUI shows one sheet at a time, and a sheet presented from a view that already shows one does not appear;
+/// with a single `sheet(item:)`, a pairing link that arrives while Settings, the file picker or the scanner is open
+/// replaces it with the question.
 struct AppSheets<SheetContent: View>: ViewModifier {
     @ObservedObject var model: AppModel
+    /// Observed too: the follow-up `model.presented` shows is `lab.repaired`.
+    @ObservedObject var lab: LabModel
     let sheetContent: (AppModel.Sheet) -> SheetContent
 
     func body(content: Content) -> some View {
@@ -362,6 +365,8 @@ struct AppSheets<SheetContent: View>: ViewModifier {
                         .interactiveDismissDisabled()
                 case let .sheet(sheet):
                     sheetContent(sheet)
+                case let .repaired(r):
+                    LabRepairedSheet(repaired: r) { model.dismissRepaired() }
                 }
             }
             // A sheet is its own presentation: it gets Comfort from the model, like the window.
@@ -374,7 +379,7 @@ extension View {
     /// Presents the app's sheets (`model.sheet`, built by `content`) and the question before a pairing takes effect,
     /// all from this one view: attach it to the window's root view only, and open sheets by setting `model.sheet`.
     public func appSheets<S: View>(_ model: AppModel, @ViewBuilder content: @escaping (AppModel.Sheet) -> S) -> some View {
-        modifier(AppSheets(model: model, sheetContent: content))
+        modifier(AppSheets(model: model, lab: model.lab, sheetContent: content))
     }
 }
 

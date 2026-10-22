@@ -88,5 +88,166 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(StorageAudit.mainThreadAccesses, [], "storage was touched on the main thread")
         XCTAssertTrue(outbox.rows.isEmpty)
     }
+
+    // MARK: Re-pairing (LAB-PLAN 2.6, DESIGN 3.4 and 12.7)
+
+    static let origin = "https://daylight-0123456789ab.example.workers.dev"
+    static let now: Int64 = 1_792_486_800_000
+
+    /// The pairing's Daylight server as an earlier visit to Lab settings left it: pinned, its config cached.
+    static func pinServer(_ store: SharedStore, _ pairing: Pairing) throws {
+        let v = try ServerCode.derive(seed: ServerCode.deriveSeed(secret: pairing.secret))
+        let files = FileServerStore(store: store)
+        files.set(ServerKeys.config, ServerConfig(server: origin, api: 1, fingerprint: v.fingerprint, delivery: "lab").json)
+        files.set(ServerKeys.configAt, .number(Double(now)))
+        files.set(ServerKeys.pin, .object(["origin": .string(origin), "fingerprint": .string(v.fingerprint)]))
+    }
+
+    static func token(_ pairing: Pairing) throws -> String {
+        try ServerCode.derive(seed: ServerCode.deriveSeed(secret: pairing.secret)).authToken
+    }
+
+    static func serverCode(_ pairing: Pairing) throws -> String {
+        try ServerCode.format(seed: ServerCode.deriveSeed(secret: pairing.secret), relay: pairing.relay)
+    }
+
+    static func lockRequests(_ net: StubNet) -> [URLRequest] {
+        net.requests.filter { $0.url?.path == "/v1/admin/lock" && $0.httpMethod == "POST" }
+    }
+
+    /// A store paired with one Daylight whose server is pinned, a stub network that takes the lock, and a Lab model on
+    /// both (Lab on or off).
+    func pinnedPairing(lab on: Bool) async throws -> (SharedStore, Pairing, StubNet, LabModel) {
+        let store = SharedStore(defaults: UserDefaults(suiteName: suite)!, directory: root)
+        let first = try Pairing.generate(relay: "https://relay.test", name: "Desk Daylight")
+        await store.pair(first)
+        try await Task.detached { try Self.pinServer(store, first) }.value
+        let net = StubNet()
+        net.json("POST", "\(Self.origin)/v1/admin/lock", ["ok": true])
+        let t = Self.now
+        let center = LabCenter(store: store, platform: "mac", fetch: net.fetch, now: { t })
+        let lab = await LabModel(center: center, arguments: on ? [] : ["-DLSLab", "0"])
+        return (store, first, net, lab)
+    }
+
+    /// Reads storage off the main thread (the app never reads it on the main thread).
+    func stored<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
+        await Task.detached { body() }.value
+    }
+
+    /// The reviewer's case: a Mac paired with one Daylight has a pinned server; the user scans another Daylight's code
+    /// and taps Switch. The old server is locked with the old token before the pairing changes, and the window then
+    /// shows the locked text with the new Server code and the re-run help (Settings › Lab too), until OK.
+    @MainActor
+    func testSwitchLocksTheOldServerAndShowsTheNewServerCode() async throws {
+        let (store, first, net, lab) = try await pinnedPairing(lab: true)
+        let model = AppModel(store: store, lab: lab, arguments: [])
+        try await waitFor("the first read") { model.isLoaded && lab.isLoaded }
+        XCTAssertNil(model.presented)
+        XCTAssertNil(lab.repaired)
+
+        let second = try Pairing.generate(relay: "https://relay.test", name: "Kitchen Daylight")
+        await model.handleOpen([URL(string: second.link)!])
+        try await waitFor("the question") { model.pendingPairing != nil }
+        XCTAssertTrue(net.requests.isEmpty, "nothing is locked before Switch")
+        model.confirmPairing()
+        try await waitFor("the follow-up") {
+            if case .repaired? = model.presented { return true }
+            return false
+        }
+        XCTAssertEqual(model.pairing, second)
+        let locks = Self.lockRequests(net)
+        XCTAssertEqual(locks.count, 1)
+        XCTAssertEqual(locks.first?.value(forHTTPHeaderField: "Authorization"), "Bearer \(try Self.token(first))",
+                       "locked with the old pairing's token")
+        guard case let .repaired(r)? = model.presented else { return XCTFail("the follow-up is not presented") }
+        XCTAssertEqual(r.message, ServerMessages.stateMessages["locked"])
+        XCTAssertEqual(r.serverCode, try Self.serverCode(second), "the new pairing's Server code")
+        XCTAssertEqual(r.rerun, ServerMessages.rerunHelp)
+        XCTAssertEqual(lab.repaired, r, "Settings › Lab shows it too")
+
+        // Swiped away: the window lets it go, Settings › Lab keeps it until OK.
+        model.presented = nil
+        XCTAssertNil(model.presented)
+        XCTAssertNotNil(lab.repaired)
+        model.dismissRepaired()
+        XCTAssertNil(lab.repaired)
+        let deadline = Date().addingTimeInterval(5)
+        while await stored({ store.labRepairedAt }) != nil {
+            if Date() > deadline { return XCTFail("OK was not saved") }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        try await waitFor("the follow-up to stay gone") { lab.repaired == nil && model.presented == nil }
+    }
+
+    /// Lab off: the old server is still locked (2.6: "whether Lab is on or off"), and nothing visible changes.
+    @MainActor
+    func testSwitchWithLabOffLocksAndShowsNothing() async throws {
+        let (store, first, net, lab) = try await pinnedPairing(lab: false)
+        let model = AppModel(store: store, lab: lab, arguments: [])
+        try await waitFor("the first read") { model.isLoaded && lab.isLoaded }
+        XCTAssertFalse(lab.isOn)
+        let second = try Pairing.generate(relay: "https://relay.test", name: "Kitchen Daylight")
+        await model.handleOpen([URL(string: second.link)!])
+        try await waitFor("the question") { model.pendingPairing != nil }
+        model.confirmPairing()
+        try await waitFor("the banner") { model.banner?.text == "Paired with Kitchen Daylight." }
+        XCTAssertEqual(model.pairing, second)
+        XCTAssertEqual(Self.lockRequests(net).first?.value(forHTTPHeaderField: "Authorization"), "Bearer \(try Self.token(first))")
+        await lab.reloadNow()
+        XCTAssertNil(model.presented, "Lab off: no follow-up")
+        XCTAssertNil(lab.repaired)
+    }
+
+    /// The Share extension's pairing link, confirmed with Switch, locks the old server first too.
+    @MainActor
+    func testTheShareExtensionLocksTheOldServerFirst() async throws {
+        let (store, first, net, _) = try await pinnedPairing(lab: true)
+        let model = ShareExtensionModel(store: store)
+        model.fetch = net.fetch
+        let second = try Pairing.generate(relay: "https://relay.test", name: "Kitchen Daylight")
+        let item = NSExtensionItem()
+        item.attachments = [NSItemProvider(object: NSURL(string: second.link)!)]
+        model.start(inputItems: [item])
+        try await waitFor("the question") {
+            if case .confirmPairing = model.phase { return true }
+            return false
+        }
+        XCTAssertTrue(net.requests.isEmpty)
+        model.confirmPairing()
+        try await waitFor("paired") {
+            if case .paired = model.phase { return true }
+            return false
+        }
+        XCTAssertEqual(Self.lockRequests(net).first?.value(forHTTPHeaderField: "Authorization"), "Bearer \(try Self.token(first))")
+        let paired = await stored { store.pairing?.code }
+        XCTAssertEqual(paired, second.code)
+        let mark = await stored { store.labRepairedAt }
+        XCTAssertNotNil(mark, "the app shows the follow-up (Settings › Lab)")
+    }
+
+    /// The Safari extension's native handler: a confirmed setPairing with another code locks the old server first and
+    /// says so (`serverLocked`).
+    func testSafariSetPairingLocksTheOldServerFirst() async throws {
+        let (store, first, net, _) = try await pinnedPairing(lab: true)
+        let other = try Pairing.generate(relay: "https://relay.test", name: "Kitchen Daylight")
+        let asked = await SafariNativeMessaging.answer(["type": "setPairing", "code": other.code], store: store, fetch: net.fetch)
+        XCTAssertEqual(asked["ok"] as? Bool, false)
+        XCTAssertTrue(net.requests.isEmpty, "nothing is locked before the user confirms")
+        let switched = await SafariNativeMessaging.answer(["type": "setPairing", "code": other.code, "confirm": true],
+                                                          store: store, fetch: net.fetch)
+        XCTAssertEqual(switched["ok"] as? Bool, true)
+        XCTAssertEqual(switched["serverLocked"] as? Bool, true)
+        XCTAssertEqual(store.pairing?.secret, other.secret)
+        XCTAssertEqual(Self.lockRequests(net).first?.value(forHTTPHeaderField: "Authorization"), "Bearer \(try Self.token(first))")
+        XCTAssertNotNil(store.labRepairedAt)
+
+        // The same secret again (a new relay): no lock, no serverLocked.
+        let moved = await SafariNativeMessaging.answer(
+            ["type": "setPairing", "link": try Pairing(secret: other.secret, relay: "https://relay2.test").link], store: store, fetch: net.fetch)
+        XCTAssertEqual(moved["ok"] as? Bool, true)
+        XCTAssertNil(moved["serverLocked"])
+        XCTAssertEqual(Self.lockRequests(net).count, 1)
+    }
 }
 #endif

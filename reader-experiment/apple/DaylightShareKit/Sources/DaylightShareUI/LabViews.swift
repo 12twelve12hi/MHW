@@ -27,6 +27,10 @@ public enum LabIDs {
     public static let setupField = "lab-setup-field"
     public static let setupButton = "lab-setup-button"
     public static let addressField = "lab-address-field"
+    /// The re-pairing follow-up (`LabRepairedNote`), its Server code and its Copy button.
+    public static let repaired = "lab-repaired"
+    public static let repairedServerCode = "lab-repaired-server-code"
+    public static let repairedCopy = "lab-repaired-copy"
 }
 
 /// Puts text on the clipboard (Copy, Copy Server code).
@@ -52,10 +56,11 @@ public enum LabClipboard {
 
 // MARK: The Lab section of Settings (1.1)
 
-/// The first section of an app's settings (1.1): the Lab switch, its footer and, while Lab is on, the rows "What’s in
-/// Lab ›" and "Daylight server ›" (subtitled "Optional · {short state}"). With Lab off only the switch (and its footer)
-/// shows. The rows are navigation links: put the settings in a `NavigationStack`. Give it the destinations, or use
-/// `LabSettingsSection(lab:)` for `WhatsInLabView` and `ServerSettingsView`.
+/// The first section of an app's settings (1.1): the Lab switch, its footer and, while Lab is on, the re-pairing
+/// follow-up when there is one (`LabRepairedNote`, 2.6) and the rows "What’s in Lab ›" and "Daylight server ›"
+/// (subtitled "Optional · {short state}"). With Lab off only the switch (and its footer) shows. The rows are navigation
+/// links: put the settings in a `NavigationStack`. Give it the destinations, or use `LabSettingsSection(lab:)` for
+/// `WhatsInLabView` and `ServerSettingsView`.
 public struct LabSettingsSection<WhatsIn: View, Server: View>: View {
     @ObservedObject var lab: LabModel
     let whatsInLab: () -> WhatsIn
@@ -77,6 +82,9 @@ public struct LabSettingsSection<WhatsIn: View, Server: View>: View {
             .accessibilityLabel(LabText.lab)
             .accessibilityIdentifier(LabIDs.labSwitch)
             if lab.isOn {
+                if let r = lab.repaired {
+                    LabRepairedNote(repaired: r) { lab.dismissRepaired() }
+                }
                 NavigationLink {
                     whatsInLab()
                 } label: {
@@ -111,6 +119,89 @@ extension LabSettingsSection where WhatsIn == WhatsInLabView, Server == ServerSe
     /// The section with the shared destinations.
     public init(lab: LabModel) {
         self.init(lab: lab, whatsInLab: { WhatsInLabView(lab: lab) }, server: { ServerSettingsView(lab: lab) })
+    }
+}
+
+// MARK: After re-pairing (2.6, DESIGN 12.7)
+
+/// After this device re-paired with another Daylight while it knew a Daylight server, which it locked first (2.6
+/// "Re-pairing", DESIGN 3.4 and 12.7): "Daylight server" as its heading, the `locked` text, the new pairing's Server code
+/// with Copy, the deploy's re-run help, and OK, which ends it (`LabModel.dismissRepaired`). The window presents it right
+/// after the switch (`AppModel.presentsRepaired`, from `appSheets`), and Settings › Lab shows it (`LabSettingsSection`)
+/// until OK or until the server answers ready. Only while Lab is on: `LabModel.repaired` is nil with Lab off.
+public struct LabRepairedNote: View {
+    let repaired: LabCenter.Repaired
+    let onOK: () -> Void
+    @State private var copied = false
+
+    public init(repaired: LabCenter.Repaired, onOK: @escaping () -> Void) {
+        self.repaired = repaired
+        self.onOK = onOK
+    }
+
+    private var S: (String) -> String { { LabText["serverSection.\($0)"] } }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(LabText.serverRow).dlsFont(.headline).wrapping(LabText.serverRow)
+                .accessibilityAddTraits(.isHeader)
+            Text(repaired.message).wrapping(repaired.message)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(S("serverCode")).dlsFont(.footnote).dlsSecondary().wrapping(S("serverCode"))
+                Text(repaired.serverCode).font(.body.monospaced()).wrapping(repaired.serverCode)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier(LabIDs.repairedServerCode)
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { buttons }
+                VStack(alignment: .leading, spacing: 8) { buttons }
+            }
+            if copied {
+                Text(LabText["setup.copied"]).dlsFont(.footnote).wrapping(LabText["setup.copied"])
+            }
+            Text(repaired.rerun).dlsFont(.footnote).dlsSecondary().wrapping(repaired.rerun)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(LabIDs.repaired)
+        .onAppear { Announcer.announce(repaired.message) }
+    }
+
+    @ViewBuilder private var buttons: some View {
+        Button {
+            LabClipboard.copy(repaired.serverCode)
+            copied = true
+            Announcer.announce(LabText["setup.copied"])
+        } label: {
+            Text(S("copy")).wrapping(S("copy")).comfortTarget()
+        }
+        .buttonStyle(.bordered)
+        .comfortBorder()
+        .accessibilityIdentifier(LabIDs.repairedCopy)
+        Button(action: onOK) {
+            Text(LabText.noteButton).wrapping(LabText.noteButton).comfortTarget()
+        }
+        .buttonStyle(.bordered)
+        .comfortBorder()
+    }
+}
+
+/// The re-pairing follow-up as the window presents it (`appSheets`): scrolls on the iPhone at large text sizes; on the
+/// Mac, as wide as the pairing question.
+struct LabRepairedSheet: View {
+    let repaired: LabCenter.Repaired
+    let onOK: () -> Void
+
+    var body: some View {
+        #if os(iOS)
+        ScrollView {
+            LabRepairedNote(repaired: repaired, onOK: onOK).padding(24)
+        }
+        #else
+        LabRepairedNote(repaired: repaired, onOK: onOK)
+            .padding(24)
+            .frame(maxWidth: 420)
+        #endif
     }
 }
 
@@ -362,7 +453,8 @@ public struct WhatsInLabView: View {
             }
         }
         .navigationTitle(LabText.whatsInLab)
-        .task { await lab.loadOverview(refresh: true) }
+        // The cached states at once, then the server's and the Daylight's answers (1.5).
+        .task { await lab.openOverview() }
         .onDisappear {
             tapped = nil
             note = .hidden

@@ -37,6 +37,10 @@ public final class AppModel: ObservableObject {
     /// question, is presented from one place (`View.appSheets`): SwiftUI shows one sheet at a time, so a pairing link
     /// that arrives while one is open closes it and asks instead (`presented`).
     @Published public var sheet: Sheet?
+    /// Whether the window presents the re-pairing follow-up (`Presented.repaired`, LAB-PLAN 2.6, DESIGN 12.7): set when
+    /// this app re-paired with another Daylight while it knew a Daylight server, which it locked first. What it shows
+    /// is `lab.repaired` (nil with Lab off, so nothing shows then); Settings › Lab shows it too until OK.
+    @Published public private(set) var presentsRepaired = false
 
     public enum Sheet: String, Identifiable {
         case settings
@@ -48,28 +52,38 @@ public final class AppModel: ObservableObject {
     }
 
     /// What the window presents (`presented`): the pairing question when one waits (it takes the place of any other
-    /// sheet), else `sheet`.
+    /// sheet), else `sheet`, else the re-pairing follow-up.
     public enum Presented: Identifiable, Equatable {
         case pairing(PendingPairing)
         case sheet(Sheet)
+        case repaired(LabCenter.Repaired)
 
         public var id: String {
             switch self {
             case let .pairing(p): return "pairing-\(p.id)"
             case let .sheet(s): return s.rawValue
+            case .repaired: return "repaired"
             }
         }
     }
 
-    /// Setting it to nil (SwiftUI does when a sheet is dismissed) closes `sheet`; the pairing question is answered
-    /// only with its buttons (`confirmPairing`, `cancelPairing`).
+    /// Setting it to nil (SwiftUI does when a sheet is dismissed) closes `sheet`, or puts the re-pairing follow-up
+    /// aside (Settings › Lab keeps showing it until OK); the pairing question is answered only with its buttons
+    /// (`confirmPairing`, `cancelPairing`).
     public var presented: Presented? {
         get {
             if let pendingPairing { return .pairing(pendingPairing) }
-            return sheet.map { .sheet($0) }
+            if let sheet { return .sheet(sheet) }
+            if presentsRepaired, let r = lab.repaired { return .repaired(r) }
+            return nil
         }
         set {
-            if newValue == nil { sheet = nil }
+            guard newValue == nil else { return }
+            if sheet != nil {
+                sheet = nil
+            } else if pendingPairing == nil {
+                presentsRepaired = false
+            }
         }
     }
 
@@ -96,9 +110,14 @@ public final class AppModel: ObservableObject {
     /// Comfort writes on their way to storage: until they land, a read does not put the old value back.
     private var comfortWrites = 0
 
-    public init(store: SharedStore = .shared, arguments: [String] = ProcessInfo.processInfo.arguments) {
+    /// `lab`: the Lab model to use (tests give one whose `LabCenter` has a stub network), else one on `store`.
+    public init(store: SharedStore = .shared, lab: LabModel? = nil, arguments: [String] = ProcessInfo.processInfo.arguments) {
         self.store = store
-        lab = LabModel(store: store, arguments: arguments)
+        if let lab {
+            self.lab = lab
+        } else {
+            self.lab = LabModel(store: store, arguments: arguments)
+        }
         storage = store.state // in memory: no storage access
         // The test hook `-DLSComfort 0|1` (LAB-PLAN 1.7) applies before the first render, and is saved off the main thread.
         if let on = Comfort.launchValue(arguments) { setComfort(on) }
@@ -265,15 +284,43 @@ public final class AppModel: ObservableObject {
     }
 
     private func apply(_ p: Pairing, notice: String?) async {
-        await change { _ = await $0.pair(p) }
+        let lock = await changePairing(p)
         show(notice ?? "Paired with \(p.displayName).")
+        if lock.known {
+            // The old pairing's Daylight server was locked (or tried): the follow-up shows the locked text with the new
+            // Server code and the re-run help (DESIGN 12.7), while Lab is on.
+            await lab.reloadNow()
+            presentsRepaired = lab.repaired != nil
+        }
         await refresh()
     }
 
-    /// Unpairs (the outbox goes too) and closes Settings, where Unpair is: there is nothing left to set.
+    /// Every pairing change goes through `LabCenter.pair` (LAB-PLAN 2.6 "Re-pairing"): with another secret, a Daylight
+    /// server that knows the old pairing is locked first, Lab on or off. Off the main thread, once storage is settled.
+    private func changePairing(_ p: Pairing) async -> LabCenter.RepairLock {
+        let center = lab.center
+        await store.ready()
+        let lock = await Self.offMain { await center.pair(p) }
+        await reloadNow()
+        return lock
+    }
+
+    /// OK on the re-pairing follow-up: it closes and is not shown again (until another re-pairing).
+    public func dismissRepaired() {
+        presentsRepaired = false
+        lab.dismissRepaired()
+    }
+
+    /// Unpairs (the outbox goes too; a typed Server address is forgotten, `LabCenter.unpair`) and closes Settings, where
+    /// Unpair is: there is nothing left to set.
     public func unpair() {
         sheet = nil
-        Task { await change { await $0.unpair() } }
+        presentsRepaired = false
+        let center = lab.center
+        Task {
+            await change { _ in await center.unpair() }
+            await lab.reloadNow()
+        }
     }
 
     public func setDeviceName(_ name: String) {
@@ -298,7 +345,7 @@ public final class AppModel: ObservableObject {
             p.relay = try ShareText.normalizeRelay(relay)
             let changed = p
             Task {
-                await change { _ = await $0.pair(changed) }
+                _ = await changePairing(changed)
                 await refresh()
             }
             return nil
@@ -469,7 +516,7 @@ public final class AppModel: ObservableObject {
         if let link = value("-DLSPairLink") {
             do {
                 let p = try Pairing.parse(link)
-                await change { _ = await $0.pair(p) }
+                _ = await changePairing(p)
             } catch {
                 show((error as? ShareError)?.message ?? error.localizedDescription, error: true)
             }

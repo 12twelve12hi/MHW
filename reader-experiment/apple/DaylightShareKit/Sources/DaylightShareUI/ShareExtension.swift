@@ -268,6 +268,9 @@ public final class ShareExtensionModel: ObservableObject {
     public var onCancel: () -> Void = {}
 
     let store: SharedStore
+    /// How a pairing with another secret reaches the old pairing's Daylight server to lock it (`LabCenter.pair`); tests
+    /// give a stub.
+    var fetch: DaylightServer.Fetch = DaylightServer.urlSessionFetch
     private var payloads: [SharePayload] = []
     private var started = false
     /// The pairing the confirmation is about, and whether the shared items are sent once it is applied.
@@ -414,8 +417,10 @@ public final class ShareExtensionModel: ObservableObject {
     }
 
     private func apply(_ p: Pairing, notice: String?, thenSend: Bool) async {
-        let store = self.store
-        _ = await AppModel.offMain { await store.pair(p) }
+        // Another Daylight: a Daylight server that knows the old pairing is locked first, Lab on or off (LAB-PLAN 2.6).
+        // The app shows the re-pairing follow-up (Settings › Lab) when they share storage.
+        let center = LabCenter(store: store, fetch: fetch)
+        _ = await AppModel.offMain { await center.pair(p) }
         daylightName = p.displayName
         if thenSend {
             await send()

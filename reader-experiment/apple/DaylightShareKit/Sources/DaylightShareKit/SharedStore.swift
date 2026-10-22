@@ -193,18 +193,35 @@ public final class SharedStore: @unchecked Sendable {
         DispatchQueue.main.async { NotificationCenter.default.post(name: .daylightShareChanged, object: nil) }
     }
 
-    /// A pairing this process made without the App Group (an earlier ad-hoc build, say) moves into the group when the
-    /// group has none, with the device name and the outbox that belong to it.
+    /// This device's settings that move into the App Group when the group has none of its own (an update keeps them,
+    /// LAB-PLAN 1.2, 1.3): Comfort, the Lab switch and the one-time Lab note.
+    static let deviceSettingKeys = [Key.comfort, Key.lab, Key.labNoteShown]
+    /// The files beside the outbox that belong to its pairing: the outbox and its bodies, Lab's ledger (`lab.json`, whose
+    /// item states go with the outbox's ack cursor) and the Daylight server's pin, config and notices (`server.json`).
+    static let pairingFiles = ["outbox.json", "outbox", LabLedger.fileName, FileServerStore.fileName]
+
+    /// What this process kept without the App Group (an earlier ad-hoc build, say: the ad-hoc Mac app updated to the
+    /// Developer ID one) moves into the group. This device's settings (`deviceSettingKeys`) move when the group has no
+    /// value of its own. A pairing moves when the group has none, with everything that belongs to it: the device name,
+    /// the re-pairing follow-up and `pairingFiles`. Moved, not copied: unpairing in the group later must not bring it
+    /// back.
     static func migrate(from old: Storage, to new: Storage) {
+        for key in deviceSettingKeys {
+            guard new.defaults.object(forKey: key) == nil, let value = old.defaults.object(forKey: key) else { continue }
+            new.defaults.set(value, forKey: key)
+            old.defaults.removeObject(forKey: key)
+        }
         guard new.defaults.data(forKey: Key.pairing) == nil, let pairing = old.defaults.data(forKey: Key.pairing) else {
             return
         }
         new.defaults.set(pairing, forKey: Key.pairing)
-        if let name = old.defaults.string(forKey: Key.deviceName), new.defaults.string(forKey: Key.deviceName) == nil {
-            new.defaults.set(name, forKey: Key.deviceName)
+        for key in [Key.deviceName, Key.labRepaired] {
+            if let value = old.defaults.object(forKey: key), new.defaults.object(forKey: key) == nil {
+                new.defaults.set(value, forKey: key)
+            }
         }
         let fm = FileManager.default
-        for name in ["outbox.json", "outbox"] {
+        for name in pairingFiles {
             let source = old.directory.appendingPathComponent(name)
             guard fm.fileExists(atPath: source.path) else { continue }
             let target = new.directory.appendingPathComponent(name)
@@ -213,6 +230,7 @@ public final class SharedStore: @unchecked Sendable {
         }
         old.defaults.removeObject(forKey: Key.pairing)
         old.defaults.removeObject(forKey: Key.deviceName)
+        old.defaults.removeObject(forKey: Key.labRepaired)
     }
 
     private func locked<T>(_ body: () -> T) -> T {
@@ -236,6 +254,8 @@ public final class SharedStore: @unchecked Sendable {
         static let lab = "dls.lab"
         /// Whether the one-time Lab note was dismissed (LAB-PLAN 1.2, 1.6; shown only in builds with F01 or F04).
         static let labNoteShown = "dls.labNoteShown"
+        /// When this device re-paired while it knew a Daylight server (ms): the re-pairing follow-up (LAB-PLAN 2.6).
+        static let labRepaired = "dls.labRepaired"
     }
 
     /// The stored pairing. Reads and writes UserDefaults: off the main thread (see `StorageAudit`).
@@ -313,6 +333,26 @@ public final class SharedStore: @unchecked Sendable {
         set {
             StorageAudit.note("lab note write")
             defaults.set(newValue, forKey: Key.labNoteShown)
+            SharedStore.postChange()
+        }
+    }
+
+    /// When this device re-paired with another Daylight while it knew a Daylight server, which it locked first
+    /// (LAB-PLAN 2.6, DESIGN 12.7): the time (ms), kept until OK on the follow-up or a ready server
+    /// (`LabCenter.repaired()`); nil otherwise. A pairing with another secret, and Unpair, remove it.
+    public var labRepairedAt: Int64? {
+        get {
+            StorageAudit.note("lab repaired read")
+            let ms = defaults.double(forKey: Key.labRepaired)
+            return ms > 0 ? Int64(ms) : nil
+        }
+        set {
+            StorageAudit.note("lab repaired write")
+            if let newValue, newValue > 0 {
+                defaults.set(Double(newValue), forKey: Key.labRepaired)
+            } else {
+                defaults.removeObject(forKey: Key.labRepaired)
+            }
             SharedStore.postChange()
         }
     }
