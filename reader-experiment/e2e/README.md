@@ -84,7 +84,8 @@ At the end, besides Wave 0's checks: every item from the Android phone was hande
 frames stay within its daily cap (`LAB_FRAMES_PER_DAY`, 30: past it, states would wait for the digest); and every
 message the run published stays within ntfy.sh's daily messages for one address (250), since the phones, the Android
 phone and the Inbox publish from one machine, as a household does. Before Wave 1 a run used 15 Lab frames and 60
-messages.
+messages; with Wave 1 it uses 24 Lab frames and 87 messages (run 64), so a later step that adds states has room for
+about six more Lab frames.
 
 When the shade does not show what to tap, the step says so in the log ("note: … not found in the shade") and does the
 same through the debug hook, so the state checks still run: Add to Reader is the root tap
