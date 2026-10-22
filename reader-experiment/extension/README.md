@@ -130,10 +130,15 @@ While Lab is on, two rows under the switch open the page `lab.html` in a tab:
   button that fixes it from here (**Copy Server code**, or **Allow** for the server's site) and **OK**. Screen readers
   hear it. A ready server answers "comes to this app in a later Lab update" until the feature is built here.
 - **Daylight server ›** (*Optional · Not set up*): where setup happens. It shows the server's state in full (with the
-  exact GitHub secret names), the server's address and fingerprint, the **Server code** with **Copy** (the
-  `daylightserver://` link form when the pairing's relay isn't ntfy.sh), when the Daylight last said hello to the
-  server, today's AI spend, **Set up with a link**, the optional **Server address** field and how to re-run the
-  deploy. See [`../server/README.md`](../server/README.md) to turn the server on.
+  exact GitHub secret names); while the server isn't set up, **Turn it on** with the five steps, numbered (the last of
+  them points to the server's README for every click); **Your server**, the server's host (with its port) and
+  fingerprint; **Delivery** (*Through Lab on your Daylight, end-to-end encrypted*, or *Through your pairing (v1
+  delivery)* followed by the v1 notice); the **Server code** with **Copy** (the `daylightserver://` link form when the
+  pairing's relay isn't ntfy.sh); when the Daylight last said hello to the server; today's AI spend; **Set up with a
+  link**; the optional **Server address** field (placeholder `https://`, **Save**, and the footer saying when it is
+  needed); and how to re-run the deploy. Every word is `LAB_TEXT.serverSection`'s (LAB-PLAN 2.6, "The rest of the
+  server section's copy") or the server module's. See [`../server/README.md`](../server/README.md) to turn the server
+  on.
   - **Set up with a link** takes the one-time setup link the deploy makes (`https://daylight-….workers.dev/setup#SETUP-…`;
     server DESIGN 3.5). It comes right after the state while that state says to paste one (not set up, the previous
     pairing, locked, or not recognised), else last. The link is read here first: anything else (the Server code, the
@@ -162,10 +167,9 @@ answers).
 The Safari extension inside the iPhone and Mac apps gets Lab only once the iPhone and Mac apps have this wave's Lab
 (below, *Lab release gate*); until then it is the plain extension, with no Lab switch.
 
-**Not there yet** (strings the shared copy, `LAB_TEXT`, doesn't have; reported to the share lane): the setup steps in
-brief; labels for the delivery mode and for the host and fingerprint line; and keys for the Server address field's
-**Save** button and `https://` placeholder, which use the popup's own words until then. The server-moved question uses
-the setup confirmation's **Use it** and **Cancel**, which answer it word for word.
+**Copy.** Every Lab word is `LAB_TEXT`'s: since Oct 22 the shared copy has the server section's steps, labels, delivery
+lines and Server address field (`LAB_TEXT.serverSection`), so nothing in the section uses the popup's own words any
+more. The server-moved question uses the setup confirmation's **Use it** and **Cancel**, which answer it word for word.
 
 ## Privacy
 

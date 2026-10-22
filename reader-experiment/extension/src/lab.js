@@ -32,7 +32,7 @@ import {
   DaylightServer, localMessage, stateFromStatus, showFingerprint, noticeText, parseSetupLink, RERUN_HELP,
   SERVER_API, SERVER_API_MIN, STATUS_REFRESH_MS,
 } from './daylight-server.js';
-import { originPattern, hostOf } from './logic.js';
+import { originPattern } from './logic.js';
 
 /** The one-time note (1.2) needs F01 or F04 in this build: from X1 (W1) on. W0 shows none. */
 export const LAB_NOTE_ENABLED = false;
@@ -348,8 +348,9 @@ export function createLab({
 
   /**
    * The Daylight server section (2.6): where setup happens, so it carries the long texts.
-   * -> {lab, paired, state, message, button, origins, host, fingerprint, delivery, v1Notice, moved, movedOrigins,
-   *     serverCode, labInbox, aiToday, manualUrl, setupFirst, rerun}
+   * -> {lab, paired, state, message, button, origins, host (the server's origin, '' while none is found), fingerprint,
+   *     delivery ('lab' | 'v1' | null), v1Notice, moved, movedOrigins, serverCode, labInbox, aiToday, manualUrl,
+   *     setupFirst, rerun}
    * moved: "Your Daylight server moved to {host}. Use it?" while the server moved (2.6), with movedOrigins, the host
    * permission the page asks for on Use it; else null.
    */
@@ -375,7 +376,9 @@ export function createLab({
       message: p.state === 'ready' ? LAB_TEXT.ready : (p.message ?? localMessage(p.state)),
       // The section has its own Copy for the Server code; only site access gets the state's button here (Allow).
       button: p.state === 'needs-site-access' ? LAB_TEXT.buttons[p.state] : null, origins: p.origins ?? null,
-      host: config ? hostOf(config.server) || config.server : '',
+      // The server's origin: the section's "Your server" line is hostLineText(host, fingerprint) (2.6), which keeps a
+      // port, as serverMovedText does.
+      host: config?.server ?? '',
       fingerprint: showFingerprint((await server.values()).fingerprint),
       delivery: config?.delivery ?? null,
       v1Notice: config?.delivery === 'v1' ? noticeText('v1') : null,

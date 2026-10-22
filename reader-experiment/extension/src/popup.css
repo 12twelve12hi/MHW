@@ -220,6 +220,11 @@ input.switch:checked::before { left: calc(100% - 1.23em); background: var(--btn-
 .lab-server-state { margin: 4px 0 10px; }
 .lab-server-ready { margin: 0; font-weight: 600; }
 .lab-server-where { margin: 0 0 8px; color: var(--muted); overflow-wrap: anywhere; }
+.lab-server-delivery { margin: 0 0 8px; overflow-wrap: anywhere; }
+.lab-server-steps-list { margin: 0 0 6px; padding-left: 1.4em; }
+.lab-server-steps-list li { margin: 0 0 4px; overflow-wrap: anywhere; }
+.lab-server-steps-more { margin: 0 0 8px; overflow-wrap: anywhere; }
+.lab-server-address-footer { margin: 4px 0 0; overflow-wrap: anywhere; }
 .lab-server-h { margin: 14px 0 4px; font-size: .8667em; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
 .lab-server-code { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .02em; overflow-wrap: anywhere; }
 .lab-server-copy { width: auto; }

@@ -321,7 +321,8 @@ test('the server section: the vector pairing’s Server code and fingerprint (F0
     assert.equal(bad.error, 'That isn’t a server address (https://…).');
     assert.equal((await s.useWorker()).manualUrl, s.worker.url);
     v = await s.msg({ type: 'labServer' });
-    assert.deepEqual([v.state, v.message, v.host, v.manualUrl], ['ready', 'Ready', 'localhost', s.worker.url]);
+    assert.deepEqual([v.state, v.message, v.host, v.manualUrl], ['ready', 'Ready', s.worker.url, s.worker.url]);
+    assert.equal(v.delivery, 'lab');
     assert.equal(v.labInbox, 'Lab Inbox last seen 5 min ago');
     assert.equal(v.aiToday, 'AI today: US$0.23 of US$3');
     assert.equal(v.v1Notice, null);
@@ -340,7 +341,9 @@ test('the server section with a v1-delivery server found on the relay: its host 
     // Without its host permission: needs-site-access, with the origin to ask for.
     let v = await s.msg({ type: 'labServer' });
     assert.deepEqual([v.state, v.button, v.origins], ['needs-site-access', 'Allow', [`${origin}/*`]]);
-    assert.equal(v.host, 'daylight-0123456789ab.example.workers.dev');
+    assert.equal(v.host, origin);
+    assert.equal(L.hostLineText(v.host, v.fingerprint), `daylight-0123456789ab.example.workers.dev · ${v.fingerprint}`);
+    assert.equal(v.delivery, 'v1');
     assert.equal(v.v1Notice, S.noticeText('v1'));
     assert.deepEqual(await s.storage('server/pin'), { origin, fingerprint: values.fingerprint }, 'the module pinned it');
   } finally { await s.close(); }
@@ -386,7 +389,7 @@ test('Set up with a link (2.6, DESIGN 3.5): read here first, sent only on Use it
     assert.deepEqual(r, { done: L.LAB_TEXT.serverSection.setupDone });
     assert.deepEqual(await s.storage('server/pin'), { origin, fingerprint: values.fingerprint });
     v = await s.msg({ type: 'labServer' });
-    assert.deepEqual([v.state, v.host, v.setupFirst], ['ready', 'daylight-0123456789ab.example.workers.dev', false]);
+    assert.deepEqual([v.state, v.host, v.setupFirst], ['ready', origin, false]);
   } finally { await s.close(); }
 });
 
@@ -405,7 +408,7 @@ test('the server moved (2.6): the section asks “moved to {host}. Use it?”, a
     await s.fb.api.storage.local.set({ 'server/pin': { origin: old, fingerprint: values.fingerprint } });
     await new ds.RelayClient({ relay: s.relay.url }).publish(values.configTopic, await S.buildConfigFrame(values, { server: moved }));
     let v = await s.msg({ type: 'labServer' });
-    assert.deepEqual([v.state, v.host], ['OFFLINE', 'daylight-aaaaaaaaaaaa.example.workers.dev'], 'still on the old pin');
+    assert.deepEqual([v.state, v.host], ['OFFLINE', old], 'still on the old pin');
     assert.equal(v.moved, 'Your Daylight server moved to daylight-bbbbbbbbbbbb.example.workers.dev. Use it?');
     assert.equal(v.moved, L.serverMovedText(moved));
     assert.deepEqual(v.movedOrigins, [`${moved}/*`]);
@@ -420,7 +423,7 @@ test('the server moved (2.6): the section asks “moved to {host}. Use it?”, a
     assert.deepEqual(await s.storage('server/pin'), { origin: moved, fingerprint: values.fingerprint });
     assert.equal(await s.storage('server/pendingMove'), undefined);
     v = await s.msg({ type: 'labServer' });
-    assert.deepEqual([v.state, v.host, v.moved, v.movedOrigins], ['ready', 'daylight-bbbbbbbbbbbb.example.workers.dev', null, null]);
+    assert.deepEqual([v.state, v.host, v.moved, v.movedOrigins], ['ready', moved, null, null]);
     assert.deepEqual(await s.msg({ type: 'labConfirmMove' }), { moved: false }, 'nothing left to confirm');
     // A typed Server address wins over discovery: no question then.
     await s.fb.api.storage.local.set({ 'server/pin': { origin: old, fingerprint: values.fingerprint } });
@@ -468,7 +471,7 @@ test('the server moved while a fresh config is cached: opening What’s in Lab o
       s.flags.route = { [old]: s.worker.url };
       await relay.publish(values.configTopic, await S.buildConfigFrame(values, { server: old, sent: new Date(Date.now() - 2 * MIN).toISOString() }));
       let v = await s.msg({ type: 'labServer' });
-      assert.deepEqual([v.state, v.host, v.moved], ['ready', 'daylight-aaaaaaaaaaaa.example.workers.dev', null]);
+      assert.deepEqual([v.state, v.host, v.moved], ['ready', old, null]);
       assert.equal((await s.storage('server/config')).server, old);
       assert.ok(Date.now() - (await s.storage('server/configAt')) < S.CONFIG_REFRESH_MS, 'the cached config is fresh');
 
@@ -488,7 +491,7 @@ test('the server moved while a fresh config is cached: opening What’s in Lab o
       assert.equal(polls(), p + 1, `${was}: the section read the config topic`);
       assert.equal(v.moved, L.serverMovedText(moved), `${was}: the section asks at once`);
       assert.deepEqual(v.movedOrigins, [`${moved}/*`]);
-      assert.equal(v.host, 'daylight-aaaaaaaaaaaa.example.workers.dev', 'still on the old pin until Use it');
+      assert.equal(v.host, old, 'still on the old pin until Use it');
       if (was === 'deleted') assert.deepEqual([v.state, v.message], ['error', S.errorMessage('SERVER_ERROR')]);
       else assert.equal(v.state, 'ready', 'a refused connection keeps the cached status (the module’s OFFLINE fallback)');
       assert.equal(s.worker.count('GET /v1/status'), statusAsked, 'nothing went to the new address before Use it');
@@ -496,7 +499,7 @@ test('the server moved while a fresh config is cached: opening What’s in Lab o
       s.fb.grant(`${moved}/*`);
       assert.deepEqual(await s.msg({ type: 'labConfirmMove' }), { moved: true });
       v = await s.msg({ type: 'labServer' });
-      assert.deepEqual([v.state, v.host, v.moved], ['ready', 'daylight-bbbbbbbbbbbb.example.workers.dev', null]);
+      assert.deepEqual([v.state, v.host, v.moved], ['ready', moved, null]);
     } finally { await s.close(); await gone.close(); }
   }
 });

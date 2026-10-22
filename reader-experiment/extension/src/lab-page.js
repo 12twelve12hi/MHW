@@ -148,7 +148,6 @@ async function renderServer(seq) {
       return r;
     },
     setupSaid: said ?? undefined,
-    saveLabel: 'Save',
     saveAddress: async (url) => {
       // The host permission for a typed server first, while the click still counts.
       if (url) {

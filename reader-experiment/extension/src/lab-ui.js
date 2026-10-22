@@ -7,7 +7,7 @@
 // .lab-inbox, .lab-features, .lab-feature, .lab-row, .lab-name, .lab-sentence, .lab-short, .lab-use (W1's Use switch),
 // .lab-group, .lab-group-state, .lab-server-*, .lab-repaired*.
 
-import { LAB_TEXT } from './daylight-lab.js';
+import { LAB_TEXT, hostLineText } from './daylight-lab.js';
 
 let uid = 0;
 const nextId = (p) => `${p}-${++uid}`;
@@ -357,13 +357,26 @@ function movedQuestion(model, on) {
   return ask;
 }
 
+/** A small heading of the server section ("Server code", "Your server", "Delivery"). -> the element (with an id). */
+function sectionHeading(text, prefix) {
+  const h = el('h3', 'lab-server-h', text);
+  h.id = nextId(prefix);
+  return h;
+}
+
 /**
  * The Daylight server section (2.6) into `box`. model: the background's server view {paired, state, message,
- * button, origins, host, fingerprint, v1Notice, moved, serverCode, labInbox, aiToday, manualUrl, setupFirst, rerun}.
+ * button, origins, host, fingerprint, delivery, v1Notice, moved, serverCode, labInbox, aiToday, manualUrl, setupFirst,
+ * rerun}. host: the server's origin (or its host); the line under "Your server" is hostLineText(host, fingerprint).
+ * delivery: 'lab' | 'v1' | null (no server found: no Delivery line).
  * on: {fix(button, note, model) for the state's one button (Allow), copy(code) -> Promise<boolean>,
- *      move(yes, model) for "moved … Use it?" (shown only with it), saveAddress(url) -> Promise<{error?}>, saveLabel,
- *      and setupForm's setupCheck, setup and setupSaid}. Set up with a link comes right after the state while the
- * state's message says to paste a setup link (model.setupFirst), else last; the move question comes next.
+ *      move(yes, model) for "moved … Use it?" (shown only with it), saveAddress(url) -> Promise<{error?}>,
+ *      and setupForm's setupCheck, setup and setupSaid}.
+ * Order (2.6): the state; Set up with a link, right here while the state's message says to paste a setup link
+ * (model.setupFirst), else last; while the state is needs-server, "Turn it on" with the five steps (numbered: how to
+ * get that link) and where to find every step; the move question; "Your server" with its host and fingerprint; "Delivery" (with the v1 notice under v1
+ * delivery); the Server code with Copy; the Lab Inbox and AI lines; the Server address field with its footer; the
+ * re-run help. Every word is LAB_TEXT.serverSection's, the server module's or the model's.
  */
 export function renderServerSection(box, model, on = {}) {
   const S = LAB_TEXT.serverSection;
@@ -385,13 +398,26 @@ export function renderServerSection(box, model, on = {}) {
   }
   const setup = on.setupCheck ? setupForm(on) : null;
   if (setup && model.setupFirst) box.append(setup);
+  if (model.state === 'needs-server') {
+    // "Turn it on" (2.6): the steps show only while the server is not set up; step 2 is the module's RERUN_HELP.
+    const steps = el('section', 'lab-server-steps');
+    const h = sectionHeading(S.stepsHeading, 'lab-steps-h');
+    steps.setAttribute('aria-labelledby', h.id);
+    const ol = el('ol', 'lab-server-steps-list');
+    for (const step of S.steps) ol.append(el('li', null, step));
+    steps.append(h, ol, el('p', 'hint small lab-server-steps-more', S.stepsMore));
+    box.append(steps);
+  }
   if (model.moved && on.move) box.append(movedQuestion(model, on));
-  const where = [model.host, model.fingerprint].filter(Boolean).join(' · ');
-  if (where) box.append(el('p', 'lab-server-where', where));
+  const where = hostLineText(model.host, model.fingerprint);
+  if (where) box.append(sectionHeading(S.hostLabel, 'lab-host-h'), el('p', 'lab-server-where', where));
+  if (model.delivery === 'lab' || model.delivery === 'v1') {
+    box.append(sectionHeading(S.deliveryLabel, 'lab-delivery-h'),
+      el('p', 'lab-server-delivery', model.delivery === 'v1' ? S.deliveryV1 : S.deliveryLab));
+  }
   if (model.v1Notice) box.append(el('p', 'note lab-server-v1', model.v1Notice));
 
-  const codeH = el('h3', 'lab-server-h', S.serverCode);
-  codeH.id = nextId('lab-code-h');
+  const codeH = sectionHeading(S.serverCode, 'lab-code-h');
   const code = el('p', 'lab-server-code', model.serverCode ?? '');
   code.id = nextId('lab-code');
   const copy = button(S.copy);
@@ -413,16 +439,18 @@ export function renderServerSection(box, model, on = {}) {
   const input = el('input');
   input.id = nextId('lab-address');
   label.htmlFor = input.id;
-  // 'https://' and 'Save' (the popup's name form's word) wait for LAB_TEXT keys, asked of the share lane.
-  Object.assign(input, { type: 'url', value: model.manualUrl ?? '', autocomplete: 'off', spellcheck: false, placeholder: 'https://' });
+  Object.assign(input, { type: 'url', value: model.manualUrl ?? '', autocomplete: 'off', spellcheck: false, placeholder: S.addressPlaceholder });
   input.setAttribute('inputmode', 'url');
-  const save = el('button', 'btn secondary', on.saveLabel ?? 'Save');
+  const footer = el('p', 'hint small lab-server-address-footer', S.addressFooter);
+  footer.id = nextId('lab-address-footer');
+  input.setAttribute('aria-describedby', footer.id);
+  const save = el('button', 'btn secondary', S.addressSave);
   save.type = 'submit';
   const row = el('div', 'row');
   row.append(input, save);
   const said = el('p', 'error lab-server-address-error');
   said.setAttribute('role', 'alert');
-  form.append(label, row, said);
+  form.append(label, row, footer, said);
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     said.textContent = '';
