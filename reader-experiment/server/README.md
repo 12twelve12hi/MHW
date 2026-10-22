@@ -27,17 +27,19 @@ Two GitHub secrets turn it on. Everything is done in the browser.
 | 2 | Cloudflare › My Profile › API Tokens › **Create Token** | Use the **Edit Cloudflare Workers** template and add **Account › D1 › Edit**. For email-in later, also add **Zone › Zone › Read**, **Zone › Email Routing Rules › Edit** and **Zone › DNS › Edit** for that domain now. Copy the token. |
 | 3 | GitHub › this repo › Settings › Secrets and variables › Actions › **New repository secret** | `CLOUDFLARE_API_TOKEN` = the token, and `CLOUDFLARE_ACCOUNT_ID` = the Account ID (Cloudflare › Workers & Pages, right-hand column). |
 | 4 | (optional) [console.anthropic.com](https://console.anthropic.com) | An API key for AI, ideally in a workspace with a monthly spend limit, as the secret `ANTHROPIC_API_KEY`. Without it the AI features say they need it. |
-| 5 | GitHub › Actions › **Reader experiment - Daylight server** | Open the latest run and choose **Re-run all jobs** (or push a change under `reader-experiment/server/`, or **Run workflow** once this file is on the default branch). |
+| 5 | GitHub › Actions › **Reader experiment - Daylight server** | Open the latest run and choose **Re-run all jobs**. GitHub offers that for 30 days after a run; if the latest run is older, push a change under `reader-experiment/server/`, or run `gh workflow run rx-server.yml --ref claude/sweet-goldberg-ej1nb0` (**Run workflow** appears once this file is on the default branch). |
 
 **What happens next.** The deploy job creates the D1 database, applies its migrations, uses R2 if your account has it,
 deploys the Worker, checks the live Worker (it answers, CORS works, requests without the right token are refused) and
 makes a one-time **setup link**. The job summary ends with **Next: …**:
 
 1. Read the setup link in Cloudflare: dashboard › Storage & Databases › D1 SQL Database › **daylight-server** ›
-   Console, run `SELECT link FROM setup;`. (Or, with Node.js: `npx wrangler d1 execute daylight-server --remote
-   --command "SELECT link FROM setup"`.) It is never shown in GitHub, whose logs are public.
+   Console, run `SELECT link FROM setup;`. (Or, with Node.js, in any folder: `npx wrangler d1 execute daylight-server
+   --remote --command "SELECT link FROM setup"`.) It is never shown in GitHub, whose logs are public.
 2. Paste it in the iPhone or Mac app: Lab settings › Daylight server › **Set up with a link**. The app gives the server
-   its Server code; your other devices and the Daylight then find the server by themselves.
+   its Server code; your other devices and the Daylight then find the server by themselves. The app takes only a link
+   to `https://daylight-<12 letters and digits>.<your subdomain>.workers.dev` and shows the address before it sends:
+   never paste a setup link someone sent you.
 
 **Check it worked.** Run the workflow again (Re-run all jobs): its summary says **Daylight server is live** with your
 Server code's fingerprint (e.g. `3f9a-1c2e`), which Lab settings › Daylight server shows too, and the state of each
@@ -48,8 +50,9 @@ feature. In the app, the server row says Ready.
 which the deploy refuses) and run the workflow again. When that secret is set it always wins.
 
 **After re-pairing** the app locks the old server; run the workflow again and paste the new setup link (if the summary
-still says the server is set up, run the workflow by hand with **New setup link**). With the secret, paste the new
-Server code into `DAYLIGHT_SERVER_CODE` instead.
+still says the server is set up, run the workflow by hand with **New setup link**; re-running that run later deploys
+the same server, it does not make another link). With the secret, paste the new Server code into
+`DAYLIGHT_SERVER_CODE` instead.
 
 Recommended: GitHub › Settings › Environments › `daylight-server` (created by the first run): limit deployment
 branches to `claude/sweet-goldberg-ej1nb0` and move the secrets there.
@@ -67,10 +70,12 @@ Optional settings:
 | `DAYLIGHT_DELIVERY=v1` (variable) + `DAYLIGHT_PAIRING` (secret) | Opt-in: server-made items reach a v1 Daylight Inbox before the Lab Inbox exists. The server then holds your pairing code, so whoever controls your Cloudflare or GitHub account can read everything sent to this Daylight. Without the variable, `DAYLIGHT_PAIRING` is never uploaded. |
 | R2 (Cloudflare dashboard) | Turn it on (it asks for a card; the free tier is not charged) for large files, email-in and PDF AI. |
 
-After changing any of them: open the latest run and choose **Re-run all jobs**. A manual run (**Run workflow**, or
+After changing any of them: open the latest run and choose **Re-run all jobs** (any re-run deploys; older than 30
+days, use a push or `gh workflow run` as in step 5). A manual run (**Run workflow**, or
 `gh workflow run rx-server.yml --ref claude/sweet-goldberg-ej1nb0 -f new_setup_link=true`) has two boxes: **deploy**
 (off: only build and test) and **new setup link** (a link that may have leaked, or a re-pairing whose lock did not reach
-the server; the server moves to a new address).
+the server; the server moves to a new address). A manual run is a one-off: its boxes apply to its first attempt only, and
+Re-run all jobs of it always deploys and never makes another link.
 
 ## What the apps show
 

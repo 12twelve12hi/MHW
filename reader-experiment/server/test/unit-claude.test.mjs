@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import Anthropic from '@anthropic-ai/sdk';
 import { buildParams, countParams, inputChars, makeClient, mapClaudeError, readResponse, costMicros, reserveMicros, attemptMicros, writesCache, SUMMARY_SCHEMA, MODEL, FALLBACK_BETA, SYSTEM } from '../src/claude.ts';
 import { mockClaude, messageBody, apiError } from './mock-claude.mjs';
+import { LIMITS } from '../src/env.ts';
 
 const BASE = 'https://claude.test';
 const input = (op, extra = {}) => ({ op, mode: 'both', length: 'medium', lang: 'auto', ...extra });
@@ -177,6 +178,19 @@ test('a timeout keeps the reservation; a connection error too; the client never 
   assert.equal(mapClaudeError(err).error.code, 'AI_BUSY');
   assert.equal(mapClaudeError(err).reservation, 'kept');
   assert.equal(mapClaudeError(new Error('anything else')).error.code, 'SERVER_ERROR');
+});
+
+test('the Claude timeout is at least what the SDK itself allows a non-streamed call of max_tokens (9.4)', () => {
+  // The call is not streamed, so it answers only when the whole message is written, and with fallbacks a decline
+  // partway through is followed by the fallback model writing from the start. The SDK's own guard for a non-streamed
+  // max_tokens 16,000 call is 10 minutes; a shorter timeout cuts calls Claude is still billing for (AI_TIMEOUT).
+  const sdk = new Anthropic({ apiKey: 'k' });
+  const sdkTimeout = sdk.calculateNonstreamingTimeout(LIMITS.aiMaxTokens);
+  assert.equal(sdkTimeout, 600_000);
+  assert.ok(LIMITS.aiTimeoutMs >= sdkTimeout, `aiTimeoutMs ${LIMITS.aiTimeoutMs} < ${sdkTimeout}`);
+  assert.equal(buildParams(input('summary'), textDoc).max_tokens, LIMITS.aiMaxTokens);
+  // It still ends well inside the job lease (20 minutes) and a Cron run (15 minutes).
+  assert.ok(LIMITS.aiTimeoutMs <= 12 * 60_000);
 });
 
 test('countTokens goes to the beta count endpoint with the same model, system and messages', async () => {

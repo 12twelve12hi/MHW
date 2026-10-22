@@ -70,9 +70,12 @@ const fmtTime = (iso) => {
 export const ERROR_MESSAGES = {
   AI_KEY_INVALID: () => 'Claude didn’t accept the API key. Check ANTHROPIC_API_KEY in GitHub › Settings › Secrets, then re-run the deploy.',
   AI_BILLING: () => 'Your Anthropic account is out of credit. Add credit in the Claude Console to keep using AI.',
-  AI_DAILY_LIMIT: (x) => (Number(x.needUsd) > 0
-    ? `This request could cost up to ${fmtUsd(x.needUsd)} with Claude, more than today’s AI limit. Raise the limit in Lab settings (up to ${fmtUsd(x.ceilingUsd ?? 10)}).`
-    : `Today’s AI limit is used up. It resets at ${fmtTime(x.resetAt)}, or raise it in Lab settings (up to ${fmtUsd(x.ceilingUsd ?? 10)}).`),
+  AI_DAILY_LIMIT: (x) => (Number(x.limitRequests) >= 0 && x.limitRequests !== undefined && x.limitRequests !== null
+    // The request ceiling (9.3), set at deploy only: the dollar limit in Lab settings would not help.
+    ? `You’ve used today’s ${x.limitRequests} AI request${Number(x.limitRequests) === 1 ? '' : 's'} (the server’s daily limit). It resets at ${fmtTime(x.resetAt)}. To change the limit, set the repo variable DAYLIGHT_AI_MAX_REQ_DAY in GitHub › Settings › Secrets and variables › Actions › Variables, then re-run the deploy.`
+    : Number(x.needUsd) > 0
+      ? `This request could cost up to ${fmtUsd(x.needUsd)} with Claude, more than today’s AI limit. Raise the limit in Lab settings (up to ${fmtUsd(x.ceilingUsd ?? 10)}).`
+      : `Today’s AI limit is used up. It resets at ${fmtTime(x.resetAt)}, or raise it in Lab settings (up to ${fmtUsd(x.ceilingUsd ?? 10)}).`),
   AI_TOO_LARGE: (x) => `This is too long for one AI request (about ${Number(x.tokens ?? 0).toLocaleString('en-US')} tokens; the limit is ${Number(x.limit ?? 200000).toLocaleString('en-US')}).`,
   AI_QUEUE_FULL: () => 'Too many AI requests are waiting. Try again in a few minutes.',
   AI_REFUSED: () => 'Claude declined to work on this one.',
@@ -205,7 +208,7 @@ export class ServerError extends Error {
     this.name = 'ServerError';
     this.code = code;
     this.status = extra.status ?? 0;
-    for (const k of ['feature', 'missing', 'retryAfter', 'limit', 'resetAt', 'missingParts', 'tokens', 'estimateUsd', 'needUsd', 'reason']) {
+    for (const k of ['feature', 'missing', 'retryAfter', 'limit', 'resetAt', 'missingParts', 'tokens', 'estimateUsd', 'needUsd', 'limitRequests', 'reason']) {
       if (extra[k] !== undefined) this[k] = extra[k];
     }
   }
@@ -308,10 +311,19 @@ export const showFingerprint = (fp) => `${String(fp).slice(0, 4)}-${String(fp).s
 const SETUP_PATH = '/setup';
 async function setupCheck(secret) { return (await sha256(concat(label('server-setup-check'), secret)))[0]; }
 
+/**
+ * The only hosts a setup link may name: the deploy's Worker, daylight-<12 hex>.<account subdomain>.workers.dev. The app
+ * sends this pairing's Server code to that host, so a link to any other host (a look-alike sent by a stranger) is
+ * refused before anything is sent. Anyone can name a Worker like this on their own account, so this stops look-alikes,
+ * not a determined attacker: the app also shows the address before it sends (3.5). The ports apply the same rule.
+ */
+export const SETUP_HOST = /^daylight-[0-9a-f]{12}\.[a-z0-9-]+\.workers\.dev$/;
+const SETUP_HOST_TEXT = 'That link isn’t for a Daylight server: a setup link starts with https://daylight- and its address ends in .workers.dev. Copy it again: the deploy’s summary in GitHub › Actions says where to find it.';
+
 function setupOrigin(server) {
   const u = new URL(String(server));
-  const local = u.protocol === 'http:' && /^(localhost|127\.0\.0\.1)$/.test(u.hostname);
-  if ((u.protocol !== 'https:' && !local) || u.username || u.password) throw new ShareError('setup-link', 'A setup link starts with https://.', 'format');
+  if (u.protocol !== 'https:' || u.username || u.password) throw new ShareError('setup-link', SETUP_FORMAT, 'format');
+  if (u.port || !SETUP_HOST.test(u.hostname)) throw new ShareError('setup-link', SETUP_HOST_TEXT, 'host');
   return u.origin;
 }
 
@@ -329,7 +341,8 @@ const SETUP_FORMAT = 'A setup link starts with https://daylight- and ends with #
 
 /**
  * A setup link -> {server (origin), secret (16 bytes)}. Throws ShareError('setup-link') with a user-facing message and
- * a reason: 'format', 'checksum', 'server-code' (the Server code was pasted) or 'pairing-code'.
+ * a reason: 'format', 'host' (not a daylight-<12 hex>.<subdomain>.workers.dev address), 'checksum', 'server-code' (the
+ * Server code was pasted) or 'pairing-code'.
  */
 export async function parseSetupLink(input) {
   const s = String(input ?? '').trim();
@@ -346,7 +359,7 @@ export async function parseSetupLink(input) {
     throw new ShareError('setup-link', SETUP_FORMAT, 'format');
   }
   let server;
-  try { server = setupOrigin(u.href); } catch { throw new ShareError('setup-link', SETUP_FORMAT, 'format'); }
+  try { server = setupOrigin(u.href); } catch (e) { throw e?.reason === 'host' ? e : new ShareError('setup-link', SETUP_FORMAT, 'format'); }
   if (u.search || (u.pathname !== SETUP_PATH && u.pathname !== `${SETUP_PATH}/`)) throw new ShareError('setup-link', SETUP_FORMAT, 'format');
   let chars = decodeURIComponent(u.hash.slice(1)).toUpperCase().replace(/[\s\-_.]/g, '');
   if (!chars.startsWith('SETUP')) throw new ShareError('setup-link', SETUP_FORMAT, 'format');

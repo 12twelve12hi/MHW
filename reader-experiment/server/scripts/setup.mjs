@@ -8,12 +8,14 @@
 //
 // With WORKER_NAME set (the gate found DAYLIGHT_SERVER_CODE or, for v1 delivery, DAYLIGHT_PAIRING) it only finds the
 // workers.dev address. Without it, it reads the `setup` row in D1 and:
-//   - no row, or the server was locked when a device re-paired, or NEW_SETUP_LINK=true: a new Worker name and a new
-//     setup link (the old Worker is removed later in the job);
+//   - no row, or the server was locked when a device re-paired, or NEW_SETUP_LINK=true on a run's first attempt: a new
+//     Worker name and a new setup link (the old Worker is removed later in the job). A re-run replays the run's inputs,
+//     so "Re-run all jobs" of a manual "New setup link" run (how changed secrets are applied) never rotates again;
 //   - a link waiting to be used: the same link (its host refreshed);
 //   - a Server code an app sent with the link: that code, for the announce and email steps.
 //
-// Environment: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, D1_ID, WORKER_NAME (optional), NEW_SETUP_LINK, RUNNER_TEMP.
+// Environment: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, D1_ID, WORKER_NAME (optional), NEW_SETUP_LINK,
+// GITHUB_RUN_ATTEMPT (set by GitHub), RUNNER_TEMP.
 // Writes WORKER_NAME and SERVER_URL to $GITHUB_ENV; mode (code | setup), setup (none | pending | claimed), reason
 // (first | locked | requested | invalid) and fingerprint to $GITHUB_OUTPUT; $RUNNER_TEMP/dls-setup-token while a link
 // waits, $RUNNER_TEMP/dls-server-code once an app used it.
@@ -93,6 +95,9 @@ export async function writeSetup({ query, plan, origin, now = Date.now() }) {
   return { link, state: 'pending' };
 }
 
+/** NEW_SETUP_LINK counts on a run's first attempt only (GITHUB_RUN_ATTEMPT 1, or unset outside Actions). */
+export const wantsNewLink = (env) => env.NEW_SETUP_LINK === 'true' && (env.GITHUB_RUN_ATTEMPT ?? '1') === '1';
+
 /** Every form of a secret value worth masking. */
 function masks(values) {
   const out = new Set();
@@ -116,7 +121,7 @@ async function main() {
   let plan = null;
   if (!worker) {
     const query = cfD1({ account, database: env.D1_ID, token });
-    plan = await planSetup({ query, newLink: env.NEW_SETUP_LINK === 'true' });
+    plan = await planSetup({ query, newLink: wantsNewLink(env) });
     worker = plan.worker;
   }
   mask(worker, worker.slice('daylight-'.length));

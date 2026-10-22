@@ -213,6 +213,27 @@ test('POST /v1/setup: only with a waiting link for this Worker, the right token 
   } finally { await t.close(); }
 });
 
+test('an earlier Worker the deploy failed to delete never adopts the new Server code from the shared D1 (3.5, 12.7)', async () => {
+  const OLD = 'https://daylight-aaaaaaaaaaaa.example.workers.dev';
+  const t = await setup({ serverUrl: OLD, vars: { DAYLIGHT_SERVER_CODE: undefined } });
+  try {
+    const query = d1Query(t);
+    // The rotation made the Worker daylight-0123456789ab and its link, and an app used it: D1 holds this pairing's code.
+    await writeSetup({ query, plan: { worker: WORKER, secret: SECRET, rotate: true }, origin: ORIGIN, now: 1 });
+    await query('UPDATE setup SET code = ?1, claimed = 2, link = NULL WHERE id = 1', [t.serverCode]);
+    const st = await t.api('GET', '/v1/status');
+    assert.equal(st.status, 503, 'the old Worker stays unconfigured');
+    assert.equal(st.json.error.code, 'NOT_CONFIGURED');
+    await t.cron();
+    assert.equal(t.relay.messages(t.values.configTopic).length, 0, 'and never announces its own address on the config topic');
+    // The Worker the row names reads the code.
+    await t.restart({ SERVER_URL: ORIGIN });
+    const now = await t.api('GET', '/v1/status');
+    assert.equal(now.status, 200);
+    assert.equal(now.json.server, ORIGIN);
+  } finally { await t.close(); }
+});
+
 test('the deploy’s D1 query function speaks Cloudflare’s REST shape and says nothing secret on failure', async () => {
   const seen = [];
   const fetchFn = async (url, init) => {
@@ -360,5 +381,36 @@ test('the deploy steps as the workflow runs them: setup.mjs, secrets.mjs and der
     assert.equal(away.status, 0, away.stdout);
     assert.match(away.stdout, /::warning title=Daylight server not reachable yet::/);
     assert.match(fs.readFileSync(j3.GITHUB_STEP_SUMMARY, 'utf8'), /not reachable yet[\s\S]*Re-run all jobs/);
+  } finally { await cf.close(); await t.close(); }
+});
+
+test('Re-run all jobs of a manual “New setup link” run keeps the server and its Server code: only attempt 1 rotates (3.5)', async () => {
+  const t = await setup({ serverUrl: ORIGIN, vars: { DAYLIGHT_SERVER_CODE: undefined } });
+  const account = 'a'.repeat(32), token = 'cf-test-token';
+  const cf = await fakeCloudflare(t, { account, token });
+  try {
+    const query = d1Query(t);
+    await writeSetup({ query, plan: { worker: WORKER, secret: SECRET, rotate: true }, origin: ORIGIN, now: 1 });
+    await query('UPDATE setup SET code = ?1, claimed = 2, link = NULL WHERE id = 1', [t.serverCode]);
+    const step = async (attempt) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dls-job-'));
+      const f = { GITHUB_ENV: path.join(dir, 'env'), GITHUB_OUTPUT: path.join(dir, 'out') };
+      for (const p of Object.values(f)) fs.writeFileSync(p, '');
+      const r = await run(['scripts/setup.mjs'], {
+        RUNNER_TEMP: dir, ...f, CLOUDFLARE_API_TOKEN: token, CLOUDFLARE_ACCOUNT_ID: account, D1_ID: 'test-d1', DLS_TEST_CF_API: cf.api,
+        GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_RUN_ATTEMPT: String(attempt), NEW_SETUP_LINK: 'true',
+      });
+      assert.equal(r.status, 0, r.stdout);
+      return { env: readKv(f.GITHUB_ENV), out: readKv(f.GITHUB_OUTPUT) };
+    };
+    // A week later the user adds ANTHROPIC_API_KEY and, as told, re-runs the latest run: that manual run.
+    const rerun = await step(2);
+    assert.deepEqual({ ...rerun.out, fingerprint: undefined }, { mode: 'setup', setup: 'claimed', reason: '', fingerprint: undefined });
+    assert.equal(rerun.env.WORKER_NAME, WORKER, 'the same Worker');
+    assert.deepEqual(await query('SELECT worker, code FROM setup'), [{ worker: WORKER, code: t.serverCode }], 'the Server code is kept');
+    // The manual run's own first attempt is what makes the new link.
+    const first = await step(1);
+    assert.deepEqual(first.out, { mode: 'setup', setup: 'pending', reason: 'requested' });
+    assert.notEqual(first.env.WORKER_NAME, WORKER);
   } finally { await cf.close(); await t.close(); }
 });

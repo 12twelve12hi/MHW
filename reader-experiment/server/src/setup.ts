@@ -6,7 +6,7 @@ import { deriveServerValues, parseServerCode, SERVER_API } from '../client/dayli
 import type { Ctx } from './env.ts';
 import { ServerError, baseHeaders, json } from './errors.ts';
 import { failureLimited, rateLimited, readJson } from './auth.ts';
-import { forgetStoredServerCode, identity } from './keys.ts';
+import { forgetStoredServerCode, identity, setupRowIsMine } from './keys.ts';
 import { isLocked, loadSettings } from './settings.ts';
 import { publishConfig } from './config.ts';
 
@@ -53,10 +53,8 @@ export async function claimSetup(ctx: Ctx, req: Request): Promise<Response> {
     throw new ServerError(400, 'BAD_REQUEST', { message: (e as Error)?.message || 'That request isn’t valid (code).' });
   }
   const row = await ctx.db.first<{ worker: string; code: string | null }>('SELECT worker, code FROM setup WHERE id = 1');
-  let host = '';
-  try { host = new URL(env.SERVER_URL ?? '').hostname; } catch { host = ''; }
   // The link is for one Worker: a Worker the deploy has since replaced (and is about to delete) never takes it.
-  if (!row || !host.startsWith(`${row.worker}.`)) throw new ServerError(404, 'NOT_FOUND');
+  if (!row || !setupRowIsMine(env, row.worker)) throw new ServerError(404, 'NOT_FOUND');
   const s = await loadSettings(ctx);
   const held = async (c: string | null) => {
     if (!c) return false;

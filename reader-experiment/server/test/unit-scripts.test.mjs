@@ -3,7 +3,7 @@
 // rate-limit fallback.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -185,4 +185,277 @@ test('smoke: a live Worker that answers without the token, or without CORS, fail
   assert.equal((await smoke('https://w.example', { fetchFn: worker({ setup: 200 }), tries: 1 })).ok, false);
   const down = await smoke('https://w.example', { fetchFn: async () => { throw new TypeError('fetch failed'); }, tries: 3, sleep: async () => {} });
   assert.deepEqual([down.up, down.ok], [false, false]);
+});
+
+// ---- The deploy workflow's own steps, run as the deploy job runs them (bash -eo pipefail) with stub commands
+
+const WF = path.join(root, '..', '..', '.github', 'workflows', 'rx-server.yml');
+const workflow = () => fs.readFileSync(WF, 'utf8');
+
+/** The `run: |` script of the workflow step whose name starts with `name`. */
+function stepScript(name) {
+  const lines = workflow().split('\n');
+  const i = lines.findIndex((l) => l.trim().startsWith(`- name: ${name}`));
+  assert.ok(i >= 0, `no step ${name}`);
+  let j = i + 1;
+  while (!/^\s+run: \|$/.test(lines[j])) {
+    if (j > i + 1 && /^\s{6}- /.test(lines[j])) throw new Error(`no run block in ${name}`);
+    j++;
+  }
+  const indent = lines[j].match(/^\s*/)[0].length + 2;
+  const out = [];
+  for (let k = j + 1; k < lines.length; k++) {
+    if (lines[k].trim() && lines[k].match(/^\s*/)[0].length < indent) break;
+    out.push(lines[k].slice(indent));
+  }
+  return out.join('\n');
+}
+
+/** Runs a step's script with stub commands first on PATH. -> {status, stdout, dir} */
+function runStep(name, { env = {}, stubs = {}, cwd = root } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'step-'));
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  for (const [cmd, body] of Object.entries(stubs)) fs.writeFileSync(path.join(bin, cmd), `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 });
+  const summary = path.join(dir, 'summary');
+  fs.writeFileSync(summary, '');
+  const r = spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', '-c', stepScript(name)], {
+    cwd: cwd === 'tmp' ? dir : cwd, encoding: 'utf8',
+    env: { PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: dir, GITHUB_STEP_SUMMARY: summary, GITHUB_ENV: path.join(dir, 'env'), ...env },
+  });
+  return { status: r.status, stdout: r.stdout + r.stderr, dir, summary: fs.readFileSync(summary, 'utf8') };
+}
+
+/**
+ * GitHub's expression for the given context: the names below, ==, !=, >, &&, || and parentheses (enough for this
+ * workflow's `if:` and env expressions).
+ */
+function evalExpr(expr, ctx) {
+  const names = {
+    'needs.test.outputs.server_changed': 'changed', 'github.run_attempt': 'attempt', 'github.event_name': 'event',
+    'inputs.deploy': 'deploy', 'inputs.new_setup_link': 'newLink',
+  };
+  let js = expr.replace(/\$\{\{|\}\}/g, '');
+  for (const [k, v] of Object.entries(names)) js = js.split(k).join(`ctx.${v}`);
+  assert.ok(!/[a-z_]+\.[a-z_]+/i.test(js.replace(/ctx\.\w+/g, '')), `unknown name in ${expr}`);
+  return Boolean(new Function('ctx', `return (${js});`)(ctx));
+}
+
+test('deploy job: a push that changes the server, Re-run all jobs (of any run) and a manual run with deploy on', () => {
+  const m = /\n {2}deploy:\n[\s\S]*?\n {4}if: >-\n((?: {6}.*\n)+)/.exec(workflow());
+  const deploys = (ctx) => evalExpr(m[1].replace(/\s+/g, ' '), { changed: 'false', attempt: 1, event: 'push', deploy: null, newLink: null, ...ctx });
+  assert.equal(deploys({ changed: 'true' }), true);
+  assert.equal(deploys({}), false, 'tested, not deployed');
+  assert.equal(deploys({ attempt: 2 }), true, 'Re-run all jobs');
+  assert.equal(deploys({ event: 'workflow_dispatch', deploy: true }), true);
+  assert.equal(deploys({ event: 'workflow_dispatch', deploy: false }), false, 'deploy off: build and test only');
+  assert.equal(deploys({ event: 'workflow_dispatch', deploy: false, attempt: 2 }), true, 'Re-run all jobs applies changed secrets, whatever run it is');
+});
+
+test('New setup link counts on a manual run’s first attempt only: Re-run all jobs never moves the server again (3.5)', () => {
+  const line = workflow().split('\n').find((l) => /^\s+NEW_SETUP_LINK: /.test(l));
+  const expr = line.replace(/^\s+NEW_SETUP_LINK: /, '');
+  const asked = (ctx) => evalExpr(expr, { event: 'workflow_dispatch', attempt: 1, newLink: true, ...ctx });
+  assert.equal(asked({}), true);
+  assert.equal(asked({ attempt: 2 }), false);
+  assert.equal(asked({ newLink: false }), false);
+  assert.equal(asked({ event: 'push', newLink: null }), false);
+});
+
+test('without the Cloudflare secrets the notice gives every way to start the first deploy, not only a re-run', () => {
+  const r = runStep('Without the Cloudflare secrets');
+  assert.equal(r.status, 0, r.stdout);
+  const notice = r.stdout.split('\n').find((l) => l.startsWith('::notice'));
+  assert.match(notice, /Re-run all jobs/);
+  assert.match(notice, /30 days/, 'GitHub offers a re-run for 30 days after a run');
+  assert.match(notice, /gh workflow run rx-server\.yml --ref claude\/sweet-goldberg-ej1nb0/);
+  assert.match(notice, /push a change under reader-experiment\/server\//);
+  assert.match(r.summary, /gh workflow run rx-server\.yml/);
+  const loose = fs.readFileSync(path.join(root, '..', 'LOOSE-ENDS.md'), 'utf8');
+  const cf = loose.slice(loose.indexOf('## Deploy the Daylight server'), loose.indexOf('\n## ', loose.indexOf('## Deploy the Daylight server') + 5));
+  assert.match(cf, /30 days/);
+  assert.match(cf, /gh workflow run rx-server\.yml --ref claude\/sweet-goldberg-ej1nb0/);
+});
+
+test('removing earlier Workers: a failed listing or delete is a warning, never silence; this Worker is kept', () => {
+  const base = { WORKER_NAME: 'daylight-0123456789ab', CF_API: 'https://api.invalid/client/v4', CLOUDFLARE_API_TOKEN: 't', CLOUDFLARE_ACCOUNT_ID: 'a' };
+  const npxLog = 'echo "$*" >> "$RUNNER_TEMP/npx.log"';
+  const down = runStep('Remove the Workers of earlier', { env: base, stubs: { curl: 'exit 22', npx: npxLog } });
+  assert.equal(down.status, 0, down.stdout);
+  assert.match(down.stdout, /::warning[^\n]*earlier Daylight Worker/i, 'a listing that failed says so');
+  assert.ok(!fs.existsSync(path.join(down.dir, 'npx.log')));
+  const list = `echo '{"success":true,"result":[{"id":"daylight-0123456789ab"},{"id":"daylight-aaaaaaaaaaaa"},{"id":"other"}]}'`;
+  const ok = runStep('Remove the Workers of earlier', { env: base, stubs: { curl: list, npx: npxLog } });
+  assert.equal(ok.status, 0, ok.stdout);
+  assert.equal(fs.readFileSync(path.join(ok.dir, 'npx.log'), 'utf8'), 'wrangler delete --name daylight-aaaaaaaaaaaa --force\n');
+  assert.doesNotMatch(ok.stdout, /::warning/);
+  const stuck = runStep('Remove the Workers of earlier', { env: base, stubs: { curl: list, npx: 'exit 1' } });
+  assert.equal(stuck.status, 0);
+  assert.match(stuck.stdout, /::warning[^\n]*earlier Daylight Worker/i);
+});
+
+test('the D1 step writes wrangler.deploy.toml with the database id, which the committed wrangler.toml leaves out', () => {
+  const id = '11111111-2222-3333-4444-555555555555';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'd1-'));
+  fs.copyFileSync(path.join(root, 'wrangler.toml'), path.join(dir, 'wrangler.toml'));
+  const npx = `case "$*" in
+  "wrangler d1 list --json") echo '[{"name":"other","uuid":"x"},{"name":"daylight-server","uuid":"${id}"}]' ;;
+  "wrangler d1 migrations apply daylight-server --remote -c wrangler.deploy.toml") echo applied >> "$RUNNER_TEMP/npx.log" ;;
+  *) echo "unexpected: $*" >&2; exit 1 ;;
+esac`;
+  const r = runStep('D1 database', { cwd: dir, stubs: { npx } });
+  assert.equal(r.status, 0, r.stdout);
+  const toml = fs.readFileSync(path.join(dir, 'wrangler.deploy.toml'), 'utf8');
+  const d1 = toml.slice(toml.indexOf('[[d1_databases]]'), toml.indexOf('\n[', toml.indexOf('[[d1_databases]]') + 5));
+  assert.match(d1, new RegExp(`^database_id = "${id}"$`, 'm'));
+  assert.match(d1, /^database_name = "daylight-server"$/m);
+  assert.equal((toml.match(/^database_id/gm) ?? []).length, 1);
+  assert.doesNotMatch(fs.readFileSync(path.join(root, 'wrangler.toml'), 'utf8'), /^database_id/m,
+    'no placeholder id: wrangler would send `d1 execute daylight-server` in this folder to it instead of looking the name up');
+});
+
+test('the documented command for reading the setup link works in the server folder (it looks the database up by name)', async () => {
+  const { SETUP_STEPS } = await import('../scripts/derive.mjs');
+  const cmd = /`(npx wrangler d1 execute daylight-server --remote --command "SELECT link FROM setup")`/.exec(SETUP_STEPS('first').join('\n'))?.[1];
+  assert.ok(cmd, 'the summary gives the command');
+  const calls = [];
+  const http = await import('node:http');
+  const uuid = '11111111-2222-3333-4444-555555555555';
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      calls.push(`${req.method} ${req.url.split('?')[0]}`);
+      res.setHeader('Content-Type', 'application/json');
+      const ok = (result) => res.end(JSON.stringify({ success: true, errors: [], messages: [], result }));
+      if (req.url.startsWith('/client/v4/accounts/acct/d1/database/daylight-server')) return ok({ uuid, name: 'daylight-server' });
+      if (req.url === `/client/v4/accounts/acct/d1/database/${uuid}/query`) return ok([{ results: [{ link: 'https://daylight-0123456789ab.x.workers.dev/setup#SETUP-TEST' }], success: true, meta: {} }]);
+      res.statusCode = 404;
+      res.end(JSON.stringify({ success: false, errors: [{ code: 7404, message: 'not found' }], messages: [], result: null }));
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'home-'));
+    const out = await new Promise((resolve) => {
+      const child = spawn('bash', ['-c', cmd], {
+        cwd: root,
+        env: {
+          PATH: process.env.PATH, HOME: home, CI: 'true', WRANGLER_SEND_METRICS: 'false', NO_UPDATE_NOTIFIER: '1',
+          CLOUDFLARE_API_BASE_URL: `http://127.0.0.1:${server.address().port}/client/v4`, CLOUDFLARE_API_TOKEN: 'tok', CLOUDFLARE_ACCOUNT_ID: 'acct',
+        },
+      });
+      let text = '';
+      child.stdout.on('data', (d) => { text += d; });
+      child.stderr.on('data', (d) => { text += d; });
+      child.on('close', (status) => resolve({ status, text }));
+    });
+    assert.equal(out.status, 0, out.text);
+    assert.deepEqual(calls, ['GET /client/v4/accounts/acct/d1/database/daylight-server', `POST /client/v4/accounts/acct/d1/database/${uuid}/query`]);
+    assert.match(out.text, /SETUP-TEST/);
+  } finally { await new Promise((r) => server.close(r)); }
+});
+
+test('secrets.mjs remove: deletes what the Worker has, retries, warns, and fails when DAYLIGHT_PAIRING may stay (3.1, 12.3)', async () => {
+  const { removeSecrets } = await import('../scripts/secrets.mjs');
+  assert.equal(typeof removeSecrets, 'function');
+  const names = ['ANTHROPIC_API_KEY', 'DAYLIGHT_PAIRING', 'NTFY_TOKEN', 'DAYLIGHT_SETUP_TOKEN'];
+  const worker = (script) => {
+    const calls = [];
+    return { calls, wrangler: async (args) => { calls.push(args.join(' ')); return script(args, calls); } };
+  };
+  const listed = (...n) => ({ status: 0, stdout: JSON.stringify(n.map((name) => ({ name, type: 'secret_text' }))) });
+  const run = async (w) => {
+    const said = [];
+    const r = await removeSecrets(names, { wrangler: w.wrangler, say: (l) => said.push(l), sleep: async () => {} });
+    return { ...r, said: said.join('\n') };
+  };
+  // The user withdrew v1 delivery: DAYLIGHT_PAIRING is on the Worker and goes; names it lacks are not touched.
+  const ok = worker((a) => (a[0] === 'secret' && a[1] === 'list' ? listed('DAYLIGHT_PAIRING', 'OTHER') : { status: 0, stdout: '' }));
+  const r1 = await run(ok);
+  assert.deepEqual([r1.ok, r1.removed, r1.failed], [true, ['DAYLIGHT_PAIRING'], []]);
+  assert.deepEqual(ok.calls, ['secret list --format json', 'secret delete DAYLIGHT_PAIRING']);
+  assert.doesNotMatch(r1.said, /::(warning|error)/);
+  // A transient 429 on the list: retried, not taken as "nothing to delete".
+  const flaky = worker((a, calls) => (a[1] === 'list' ? (calls.length < 3 ? { status: 1, stdout: '' } : listed('DAYLIGHT_PAIRING')) : { status: 0, stdout: '' }));
+  const r2 = await run(flaky);
+  assert.deepEqual([r2.ok, r2.removed], [true, ['DAYLIGHT_PAIRING']]);
+  // A list that keeps failing: DAYLIGHT_PAIRING may still be there, so the step fails, saying so.
+  const down = worker(() => ({ status: 1, stdout: '' }));
+  const r3 = await run(down);
+  assert.equal(r3.ok, false);
+  assert.match(r3.said, /^::error title=Worker secrets::[^\n]*DAYLIGHT_PAIRING/m);
+  assert.equal(down.calls.filter((c) => c.includes('list')).length, 3);
+  // A delete that keeps failing: a warning for an optional secret, an error for DAYLIGHT_PAIRING.
+  const stuck = worker((a) => (a[1] === 'list' ? listed('ANTHROPIC_API_KEY', 'DAYLIGHT_PAIRING') : a[2] === 'DAYLIGHT_PAIRING' ? { status: 0, stdout: '' } : { status: 1, stdout: '' }));
+  const r4 = await run(stuck);
+  assert.deepEqual([r4.ok, r4.removed, r4.failed], [true, ['DAYLIGHT_PAIRING'], ['ANTHROPIC_API_KEY']]);
+  assert.match(r4.said, /^::warning title=Worker secrets::[^\n]*ANTHROPIC_API_KEY/m);
+  const pinned = worker((a) => (a[1] === 'list' ? listed('DAYLIGHT_PAIRING') : { status: 1, stdout: '' }));
+  const r5 = await run(pinned);
+  assert.equal(r5.ok, false);
+  assert.match(r5.said, /^::error title=Worker secrets::[^\n]*DAYLIGHT_PAIRING/m);
+  // Without DAYLIGHT_PAIRING to remove, a list that keeps failing is a warning.
+  const said = [];
+  const r6 = await removeSecrets(['ANTHROPIC_API_KEY'], { wrangler: down.wrangler, say: (l) => said.push(l), sleep: async () => {} });
+  assert.equal(r6.ok, true);
+  assert.match(said.join('\n'), /^::warning title=Worker secrets::/m);
+  // The deploy step uses it, with nothing swallowed.
+  const step = stepScript('Deploy the Worker with its secrets');
+  assert.match(step, /^node scripts\/secrets\.mjs remove "\$RUNNER_TEMP\/delete\.txt" wrangler\.deploy\.toml$/m);
+  assert.doesNotMatch(step, /secret (list|delete)/);
+});
+
+test('change check: against the last deployed commit (a cancelled pending run’s change still ships), and the share/js the Worker bundles', async () => {
+  const { serverChanged, bundledShareFiles } = await import('../scripts/changes.mjs');
+  assert.deepEqual(bundledShareFiles(root), ['reader-experiment/share/js/daylight-share.js'], 'what src/ and client/ import from share/js');
+  const REPO = '12twelve12hi/MHW';
+  // Run A deployed commit A; run B (a push of src/feeds.ts) was cancelled while pending; this is run C's push (B..C
+  // touches share/js/daylight-lab.js only).
+  const github = ({ files, runs, jobs = {}, fail = '' }) => {
+    const calls = [];
+    const fetchFn = async (url) => {
+      const u = new URL(url);
+      calls.push(u.pathname + u.search);
+      if (fail && u.pathname.includes(fail)) return new Response('{}', { status: 502 });
+      if (u.pathname === `/repos/${REPO}/actions/workflows/rx-server.yml/runs`) return Response.json({ workflow_runs: runs });
+      const m = /\/actions\/runs\/(\d+)\/jobs$/.exec(u.pathname);
+      if (m) return Response.json({ jobs: jobs[m[1]] ?? [] });
+      const c = /\/compare\/([0-9a-f]+)\.\.\.([0-9a-f]+)$/.exec(u.pathname);
+      if (c) return Response.json({ files: (files[c[1]] ?? []).map((filename) => ({ filename })) });
+      return new Response('{}', { status: 404 });
+    };
+    return { calls, fetchFn };
+  };
+  const deployed = [{ name: 'Deploy to Cloudflare (when the secrets exist)', steps: [{ name: 'Deploy the Worker with its secrets', conclusion: 'success' }] }];
+  const testedOnly = [{ name: 'Deploy to Cloudflare (when the secrets exist)', steps: [{ name: 'Deploy the Worker with its secrets', conclusion: 'skipped' }] }];
+  const runs = [
+    { id: 3, head_sha: 'bbbb', conclusion: 'cancelled', status: 'completed' },
+    { id: 2, head_sha: 'aaa1', conclusion: 'success', status: 'completed' },
+    { id: 1, head_sha: 'aaaa', conclusion: 'success', status: 'completed' },
+  ];
+  const jobs = { 2: testedOnly, 1: deployed };
+  const check = (gh, over = {}) => serverChanged({ event: 'push', sha: 'cccc', repo: REPO, branch: 'claude/sweet-goldberg-ej1nb0', token: 't', api: 'https://api.github.test', root, fetchFn: gh.fetchFn, ...over });
+  const scenario = github({ runs, jobs, files: { aaaa: ['reader-experiment/server/src/feeds.ts', 'reader-experiment/share/js/daylight-lab.js'] } });
+  const r = await check(scenario);
+  assert.equal(r.changed, true, r.reason);
+  assert.equal(r.base, 'aaaa', 'the last run whose deploy step ran, not the last green run');
+  assert.ok(scenario.calls.some((c) => c.includes('/compare/aaaa...cccc')));
+  assert.ok(scenario.calls.some((c) => c.includes('/runs/3/jobs')), 'the cancelled run had no jobs, so it is passed over');
+  const only = async (fileList) => (await check(github({ runs, jobs, files: { aaaa: fileList } }))).changed;
+  assert.equal(await only(['reader-experiment/share/js/daylight-lab.js', 'reader-experiment/server/README.md']), false, 'tested, not deployed');
+  assert.equal(await only(['reader-experiment/share/js/daylight-share.js']), true, 'the Worker bundles it');
+  assert.equal(await only(['.github/workflows/rx-server.yml']), true);
+  assert.equal(await only(['reader-experiment/server/migrations/0004_holds.sql']), true);
+  assert.equal(await only([]), false);
+  // Safe answers: never deployed, an API error, a manual run or a re-run all deploy.
+  assert.equal((await check(github({ runs, jobs: { 2: testedOnly, 1: testedOnly }, files: {} }))).changed, true);
+  assert.equal((await check(github({ runs, jobs, files: {}, fail: '/compare/' }))).changed, true);
+  assert.equal((await check(github({ runs, jobs, files: {}, fail: '/runs' }))).changed, true);
+  assert.equal((await check(github({ runs, jobs, files: {} }), { event: 'workflow_dispatch' })).changed, true);
+  // The workflow runs it in place of the push's own compare.
+  const wf = workflow();
+  const step = wf.slice(wf.indexOf('- name: Did the server change'), wf.indexOf('\n  ntfy-attach:'));
+  assert.match(step, /run: node scripts\/changes\.mjs/);
+  assert.doesNotMatch(wf, /github\.event\.before/);
+  assert.match(wf.slice(wf.indexOf('\n  test:'), wf.indexOf('\n  ntfy-attach:')), /actions: read/);
 });

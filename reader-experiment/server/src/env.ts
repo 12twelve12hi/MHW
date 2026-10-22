@@ -47,6 +47,10 @@ export function capsFor(plan: Plan) {
     digestBytes: paid ? 4 * MiB : 256 * KiB,
     urlHtmlBytes: paid ? 2 * MiB : 1 * MiB,
     emailMaxFree: 2 * MiB,
+    // Text AI (9.2): on Free the request's passes over the text (parse, check, hash and store, countTokens, the Claude
+    // request) stay within 10 ms up to here (2.2 rule 6); longer text needs Workers Paid.
+    aiTextChars: paid ? 400_000 : 100_000,
+    aiTextBytes: paid ? 1_000_000 : 200_000,
   };
 }
 
@@ -77,7 +81,7 @@ export const LIMITS = {
   aiInputTokens: 200_000,
   aiMaxTokens: 16_000,
   aiQueue: 20,
-  aiTimeoutMs: 240_000,
+  aiTimeoutMs: 600_000,             // the SDK's own guard for a non-streamed max_tokens 16,000 call (9.4)
   keepaliveMs: 15_000,
   sourceTtl: DAY,
   jobTtl: DAY,

@@ -102,19 +102,33 @@ async function build(env: Env, serverCode: string): Promise<Identity> {
   };
 }
 
+/**
+ * Whether the D1 setup row (3.5) is for this Worker: its SERVER_URL host is `<row.worker>.<subdomain>.workers.dev`.
+ * Every Worker the deploy made shares the one D1, so an earlier Worker it failed to delete must neither take the new
+ * link nor adopt the Server code an app sent with it (it would announce its own address on the same config topic).
+ */
+export function setupRowIsMine(env: Env, worker: unknown): boolean {
+  let host = '';
+  try { host = new URL(env.SERVER_URL ?? '').hostname; } catch { host = ''; }
+  return typeof worker === 'string' && /^daylight-[0-9a-f]{12}$/.test(worker) && host.startsWith(`${worker}.`);
+}
+
 // The Server code kept in D1 by POST /v1/setup (3.5), read at most every 5 minutes per isolate (10 seconds while there
 // is none): it changes only from none to a code, and a new setup link comes with a new Worker.
 let stored: { at: number; code: string | null } | null = null;
 const STORED_TTL_MS = 300_000;
 const STORED_NONE_TTL_MS = 10_000;
 
-/** The Server code an app sent with the setup link, or null. A D1 failure is a 503, never "not configured". */
+/**
+ * The Server code an app sent with the setup link for this Worker, or null (also when the row names another Worker).
+ * A D1 failure is a 503, never "not configured".
+ */
 export async function storedServerCode(env: Env, now = Date.now()): Promise<string | null> {
   if (stored && now - stored.at < (stored.code ? STORED_TTL_MS : STORED_NONE_TTL_MS)) return stored.code;
   let code: string | null;
   try {
-    const row = await env.DB.prepare('SELECT code FROM setup WHERE id = 1').first<{ code: string | null }>();
-    code = typeof row?.code === 'string' && row.code ? row.code : null;
+    const row = await env.DB.prepare('SELECT worker, code FROM setup WHERE id = 1').first<{ worker: string; code: string | null }>();
+    code = row && setupRowIsMine(env, row.worker) && typeof row.code === 'string' && row.code ? row.code : null;
   } catch {
     throw new ServerError(503, 'SERVER_ERROR', { retryAfter: 30 });
   }

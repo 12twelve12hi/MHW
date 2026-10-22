@@ -2330,7 +2330,7 @@
     ]
   },
   "setupLinks": {
-    "note": "formatSetupLink(server, secret) = server origin + \"/setup#SETUP-\" + base32(secret ‖ check) in groups of 4, check = SHA-256(\"dlshare/v1/server-setup-check\" ‖ 0x00 ‖ secret)[0]. setupToken = hex(SHA-256(\"dlshare/v1/server-setup-auth\" ‖ 0x00 ‖ secret)), sent as Authorization: Bearer on POST /v1/setup with {\"code\": <the Server code>}. parseSetupLink ignores case, spaces, dashes, dots and underscores in the fragment and reads 0, 1 and 8 as O, I and B; error reasons: format, checksum, server-code, pairing-code.",
+    "note": "formatSetupLink(server, secret) = server origin + \"/setup#SETUP-\" + base32(secret ‖ check) in groups of 4, check = SHA-256(\"dlshare/v1/server-setup-check\" ‖ 0x00 ‖ secret)[0]. setupToken = hex(SHA-256(\"dlshare/v1/server-setup-auth\" ‖ 0x00 ‖ secret)), sent as Authorization: Bearer on POST /v1/setup with {\"code\": <the Server code>}. parseSetupLink ignores case, spaces, dashes, dots and underscores in the fragment and reads 0, 1 and 8 as O, I and B. The link must be https with a host matching ^daylight-[0-9a-f]{12}\\.[a-z0-9-]+\\.workers\\.dev$ (after lowercasing; no port), or it is refused before anything is sent (reason host); error reasons: format, host, checksum, server-code, pairing-code.",
     "secretHex": "4c66abcb15285b10c92f01928ca07290",
     "server": "https://daylight-0123456789ab.example.workers.dev",
     "link": "https://daylight-0123456789ab.example.workers.dev/setup#SETUP-JRTK-XSYV-FBNR-BSJP-AGJI-ZIDS-SD2A",
@@ -2383,6 +2383,18 @@
       {
         "input": "SERVER-UAP3-JDN6-YUOR-CUH7-GGOC-J35A-SRYA",
         "error": "server-code"
+      },
+      {
+        "input": "https://daylight-help.example/setup#SETUP-JRTK-XSYV-FBNR-BSJP-AGJI-ZIDS-SD2A",
+        "error": "host"
+      },
+      {
+        "input": "https://daylight-0123456789ab.example.workers.dev.evil.example/setup#SETUP-JRTK-XSYV-FBNR-BSJP-AGJI-ZIDS-SD2A",
+        "error": "host"
+      },
+      {
+        "input": "https://daylight-0123456789ab.example.workers.dev:8443/setup#SETUP-JRTK-XSYV-FBNR-BSJP-AGJI-ZIDS-SD2A",
+        "error": "host"
       },
       {
         "input": "E4AY-56TM-ADQP-5QSN-MY7B-CGPZ-UFRA",

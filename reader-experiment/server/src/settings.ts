@@ -41,6 +41,8 @@ export interface Settings {
   _jobs?: number;
   _feeds?: number;
   _pending?: number;
+  /** POST /v1/ai holds past their `until` (9.5). */
+  _holds?: number;
   [k: string]: unknown;
 }
 
@@ -65,22 +67,23 @@ export function parseRows(rows: { k: string; v: unknown }[]): Settings {
 /** Settings plus the counters the Cron needs to decide which steps are due, in one statement (2.3). */
 export async function loadCronSettings(ctx: Ctx, fp: string): Promise<Settings> {
   const now = ctx.now;
-  const rows = await ctx.db.all<{ k: string; v: unknown; a: number | null; b: number | null; c: number | null; d: number | null; e: number | null; f: number | null }>(
-    `SELECT k, v, NULL AS a, NULL AS b, NULL AS c, NULL AS d, NULL AS e, NULL AS f FROM settings
+  const rows = await ctx.db.all<{ k: string; v: unknown; a: number | null; b: number | null; c: number | null; d: number | null; e: number | null; f: number | null; g: number | null }>(
+    `SELECT k, v, NULL AS a, NULL AS b, NULL AS c, NULL AS d, NULL AS e, NULL AS f, NULL AS g FROM settings
      UNION ALL SELECT '_counts', NULL,
        (SELECT COUNT(*) FROM outbox WHERE state = 'sent' AND fp = ?1),
        (SELECT COUNT(*) FROM outbox WHERE fp = ?1 AND (state = 'queued' OR (state = 'sent' AND last_publish <= ?2))),
        (SELECT COUNT(*) FROM mail WHERE state = 'queued' OR (state = 'running' AND lease < ?3) OR state = 'waiting-paid'),
        (SELECT COUNT(*) FROM jobs WHERE state = 'queued' OR (state = 'running' AND lease < ?3)),
        (SELECT COUNT(*) FROM feeds WHERE paused = 0 AND next_check <= ?3),
-       (SELECT COUNT(*) FROM entries WHERE state = 'pending')`,
+       (SELECT COUNT(*) FROM entries WHERE state = 'pending'),
+       (SELECT COUNT(*) FROM holds WHERE until < ?3)`,
     fp, now - ctx.limits.outboxResend, now,
   );
   const s = parseRows(rows.filter((r) => r.k !== '_counts'));
   const c = rows.find((r) => r.k === '_counts');
   if (c) {
     s._awaiting = Number(c.a) || 0; s._due = Number(c.b) || 0; s._mail = Number(c.c) || 0;
-    s._jobs = Number(c.d) || 0; s._feeds = Number(c.e) || 0; s._pending = Number(c.f) || 0;
+    s._jobs = Number(c.d) || 0; s._feeds = Number(c.e) || 0; s._pending = Number(c.f) || 0; s._holds = Number(c.g) || 0;
   }
   return s;
 }

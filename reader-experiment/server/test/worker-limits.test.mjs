@@ -123,6 +123,8 @@ test("'each' url items only for hosts that resolve, in public DNS, to public add
       lan: 'http://192.168.1.1.nip.io/cgi-bin/reboot', box: 'http://fritz.box/', v6: 'https://v6.example/a', down: 'https://down.example/a', ok: 'https://news.example/story',
     };
     const T = Date.now();
+    // The daily digest (07:00 UTC by default) would take the 'digest' entries during that hour: keep it away from T.
+    await t.db.prepare("INSERT INTO settings (k, v) VALUES ('digest', ?)").bind(JSON.stringify({ hour: (new Date(T).getUTCHours() + 12) % 24, tz: 'UTC' })).run();
     for (const [i, [key, url]] of Object.entries(links).entries()) {
       await t.db.prepare("INSERT INTO entries (feed_id, key, url, title, first_seen, state) VALUES ('aaaaaaaaaaaa', ?, ?, ?, ?, 'pending')").bind(key, url, key, T - 1000 + i).run();
     }

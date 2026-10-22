@@ -4,6 +4,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
+import http from 'node:http';
+import * as ds from '../../share/js/daylight-share.js';
 import * as srv from '../client/daylight-server.js';
 import { setup, SERVER } from './helpers.mjs';
 import { apiError, messageBody } from './mock-claude.mjs';
@@ -17,6 +19,7 @@ let t;
 before(async () => { t = await setup({ web, knobs: { keepaliveMs: 40, aiQueue: 3 } }); });
 after(async () => { await t?.close(); });
 
+const MIN = 60_000;
 const ai = (json, extra = {}) => t.api('POST', '/v1/ai', { json, ...extra });
 const usage = async () => (await t.rows("SELECT n, usd_micros, reserved_micros FROM usage WHERE kind = 'ai'"))[0] ?? { n: 0, usd_micros: 0, reserved_micros: 0 };
 
@@ -446,4 +449,147 @@ test('parts of a new PDF source uploaded at the same time all stay validated', a
     const sizes = JSON.parse(row.validated);
     assert.ok(sizes.every((v) => v > 0), `round ${k}: ${row.validated}`);
   }
+});
+
+test('a recorded AI_BILLING is tried again after 15 minutes: an app that only taps through a ready gate is not stuck (14.1)', async () => {
+  const t2 = await setup({ web });
+  try {
+    const T = Date.now();
+    let clock = T;
+    const app = new srv.DaylightServer({
+      pairing: t2.pairing, storage: new ds.MemoryStorage(), now: () => clock, from: 'Phone', app: 'test/1',
+      fetch: (url, init = {}) => t2.nodeFetch(url, { ...init, headers: { ...(init.headers ?? {}), 'X-DLS-Test-Now': String(clock) } }),
+    });
+    await t2.cron(T);
+    t2.claude.next(apiError(402, 'billing_error'));
+    const failed = await app.ai.summarize({ text: 'The prepaid credit ran out.' }).then(() => null, (e) => e);
+    assert.equal(failed?.code, 'AI_BILLING');
+    // The gate (labGate) lets a tap through only while state() is 'ready'; the status is re-read every 10 minutes.
+    assert.equal((await app.state('ai')).state, 'error');
+    clock = T + 11 * MIN;
+    assert.equal((await app.state('ai')).state, 'error', 'still recorded 11 minutes later');
+    clock = T + 22 * MIN;
+    assert.deepEqual(await app.state('ai'), { state: 'ready', message: null }, 'the user added credit: the next tap may try');
+    assert.equal((await app.state('pdf')).state, 'ready');
+    const ok = await app.ai.summarize({ text: 'Credit was added.' });
+    assert.ok(ok.result);
+    assert.deepEqual(await t2.rows("SELECT k FROM settings WHERE k = 'aiError'"), [], 'and its success clears the record');
+    // A key that still fails is recorded again by that one tap, for another 15 minutes.
+    t2.claude.next(apiError(401, 'authentication_error'));
+    clock = T + 23 * MIN;
+    assert.equal((await app.ai.summarize({ text: 'Key revoked.' }).then(() => null, (e) => e))?.code, 'AI_KEY_INVALID');
+    assert.equal((await app.status({ force: true })).features.ai.state, 'error');
+  } finally { await t2.close(); }
+});
+
+test('the per-day request ceiling says so and names DAYLIGHT_AI_MAX_REQ_DAY, not the dollar limit apps can raise (9.3)', async () => {
+  const t2 = await setup({ web, vars: { AI_MAX_REQ_DAY: '1' } });
+  try {
+    const first = await t2.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'One.' } } });
+    assert.ok(first.json.result, first.text);
+    const second = await t2.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'Two.' } } });
+    assert.equal(second.json.error.code, 'AI_DAILY_LIMIT');
+    assert.equal(second.json.error.limitRequests, 1);
+    assert.match(second.json.error.message, /today’s 1 AI request \(/);
+    assert.match(second.json.error.message, /DAYLIGHT_AI_MAX_REQ_DAY/);
+    assert.doesNotMatch(second.json.error.message, /Lab settings/, 'raising the dollar limit would not help');
+    assert.equal((await t2.api('PATCH', '/v1/settings', { json: { ai: { dailyUsd: 10 } } })).status, 200);
+    const third = await t2.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'Three.' } } });
+    assert.equal(third.json.error.code, 'AI_DAILY_LIMIT');
+    assert.equal(third.json.error.limitRequests, 1);
+    // The dollar cap itself still says to raise it in Lab settings.
+    const t3 = await setup({ web });
+    try {
+      await t3.db.prepare("INSERT INTO usage (day, kind, n, usd_micros) VALUES (?, 'ai', 0, 2900000)").bind(new Date().toISOString().slice(0, 10)).run();
+      const capped = await t3.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'B.' } } });
+      assert.equal(capped.json.error.code, 'AI_DAILY_LIMIT');
+      assert.equal(capped.json.error.limitRequests, undefined);
+      assert.match(capped.json.error.message, /raise it in Lab settings/);
+    } finally { await t3.close(); }
+    // The client module reads the field and shows the same text.
+    const e = new srv.ServerError('AI_DAILY_LIMIT', { limitRequests: 100, resetAt: '2026-10-23T00:00:00.000Z' });
+    assert.equal(e.limitRequests, 100);
+    assert.match(e.message, /^You’ve used today’s 100 AI requests \(the server’s daily limit\)\. It resets at 00:00 UTC\./);
+  } finally { await t2.close(); }
+});
+
+test('a client that goes away during POST /v1/ai: the call still finishes and is settled with its real cost (9.5)', async () => {
+  const t2 = await setup({ web, knobs: { keepaliveMs: 40 } });
+  try {
+    t2.claude.next({ delayMs: 1500 });
+    const body = JSON.stringify({ op: 'summary', source: { text: 'A phone that locks mid-summary.' } });
+    const base = await t2.mf.ready;
+    // A raw connection that the "phone" drops once the keepalive response has started, while Claude is still writing.
+    await new Promise((resolve, reject) => {
+      const req = http.request(new URL('/v1/ai', base), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${t2.values.authToken}`, 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(body)) },
+      }, (res) => {
+        assert.equal(res.statusCode, 200, 'the keepalive response starts at once');
+        res.on('error', () => {});
+        res.once('data', () => setTimeout(() => { req.destroy(); resolve(); }, 300));
+      });
+      req.on('error', (e) => { if (!req.destroyed) reject(e); });
+      req.end(body);
+    });
+    let u;
+    for (let i = 0; i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      u = (await t2.rows("SELECT n, usd_micros, reserved_micros FROM usage WHERE kind = 'ai'"))[0];
+      if (u?.usd_micros) break;
+    }
+    assert.equal(t2.claude.messageRequests().length, 1);
+    assert.deepEqual(u, { n: 1, usd_micros: 8000, reserved_micros: 0 }, 'settled, not left reserved until midnight');
+  } finally { await t2.close(); }
+});
+
+test('a POST /v1/ai cut short between reserving and settling: the next Cron run after the timeout keeps it as spent (9.3)', async () => {
+  const t2 = await setup({ web, knobs: { kill: 'ai-after-reserve' } });
+  try {
+    const T = Date.now();
+    const r = await t2.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'Cut short.' } }, now: T });
+    assert.ok(r.json.error, r.text);
+    assert.equal(t2.claude.messageRequests().length, 0);
+    const [held] = await t2.rows("SELECT n, usd_micros, reserved_micros FROM usage WHERE kind = 'ai'");
+    assert.equal(held.n, 1);
+    assert.equal(held.usd_micros, 0);
+    assert.ok(held.reserved_micros > 0);
+    await t2.cron(T + 5 * MIN);
+    assert.deepEqual((await t2.rows("SELECT reserved_micros FROM usage WHERE kind = 'ai'"))[0], { reserved_micros: held.reserved_micros }, 'not while the call could still be running');
+    await t2.cron(T + 20 * MIN);
+    assert.deepEqual((await t2.rows("SELECT n, usd_micros, reserved_micros FROM usage WHERE kind = 'ai'"))[0],
+      { n: 1, usd_micros: held.reserved_micros, reserved_micros: 0 }, 'kept as spent, so the display shows it');
+    await t2.cron(T + 21 * MIN);
+    assert.equal((await t2.rows("SELECT usd_micros FROM usage WHERE kind = 'ai'"))[0].usd_micros, held.reserved_micros, 'exactly once');
+    // The next request settles normally.
+    const ok = await t2.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'Again.' } }, now: T + 22 * MIN });
+    assert.ok(ok.json.result, ok.text);
+    assert.deepEqual((await t2.rows("SELECT n, usd_micros, reserved_micros FROM usage WHERE kind = 'ai'"))[0], { n: 2, usd_micros: held.reserved_micros + 8000, reserved_micros: 0 });
+  } finally { await t2.close(); }
+});
+
+test('text AI on Workers Free stops at 100,000 characters (200,000 bytes), so its passes over the text fit in 10 ms (2.2)', async () => {
+  const long = new Map([...web, ['long.example', () => new Response('w '.repeat(90_000), { headers: { 'Content-Type': 'text/plain; charset=utf-8' } })]]);
+  const free = await setup({ web: long });
+  const paid = await setup({ web: long, plan: 'paid' });
+  try {
+    const at = async (tt, text, path = '/v1/ai') => tt.api('POST', path, { json: { op: 'summary', source: { text } } });
+    const over = await at(free, 'x'.repeat(100_001));
+    assert.equal(over.status, 413, 'refused before the response starts and before anything is reserved');
+    assert.equal(over.json.error.code, 'SERVER_LIMIT');
+    assert.equal(over.json.error.limit, 100_000);
+    assert.match(over.json.error.message, /Workers Paid/);
+    assert.equal((await at(free, 'x'.repeat(100_001), '/v1/ai/jobs')).json.error.code, 'SERVER_LIMIT');
+    assert.equal((await at(free, '漢'.repeat(70_000))).json.error.code, 'SERVER_LIMIT', '210,000 bytes');
+    assert.ok((await at(free, 'x'.repeat(100_000))).json.result);
+    assert.equal(free.claude.messageRequests().length, 1);
+    assert.deepEqual((await free.rows("SELECT n FROM usage WHERE kind = 'ai'"))[0], { n: 1 }, 'only the one that fits was reserved');
+    // A fetched page's text is cut to the same length on Free.
+    free.claude.clear();
+    assert.ok((await free.api('POST', '/v1/ai', { json: { op: 'summary', source: { url: 'https://long.example/a' } } })).json.result);
+    assert.equal(free.claude.messageRequests()[0].body.messages[0].content[0].source.data.length, 100_000);
+    // Workers Paid takes 400,000 characters, as before.
+    assert.ok((await at(paid, 'x'.repeat(150_000))).json.result);
+    assert.equal((await at(paid, 'x'.repeat(400_001))).json.error.code, 'TOO_LARGE');
+  } finally { await free.close(); await paid.close(); }
 });

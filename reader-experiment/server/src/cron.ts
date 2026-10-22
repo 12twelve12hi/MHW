@@ -9,7 +9,7 @@ import { outboxCleanup, pollAcks, publishDue } from './outbox.ts';
 import { checkDueFeeds, entriesCleanup, sendEachItems } from './feeds.ts';
 import { digestDue, runDigest } from './digest.ts';
 import { mailCleanup, processOneEmail } from './email.ts';
-import { jobsCleanup, processOneJob } from './ai.ts';
+import { jobsCleanup, processOneJob, settleStaleHolds } from './ai.ts';
 import { filesCleanup } from './files.ts';
 import { sourcesCleanup } from './sources.ts';
 import type { Settings } from './settings.ts';
@@ -109,6 +109,8 @@ export async function runCron(ctx: Ctx, id: Identity): Promise<CronReport> {
       preferJobs = !preferJobs;
     }
   }
+  // Money bookkeeping, locked or not: AI reservations whose request was cut short are kept as spent (9.5).
+  if ((s._holds ?? 0) > 0) await step(ctx, report, 'holds', 2, 0, () => settleStaleHolds(ctx));
   if (ctx.now - (s.cleanupAt ?? 0) >= HOUR) await step(ctx, report, 'cleanup', 9, 0, () => cleanup(ctx, id, s));
   await flushLog(ctx);
   report.d1 = ctx.budget.d1;

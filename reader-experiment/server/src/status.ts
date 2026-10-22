@@ -2,7 +2,7 @@
 
 import { STATE_MESSAGES, errorMessage, SERVER_API, FEATURES } from '../client/daylight-server.js';
 import type { Ctx } from './env.ts';
-import { iso, nextUtcMidnight, utcDay } from './env.ts';
+import { MIN, iso, nextUtcMidnight, utcDay } from './env.ts';
 import type { Identity } from './keys.ts';
 import { ServerError, json } from './errors.ts';
 import type { Settings } from './settings.ts';
@@ -25,10 +25,18 @@ export async function currentKeyFp(key: string | undefined): Promise<string> {
 
 const st = (state: string): FeatureState => (state === 'ready' ? { state } : { state, message: (STATE_MESSAGES as Record<string, string>)[state] });
 
+/**
+ * How long a recorded AI_KEY_INVALID or AI_BILLING makes ai and pdf 'error' (14.1). Only a successful call clears the
+ * record, and apps send a call only while the state is 'ready', so the record has to lapse: then the next tap tries
+ * again (credit added, or the key fixed in the Console) and either clears it or records it again.
+ */
+export const AI_ERROR_HOLD_MS = 15 * MIN;
+
 /** A feature's state as the server decides it. `aiKeyFp` is the fingerprint of the current key (to ignore stale errors). */
 export function featureState(ctx: Ctx, id: Identity, s: Settings, feature: string, aiKeyFp = ''): FeatureState {
   const labNoInbox = id.delivery.mode === 'lab' && !inboxPresent(s);
-  const aiErr = s.aiError && (!aiKeyFp || s.aiError.keyFp === aiKeyFp) ? s.aiError : null;
+  const aiErr = s.aiError && (!aiKeyFp || s.aiError.keyFp === aiKeyFp) && ctx.now - (Number(s.aiError.at) || 0) < AI_ERROR_HOLD_MS
+    ? s.aiError : null;
   switch (feature) {
     case 'ai':
       if (!ctx.env.ANTHROPIC_API_KEY) return st('needs-key');

@@ -35,10 +35,13 @@ Two GitHub secrets (MHW › Settings › Secrets and variables › Actions) turn
 | `ANTHROPIC_API_KEY` (optional) | For the AI features; without it they say they need it |
 | `DAYLIGHT_EMAIL_DOMAIN` (optional) | A domain on Cloudflare for the email-in address (needs R2; Workers Paid recommended) |
 
-Then open the latest "Reader experiment - Daylight server" run in GitHub › Actions and choose Re-run all jobs. It
-creates the database, deploys the Worker, checks it, and its summary says where to read a one-time setup link in
-Cloudflare. Paste that link in the iPhone or Mac app (Lab settings › Daylight server › Set up with a link). Until the
-apps have that button, copy the app's Server code into the secret `DAYLIGHT_SERVER_CODE` instead. Turning on R2 in the
+Then open the latest "Reader experiment - Daylight server" run in GitHub › Actions and choose Re-run all jobs. GitHub
+offers that for 30 days after a run; if the latest run is older, push any change under `reader-experiment/server/`
+(or run `gh workflow run rx-server.yml --ref claude/sweet-goldberg-ej1nb0`; the Run workflow button appears only once
+the workflow is on the default branch). The run creates the database, deploys the Worker, checks it, and its summary
+says where to read a one-time setup link in Cloudflare. Paste that link in the iPhone or Mac app (Lab settings ›
+Daylight server › Set up with a link). Until the apps have that button, copy the app's Server code into the secret
+`DAYLIGHT_SERVER_CODE` instead. Turning on R2 in the
 Cloudflare dashboard (it asks for a card; the free tier isn't charged) adds large files, email-in and PDF AI. Details:
 `reader-experiment/server/README.md` › Turn it on.
 

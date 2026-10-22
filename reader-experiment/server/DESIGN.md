@@ -151,8 +151,13 @@ Rules for the implementation:
    attempt is not counted.
 6. **What needs Workers Paid, plainly.** postal-mime alone takes 36 ms cold, and Cron isolates are often cold. So on
    Free, **email-in is best effort: most real newsletters and every forwarded document will not get through.** Other
-   things that tend to exceed 10 ms are digests over 256 KiB (capped on Free) and AI on long URL pages (1 MiB of HTML
-   on Free). Feeds, short digests, text AI, PDF AI and large files are designed to fit.
+   things that tend to exceed 10 ms are digests over 256 KiB (capped on Free), AI on long URL pages (1 MiB of HTML
+   on Free) and **long text AI**: a text source makes several passes over its text (parse the body, check it, hash
+   and store it, `countTokens`, the Claude request), measured at 7–22 ms for 400,000 characters and 18–25 ms for
+   330,000 CJK characters. So text AI on Free takes at most 100,000 characters and 200,000 bytes (warm: about 2–4 ms,
+   and about 4–6 ms for 200,000 bytes of CJK; a fetched page's text is cut to the same length), and longer text
+   answers `SERVER_LIMIT`: it needs Workers Paid (9.2). Feeds, short digests, text AI within that cap, PDF AI and
+   large files are designed to fit.
 7. **CPU canary.** After every deploy the workflow calls `POST /v1/admin/selftest` three times. Each call parses a
    150 KiB newsletter fixture and builds a 256 KiB server item. If Cloudflare kills a call (1102 or 503), the job
    summary and `GET /v1/status` say "email-in needs Workers Paid". The email feature state is then `needs-paid` (14).
@@ -177,8 +182,9 @@ step never fails the others.
 | `each` items (8.3) | every run with pending entries | ≤ 5 | ≤ 8 (≤ 4 hosts resolved over DNS-over-HTTPS, 9.7) |
 | Digest (8.3) | once a day | ≤ 5 | 0 |
 | One heavy step: an email **or** an AI job | when queued | ≤ 10; an email's allowance grows to what its frames need (one statement per 1.5 MB), within the invocation's budget | ≤ 3 (R2 is not external; Claude: count + call) |
+| AI holds (9.3) | when a `POST /v1/ai` reservation was never settled and its `until` passed | 2 (one batch) | 0 |
 | Hourly cleanup | once an hour | ≤ 6 | 0 |
-| **Worst case, everything due** | | **≈ 43** (on Free the hourly cleanup then waits for the next run) | **≤ 34** |
+| **Worst case, everything due** | | **≈ 45** (on Free the hourly cleanup then waits for the next run) | **≤ 34** |
 
 HTTP requests use ≤ 6 statements each. `email()` uses ≤ 3. The integration tests run the worst-case Cron (every step
 due at once) through the counting wrappers. They fail if any invocation passes 50 D1 statements or 50 subrequests.
@@ -327,8 +333,15 @@ makes a **setup link** that lets one app hand the server its Server code, once:
    `https://<worker>.<subdomain>.workers.dev/setup#SETUP-XXXX-…-XXXX` (3.2). It uploads `setupToken` as the Worker
    secret `DAYLIGHT_SETUP_TOKEN`. The link never appears in GitHub: the job summary says where to read it, from
    Cloudflare's dashboard (D1 › `daylight-server` › Console: `SELECT link FROM setup;`) or with
-   `npx wrangler d1 execute daylight-server --remote --command "SELECT link FROM setup"`.
+   `npx wrangler d1 execute daylight-server --remote --command "SELECT link FROM setup"`, in any folder: the committed
+   `wrangler.toml` names the database without an id, so wrangler looks it up by name (12.2).
 2. **The user pastes the link into one app** (iPhone or Mac: Lab settings › Daylight server › Set up with a link).
+   `parseSetupLink` accepts only `https://` and a host matching `^daylight-[0-9a-f]{12}\.[a-z0-9-]+\.workers\.dev$`
+   (no port): anything else is refused with reason `host` before anything is sent, because the app is about to send
+   this pairing's Server code to that host. That stops look-alike links (`https://daylight-help.example/setup#…`), not
+   a determined attacker, who can name a Worker like that on their own account; so the app also shows the address
+   (`parseSetupLink(link).server`) and sends only once the user confirms it is their own Cloudflare account's. The
+   Swift and Kotlin ports apply the same rule (the `setupLinks` vectors include refused hosts). Then
    `DaylightServer.setup(link)` sends `POST /v1/setup {"code": <its Server code>}` with `Authorization: Bearer
    <setupToken>` to the link's origin.
 3. **The Worker** checks the token in constant time before reading the body (a wrong one is `401` and rate-limited,
@@ -338,14 +351,18 @@ makes a **setup link** that lets one app hand the server its Server code, once:
    locked on this server is `423`.
 4. **The app** pins the origin it was given (the user gave it) and caches the config. Every other device and the Lab
    Inbox derive the config topic from the pairing and find the server as usual (4.3).
-5. **From then on** the Worker reads its Server code from D1 when the secret is absent: once per isolate, cached for
-   5 minutes (10 seconds while there is none). The next deploy reads it too (for the announce, the smoke test with
+5. **From then on** the Worker reads its Server code from D1 when the secret is absent and the row names this Worker:
+   once per isolate, cached for 5 minutes (10 seconds while there is none). The next deploy reads it too (for the announce, the smoke test with
    the token and email routing), and deletes `DAYLIGHT_SETUP_TOKEN` from the Worker.
 
 **New links.** The deploy makes a new Worker name and link when there is no row, when the stored code's fingerprint is
 locked (a device re-paired, 3.4), or when the workflow is run by hand with **New setup link** (a link that leaked, or
-a re-pairing whose lock did not reach the server). The new Worker replaces the old one, which the deploy deletes, so
-the old link and the old address stop working. A link waiting to be used is kept from run to run.
+a re-pairing whose lock did not reach the server). New setup link counts on that run's first attempt only: GitHub's
+Re-run all jobs replays a run's inputs, and re-running the latest run is how changed secrets are applied, so a re-run
+of that manual run deploys the same server and keeps its Server code. The new Worker replaces the old one, which the
+deploy deletes, so the old link and the old address stop working. An old Worker the deploy could not delete (a
+warning in the run) reads nothing from the setup row, which names the new Worker (11.1): it stays `NOT_CONFIGURED`
+until a later run deletes it. A link waiting to be used is kept from run to run.
 
 **Why this is safe.** The link is as secret as the Server code it unlocks and lives where the Server code lives
 already: in the user's Cloudflare account, which controls the Worker anyway (15.2). It works once: after use only the
@@ -940,8 +957,8 @@ result stays readable at `GET /v1/ai/jobs/{id}` for 24 h.
 
 | Source | How it reaches the Worker | Cap |
 |---|---|---|
-| `{"text", "title"?, "url"?}` | Preferred: extensions (`document.body.innerText` or a readability pass) and share sheets extract text on the device. Stored as a text source in D1 for 24 h; the answer carries its `sourceId`, so `ask`/`explain` follow-ups do not resend it. | 400,000 characters and 1,000,000 UTF-8 bytes |
-| `{"url"}` | For share sheets without page access. `safeFetch` (9.7), then `HTMLRewriter` text extraction (p, h1–h6, li, blockquote, pre, td, figcaption; skipping script, style, nav, footer, aside, form). Stored like a text source. | 1 MiB of HTML on Free, 2 MiB on Paid |
+| `{"text", "title"?, "url"?}` | Preferred: extensions (`document.body.innerText` or a readability pass) and share sheets extract text on the device. Stored as a text source in D1 for 24 h; the answer carries its `sourceId`, so `ask`/`explain` follow-ups do not resend it. | Workers Paid: 400,000 characters and 1,000,000 UTF-8 bytes (`413 TOO_LARGE` past them). Workers Free: **100,000 characters and 200,000 bytes** (`413 SERVER_LIMIT`, `limit` = 100000), so the request fits in 10 ms of CPU (2.2 rule 6) |
+| `{"url"}` | For share sheets without page access. `safeFetch` (9.7), then `HTMLRewriter` text extraction (p, h1–h6, li, blockquote, pre, td, figcaption; skipping script, style, nav, footer, aside, form). Stored like a text source; the text is cut to the plan's character cap. | 1 MiB of HTML on Free, 2 MiB on Paid |
 | PDF | Uploaded in **parts** (below), then `{"sourceId"}` | 30,000,000 base64 characters (≈ 22.5 MB PDF; the API's request limit is 32 MB), 600 pages (enforced by the API) |
 | `{"sourceId"}` | Any earlier source | Sources live 24 h |
 
@@ -1005,8 +1022,15 @@ How it works:
    ```
 
    This runs in a batch after `INSERT OR IGNORE` of the day's row. `meta.changes == 0` → `AI_DAILY_LIMIT` with
-   `limit` and `resetAt`. Because the reservation is atomic, concurrent calls cannot overrun the cap, and no
-   "in flight" table is needed.
+   `limit` and `resetAt`. When the request ceiling is what failed (one more read on this path only), the answer also
+   carries `limitRequests` and its message names `DAYLIGHT_AI_MAX_REQ_DAY`: raising the dollar limit in Lab settings
+   would not help, and apps cannot change the ceiling. Because the reservation is atomic, concurrent calls cannot
+   overrun the cap.
+   - A `POST /v1/ai` reservation also writes a row in `holds` (11.1) in the same batch, under the same condition, with
+     `until` = now + the Claude timeout + 5 minutes. The settlement is conditional on the hold and deletes it in the
+     same batch. A request that ends between the two (a CPU kill, or a client gone for longer than `waitUntil`'s 30 s,
+     9.5) leaves its hold: the first Cron run after `until` keeps it as spent (step `holds`), so it shows in
+     `usage.ai.usd` instead of staying in `reservedUsd` until midnight. Each hold is settled exactly once.
 3. **Settle** after the call: release `R` and add the real cost, Σ over `usage.iterations` (or the top-level `usage`):
    - for `claude-opus-5-5`: input × $4/MTok, output × $20/MTok, cache reads × $0.20/MTok, cache writes × $5/MTok;
    - for an iteration served by another model: $5/$25 (cache $0.50/$6.25).
@@ -1036,7 +1060,7 @@ import Anthropic from "@anthropic-ai/sdk";
 const client = new Anthropic({
   apiKey: env.ANTHROPIC_API_KEY,
   maxRetries: 0,                       // every attempt is reserved and counted (9.3)
-  timeout: 240_000,
+  timeout: 600_000,                    // the SDK's own guard for a non-streamed max_tokens 16,000 call
   fetch: sourceSplicingFetch(env, parts), // 2.2 rule 3: streams the validated PDF parts from R2 into the body
   ...testOnlyBaseURL(env),
 });
@@ -1089,7 +1113,12 @@ Rules (from Anthropic's SDK guidance, all mandatory):
   because Claude Opus 5.5's default is `medium`: `medium` for summaries and ask, `low` for explain. `max_tokens`
   16,000 leaves room for thinking plus the reply. No `temperature`, `top_p` or `top_k` (Claude Opus 5.5 refuses
   them). Responses are read by block `type`; they may start with `thinking` blocks whose text is empty.
-- **Not streamed.** The call to Anthropic is an ordinary request with the SDK's own timeout (240 s) and no retries.
+- **Not streamed.** The call to Anthropic is an ordinary request with no retries and a 600 s timeout: what the SDK
+  itself allows a non-streamed call of `max_tokens` 16,000 (it estimates 450 s for that many tokens and rounds up to
+  10 minutes; a unit test checks the two agree). The call answers only once the whole message is written, and with
+  fallbacks a decline partway through is followed by the fallback model writing from the start, so a shorter timeout
+  would cut calls Anthropic still bills (`AI_TIMEOUT`, the reservation kept). 600 s fits inside a Cron run (15 min)
+  and the job lease (20 min); an HTTP request has no wall-clock limit while the client stays connected (2.1).
   Streaming would mean parsing thousands of server-sent events in the Worker, which does not fit the Free plan's
   10 ms of CPU (2.2); 16,000 tokens is within what the SDK allows without streaming. The keepalive newlines (9.5) keep
   the app's connection open instead.
@@ -1131,10 +1160,10 @@ Errors are mapped by the SDK's typed classes, checked from most to least specifi
 | `Anthropic.APIConnectionTimeoutError` | `504 AI_TIMEOUT` | kept |
 | `Anthropic.APIConnectionError` whose `cause` is our own refusal from the custom fetch (a `ServerError`: a PDF part missing or changed → `404 NEED_SOURCE` with `missingParts`; a part with a forbidden byte → `422 AI_BAD_INPUT`) or a used-up subrequest budget (→ `503 AI_BUSY`, `retryAfter` 60). The SDK wraps whatever its fetch throws in `APIConnectionError`, with that error as the cause; nothing reached Anthropic. | the cause's answer | released |
 | `Anthropic.APIConnectionError` (any other) | `503 AI_BUSY` (`retryAfter` 30) | kept |
-| `Anthropic.AuthenticationError`, `Anthropic.PermissionDeniedError` | `503 AI_KEY_INVALID`; recorded, so the AI state is `error` with this code | released |
+| `Anthropic.AuthenticationError`, `Anthropic.PermissionDeniedError` | `503 AI_KEY_INVALID`; recorded, so the AI state is `error` with this code for 15 minutes (14.1) | released |
 | `Anthropic.RateLimitError`, `Anthropic.InternalServerError` (incl. 529 overloaded) | `503 AI_BUSY` with `retryAfter` from the `retry-after` header (default 30 s) | released |
 | `Anthropic.BadRequestError` | `422 AI_BAD_INPUT` (unreadable PDF, over 600 pages, invalid base64) | released |
-| `Anthropic.APIError` with `type === "billing_error"` (402) | `503 AI_BILLING` (also recorded) | released |
+| `Anthropic.APIError` with `type === "billing_error"` (402) | `503 AI_BILLING` (also recorded, for 15 minutes) | released |
 | `Anthropic.APIError` with `status === 413` | `413 AI_TOO_LARGE` | released |
 | `ANTHROPIC_API_KEY` not set | `409 NEEDS_KEY` (`"feature": "ai"`, `"missing": ["ANTHROPIC_API_KEY"]`), before any work | none |
 
@@ -1163,7 +1192,7 @@ once**: `200`, `Content-Type: application/json; charset=utf-8`. It writes a newl
 object. JSON allows leading whitespace, so every JSON parser reads it.
 
 - Errors found before the response starts use real status codes: `400`, `401`, `404 NEED_SOURCE`, `409 NEEDS_KEY`,
-  `411`, `413 TOO_LARGE`, `423`.
+  `411`, `413 TOO_LARGE`, `413 SERVER_LIMIT` (text over the Free plan's cap, 9.2), `423`.
 - Everything after that, including `AI_DAILY_LIMIT`, `AI_TOO_LARGE` and every Claude error, arrives as
   `{"error": {...}}` in the body with status 200, and `retryAfter` is in the body. Clients parse `/v1/ai` bodies
   whatever the status.
@@ -1182,6 +1211,14 @@ object. JSON allows leading whitespace, so every JSON parser reads it.
 `explain` and `ask` return `"result": { "answer": "<Markdown>" }`. `delivered` is `null` unless `deliver` included
 `daylight`. The answer is not streamed token by token, which keeps four client implementations simple. `max_tokens`
 16,000 stays under the SDK's non-streaming time guard.
+
+**A client that goes away** (a phone locks or changes network mid-call). Cloudflare then cancels the request's work,
+the Claude call included. The work is passed to `ctx.waitUntil`, which keeps it going for up to 30 s more, so a call
+that ends by then is still settled, and delivered when `deliver` asked for it; only the answer to the app is lost.
+A call that needs longer is cut off: Anthropic may still finish and bill it, so its reservation is kept as spent by the
+Cron run once its hold expires (9.3), and `GET /v1/status` shows it as spent. Apps that may be put away during a long
+call (a phone, an input over about 50,000 characters, `deliver: "daylight"`) are better served by `POST /v1/ai/jobs`,
+whose result waits for them.
 
 ### 9.6 Prompt injection
 
@@ -1334,7 +1371,7 @@ and `SERVER_ERROR` for any other status that is not 2xx, so no answer can pose a
 | 422 | `FEED_INVALID`, `URL_BLOCKED`, `AI_REFUSED`, `AI_BAD_INPUT` | See 14.2 |
 | 423 | `LOCKED` | Server locked after a re-pairing (3.4) |
 | 429 | `RATE_LIMITED` | Rate limit (`retryAfter`) |
-| 429 | `AI_DAILY_LIMIT` | Daily AI requests or spend reached (`limit`, `resetAt`; `needUsd` when the request's worst case alone is over the cap, 9.3) |
+| 429 | `AI_DAILY_LIMIT` | Daily AI requests or spend reached (`limit`, `resetAt`; `limitRequests` when the request ceiling is what was reached; `needUsd` when the request's worst case alone is over the cap, 9.3) |
 | 429 | `AI_QUEUE_FULL` | 20 jobs already queued |
 | 429 | `FEED_LIMIT` | Feed count cap |
 | 502 | `FETCH_FAILED` | Feed or page could not be loaded |
@@ -1415,7 +1452,7 @@ All answer `409 NOT_CONFIGURED` without a domain or R2.
 
 ## 11. Storage
 
-### 11.1 D1 (`migrations/0001_init.sql`, `0002_bounded_reads.sql`, `0003_setup.sql`)
+### 11.1 D1 (`migrations/0001_init.sql`, `0002_bounded_reads.sql`, `0003_setup.sql`, `0004_holds.sql`)
 
 ```sql
 CREATE TABLE settings (k TEXT PRIMARY KEY, v TEXT NOT NULL);                 -- JSON values: digest, ai, lock, cursors, inbox
@@ -1474,7 +1511,14 @@ CREATE TABLE setup (                                                          --
   link TEXT,                                                                  -- the waiting setup link; NULL once used
   code TEXT,                                                                  -- the Server code an app sent with it
   created INTEGER NOT NULL, claimed INTEGER);
+CREATE TABLE holds (                                                          -- 0004: POST /v1/ai reservations (9.3)
+  id TEXT PRIMARY KEY, day TEXT NOT NULL, micros INTEGER NOT NULL,
+  until INTEGER NOT NULL);                                                    -- past this, Cron keeps it as spent
 ```
+
+The setup row is read only by the Worker it names (`SERVER_URL`'s host is `<worker>.<subdomain>.workers.dev`): every
+Worker the deploy made shares this D1, so an earlier one the deploy failed to delete neither takes the link nor adopts
+the Server code an app sent with it, and stays `NOT_CONFIGURED` instead of announcing its own address (3.5).
 
 - **Claiming work.** Work items are claimed with a conditional update: `UPDATE … SET state='running', lease=?,
   attempts=attempts+1 WHERE id=? AND (state='queued' OR (state='running' AND lease<?))`, then a check that
@@ -1568,8 +1612,8 @@ crons = ["* * * * *"]
 
 [[d1_databases]]
 binding = "DB"
-database_name = "daylight-server"
-database_id = "00000000-0000-0000-0000-000000000000"   # replaced by the deploy workflow
+database_name = "daylight-server"   # no database_id: the deploy adds it to wrangler.deploy.toml, so that
+                                    # `wrangler d1 execute daylight-server --remote` here looks the name up
 migrations_dir = "migrations"
 
 [[ratelimits]]
@@ -1620,7 +1664,10 @@ link waits and deleted once it is used or replaced (3.5). It is never a GitHub s
 | `DAYLIGHT_DELIVERY` | `lab` (default) or `v1` (3.1) |
 | `DAYLIGHT_AI_MAX_USD_DAY` / `DAYLIGHT_AI_MAX_REQ_DAY` | Hard AI ceilings (default 10 / 100); apps can only set lower (9.3) |
 
-Optional secrets that disappear from GitHub are deleted from the Worker on the next deploy. Test-only behaviour hangs
+Optional secrets that disappear from GitHub are deleted from the Worker on the next deploy (`wrangler deploy
+--secrets-file` only adds): `secrets.mjs remove` lists the Worker's secrets and deletes the ones that are gone, each
+tried three times. One it could not remove, or check, is a warning; for `DAYLIGHT_PAIRING` it fails the job, because
+the summary and the apps would otherwise say the server does not hold the pairing code while it does. Test-only behaviour hangs
 on the build-time constant `__TESTING__`, which is `false` in every deploy bundle. CI checks that the bundle does not
 contain the test variable's name.
 
@@ -1629,11 +1676,20 @@ contain the test variable's name.
 The workflow file is the reference; this is what it does. **Triggers:** a push to the branch that touches
 `reader-experiment/server/` (not only Markdown), `share/js/` or the workflow; **Re-run all jobs**; and
 `workflow_dispatch` with two inputs, **deploy** (default on; off only builds and tests) and **new setup link**
-(default off, 3.5). Never `pull_request`.
+(default off, 3.5). Never `pull_request`. A re-run replays the run's event and inputs, so **any** re-run deploys
+(also of a manual run whose deploy box was off), and New setup link counts on a run's first attempt only: re-running
+the latest run is how changed secrets and variables are applied, and must not move the server. GitHub offers a
+re-run for 30 days after a run; later, a push under `reader-experiment/server/` or `gh workflow run rx-server.yml
+--ref claude/sweet-goldberg-ej1nb0` starts one (the Run workflow button appears once the file is on the default
+branch).
 
 **Job `test`** (always): `npm ci`, the type check, `npm test`, the vectors check (`npm run vectors` leaves no diff),
 and the bundle check (`wrangler deploy --dry-run`; under 3 MB gzipped; no test-only names). It also decides whether
-a push changed the server (a push that touches only `share/js/` is tested, not deployed).
+a push changed the server since its last deploy (`changes.mjs`): it compares with the commit of the newest run whose
+deploy step ran, not with the push's parent, because GitHub cancels an older pending run of the concurrency group and
+that run's change must still ship. Changes under `reader-experiment/server/` (not Markdown), the workflow and the
+`share/js` files the Worker bundles (found from `src/index.ts`'s imports: today `daylight-share.js`) count; other
+`share/js` changes are tested, not deployed. With no deploy found, or an API error, it counts as changed.
 
 **Job `deploy`**, in the Environment `daylight-server`, each step given only the secrets it needs:
 
@@ -1647,8 +1703,8 @@ a push changed the server (a push that touches only `share/js/` is tested, not d
 | Server code or setup link (`setup.mjs`) | The workers.dev subdomain (created only when the API says there is none). In setup mode, the D1 `setup` row (3.5): a new Worker name and link the first time, after a lock or on request; else the waiting link, or the Server code an app sent. Writes `WORKER_NAME` and `SERVER_URL`; hands the token or the code to later steps in `$RUNNER_TEMP` files (0600). |
 | R2 bucket | With R2: finds or creates the bucket and its lifecycle rules (14 days `f/`, 8 days `m/`, 1 day `a/`). A token that can't create it leaves R2 off with a warning instead of failing. |
 | Deploy config | The Worker name, the R2 binding when on, `cpu_ms = 60000` on Workers Paid. |
-| Deploy | `secrets.mjs` splits the Worker's secrets (GitHub's, plus `DAYLIGHT_SETUP_TOKEN` while a link waits) into the ones to upload and the ones to delete; `wrangler deploy --secrets-file` with `--var` for `SERVER_URL`, `GIT_SHA`, the plan, the delivery mode and the AI ceilings; without the rate-limit binding if the account refuses it; then deletes the secrets that are gone. |
-| Remove earlier Workers | Every `daylight-<12 hex>` Worker but this one (an earlier Server code or setup link). |
+| Deploy | `secrets.mjs` splits the Worker's secrets (GitHub's, plus `DAYLIGHT_SETUP_TOKEN` while a link waits) into the ones to upload and the ones to delete; `wrangler deploy --secrets-file` with `--var` for `SERVER_URL`, `GIT_SHA`, the plan, the delivery mode and the AI ceilings; without the rate-limit binding if the account refuses it; then `secrets.mjs remove` deletes the secrets that are gone (12.3). |
+| Remove earlier Workers | Every `daylight-<12 hex>` Worker but this one (an earlier Server code or setup link). A failed listing or delete is a warning ("Re-run all jobs"); such a Worker reads nothing from the setup row meanwhile (3.5). |
 | Email routing | With a domain and R2, once the Server code is known: the routing rule to this Worker. |
 | Smoke test and summary (`derive.mjs announce`) | Waits up to 5 minutes for `GET /v1/hello` (a new workers.dev address can take that long; if it never answers, a warning and "re-run in a few minutes"), then checks the CORS preflight, that `GET /v1/status` without a token and with a wrong one is refused (`401`, or `503 NOT_CONFIGURED` before setup), and that `POST /v1/setup` with a wrong token is refused. With a Server code it then publishes the config frame from the runner, calls `/v1/admin/announce` and the CPU canary, checks the token is accepted, and reads the feature states. It writes the job summary itself and fails the job when the live Worker fails a check. |
 | Remove the hand-over files | Always. |
@@ -1704,7 +1760,8 @@ processed on the next Cron runs.
 1. The app that re-pairs locks the old server (3.4) and shows the `locked` text with the new Server code and Copy.
 2. **With a setup link** (no `DAYLIGHT_SERVER_CODE`): re-run the deploy. It sees the lock, makes a new Worker name and
    a new setup link; paste the link in the app as the first time (3.5). If the lock did not reach the server (the app
-   was offline), run the workflow by hand with **New setup link**. **With the secret:** paste the new Server code into
+   was offline), run the workflow by hand with **New setup link** (that run's first attempt makes the link; re-running
+   it later deploys the same server). **With the secret:** paste the new Server code into
    `DAYLIGHT_SERVER_CODE` and re-run the deploy.
 3. The deploy creates the Worker under the new name and deletes the old Worker. It points the email routing rule at
    the new Worker (with a setup link: on the run after the app used it) and the new Worker publishes the new config
@@ -1745,7 +1802,7 @@ export async function deriveServerValues(seed, { emailSalt = '' } = {}) {}
 export async function serverItemId(seed, origin) {}
 /** The setup link (3.5): the deploy formats it; the apps parse it and send setupToken with their Server code. */
 export async function formatSetupLink(server, secret) {}   // -> "https://<host>/setup#SETUP-XXXX-…"
-export async function parseSetupLink(input) {}             // -> {server, secret}; ShareError('setup-link'): format | checksum | server-code | pairing-code
+export async function parseSetupLink(input) {}             // -> {server, secret}; ShareError('setup-link'): format | host | checksum | server-code | pairing-code
 export async function deriveSetupToken(secret) {}
 
 /** Frames under boxKey with their own AADs ('config' | 'item' | 'ack'); never through share/js sealFrame (3.2). */
@@ -1922,7 +1979,7 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
 | `needs-r2` | server | Needs R2 storage on your Cloudflare account. Turn on R2 in the Cloudflare dashboard (it asks for a card; the free tier isn't charged), then re-run the deploy. |
 | `needs-lab-inbox` | server | Your Daylight server hasn’t heard from your Daylight yet. Open Daylight Share on it with Lab on. (LAB-PLAN 1.6's text, since S0.) |
 | `needs-paid` | server | Email-in needs Cloudflare's Workers Paid plan. Subscribe in the Cloudflare dashboard, set the variable DAYLIGHT_WORKERS_PLAN to paid in GitHub › Settings, then re-run the deploy. |
-| `error` | server | The server's `message` for the recorded code (e.g. `AI_KEY_INVALID`). A state in `GET /v1/status` that is not in this table's server rows (a newer server's, or one the app decides) is shown as `error` too. |
+| `error` | server | The server's `message` for the recorded code (e.g. `AI_KEY_INVALID`). `ai` and `pdf` show a recorded `AI_KEY_INVALID` or `AI_BILLING` for 15 minutes (while the key is the same); then they are `ready` again, so the next tap (gated on `ready`) tries again and clears the record by succeeding or records it anew. Only a successful call clears it, and apps call only when `ready`, so a record that never lapsed would keep AI off after the user added credit. A state in `GET /v1/status` that is not in this table's server rows (a newer server's, or one the app decides) is shown as `error` too. |
 | `OFFLINE` (network) | app | Couldn't reach the Daylight server. Check your connection and try again. |
 
 "Re-run the deploy" in the app links to a one-line help text: "In GitHub › Actions, open the latest
@@ -1934,7 +1991,7 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
 |---|---|
 | `AI_KEY_INVALID` | Claude didn't accept the API key. Check ANTHROPIC_API_KEY in GitHub › Settings › Secrets, then re-run the deploy. |
 | `AI_BILLING` | Your Anthropic account is out of credit. Add credit in the Claude Console to keep using AI. |
-| `AI_DAILY_LIMIT` | Today's AI limit is used up. It resets at {time}, or raise it in Lab settings (up to {ceiling}). With `needUsd`: This request could cost up to {needUsd} with Claude, more than today's AI limit. Raise the limit in Lab settings (up to {ceiling}). |
+| `AI_DAILY_LIMIT` | Today's AI limit is used up. It resets at {time}, or raise it in Lab settings (up to {ceiling}). With `needUsd`: This request could cost up to {needUsd} with Claude, more than today's AI limit. Raise the limit in Lab settings (up to {ceiling}). With `limitRequests`: You've used today's {n} AI requests (the server's daily limit). It resets at {time}. To change the limit, set the repo variable DAYLIGHT_AI_MAX_REQ_DAY in GitHub › Settings › Secrets and variables › Actions › Variables, then re-run the deploy. |
 | `AI_TOO_LARGE` | This is too long for one AI request (about {tokens} tokens; the limit is {limit}). |
 | `AI_QUEUE_FULL` | Too many AI requests are waiting. Try again in a few minutes. |
 | `AI_REFUSED` | Claude declined to work on this one. |
@@ -1955,7 +2012,7 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
 | `BAD_AUTH` | The Daylight server doesn't recognise this device's pairing. Re-run the deploy and paste its new setup link in Lab settings › Daylight server, or check DAYLIGHT_SERVER_CODE. |
 | `SETUP_USED` | That setup link was already used for another pairing. Run the deploy with "New setup link" for a fresh one. |
 | `SETUP_INVALID` (decided by `setup()` for a `401` or `404`) | That setup link isn't current. Copy it again: the deploy's summary in GitHub › Actions says where to find it. |
-| `SERVER_LIMIT` | This was too big for the Daylight server on Cloudflare's Free plan. It works on the Workers Paid plan. |
+| `SERVER_LIMIT` | This was too big for the Daylight server on Cloudflare's Free plan. It works on the Workers Paid plan. (Also `413` for text AI over the Free plan's 100,000 characters, 9.2.) |
 | `NEEDS_KEY`, `NOT_CONFIGURED`, `NEEDS_LAB_INBOX`, `LOCKED` | The matching 14.1 message |
 | anything else | Something went wrong on the Daylight server ({code}). Try again later. |
 
@@ -1986,7 +2043,7 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
 | Threat | Mitigations |
 |---|---|
 | **A stranger finds or guesses the Worker URL** | The URL is not treated as a secret. It appears in `Attach:` URLs that the relay sees, and Workers are easy to enumerate. Every endpoint that reads or changes anything needs the bearer token. A wrong token is rejected after a constant-time compare, before the body is read or D1 is touched (3.3), and failures are rate-limited per IP. Unauthenticated routes are `hello` (no version), robots, and hosted frames behind 128-bit capability ids, which are ciphertext. There are no stub pages and no id lookups for unknown paths. The Worker name is derived from the seed and rotates with the pairing. Residual risk: a flood could use up the 100,000 requests a day and pause the server until 00:00 UTC. Nothing leaks. |
-| **A copy of the setup link** (it is in D1, and in the clipboard of the device it was pasted on) | Before use it lets one pairing claim the server, which is why it lives only in the user's Cloudflare account (never in GitHub's logs or summary) and is pasted, not stored, by the app. After use it is worth nothing: only the same Server code is accepted, the link is cleared from D1 and the next deploy deletes its token. The claim needs 128 bits behind a constant-time compare, failures are rate-limited per IP, and the body is not read before the token matches. A link that may have leaked before use is replaced by running the workflow with **New setup link**, which also moves the server to a new address (3.5). |
+| **A copy of the setup link** (it is in D1, and in the clipboard of the device it was pasted on) | Before use it lets one pairing claim the server, which is why it lives only in the user's Cloudflare account (never in GitHub's logs or summary) and is pasted, not stored, by the app. After use it is worth nothing: only the same Server code is accepted, the link is cleared from D1 and the next deploy deletes its token. The claim needs 128 bits behind a constant-time compare, failures are rate-limited per IP, and the body is not read before the token matches. A link that may have leaked before use is replaced by running the workflow with **New setup link**, which also moves the server to a new address (3.5). A **look-alike link** a stranger sends would make the app send this pairing's Server code to the stranger's host: the app takes only `daylight-<12 hex>.<subdomain>.workers.dev` hosts and shows the address before it sends (3.5); a stranger's own workers.dev Worker still matches that pattern, so the confirmation is what stops a determined one, and what the Server code gives is the row above. |
 | **A copy of the token or Server code** (lost phone, the web sender's storage, a Cloudflare compromise) | It gives the server's powers and no more. It cannot read what apps send to the Daylight under Lab delivery (3.1). Re-pairing locks the old server (3.4) and rotates every derived value. |
 | **Cloudflare account, API token or GitHub repo compromised** | **Lab delivery:** the attacker can read the Server code (from the Worker's secret, or from D1 when it came with the setup link) or deploy code that reads it. That exposes the server-held plaintext (mail being processed, recent mail subjects, the feed list, AI inputs and results for 24 h), lets them forge server items (labelled "From your server" and still passed through the untrusted-input path) and spend within the AI ceilings. App shares and large files stay unreadable. **v1 delivery:** everything sent to the Daylight; the apps say so (14.3). |
 | **Deploy pipeline on a public repo** | 12.4: no secrets during `npm ci`, secrets per step, an Environment limited to the branch (recommended), actions pinned by SHA, no persisted credentials, every derived form masked before it could print, workflow commands never redirected into the summary, hand-over values in 0600 files, and summaries with no secret-derived values except the 32-bit fingerprint. The setup link is never in GitHub at all. |
@@ -2182,7 +2239,7 @@ accepted, partly accepted, or rejected with a one-line reason.
 | O13 | Email asks too much for a first release | Accepted | Open policy, block list, recent mail. Held queue deferred (7.6). `DAYLIGHT_EMAIL_ALLOW` dropped. Address-change notice, and `DAYLIGHT_EMAIL_LOCAL` for a stable address. A stored random token is rejected: the deploy must know the address to write the literal routing rule (7). |
 | O14 | Too many per-feed settings | Accepted | One digest time, per-feed `each` or `digest`, fixed interval and caps, overflow into the digest, OPML import only. `send=content` is also deferred (8). |
 | O15 | Setup steps scattered and incomplete | Accepted | Numbered checklist, email zone permissions up front, token check that names a missing permission, `DAYLIGHT_RELAY` dropped (the Server code link carries relay and token), "Next:" line (12.0, 12.4). |
-| O16 | Smoke test on a public repo; deploys on share/js pushes (nit) | Accepted | `$sub` masked, a 5-minute wait that only warns on a first deploy, share/js-only pushes tested but not deployed (12.4). |
+| O16 | Smoke test on a public repo; deploys on share/js pushes (nit) | Accepted | `$sub` masked, a 5-minute wait that only warns on a first deploy, share/js-only pushes tested but not deployed (12.4), except the share/js files the Worker bundles (October 2026 review: a protocol fix there must reach the live Worker). |
 | O17 | Three message tables will drift (nit) | Accepted | Apps show the server's `message`. Local text only for the states an app decides itself, and code handles only the codes that change behaviour (10.4, 14). |
 | O18 | PDF upload round trips; `countTokens` re-sends 30 MB (nit) | Partly | Streaming base64 into a temp file and `NEED_SOURCE` instead of `HEAD`: accepted (9.2, 13.1). Estimating PDF tokens from byte size is rejected: bytes do not bound tokens, and `countTokens` is free (9.3). |
 | O19 | Three stub routes (nit) | Accepted, further | No stub routes at all. Items use the non-resolving `https://daylight.invalid/i/<itemId>` (5). |

@@ -1,6 +1,6 @@
 # The Daylight server (DESIGN.md 12.2). The deploy workflow (.github/workflows/rx-server.yml) writes
-# wrangler.deploy.toml from this file: the Worker's name (daylight-<12 hex>, from the Server code), the D1 database id,
-# and the R2 binding and CPU limit when they apply.
+# wrangler.deploy.toml from this file: the Worker's name (daylight-<12 hex>), the D1 database id, and the R2 binding and
+# CPU limit when they apply.
 name = "daylight-server"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
@@ -18,10 +18,11 @@ __TESTING__ = "false"
 [triggers]
 crons = ["* * * * *"]
 
+# No database_id: the deploy adds it to wrangler.deploy.toml. Without one here, `wrangler d1 execute daylight-server
+# --remote` run in this folder looks the database up by name (a placeholder id would send the query to that id).
 [[d1_databases]]
 binding = "DB"
 database_name = "daylight-server"
-database_id = "00000000-0000-0000-0000-000000000000"   # replaced by the deploy workflow
 migrations_dir = "migrations"
 
 [[ratelimits]]

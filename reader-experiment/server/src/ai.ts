@@ -79,8 +79,8 @@ export function trimHistory(history: { q: string; a: string }[], keep = HISTORY_
 /** Size of a JSON value as the server would write it (characters). */
 const jsonSize = (v: unknown) => JSON.stringify(v ?? null).length;
 
-/** Validates the body of POST /v1/ai and POST /v1/ai/jobs (10.9). */
-export function validateAi(body: Record<string, unknown>): AiRequest {
+/** Validates the body of POST /v1/ai and POST /v1/ai/jobs (10.9); `caps`: the plan's text caps (9.2). */
+export function validateAi(body: Record<string, unknown>, caps?: { aiTextChars: number; aiTextBytes: number }): AiRequest {
   const op = oneOf<Op>(body.op, ['summary', 'explain', 'ask'], 'summary', 'op');
   if (body.op === undefined) throw new ServerError(400, 'BAD_REQUEST', { message: 'That request isn’t valid (op).' });
   const mode = oneOf<Mode>(body.mode, ['summary', 'keypoints', 'both'], 'both', 'mode');
@@ -107,7 +107,7 @@ export function validateAi(body: Record<string, unknown>): AiRequest {
     if (typeof s !== 'object') throw new ServerError(400, 'BAD_REQUEST', { message: 'That request isn’t valid (source).' });
     if (typeof s.sourceId === 'string') source = { kind: 'id', sourceId: s.sourceId };
     else if (typeof s.text === 'string') {
-      source = { kind: 'text', text: checkText(s.text), title: cleanTitle(str(s.title, 1000, 'source.title') ?? ''), url: typeof s.url === 'string' ? publicUrl(s.url) : null };
+      source = { kind: 'text', text: checkText(s.text, caps), title: cleanTitle(str(s.title, 1000, 'source.title') ?? ''), url: typeof s.url === 'string' ? publicUrl(s.url) : null };
     } else if (typeof s.url === 'string') source = { kind: 'url', url: s.url };
     else throw new ServerError(400, 'BAD_REQUEST', { message: 'That request isn’t valid (source).' });
   }
@@ -150,7 +150,11 @@ function testBaseURL(env: Env): string | undefined {
   return undefined;
 }
 
-export interface Reservation { day: string; micros: number }
+/** A reservation; `hold` names its row in `holds` (POST /v1/ai only: jobs keep theirs on the job row). */
+export interface Reservation { day: string; micros: number; hold?: string }
+
+/** A hold is settled by Cron once the call it covers can no longer be running: the Claude timeout plus this margin. */
+const HOLD_MARGIN_MS = 5 * 60_000;
 
 /** A job row written in the same batch as its reservation, so one never exists without the other (9.3 rule 4). */
 export type JobWrite =
@@ -160,7 +164,8 @@ export type JobWrite =
 /**
  * Reserves the worst case atomically (9.3). Throws 429 AI_DAILY_LIMIT. With `job`, the job row is inserted (or its
  * reservation recorded) in the same batch and under the same cap condition, so it takes effect exactly when the
- * reservation does: a run cut short between the two can't leave a reservation nobody will settle.
+ * reservation does: a run cut short between the two can't leave a reservation nobody will settle. Without one (POST
+ * /v1/ai), a hold row plays that part: the Cron run settles it as spent if the request never does (9.5).
  */
 export async function reserve(ctx: Ctx, s: Settings, micros: number, job?: JobWrite): Promise<Reservation> {
   const day = utcDay(ctx.now);
@@ -174,9 +179,15 @@ export async function reserve(ctx: Ctx, s: Settings, micros: number, job?: JobWr
       micros, day, l.maxRequests, max, job.id, job.op, ctx.now, job.input, job.expires,
     )]
     : [ctx.db.stmt(`UPDATE jobs SET reserved_micros = ?1, reserved_day = ?2 WHERE id = ?5 AND ${capOk}`, micros, day, l.maxRequests, max, job.id)];
+  const hold = job ? undefined : randomHex(16);
+  const holdStmt = !hold ? [] : [ctx.db.stmt(
+    `INSERT INTO holds (id, day, micros, until) SELECT ?5, ?2, ?1, ?6 WHERE ${capOk}`,
+    micros, day, l.maxRequests, max, hold, ctx.now + ctx.limits.aiTimeoutMs + HOLD_MARGIN_MS,
+  )];
   const res = await ctx.db.batch([
     ctx.db.stmt("INSERT OR IGNORE INTO usage (day, kind) VALUES (?, 'ai')", day),
     ...jobStmt,
+    ...holdStmt,
     ctx.db.stmt(
       `UPDATE usage SET n = n + 1, reserved_micros = reserved_micros + ?1
        WHERE day = ?2 AND kind = 'ai' AND n < ?3 AND usd_micros + reserved_micros + ?1 <= ?4`,
@@ -184,21 +195,52 @@ export async function reserve(ctx: Ctx, s: Settings, micros: number, job?: JobWr
     ),
   ]);
   if ((res[res.length - 1]?.meta?.changes ?? 0) === 0) {
-    // A request whose worst case alone is over today's cap says so (needUsd), instead of "used up".
-    const needUsd = micros > max ? Math.ceil(micros / 1e4) / 100 : undefined;
-    throw new ServerError(429, 'AI_DAILY_LIMIT', { limit: l.dailyUsd, resetAt: iso(nextUtcMidnight(ctx.now)), ceilingUsd: l.ceilingUsd, ...(needUsd ? { needUsd } : {}) });
+    // Which condition failed: the request ceiling (set at deploy, so the answer names its variable: limitRequests), or
+    // the dollar cap. A request whose worst case alone is over today's cap says so (needUsd), instead of "used up".
+    const row = await ctx.db.first<{ n: number }>("SELECT n FROM usage WHERE day = ? AND kind = 'ai'", day);
+    const byCount = Number(row?.n ?? 0) >= l.maxRequests;
+    const needUsd = !byCount && micros > max ? Math.ceil(micros / 1e4) / 100 : undefined;
+    throw new ServerError(429, 'AI_DAILY_LIMIT', {
+      limit: l.dailyUsd, resetAt: iso(nextUtcMidnight(ctx.now)), ceilingUsd: l.ceilingUsd,
+      ...(byCount ? { limitRequests: l.maxRequests } : {}), ...(needUsd ? { needUsd } : {}),
+    });
   }
-  return { day, micros };
+  return hold ? { day, micros, hold } : { day, micros };
 }
 
-/** Releases the reservation and adds the real cost; `spent` keeps it all as spent (unknown outcome). */
+/**
+ * Releases the reservation and adds the real cost; `spent` keeps it all as spent (unknown outcome). A reservation with
+ * a hold is settled only while its hold exists (the Cron run may have kept it as spent already), so it is settled
+ * exactly once; holdDoneStmt follows it in the same batch.
+ */
 export function settleStmt(ctx: Ctx, r: Reservation, actual: number | 'spent', tokensIn = 0, tokensOut = 0): D1PreparedStatement {
   const cost = actual === 'spent' ? r.micros : actual;
   return ctx.db.stmt(
     `UPDATE usage SET reserved_micros = MAX(0, reserved_micros - ?1), usd_micros = usd_micros + ?2,
-       tokens_in = tokens_in + ?3, tokens_out = tokens_out + ?4 WHERE day = ?5 AND kind = 'ai'`,
-    r.micros, cost, tokensIn, tokensOut, r.day,
+       tokens_in = tokens_in + ?3, tokens_out = tokens_out + ?4 WHERE day = ?5 AND kind = 'ai'${r.hold ? ' AND EXISTS (SELECT 1 FROM holds WHERE id = ?6)' : ''}`,
+    ...[r.micros, cost, tokensIn, tokensOut, r.day, ...(r.hold ? [r.hold] : [])],
   );
+}
+
+/** The hold's end, after its settleStmt in the same batch. */
+const holdDoneStmt = (ctx: Ctx, r: Reservation) => (r.hold ? [ctx.db.stmt('DELETE FROM holds WHERE id = ?', r.hold)] : []);
+
+/**
+ * Cron: POST /v1/ai reservations whose request ended without settling (cut short: a CPU kill, or the client gone for
+ * longer than waitUntil's 30 s) are kept as spent once the call can no longer be running (9.3, 9.5). One batch, so
+ * each hold is counted once. -> how many.
+ */
+export async function settleStaleHolds(ctx: Ctx): Promise<number> {
+  const stale = '(SELECT COALESCE(SUM(micros), 0) FROM holds h WHERE h.day = usage.day AND h.until < ?1)';
+  const res = await ctx.db.batchAlways([
+    ctx.db.stmt(
+      `UPDATE usage SET reserved_micros = MAX(0, reserved_micros - ${stale}), usd_micros = usd_micros + ${stale}
+       WHERE kind = 'ai' AND day IN (SELECT day FROM holds WHERE until < ?1)`,
+      ctx.now,
+    ),
+    ctx.db.stmt('DELETE FROM holds WHERE until < ?', ctx.now),
+  ]);
+  return res[1]?.meta?.changes ?? 0;
 }
 
 /** The job's record of its reservation, cleared in the same batch as the settlement. */
@@ -253,9 +295,10 @@ export async function runClaude(ctx: Ctx, s: Settings, input: AiInput, src: Reso
     }
     reservation = await reserve(ctx, s, reserveMicros(tokens, { cached: writesCache(params) }), jobId ? { kind: 'update', id: jobId } : undefined);
   }
+  testKillPoint(ctx.env, 'ai-after-reserve');
   // A job's own record of the reservation is cleared together with the settlement, so a job retried after the run
-  // was cut short can never reuse a reservation that is already settled (9.3).
-  const settledJob = jobId ? [jobSettledStmt(ctx, jobId)] : [];
+  // was cut short can never reuse a reservation that is already settled (9.3). A hold ends with its settlement.
+  const settledJob = [...(jobId ? [jobSettledStmt(ctx, jobId)] : []), ...holdDoneStmt(ctx, reservation)];
   let response;
   try {
     response = await client.beta.messages.create(params);
@@ -343,6 +386,9 @@ function keepaliveResponse(ctx: Ctx, work: () => Promise<unknown>): Response {
     await flushLog(ctx);
   })();
   done.catch(() => clearInterval(timer));
+  // If the client goes away (a phone locks), Cloudflare cancels the request's work: waitUntil keeps it going for up to
+  // 30 s more, so a call that ends by then is still settled (and delivered). Longer, the hold is settled by Cron (9.5).
+  ctx.waitUntil(done.catch(() => {}));
   return new Response(readable, { status: 200, headers: baseHeaders(ctx.rid, { 'Content-Type': 'application/json; charset=utf-8' }) });
 }
 
@@ -350,7 +396,7 @@ function keepaliveResponse(ctx: Ctx, work: () => Promise<unknown>): Response {
 export async function aiRequest(ctx: Ctx, id: Identity, s: Settings, req: Request): Promise<Response> {
   if (!ctx.env.ANTHROPIC_API_KEY) throw new ServerError(409, 'NEEDS_KEY', { feature: 'ai', missing: ['ANTHROPIC_API_KEY'] });
   const body = await readJson(ctx, req, ctx.limits.aiBody);
-  const r = validateAi(body);
+  const r = validateAi(body, ctx.caps);
   // Only a text source makes a large body; history may be long too (each answer as long as the server wrote it), so
   // the 64 KiB rule applies to the rest.
   if (r.source?.kind !== 'text' && jsonSize({ ...body, history: undefined }) > ctx.limits.jsonBody) {
@@ -382,7 +428,7 @@ function jobJson(j: JobRow) {
 /** POST /v1/ai/jobs: validates, resolves the source, reserves the worst case and queues (9.1, 9.3 rule 4). */
 export async function aiJobCreate(ctx: Ctx, id: Identity, s: Settings, req: Request): Promise<Response> {
   if (!ctx.env.ANTHROPIC_API_KEY) throw new ServerError(409, 'NEEDS_KEY', { feature: 'ai', missing: ['ANTHROPIC_API_KEY'] });
-  const r = validateAi(await readJson(ctx, req, ctx.limits.aiBody));
+  const r = validateAi(await readJson(ctx, req, ctx.limits.aiBody), ctx.caps);
   if (id.delivery.mode === 'lab' && !inboxPresent(s)) throw new ServerError(409, 'NEEDS_LAB_INBOX', { feature: 'deliver' });
   const queued = await ctx.db.first<{ n: number }>("SELECT COUNT(*) AS n FROM jobs WHERE state IN ('queued', 'running')");
   if ((queued?.n ?? 0) >= ctx.limits.aiQueue) throw new ServerError(429, 'AI_QUEUE_FULL', { retryAfter: 300 });

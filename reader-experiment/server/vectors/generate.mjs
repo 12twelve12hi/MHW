@@ -305,12 +305,14 @@ async function setupLinkVectors() {
     try { const r = await srv.parseSetupLink(input); return { input, server: r.server, secretHex: hex(r.secret) }; } catch (e) { return { input, error: e.reason }; }
   };
   return {
-    note: 'formatSetupLink(server, secret) = server origin + "/setup#SETUP-" + base32(secret ‖ check) in groups of 4, check = SHA-256("dlshare/v1/server-setup-check" ‖ 0x00 ‖ secret)[0]. setupToken = hex(SHA-256("dlshare/v1/server-setup-auth" ‖ 0x00 ‖ secret)), sent as Authorization: Bearer on POST /v1/setup with {"code": <the Server code>}. parseSetupLink ignores case, spaces, dashes, dots and underscores in the fragment and reads 0, 1 and 8 as O, I and B; error reasons: format, checksum, server-code, pairing-code.',
+    note: 'formatSetupLink(server, secret) = server origin + "/setup#SETUP-" + base32(secret ‖ check) in groups of 4, check = SHA-256("dlshare/v1/server-setup-check" ‖ 0x00 ‖ secret)[0]. setupToken = hex(SHA-256("dlshare/v1/server-setup-auth" ‖ 0x00 ‖ secret)), sent as Authorization: Bearer on POST /v1/setup with {"code": <the Server code>}. parseSetupLink ignores case, spaces, dashes, dots and underscores in the fragment and reads 0, 1 and 8 as O, I and B. The link must be https with a host matching ^daylight-[0-9a-f]{12}\\.[a-z0-9-]+\\.workers\\.dev$ (after lowercasing; no port), or it is refused before anything is sent (reason host); error reasons: format, host, checksum, server-code, pairing-code.',
     secretHex: hex(secret), server, link, setupToken: await srv.deriveSetupToken(secret),
     parsing: await Promise.all([
       link, link.replace('https://daylight-', 'HTTPS://DAYLIGHT-'), `${server}/setup/#${frag.toLowerCase().replace(/-/g, ' ')}`,
       `  ${link}\n`, `${server}/setup#${otherCheck}`, `http://daylight-0123456789ab.example.workers.dev/setup#${frag}`,
       `${server}/other#${frag}`, `${server}/setup?x=1#${frag}`, `${server}/setup#SETUP-ABCD`, `${server}/setup`, code,
+      `https://daylight-help.example/setup#${frag}`, `https://daylight-0123456789ab.example.workers.dev.evil.example/setup#${frag}`,
+      `https://daylight-0123456789ab.example.workers.dev:8443/setup#${frag}`,
       await ds.formatCode(ds.fromHex(SECRET_HEX)), 'hello',
     ].map(parse)),
   };

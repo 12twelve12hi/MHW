@@ -510,3 +510,32 @@ test('files.tick: Lab frames on the pairing ack topic (hello, x-st naming the ho
     assert.equal((await c.files.tick()).delivered, 1, 'the Inbox’s own ack still delivers it');
   } finally { await relay.close(); }
 });
+
+test('setup links: only a Daylight Worker on workers.dev; any other host is refused before the Server code is sent (3.5)', async () => {
+  const secret = ds.fromHex('00112233445566778899aabbccddeeff');
+  const server = 'https://daylight-0123456789ab.anjan.workers.dev';
+  const link = await srv.formatSetupLink(server, secret);
+  const frag = link.split('#')[1];
+  assert.equal((await srv.parseSetupLink(link)).server, server);
+  assert.equal((await srv.parseSetupLink(link.replace('https://daylight-', 'HTTPS://DAYLIGHT-'))).server, server, 'case is ignored');
+  const lookalikes = [
+    'https://daylight-help.example', 'https://attacker.example', `${server}.evil.example`, 'https://daylight-0123456789ab.workers.dev',
+    'https://x.daylight-0123456789ab.anjan.workers.dev', 'https://daylight-0123456789abc.anjan.workers.dev', 'https://daylight-0123456789AG.anjan.workers.dev',
+    `${server}:8443`, 'https://daylight-0123456789ab.anjan.workers.dev.',
+  ];
+  for (const host of lookalikes) {
+    await assert.rejects(srv.parseSetupLink(`${host}/setup#${frag}`), (e) => e.reason === 'host' && /workers\.dev/.test(e.message), host);
+    await assert.rejects(srv.formatSetupLink(host, secret), (e) => e.reason === 'host', host);
+  }
+  for (const host of ['http://daylight-0123456789ab.anjan.workers.dev', 'http://localhost:8787', 'http://127.0.0.1:8787']) {
+    await assert.rejects(srv.parseSetupLink(`${host}/setup#${frag}`), (e) => e.reason === 'format', host);
+  }
+  // DaylightServer.setup() sends nothing to such a host: the scenario of a look-alike link sent by a stranger.
+  const sent = [];
+  const phone = new srv.DaylightServer({
+    pairing: { secret: SECRET, relay: 'https://ntfy.sh' }, storage: new ds.MemoryStorage(),
+    fetch: async (url, init) => { sent.push([url, init?.body]); return Response.json({ server: 'https://daylight-help.example', api: 1 }); },
+  });
+  await assert.rejects(phone.setup(`https://daylight-help.example/setup#${frag}`), (e) => e.code === 'BAD_REQUEST' && e.reason === 'host');
+  assert.deepEqual(sent, []);
+});

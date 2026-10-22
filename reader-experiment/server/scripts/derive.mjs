@@ -200,7 +200,7 @@ export async function smoke(url, { fetchFn = fetch, sleep = sleepMs, tries = 30,
 
 const checksLine = (s) => `Checks: ${s.checks.map((c) => `${c.name} ${c.ok ? 'ok' : `FAILED (${c.detail})`}`).join(' · ')}.`;
 
-const SETUP_STEPS = (reason) => [
+export const SETUP_STEPS = (reason) => [
   `**Next: give the server your pairing, once.**${reason === 'locked' ? ' (A device re-paired and locked the old server, so this is a new server address and a new link.)' : reason === 'requested' ? ' (You asked for a new setup link: the old one and the old server address no longer work.)' : ''}`,
   '',
   '1. Copy the setup link. It is kept in your Cloudflare account and never shown here, because this repository’s logs are public. Either:',

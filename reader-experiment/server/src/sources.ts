@@ -29,29 +29,32 @@ export interface ResolvedSource {
   sizes?: number[];
 }
 
-export async function sha256Hex(s: string): Promise<string> {
-  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)));
-  return [...h].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
 /** Stores a text source for 24 h (unless optional writes are paused). -> its id. */
 export async function storeTextSource(ctx: Ctx, id: Identity, text: string, title: string, url: string | null, paused: boolean): Promise<string> {
-  const sourceId = (await sha256Hex(text)).slice(0, 32);
+  const bytes = new TextEncoder().encode(text); // once, for both the hash and the size (2.2 rule 6)
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  const sourceId = [...h.slice(0, 16)].map((b) => b.toString(16).padStart(2, '0')).join('');
   if (!paused) {
     await ctx.db.run(
       `INSERT INTO sources (id, fp, type, title, url, text, bytes, created, expires) VALUES (?, ?, 'text', ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET expires = excluded.expires, fp = excluded.fp`,
-      sourceId, id.values.fingerprint, title.slice(0, 300), url, text, new TextEncoder().encode(text).byteLength, ctx.now, ctx.now + ctx.limits.sourceTtl,
+      sourceId, id.values.fingerprint, title.slice(0, 300), url, text, bytes.byteLength, ctx.now, ctx.now + ctx.limits.sourceTtl,
     );
   }
   return sourceId;
 }
 
-export function checkText(text: unknown): string {
+/**
+ * A text source's checks (9.2): at most 400,000 characters and 1,000,000 UTF-8 bytes (413 TOO_LARGE), and within the
+ * plan's caps: on Workers Free 100,000 characters and 200,000 bytes, since longer text does not fit in 10 ms of CPU
+ * (2.2 rule 6; 413 SERVER_LIMIT, limit = the plan's character cap).
+ */
+export function checkText(text: unknown, caps: { aiTextChars: number; aiTextBytes: number } = { aiTextChars: TEXT_MAX_CHARS, aiTextBytes: TEXT_MAX_BYTES }): string {
   if (typeof text !== 'string' || !text.trim()) throw new ServerError(400, 'BAD_REQUEST', { message: 'That request isn’t valid (source.text).' });
-  if (text.length > TEXT_MAX_CHARS || new TextEncoder().encode(text).byteLength > TEXT_MAX_BYTES) {
-    throw new ServerError(413, 'TOO_LARGE', { limit: TEXT_MAX_BYTES });
-  }
+  if (text.length > TEXT_MAX_CHARS) throw new ServerError(413, 'TOO_LARGE', { limit: TEXT_MAX_BYTES });
+  const bytes = text.length > caps.aiTextBytes / 3 ? new TextEncoder().encode(text).byteLength : text.length * 3; // UTF-8: ≤ 3 bytes per UTF-16 unit
+  if (bytes > TEXT_MAX_BYTES) throw new ServerError(413, 'TOO_LARGE', { limit: TEXT_MAX_BYTES });
+  if (text.length > caps.aiTextChars || bytes > caps.aiTextBytes) throw new ServerError(413, 'SERVER_LIMIT', { limit: caps.aiTextChars });
   return text;
 }
 
@@ -62,11 +65,11 @@ export async function fetchUrlSource(ctx: Ctx, id: Identity, url: string): Promi
   if (res.status < 200 || res.status >= 300) throw new ServerError(502, 'FETCH_FAILED');
   const type = (res.headers.get('Content-Type') ?? '').toLowerCase();
   const body = new TextDecoder().decode(res.body);
-  if (type.startsWith('text/plain')) return { text: body.trim(), title: '', url: res.url };
+  if (type.startsWith('text/plain')) return { text: body.trim().slice(0, Math.min(TEXT_MAX_CHARS, ctx.caps.aiTextChars)), title: '', url: res.url };
   if (type && !/html|xml/.test(type)) throw new ServerError(422, 'AI_BAD_INPUT');
   const { title, text } = await extractText(body);
   if (!text) throw new ServerError(422, 'AI_BAD_INPUT');
-  return { text: text.slice(0, TEXT_MAX_CHARS), title, url: res.url };
+  return { text: text.slice(0, Math.min(TEXT_MAX_CHARS, ctx.caps.aiTextChars)), title, url: res.url };
 }
 
 export { checkFetchUrl };

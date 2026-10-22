@@ -6,7 +6,9 @@ name: Reader experiment - Daylight server
 # deploys, smoke-tests the live Worker and makes a one-time setup link that one app uses to give the server its Server
 # code (DESIGN.md 3.5, 12). The job summary ends with "Next: ...". Without the secrets the deploy job only explains
 # what to add; it never fails for a missing secret.
-# To apply changed secrets or variables: open the latest run of this workflow and choose "Re-run all jobs".
+# To apply changed secrets or variables: open the latest run of this workflow and choose "Re-run all jobs" (GitHub offers
+# that for 30 days after a run; any re-run deploys, and never makes a new setup link). After 30 days: push a change under
+# reader-experiment/server/, or `gh workflow run rx-server.yml --ref claude/sweet-goldberg-ej1nb0`.
 on:
   push:
     branches: [claude/sweet-goldberg-ej1nb0]
@@ -22,7 +24,7 @@ on:
         type: boolean
         default: true
       new_setup_link:
-        description: "New setup link (for a new pairing, or if the link leaked); the server moves to a new address"
+        description: "New setup link (for a new pairing, or if the link leaked); the server moves to a new address. This run's first attempt only: Re-run all jobs keeps the link it made"
         type: boolean
         default: false
 
@@ -38,6 +40,9 @@ jobs:
     name: Build and test
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read                  # the change check reads which commit this workflow last deployed
     outputs:
       server_changed: ${{ steps.changes.outputs.server }}
     defaults:
@@ -72,16 +77,13 @@ jobs:
           fi
           echo "### Daylight server: tests passed" >> "$GITHUB_STEP_SUMMARY"
           echo "Bundle: $size bytes gzipped (Free plan limit 3 MB), no test hooks." >> "$GITHUB_STEP_SUMMARY"
-      - name: Did this push change the server? (share/js-only pushes are tested, not deployed)
+      - name: Did the server change since its last deploy? (other share/js changes are tested, not deployed)
         id: changes
         env:
           GH_TOKEN: ${{ github.token }}
-          BEFORE: ${{ github.event.before }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" != push ] || [ -z "${BEFORE//0/}" ]; then echo server=true >> "$GITHUB_OUTPUT"; exit 0; fi
-          files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA" --jq '.files[].filename' || echo FAILED)
-          if echo "$files" | grep -v '\.md$' | grep -qE '^(FAILED$|reader-experiment/server/|\.github/workflows/rx-server\.yml$)'; then
-            echo server=true >> "$GITHUB_OUTPUT"; else echo server=false >> "$GITHUB_OUTPUT"; fi
+        # Compares this commit with the one the last successful deploy shipped (not with this push's parent, so a
+        # change whose run was cancelled while pending still ships), counting the share/js files the Worker bundles.
+        run: node scripts/changes.mjs
 
   ntfy-attach:
     name: ntfy.sh external attachments (informational)
@@ -100,11 +102,11 @@ jobs:
   deploy:
     name: Deploy to Cloudflare (when the secrets exist)
     needs: test
-    # Deploy on server changes, on "Re-run all jobs" and on a manual run (unless its "deploy" box is off); never on
-    # pull_request.
+    # Deploy on server changes, on "Re-run all jobs" (of any run, also a manual one whose "deploy" box was off: a re-run
+    # is how changed secrets are applied) and on a manual run (unless its "deploy" box is off); never on pull_request.
     if: >-
       (needs.test.outputs.server_changed == 'true' || github.run_attempt > 1 || github.event_name == 'workflow_dispatch')
-      && (github.event_name != 'workflow_dispatch' || inputs.deploy)
+      && (github.event_name != 'workflow_dispatch' || inputs.deploy || github.run_attempt > 1)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: daylight-server     # created on first use; protect it in Settings › Environments (README)
@@ -125,7 +127,7 @@ jobs:
         if: env.HAS_CF != 'true'
         working-directory: .
         run: |
-          msg="The Daylight server is built and tested but not deployed. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in GitHub › Settings › Secrets and variables › Actions, then open this run and choose Re-run all jobs (see reader-experiment/server/README.md, Turn it on)."
+          msg="The Daylight server is built and tested but not deployed. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in GitHub › Settings › Secrets and variables › Actions, then open this run and choose Re-run all jobs. GitHub offers that for 30 days after a run; later, push a change under reader-experiment/server/ or run gh workflow run rx-server.yml --ref claude/sweet-goldberg-ej1nb0 (see reader-experiment/server/README.md, Turn it on)."
           echo "::notice title=Daylight server not deployed::$msg"
           printf '### Daylight server\n\n%s\n\nNext: add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID.\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
 
@@ -180,7 +182,10 @@ jobs:
           fi
           test -n "$id"
           echo "D1_ID=$id" >> "$GITHUB_ENV"
-          sed -e "s/00000000-0000-0000-0000-000000000000/$id/" wrangler.toml > wrangler.deploy.toml
+          # wrangler.toml names the database without an id (so `wrangler d1 execute daylight-server` run in this folder
+          # looks it up by name); the deploy config gets the id.
+          sed -e "s/^database_name = \"daylight-server\"$/&\ndatabase_id = \"$id\"/" wrangler.toml > wrangler.deploy.toml
+          grep -qx "database_id = \"$id\"" wrangler.deploy.toml
           npx wrangler d1 migrations apply daylight-server --remote -c wrangler.deploy.toml
 
       - name: Server code or setup link, and the workers.dev address
@@ -189,7 +194,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          NEW_SETUP_LINK: ${{ github.event_name == 'workflow_dispatch' && inputs.new_setup_link }}
+          NEW_SETUP_LINK: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.new_setup_link }}
         # With the secret DAYLIGHT_SERVER_CODE (the gate set WORKER_NAME) only the address. Without it: the D1 setup row
         # (a new Worker name and link the first time, after a lock or on request; else the waiting link, or the Server
         # code an app sent). The subdomain is created only when the API says the account has none. Masks everything it
@@ -262,14 +267,11 @@ jobs:
             echo "::warning::This account refused the rate-limiting binding; deploying without it."
             node scripts/cf-check.mjs drop-ratelimit wrangler.deploy.toml && deploy
           fi
-          # Optional secrets removed from GitHub (and a used setup token) are removed from the Worker too.
-          existing=$(npx wrangler secret list -c wrangler.deploy.toml --format json 2>/dev/null | jq -r '.[].name' || true)
-          while read -r name; do
-            if [ -n "$name" ] && grep -qx "$name" <<< "$existing"; then
-              npx wrangler secret delete "$name" -c wrangler.deploy.toml > /dev/null || true
-            fi
-          done < "$RUNNER_TEMP/delete.txt"
-          rm -f "$RUNNER_TEMP/put.json" "$RUNNER_TEMP/delete.txt" "$RUNNER_TEMP/deploy.err" "$RUNNER_TEMP/deploy.out"
+          rm -f "$RUNNER_TEMP/put.json" "$RUNNER_TEMP/deploy.err" "$RUNNER_TEMP/deploy.out"
+          # Optional secrets removed from GitHub (and a used setup token) are removed from the Worker too: --secrets-file
+          # only adds. Retried; a secret it could not remove is a warning, and DAYLIGHT_PAIRING fails the job.
+          node scripts/secrets.mjs remove "$RUNNER_TEMP/delete.txt" wrangler.deploy.toml
+          rm -f "$RUNNER_TEMP/delete.txt"
 
       - name: Remove the Workers of earlier Server codes and setup links
         if: steps.gate.outputs.ok == 'true'
@@ -277,13 +279,18 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CI: 'true'
+        # An earlier Worker left running is harmless (it never adopts the new Server code, 3.5) but should go: a failed
+        # listing or delete is a warning, so the job still finishes and announces.
         run: |
-          scripts=$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts" \
-            | jq -r '.result[].id' || true)
-          grep -E '^daylight-[0-9a-f]{12}$' <<< "$scripts" | grep -vx "$WORKER_NAME" | while read -r old; do
+          if ! scripts=$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts" | jq -r '.result[].id'); then
+            echo "::warning title=Earlier Daylight Workers::Couldn't list this account's Workers, so an earlier Daylight Worker may still be deployed. Re-run all jobs to remove it, or delete it in Cloudflare › Workers & Pages."
+            exit 0
+          fi
+          while read -r old; do
             echo "::add-mask::$old"
-            npx wrangler delete --name "$old" --force > /dev/null || echo "::warning::Couldn't remove an earlier Daylight Worker; it is locked or unused."
-          done || true
+            npx wrangler delete --name "$old" --force > /dev/null \
+              || echo "::warning title=Earlier Daylight Workers::Couldn't remove an earlier Daylight Worker. Re-run all jobs to try again, or delete it in Cloudflare › Workers & Pages."
+          done < <(grep -E '^daylight-[0-9a-f]{12}$' <<< "$scripts" | grep -vx "$WORKER_NAME" || true)
 
       - name: Email routing
         if: steps.gate.outputs.ok == 'true' && steps.r2.outputs.r2 == 'on'
