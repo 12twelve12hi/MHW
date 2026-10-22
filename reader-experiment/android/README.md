@@ -199,11 +199,15 @@ artifacts (`daylight-share-apk` and `daylight-share-debug-apk`, the latter conta
 choice; the phone unpaired, paired with a row in every state, and its Settings; the Inbox new (with its code), with
 items, and its Settings.
 
-- `AccessibilityTest` (F27) runs the Accessibility Test Framework on each (Compose `enableAccessibilityChecks()`,
-  F27.2), checks that every control has a label, and, with Comfort at 200 % text on a 360 dp phone, that no text's
-  layout overflows (`TextLayoutResult.hasVisualOverflow`) and no control is under 56 dp (F27.4). It also checks the
-  Comfort switch and its words against `LAB_TEXT`, the announcements, the static Inbox, the typed code, and the
-  Inbox's relay-check and out-of-space sentences on screen.
+- `AccessibilityTest` (F27) checks each screen against the Accessibility Test Framework's error rules (F27.2): every
+  control has words for a screen reader, a touch target of at least 48 dp and its own place, and text fields are named
+  by their labels; the text colours are at least 4.5:1. Compose's `enableAccessibilityChecks()` runs as well, but under
+  Robolectric the framework sees only the Android views, not Compose's nodes (it passes an unlabelled 20 dp button), so
+  the test applies the same rules to the semantics tree and shows they catch that button. With Comfort at 200 % text
+  on a 360 dp phone (native graphics, so text is measured as on a device), no text exceeds its lines or its box and no
+  control is under 56 dp (F27.4; measured against each text's own box, because the layout the semantics action hands
+  out is redone at the column's full width). It also checks the Comfort switch and its words against `LAB_TEXT`, the
+  announcements, the static Inbox, the typed code, and the Inbox's relay-check and out-of-space sentences on screen.
 - `LabOffParityTest` (LAB-PLAN 1.7, F00.2) compares what a screen reader gets from each screen (the merged Compose
   semantics tree: type, label and value of each node, in order) with `app/src/test/lab-off-baseline/<screen>.json`,
   recorded from the P0 close-out (protocol 1.1 and the F27 baseline). Relative times, the version and the Inbox's

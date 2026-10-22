@@ -5,6 +5,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.LocalRippleConfiguration
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -54,9 +55,14 @@ import java.io.File
 
 /**
  * The accessibility baseline (LAB-PLAN F27; not a Lab feature) on every main screen of both roles: the Accessibility
- * Test Framework's checks (F27.2), a label on every control, announced status changes, and with Comfort at the largest
- * text on a 360 dp phone no text cut short and no control under 56 dp (F27.4). The window is tall, so every row of a
- * list is laid out and checked; native graphics, so text is measured as on a device.
+ * Test Framework's error rules (F27.2), announced status changes, and with Comfort at the largest text on a 360 dp phone
+ * no text cut short and no control under 56 dp (F27.4). The window is tall, so every row of a list is laid out and
+ * checked; native graphics, so text is measured as on a device.
+ *
+ * Compose's `enableAccessibilityChecks()` runs too, but under Robolectric the framework sees only the Android views
+ * (DecorView … AndroidComposeView), never Compose's nodes, so it passes whatever the screen holds. The same rules run
+ * on the semantics tree instead ([ScreenKit.accessibilityProblems]); [theChecksCatchAnUnlabelledSmallButton] shows they
+ * catch what the framework would.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w360dp-h16000dp")
@@ -78,15 +84,14 @@ class AccessibilityTest {
     @Test fun inboxSettings() = checkScreen(MainScreen.INBOX_SETTINGS)
 
     private fun checkScreen(screen: MainScreen) {
-        ScreenKit.screenReaderOn(app)
         screen.prepare(app)
         screen.open(compose)
         compose.enableAccessibilityChecks()
 
         // As shipped (Comfort off, the system's text size).
         compose.onRoot().tryPerformAccessibilityChecks()
-        val unlabelled = ScreenKit.unlabelledControls(compose)
-        assertTrue("${screen.file}: controls without a label:\n${unlabelled.joinToString("\n")}", unlabelled.isEmpty())
+        val problems = ScreenKit.accessibilityProblems(compose)
+        assertTrue("${screen.file}:\n${problems.joinToString("\n")}", problems.isEmpty())
 
         // Comfort at the largest text size, on a 360 dp phone (F27.4).
         app.setComfort(true)
@@ -94,33 +99,56 @@ class AccessibilityTest {
         screen.open(compose)
         val cut = ScreenKit.textOverflows(compose)
         assertTrue("${screen.file}, Comfort at ${ScreenKit.LARGEST_FONT_SCALE}x text: text cut short or clipped:\n${cut.joinToString("\n")}", cut.isEmpty())
-        val small = ScreenKit.smallControls(compose, COMFORT_TARGET.value)
-        assertTrue("${screen.file}, Comfort: controls under ${COMFORT_TARGET.value.toInt()} dp:\n${small.joinToString("\n")}", small.isEmpty())
         compose.onRoot().tryPerformAccessibilityChecks()
-        val unlabelledComfort = ScreenKit.unlabelledControls(compose)
-        assertTrue("${screen.file}, Comfort: controls without a label:\n${unlabelledComfort.joinToString("\n")}", unlabelledComfort.isEmpty())
+        val comfortProblems = ScreenKit.accessibilityProblems(compose, minTargetDp = COMFORT_TARGET.value)
+        assertTrue("${screen.file}, Comfort:\n${comfortProblems.joinToString("\n")}", comfortProblems.isEmpty())
     }
 
-    /** The Accessibility Test Framework really runs here: an unlabelled 20 dp button fails its checks. */
+    /** The rules catch what the framework would: an unlabelled 20 dp button, twice on the same spot. */
     @Test
-    fun theAccessibilityChecksRunHere() {
-        ScreenKit.screenReaderOn(app)
+    fun theChecksCatchAnUnlabelledSmallButton() {
         compose.runOnUiThread {
             compose.activity.setContent {
-                androidx.compose.foundation.layout.Box(
-                    androidx.compose.ui.Modifier.size(20.dp).clickable { },
-                )
+                androidx.compose.foundation.layout.Box {
+                    androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.size(20.dp).clickable { })
+                    androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.size(20.dp).clickable { })
+                }
             }
         }
         compose.waitForIdle()
-        val (errors, seen) = ScreenKit.atfErrors(compose)
-        compose.enableAccessibilityChecks()
-        val failure = runCatching { compose.onRoot().tryPerformAccessibilityChecks() }.exceptionOrNull()
-        assertTrue(
-            "an unlabelled 20 dp button passed the checks. Framework errors: $errors; Compose's checks: ${failure?.javaClass?.simpleName}; " +
-                "the framework saw ${seen.size} elements:\n${seen.joinToString("\n")}",
-            errors.isNotEmpty() && failure != null,
+        val problems = ScreenKit.accessibilityProblems(compose)
+        assertEquals(problems.joinToString("\n"), 2, problems.count { it.startsWith("no label") })
+        assertEquals(problems.joinToString("\n"), 2, problems.count { it.startsWith("touch target under 48") })
+        assertEquals(problems.joinToString("\n"), 1, problems.count { it.startsWith("controls on the same spot") })
+    }
+
+    /**
+     * Text contrast (the framework's TextContrastCheck needs a screenshot): every text colour on every background the
+     * app uses is at least 4.5:1 (WCAG AA), and Comfort's secondary text is black.
+     */
+    @Test
+    fun theColoursHaveEnoughContrast() {
+        fun ratio(a: androidx.compose.ui.graphics.Color, b: androidx.compose.ui.graphics.Color): Float {
+            val (hi, lo) = listOf(a.luminance(), b.luminance()).sortedDescending()
+            return (hi + 0.05f) / (lo + 0.05f)
+        }
+        val pairs = mapOf(
+            "text on paper" to (com.daylight.share.ui.Ink to com.daylight.share.ui.Paper),
+            "secondary text on paper" to (com.daylight.share.ui.Pencil to com.daylight.share.ui.Paper),
+            "secondary text on wash" to (com.daylight.share.ui.Pencil to com.daylight.share.ui.Wash),
+            "a primary button's words" to (com.daylight.share.ui.Paper to com.daylight.share.ui.Ink),
+            "a disabled primary button's words" to (com.daylight.share.ui.Pencil to com.daylight.share.ui.Wash),
         )
+        for ((what, colours) in pairs) {
+            val r = ratio(colours.first, colours.second)
+            assertTrue("$what: $r:1", r >= 4.5f)
+        }
+        var comfortSmall = androidx.compose.ui.graphics.Color.Unspecified
+        compose.runOnUiThread {
+            compose.activity.setContent { DaylightTheme(comfort = true) { comfortSmall = androidx.compose.material3.MaterialTheme.typography.bodySmall.color } }
+        }
+        compose.waitForIdle()
+        assertEquals(com.daylight.share.ui.Ink, comfortSmall)
     }
 
     /** The F27.4 measure itself: a text cut to one line is caught, a short line in a wide column is not. */

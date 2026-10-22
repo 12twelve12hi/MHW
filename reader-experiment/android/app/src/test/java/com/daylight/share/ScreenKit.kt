@@ -1,10 +1,8 @@
 package com.daylight.share
 
-import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ComponentName
 import android.content.Intent
 import android.content.IntentFilter
-import android.view.accessibility.AccessibilityManager
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -24,9 +22,6 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import com.daylight.share.core.FileOutboxStore
-import com.google.android.apps.common.testing.accessibility.framework.AccessibilityCheckPreset
-import com.google.android.apps.common.testing.accessibility.framework.AccessibilityCheckResult
-import com.google.android.apps.common.testing.accessibility.framework.uielement.AccessibilityHierarchyAndroid
 import com.daylight.share.core.ItemHeader
 import com.daylight.share.core.Kind
 import com.daylight.share.core.OutboxRow
@@ -172,19 +167,6 @@ object ScreenKit {
         })
     }
 
-    /**
-     * Has the system report a screen reader running (an enabled service, touch exploration), as on a phone with TalkBack:
-     * Compose builds its accessibility nodes, which the Accessibility Test Framework's checks read, only then.
-     */
-    fun screenReaderOn(app: App) {
-        val am = shadowOf(app.getSystemService(AccessibilityManager::class.java))
-        val talkBack = AccessibilityServiceInfo().apply { feedbackType = AccessibilityServiceInfo.FEEDBACK_SPOKEN }
-        am.setInstalledAccessibilityServiceList(listOf(talkBack))
-        am.setEnabledAccessibilityServiceList(listOf(talkBack))
-        am.setEnabled(true)
-        am.setTouchExplorationEnabled(true)
-    }
-
     /** Shows the app at the largest system font scale (linear: stricter than Android 14's non-linear scaling). */
     fun showAtLargestText(compose: AppRule) {
         compose.runOnUiThread {
@@ -227,37 +209,42 @@ object ScreenKit {
         return out
     }
 
-    /**
-     * The Accessibility Test Framework's checks (its latest preset), run on the app's window as the framework builds it
-     * from the views and Compose's accessibility nodes. Returns the errors, and how many elements the framework saw.
-     */
-    fun atfErrors(compose: AppRule): Pair<List<String>, List<String>> {
-        lateinit var hierarchy: AccessibilityHierarchyAndroid
-        compose.runOnUiThread { hierarchy = AccessibilityHierarchyAndroid.newBuilder(compose.activity.window.decorView).build() }
-        val seen = hierarchy.activeWindow.allViews.map { v ->
-            "${v.className}${v.contentDescription?.let { " \"$it\"" } ?: ""}${v.text?.let { " '$it'" } ?: ""}"
-        }
-        val errors = AccessibilityCheckPreset.getAccessibilityHierarchyChecksForPreset(AccessibilityCheckPreset.LATEST)
-            .flatMap { it.runCheckOnHierarchy(hierarchy) }
-            .filter { it.type == AccessibilityCheckResult.AccessibilityCheckResultType.ERROR }
-            .map { r -> "${r.sourceCheckClass.simpleName}: ${r.element?.className} ${r.element?.text ?: r.element?.contentDescription ?: ""}" }
-        return errors to seen
-    }
-
-    /** Every control (merged tree) smaller than [minDp] in either direction. */
+    /** Every control (merged tree) whose touch target is under [minDp] in either direction. */
     fun smallControls(compose: AppRule, minDp: Float): List<String> {
-        val min = with(compose.density) { minDp * density } - 0.5f
+        val dp = compose.density.density
         return compose.onAllNodes(hasClickAction()).fetchSemanticsNodes()
-            .filter { it.boundsInRoot.height < min || it.boundsInRoot.width < min }
-            .map { n ->
-                val dp = compose.density.density
-                "${describe(n)?.label ?: "(no label)"}: ${n.boundsInRoot.width / dp} x ${n.boundsInRoot.height / dp} dp"
+            .mapNotNull { n ->
+                // The touch target: the node's box, or its layout's when minimumInteractiveComponentSize pads it.
+                val w = maxOf(n.boundsInRoot.width, n.layoutInfo.width.toFloat()) / dp
+                val h = maxOf(n.boundsInRoot.height, n.layoutInfo.height.toFloat()) / dp
+                if (w < minDp - 0.5f || h < minDp - 0.5f) "${describe(n)?.label ?: "(no label)"}: $w x $h dp" else null
             }
     }
 
     /** Every control (merged tree: a button, a switch, a choice, a text field) without words for a screen reader. */
     fun unlabelledControls(compose: AppRule): List<String> =
         tree(compose.onRoot().fetchSemanticsNode()).filter { it.isControl && it.label.isNullOrBlank() }.map { it.toString() }
+
+    /**
+     * The Accessibility Test Framework's error rules, applied to the Compose semantics tree (the framework itself sees
+     * only the Android views under Robolectric, not Compose's nodes): every control has words for a screen reader
+     * (SpeakableTextPresentCheck), a touch target of at least [minTargetDp] (TouchTargetSizeCheck), its own place
+     * (DuplicateClickableBoundsCheck), and a text field is named by its label, not a content description
+     * (EditableContentDescCheck).
+     */
+    fun accessibilityProblems(compose: AppRule, minTargetDp: Float = 48f): List<String> {
+        val out = ArrayList<String>()
+        unlabelledControls(compose).forEach { out += "no label: $it" }
+        smallControls(compose, minTargetDp).forEach { out += "touch target under $minTargetDp dp: $it" }
+        compose.onAllNodes(hasClickAction()).fetchSemanticsNodes()
+            .groupBy { it.boundsInRoot.run { listOf(left, top, right, bottom).map { v -> v.toInt() } } }
+            .filterValues { it.size > 1 }
+            .forEach { (bounds, nodes) -> out += "controls on the same spot $bounds: ${nodes.map { describe(it)?.label }}" }
+        compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.SetText)).fetchSemanticsNodes()
+            .filter { !it.config.getOrNull(SemanticsProperties.ContentDescription).isNullOrEmpty() }
+            .forEach { out += "text field with a content description: ${describe(it)?.label}" }
+        return out
+    }
 
     // ---------------------------------------------------------------------------- the semantics tree (LAB-PLAN 1.7)
 
