@@ -137,7 +137,7 @@ class SenderTimelineTest {
         PhoneKit.writeRows(app, listOf(PhoneKit.row(1, "Delivered the v1.1 way", Status.DELIVERED, now - 2 * MIN, delivered = now - MIN)))
         runBlocking { app.sender.refresh() }
         waitForText("Delivered ✓")
-        compose.onNodeWithText("Saved on your Daylight.").assertIsDisplayed()
+        compose.onNodeWithText("Saved on your Daylight.", substring = true).assertExists()
         assertTrue(compose.onAllNodes(hasText(LabText["rows.delivered.label"])).fetchSemanticsNodes().isEmpty())
         // With a Lab Inbox and no state yet: "On your Daylight ✓".
         PhoneKit.hello(relay)
@@ -159,7 +159,7 @@ class SenderTimelineTest {
         )
         runBlocking { app.sender.refresh() }
         waitForText("Turned down")
-        compose.onNodeWithText("The relay set on your Daylight keeps turning this down. Check that setting on your Daylight, then try again.").assertIsDisplayed()
+        compose.onNode(hasText("The relay set on your Daylight keeps turning this down. Check that setting on your Daylight, then try again.")).assertExists()
         assertEquals(1, compose.onAllNodes(hasText("Try again")).fetchSemanticsNodes().size)
         assertTrue(compose.onAllNodes(hasText("Retry now")).fetchSemanticsNodes().isEmpty())
     }

@@ -130,7 +130,7 @@ class WhatsInLabPhoneTest {
         PhoneKit.grantNotifications(app)
         openWhatsInLab()
         compose.onNode(hasText(LabText.featureName("F26")) and hasClickAction()).performClick()
-        waitForText(LabText["setup.title"])
+        waitForText(LabText["setup.testSend"])
         compose.onNodeWithText(LabText.fill(LabText["setup.ok"], mapOf("check" to LabText["setup.checks.paired"]))).assertIsDisplayed()
         compose.onNodeWithText(LabText.fill(LabText["setup.ok"], mapOf("check" to LabText["setup.checks.notifications"]))).assertIsDisplayed()
         compose.onNodeWithText(LabText.fill(LabText["setup.notOk"], mapOf("check" to LabText["setup.checks.batteryOptimisation"]))).assertIsDisplayed()
@@ -171,7 +171,8 @@ class WhatsInLabPhoneTest {
         PhoneKit.phone(app, relay)
         openWhatsInLab()
         compose.onNode(hasText(LabText.featureName("F26")) and hasClickAction()).performClick()
-        waitForText(LabText["setup.title"])
-        compose.onNodeWithText(LabText["linkOnly.android"]).assertIsDisplayed()
+        // Setup check is open once its test button shows (its title is F26's name, which What's in Lab shows too).
+        waitForText(LabText["setup.testSend"])
+        compose.onNodeWithText(LabText["linkOnly.android"]).assertExists()
     }
 }

@@ -181,7 +181,7 @@ fun PhoneSetupCheck(activity: MainActivity, onBack: () -> Unit, onExit: () -> Un
     val app = App.of(activity)
     val scope = rememberCoroutineScope()
     val rows by app.sender.rows.collectAsStateWithLifecycle()
-    val snap by app.sender.labSnapshot.collectAsStateWithLifecycle()
+    val heard by app.sender.labSnapshot.collectAsStateWithLifecycle()
     var testError by remember { mutableStateOf<String?>(null) }
     var sending by remember { mutableStateOf(false) }
     var showLog by remember { mutableStateOf(false) }
@@ -192,7 +192,7 @@ fun PhoneSetupCheck(activity: MainActivity, onBack: () -> Unit, onExit: () -> Un
     // The test article is followed while it is on its way (the ack topic every 30 s, as the timeline's faster checks).
     val testId = app.prefs.labTestId
     val testRow = rows.firstOrNull { it.id == testId }
-    val testState = testRow?.let { snap?.state(it.id)?.s }
+    val testState = testRow?.let { heard?.state(it.id)?.s }
     LaunchedEffect(testId, testRow?.status, testState) {
         while (testRow != null && testState != "reader" && testRow.status != Status.EXPIRED) {
             delay(com.daylight.share.core.lab.Lab.FAST_CHECK_MS)
@@ -246,7 +246,7 @@ fun PhoneSetupCheck(activity: MainActivity, onBack: () -> Unit, onExit: () -> Un
                     Text(if (delivered) LabText.fill(LabText["$S.ok"], mapOf("check" to LabText["$S.delivered"])) else LabText["$S.delivered"], style = MaterialTheme.typography.bodyLarge)
                     Text(if (inReader) LabText.fill(LabText["$S.ok"], mapOf("check" to LabText["$S.inReader"])) else LabText["$S.inReader"], style = MaterialTheme.typography.bodyLarge)
                     if (!inReader) {
-                        val ctx = snap?.let { LabRowText.Context.of(true, it, testRow.id, PhoneLab.online(activity)) } ?: LabRowText.Context(true, online = PhoneLab.online(activity))
+                        val ctx = heard?.let { LabRowText.Context.of(true, it, testRow.id, PhoneLab.online(activity)) } ?: LabRowText.Context(true, online = PhoneLab.online(activity))
                         Text(LabRowText.of(testRow, System.currentTimeMillis(), ctx).label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced())
                     }
                 }
@@ -282,14 +282,14 @@ private fun CheckLine(check: String, ok: Boolean, button: String?, onFix: () -> 
 
 /** Copy diagnostics (F26): already redacted by `SetupCheck.diagnosticsReport`. */
 private suspend fun diagnostics(app: App): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-    val snap = runCatching { app.sender.ledger()?.snapshot() }.getOrNull()
+    val ledger = runCatching { app.sender.ledger()?.snapshot() }.getOrNull()
     SetupCheck.diagnosticsReport(
         app = LabText.appName(PhoneLab.PLATFORM),
         version = BuildConfig.VERSION_NAME,
         platform = PhoneLab.PLATFORM,
         lab = app.prefs.lab,
-        caps = snap?.caps ?: emptyList(),
-        checkedIn = snap?.checkedIn,
+        caps = ledger?.caps ?: emptyList(),
+        checkedIn = ledger?.checkedIn,
         statuses = app.sender.rows.value.map { it.status },
         relay = app.sender.pairing()?.relay ?: "",
         log = ActivityLog.read(app),

@@ -403,14 +403,16 @@ private fun LabRowView(row: OutboxRow, t: LabRowText, showAll: Boolean, remove: 
         }
         val delivered = if (row.status == Status.DELIVERED && row.delivered > 0) "delivered ${ago(row.delivered)}" + (row.deliveredBy.ifEmpty { null }?.let { " to $it" } ?: "") else null
         Text(listOfNotNull(kind, sizeText(row.size).ifEmpty { null }, ago(row.created).ifEmpty { null }, delivered).joinToString(" · "), style = MaterialTheme.typography.bodySmall)
-        Text(t.label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.announced().semantics { contentDescription = t.a11yLabel })
         // Rules 1 and 4 (v1.1's rows) keep v1.1's layout: the sentence always. Final rows show it only in details.
         val full = showAll || !t.final || open
-        if (full) {
-            t.sentence?.let { Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.clearAndSetSemantics { }) }
-            // The step line is hidden from screen readers (the label says it); its box carries only a test tag.
-            t.stepLine?.let { Box(Modifier.testTag(LAB_STEP_LINE_TAG)) { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.clearAndSetSemantics { }) } }
+        // The label and the sentence are one node for a screen reader, read as "{label}. {sentence}" (whether the
+        // sentence shows or not) and announced when it changes.
+        Column(Modifier.fillMaxWidth().semantics(mergeDescendants = true) { contentDescription = t.a11yLabel }.announced()) {
+            Text(t.label, style = MaterialTheme.typography.bodyLarge)
+            if (full) t.sentence?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
         }
+        // The step line is hidden from screen readers (the label says it); its box carries only a test tag.
+        if (full) t.stepLine?.let { Box(Modifier.testTag(LAB_STEP_LINE_TAG)) { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.clearAndSetSemantics { }) } }
         Buttons {
             val button = when (t.action) {
                 RowText.RETRY_NOW -> "Retry now"

@@ -66,6 +66,7 @@ class LabNoteTest {
         LabKit.useRelay(app, relay)
         app.prefs.askedNotifications = true
         app.prefs.deviceName = "Test phone"
+        app.prefs.labNoteShown = true // the phone's one-time note (K4) is LabOneTimeNote's test, below
         app.sender.pair(LabKit.vectorPairing)
         app.setRole(Role.SENDER)
         compose.waitForIdle()
@@ -100,7 +101,8 @@ class LabNoteTest {
         openWhatsInLab(LabText.serverHeadingShort("needs-server"))
         compose.onNodeWithText(LabText.SERVER_HEADING).assertIsDisplayed()
         // F17.2: no hello heard yet.
-        compose.onNodeWithText(LabText.short("needs-inbox")!!).assertIsDisplayed()
+        // The header line (F01's row says the same as its short state).
+        compose.onNode(hasText(LabText.short("needs-inbox")!!) and !hasClickAction()).assertIsDisplayed()
         // Every server feature, never greyed out; each row's state is the heading's, so none shows its own.
         for (id in LabText.SERVER_FEATURE_ORDER) {
             row(id).assertIsDisplayed().assertIsEnabled()
@@ -270,7 +272,8 @@ class LabNoteTest {
         compose.onNodeWithText("Delivered ✓").assertIsDisplayed()
         openSettings()
         openWhatsInLab(LabText.serverHeadingShort("needs-server"))
-        compose.onNodeWithText(LabText.short("needs-inbox")!!).assertIsDisplayed()
+        // The header line (F01's row says the same as its short state).
+        compose.onNode(hasText(LabText.short("needs-inbox")!!) and !hasClickAction()).assertIsDisplayed()
         compose.onNodeWithText("Done").performClick()
         compose.waitForIdle()
 

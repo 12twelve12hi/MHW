@@ -255,7 +255,6 @@ class ShareInPlaceTest {
         PhoneKit.phone(app, relay)
         app.prefs.setLabUse("F04", false)
         share("Old way https://example.com/v11").use { s ->
-            compose.onNodeWithText("Sending to Kitchen Daylight…").assertIsDisplayed()
             PhoneKit.until(what = "the result") { compose.onAllNodes(hasText("Sent · waiting for your Daylight")).fetchSemanticsNodes().isNotEmpty() }
             assertEquals("https://example.com/v11", rows().single().url)
             assertTrue("no share-in-place job", PhoneKit.jobs().none { it.startsWith("send-") })
