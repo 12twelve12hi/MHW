@@ -182,6 +182,16 @@ public struct HistoryRowView: View {
     static let sourceStyle: Font.TextStyle = .caption
     #endif
 
+    /// The style of a row's time: the caption at 11 pt on iPhone and iPad; on the Mac the callout (12 pt), like where a
+    /// row is from. At 10 pt the Mac's contrast audit said "nearly passed" for some times and not others (it measures
+    /// the drawn strokes, so "10/14/26, 4:47 PM" failed where "10/14/26, 4:04 PM" passed): a result that depended on
+    /// the time of day the test ran.
+    #if os(macOS)
+    static let timeStyle: Font.TextStyle = .callout
+    #else
+    static let timeStyle: Font.TextStyle = .caption2
+    #endif
+
     /// The accessibility identifier of a row's words as one element on iPhone and iPad (`spokenLabel`, with the row's
     /// time as its value): the UI tests' walk writes that value as "<when>" (`AXTree.rowID`).
     public static let rowID = "history-row"
@@ -270,7 +280,7 @@ public struct HistoryRowView: View {
     }
 
     private func time(_ when: String) -> some View {
-        Text(when).dlsFont(.caption2).dlsSecondary()
+        Text(when).dlsFont(Self.timeStyle).dlsSecondary()
             .accessibilityIdentifier(Self.timeID)
             .wrapping(Self.timeProbe(row))
     }
