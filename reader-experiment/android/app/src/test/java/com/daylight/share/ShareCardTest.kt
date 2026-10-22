@@ -9,12 +9,12 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import com.daylight.share.sender.ShareActivity
 import com.daylight.share.ui.COMFORT_TARGET
-import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -42,28 +42,37 @@ class ShareCardTest {
 
     private fun waitMs(ms: Long) = shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(ms))
 
+    private fun ActivityScenario<ShareActivity>.activity(): ShareActivity {
+        var a: ShareActivity? = null
+        onActivity { a = it }
+        return a!!
+    }
+
     @Test
     fun withComfortTheCardStaysUntilClosed() {
         app.setComfort(true)
         shareNothing().use { scenario ->
+            val card = scenario.activity()
             compose.onNodeWithText(NOTHING).assertIsDisplayed()
             val close = compose.onNode(hasText("Close") and hasClickAction())
             close.assertIsDisplayed().assertHeightIsAtLeast(COMFORT_TARGET)
             waitMs(30_000)
-            assertEquals("still up after 30 s", Lifecycle.State.RESUMED, scenario.state)
+            assertFalse("still up after 30 s", card.isFinishing)
             close.performClick()
             waitMs(500)
-            assertEquals(Lifecycle.State.DESTROYED, scenario.state)
+            assertTrue("Close closes it", card.isFinishing)
         }
     }
 
     @Test
     fun asShippedTheCardClosesByItself() {
         shareNothing().use { scenario ->
+            val card = scenario.activity()
             compose.onNodeWithText(NOTHING).assertIsDisplayed()
             compose.onNode(hasText("Close")).assertDoesNotExist()
+            assertFalse(card.isFinishing)
             waitMs(4_000)
-            assertEquals(Lifecycle.State.DESTROYED, scenario.state)
+            assertTrue("closed after 3.5 s", card.isFinishing)
         }
     }
 
