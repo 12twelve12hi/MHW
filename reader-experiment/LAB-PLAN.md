@@ -767,6 +767,31 @@ as before. `DAYLIGHT_SERVER_CODE` still works and always wins.
 
   `setupConfirmText(link)` fills `{host}` the way `serverMovedText` does, and the Lab vectors pin it.
 
+**The rest of the server section's copy (added Oct 22).** X0, B0 and WIN0 found that LAB_TEXT had no words for these
+lines, so they used their own. The setup link replaces the old step 5 (copy the Server code into a secret), so the
+steps are new too. The share lane adds them to `LAB_TEXT.serverSection` before W1, and every app then shows them
+exactly. The plan uses ASCII apostrophes and quotes; apps show ’ ‘ …, as in §0.1.
+
+| Id | Text |
+|---|---|
+| `stepsHeading` | Turn it on |
+| `steps` (a list, shown numbered) | 1. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in GitHub › Settings › Secrets and variables › Actions. 2. In GitHub › Actions, open the latest 'Reader experiment - Daylight server' run and choose Re-run all jobs. 3. When it finishes, open Cloudflare › D1 › daylight-server › Console and run SELECT link FROM setup; 4. Paste that link in Set up with a link. 5. Optional, for Summaries with Claude: add ANTHROPIC_API_KEY the same way, then re-run. |
+| `stepsMore` | Every step, with where to click: the Daylight server's README, "Turn it on". |
+| `hostLabel` | Your server |
+| `hostLine` | {host} · {fingerprint} |
+| `deliveryLabel` | Delivery |
+| `deliveryLab` | Through Lab on your Daylight, end-to-end encrypted |
+| `deliveryV1` | Through your pairing (v1 delivery) |
+| `addressPlaceholder` | https:// |
+| `addressSave` | Save |
+| `addressFooter` | Only needed when your Daylight server has an address of its own. Leave it empty and your apps find it. |
+
+- Step 2 is the client module's `RERUN_HELP`, word for word. The vectors check that they match.
+- `hostLineText(host, fingerprint)` fills `hostLine` (the host as `serverMovedText` makes it). The Lab vectors pin it.
+- With v1 delivery, the section shows `deliveryV1` and then the v1 notice (DESIGN 14.3), as before.
+- The steps show only while the server's state is `needs-server`. `pairing-mismatch` and `locked` show their own
+  messages and Set up with a link.
+
 ### 2.7 JS reference additions, then the ports
 
 **2.7.1 `share/js/daylight-share.js`** (protocol module). These changes are wire-neutral, and `test-vectors.json`
