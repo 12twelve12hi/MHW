@@ -76,6 +76,13 @@ kotlin {
 }
 
 tasks.withType<Test>().configureEach {
+    // Copy is pinned by the shared Lab vectors (LAB_TEXT): the Comfort switch's words are checked against them.
+    systemProperty("dls.labVectors", rootProject.projectDir.resolve("../share/vectors/lab-vectors.json").absolutePath)
+    // The Lab-off parity baselines (LAB-PLAN 1.7): compared here, and recorded into build/ when missing.
+    systemProperty("dls.labOffBaselines", projectDir.resolve("src/test/lab-off-baseline").absolutePath)
+    systemProperty("dls.labOffRecorded", layout.buildDirectory.dir("lab-off-baseline").get().asFile.absolutePath)
+    inputs.file(rootProject.projectDir.resolve("../share/vectors/lab-vectors.json"))
+    inputs.dir("src/test/lab-off-baseline").optional()
     testLogging {
         events("passed", "skipped", "failed")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
@@ -85,7 +92,8 @@ tasks.withType<Test>().configureEach {
 dependencies {
     implementation(project(":share-core"))
 
-    implementation(platform("androidx.compose:compose-bom:2024.12.01"))
+    // Compose 1.8 (material3 1.3.2): its tests can run the Accessibility Test Framework's checks (F27.2).
+    implementation(platform("androidx.compose:compose-bom:2025.05.01"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
@@ -103,4 +111,8 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("androidx.test:core:1.6.1")
+    // Screen tests under Robolectric: semantics, text layout, and the accessibility checks (F27, LAB-PLAN 1.7).
+    testImplementation(platform("androidx.compose:compose-bom:2025.05.01"))
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.compose.ui:ui-test-junit4-accessibility:1.8.2")
 }

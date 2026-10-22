@@ -1,8 +1,11 @@
 package com.daylight.share.sender
 
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.accessibility.AccessibilityManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
@@ -35,10 +38,12 @@ import kotlinx.coroutines.withTimeoutOrNull
 class ShareActivity : ComponentActivity() {
     private val text = mutableStateOf("Preparing…")
     private val action = mutableStateOf<Pair<String, () -> Unit>?>(null)
+    /** The card stays, with Close, for someone who needs time to read it ([needsTime]). */
+    private val stays = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { DaylightTheme { StatusCard(text.value, action.value, onDismiss = ::finish) } }
+        setContent { DaylightTheme { StatusCard(text.value, action.value, onDismiss = ::finish, close = action.value != null || stays.value) } }
         if (savedInstanceState != null) {
             finish() // recreated after process death: the share's grant is gone
             return
@@ -88,17 +93,23 @@ class ShareActivity : ComponentActivity() {
             val allSent = rows != null && rows.all { it?.status == Status.SENT }
             text.value = resultText(rows, ids.size, daylight)
             if (error != null) text.value += "\n$error"
-            delay(if (allSent && error == null) 1_200 else 3_500)
-            finish()
+            closeAfter(if (allSent && error == null) 1_200 else 3_500)
         }
     }
 
     private fun fail(msg: String) {
         text.value = msg
-        lifecycleScope.launch {
-            delay(3_500)
-            finish()
+        lifecycleScope.launch { closeAfter(3_500) }
+    }
+
+    /** Closes the card after [ms], or leaves it up with Close for someone who needs time to read it (F27, WCAG 2.2.1). */
+    private suspend fun closeAfter(ms: Long) {
+        if (needsTime(this)) {
+            stays.value = true
+            return
         }
+        delay(ms)
+        finish()
     }
 
     private fun openApp() {
@@ -107,6 +118,20 @@ class ShareActivity : ComponentActivity() {
     }
 
     companion object {
+        /**
+         * Whether the card must not close by itself: Comfort is on, or TalkBack (touch exploration) or Switch Access is
+         * running.
+         */
+        fun needsTime(context: Context): Boolean {
+            if (App.of(context).prefs.comfort) return true
+            val am = context.getSystemService(AccessibilityManager::class.java) ?: return false
+            if (!am.isEnabled) return false
+            if (am.isTouchExplorationEnabled) return true
+            return runCatching {
+                am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK).any { it.id.contains("switchaccess", ignoreCase = true) }
+            }.getOrDefault(false)
+        }
+
         /**
          * What the card says after a share (CHANGES-v1.1 2.5): the row's label, then its sentence ("Sent · waiting for
          * your Daylight", "Waiting to send. Couldn’t send right now. It will try again by itself."); for several items,

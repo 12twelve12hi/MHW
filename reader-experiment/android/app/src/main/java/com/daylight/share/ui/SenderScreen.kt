@@ -88,23 +88,22 @@ fun SenderScreen(activity: MainActivity, onSettings: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Daylight Share", style = MaterialTheme.typography.headlineSmall)
-                    val p = pairing
-                    Text(
-                        if (p == null) "Not paired yet" else "Sending to ${p.name.ifEmpty { "your Daylight" }}" +
-                            if (p.relay != Limits.DEFAULT_RELAY) " · through ${Relay.host(p.relay)}" else "",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
+            HeaderRow(title = {
+                Text("Daylight Share", style = MaterialTheme.typography.headlineSmall)
+                val p = pairing
+                Text(
+                    if (p == null) "Not paired yet" else "Sending to ${p.name.ifEmpty { "your Daylight" }}" +
+                        if (p.relay != Limits.DEFAULT_RELAY) " · through ${Relay.host(p.relay)}" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }) {
                 SecondaryButton("Settings") { onSettings() }
             }
         }
         if (notice != null) item {
             Section {
-                Text(notice)
-                TextButton(onClick = { activity.notice.value = null }) { Text("OK") }
+                Text(notice, modifier = Modifier.announced())
+                TextAction("OK") { activity.notice.value = null }
             }
         }
         if (pairing == null) {
@@ -114,12 +113,13 @@ fun SenderScreen(activity: MainActivity, onSettings: () -> Unit) {
                 Section("Send a link") {
                     OutlinedTextField(
                         value = link, onValueChange = { link = it }, singleLine = true,
+                        label = { Text("Link") },
                         placeholder = { Text("https://…") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Send),
                         keyboardActions = KeyboardActions(onSend = { if (link.isNotBlank() && !busy) sendShared(Shared.Link(link.trim(), null)) }),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Buttons {
                         PrimaryButton("Send link", enabled = link.isNotBlank() && !busy) { sendShared(Shared.Link(link.trim(), null)) }
                         SecondaryButton("Send a file", enabled = !busy) {
                             try {
@@ -131,12 +131,12 @@ fun SenderScreen(activity: MainActivity, onSettings: () -> Unit) {
                     }
                     Text("Anywhere else: Share › Send to Daylight.", style = MaterialTheme.typography.bodySmall)
                     Text(LIMITS_LINE, style = MaterialTheme.typography.bodySmall)
-                    message?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
+                    // The share's result ("Sent · waiting for your Daylight"), announced when it changes.
+                    message?.let { Text(it, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.announced()) }
                 }
             }
             item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Sent", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                HeaderRow(title = { Text("Sent", style = MaterialTheme.typography.titleLarge) }) {
                     SecondaryButton("Check deliveries") { scope.launch { app.sender.tick() } }
                 }
             }
@@ -177,12 +177,13 @@ private fun PairSection(activity: MainActivity) {
         Text("Or type the code:", style = MaterialTheme.typography.bodyMedium)
         OutlinedTextField(
             value = code, onValueChange = { code = it; error = null }, singleLine = true,
+            label = { Text("Pairing code") },
             placeholder = { Text("XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX") },
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done),
             isError = error != null,
             modifier = Modifier.fillMaxWidth(),
         )
-        error?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+        error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced()) }
         SecondaryButton("Pair", enabled = code.isNotBlank()) {
             try {
                 activity.offerPairing(Pairing.parse(code), PairingConfirmation.Source.APP)
@@ -198,7 +199,7 @@ private fun PairSection(activity: MainActivity) {
 private fun OutboxRowView(row: OutboxRow, onRetry: () -> Unit, onRemove: () -> Unit) {
     Section {
         val title = row.title.ifEmpty { if (row.kind == Kind.FILE) row.name else row.url }
-        Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        Text(title, style = MaterialTheme.typography.titleMedium, maxLines = titleLines(3), overflow = TextOverflow.Ellipsis)
         val kind = when (row.kind) {
             Kind.URL -> "Link"
             Kind.PAGE -> "Web page"
@@ -207,12 +208,13 @@ private fun OutboxRowView(row: OutboxRow, onRetry: () -> Unit, onRemove: () -> U
         val delivered = if (row.status == Status.DELIVERED && row.delivered > 0) "delivered ${ago(row.delivered)}" + (row.deliveredBy.ifEmpty { null }?.let { " to $it" } ?: "") else null
         Text(listOfNotNull(kind, sizeText(row.size).ifEmpty { null }, ago(row.created).ifEmpty { null }, delivered).joinToString(" · "), style = MaterialTheme.typography.bodySmall)
         // The same words on every surface (CHANGES-v1.1 2.5): the label, its sentence, and a button only when it helps.
+        // The label is announced when it changes ("Delivered ✓"); it wraps, never truncates (F27).
         val text = RowText.of(row)
-        Text(text.label, style = MaterialTheme.typography.bodyLarge)
+        Text(text.label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.announced())
         text.sentence?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Buttons {
             text.button?.let { SecondaryButton(it) { onRetry() } }
-            TextButton(onClick = onRemove) { Text("Remove") }
+            TextAction("Remove") { onRemove() }
         }
     }
 }

@@ -54,11 +54,15 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         app = App.of(this)
         if (savedInstanceState == null) handleLink(intent)
-        setContent {
-            DaylightTheme {
-                Surface(Modifier.fillMaxSize()) {
-                    Box(Modifier.safeDrawingPadding()) { Root() }
-                }
+        setContent { AppContent() }
+    }
+
+    /** Everything this activity shows, in the app's theme (tests host it at other text sizes). */
+    @Composable
+    internal fun AppContent() {
+        DaylightTheme {
+            Surface(Modifier.fillMaxSize()) {
+                Box(Modifier.safeDrawingPadding()) { Root() }
             }
         }
     }
@@ -141,10 +145,10 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Debug builds only, for automated tests:
-     * `daylightshare://setup?role=inbox|sender&c=<code>[&r=<relay>][&n=<name>][&instant=1][&auto=1][&docs=ask|quiet|open][&to=<package>]`.
+     * `daylightshare://setup?role=inbox|sender&c=<code>[&r=<relay>][&n=<name>][&instant=1][&auto=1][&docs=ask|quiet|open][&to=<package>][&comfort=0|1]`.
      * Sets the role and uses that pairing secret (instead of generating one) and relay; `instant` turns on Instant
      * delivery; `docs` sets "Documents" (`auto=1` is `docs=open`, `auto=0` is `docs=ask`); `to` sets "Deliver to"
-     * (empty: Automatic).
+     * (empty: Automatic); `comfort` sets Comfort (F27).
      */
     private fun debugSetup(link: String) {
         val q = Pairing.parseQuery(link.substringAfter('?', "").substringBefore('#'))
@@ -162,6 +166,7 @@ class MainActivity : ComponentActivity() {
         q["auto"]?.let { app.prefs.documentMode = if (it == "1" || it == "true") DocumentMode.OPEN else DocumentMode.ASK }
         q["docs"]?.let { v -> DocumentMode.parse(v)?.let { app.prefs.documentMode = it } }
         q["to"]?.let { app.prefs.deliverTo = it.trim() }
+        q["comfort"]?.let { app.setComfort(it == "1" || it == "true") }
         when (q["role"]) {
             "sender" -> {
                 app.sender.pair(p)
@@ -173,7 +178,7 @@ class MainActivity : ComponentActivity() {
                 app.setRole(Role.INBOX)
             }
         }
-        logi("setup: role=${app.prefs.role} relay=${p.relay} inbox=${p.keys.inboxTopic} instant=${app.prefs.instantDelivery} docs=${app.prefs.documentMode.key} to=${app.prefs.deliverTo.ifEmpty { "auto" }}")
+        logi("setup: role=${app.prefs.role} relay=${p.relay} inbox=${p.keys.inboxTopic} instant=${app.prefs.instantDelivery} docs=${app.prefs.documentMode.key} to=${app.prefs.deliverTo.ifEmpty { "auto" }} comfort=${if (app.prefs.comfort) 1 else 0}")
         notice.value = "Set up as ${if (app.prefs.role == Role.INBOX) "the Daylight Inbox" else "a sender"} (relay ${p.relay})."
     }
 

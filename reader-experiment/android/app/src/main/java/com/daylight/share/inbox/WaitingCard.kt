@@ -152,10 +152,15 @@ object WaitingCard {
         }
     }
 
-    /** Black on white with a black border, like the app (it is read on e-paper). */
+    /**
+     * Black on white with a black border, like the app (it is read on e-paper). With Comfort (F27) the text is 1.3 times
+     * larger, nothing is cut short, the buttons are 56 dp tall and stacked; the heading is announced when it changes.
+     */
     private fun content(context: Context, items: List<InboxItem>): View {
         val d = context.resources.displayMetrics.density
         fun dp(v: Int) = (v * d).toInt()
+        val comfort = (context.applicationContext as? App)?.prefs?.comfort == true
+        val scale = if (comfort) com.daylight.share.ui.COMFORT_TEXT_SCALE else 1f
         val words = Notices.card(items)
         val ids = items.map { it.id }
         val box = LinearLayout(context).apply {
@@ -171,41 +176,51 @@ object WaitingCard {
             tag = TAG_HEADING
             text = words.heading
             setTextColor(Color.BLACK)
-            textSize = 18f
+            textSize = 18f * scale
             setTypeface(typeface, Typeface.BOLD)
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         })
         box.addView(TextView(context).apply {
             tag = TAG_BODY
             text = words.body
             setTextColor(Color.BLACK)
-            textSize = 16f
-            maxLines = 4
-            ellipsize = TextUtils.TruncateAt.END
+            textSize = 16f * scale
+            if (!comfort) {
+                maxLines = 4
+                ellipsize = TextUtils.TruncateAt.END
+            }
             setPadding(0, dp(4), 0, dp(12))
         })
         val row = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
+            orientation = if (comfort) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
             gravity = Gravity.END
         }
-        row.addView(button(context, "Later", TAG_LATER, filled = false) { later(context, ids) })
-        row.addView(
-            button(context, words.add, TAG_ADD, filled = true) { add(context, ids) },
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(12) },
-        )
+        if (comfort) {
+            // Stacked, full width: Add to Reader first.
+            val full = { top: Int -> LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = top } }
+            row.addView(button(context, words.add, TAG_ADD, filled = true, comfort = true) { add(context, ids) }, full(0))
+            row.addView(button(context, "Later", TAG_LATER, filled = false, comfort = true) { later(context, ids) }, full(dp(10)))
+        } else {
+            row.addView(button(context, "Later", TAG_LATER, filled = false) { later(context, ids) })
+            row.addView(
+                button(context, words.add, TAG_ADD, filled = true) { add(context, ids) },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(12) },
+            )
+        }
         box.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         return box
     }
 
-    private fun button(context: Context, label: String, tag: String, filled: Boolean, onClick: () -> Unit): TextView {
+    private fun button(context: Context, label: String, tag: String, filled: Boolean, comfort: Boolean = false, onClick: () -> Unit): TextView {
         val d = context.resources.displayMetrics.density
         return TextView(context).apply {
             this.tag = tag
             text = label
             contentDescription = label
-            textSize = 16f
+            textSize = 16f * (if (comfort) com.daylight.share.ui.COMFORT_TEXT_SCALE else 1f)
             gravity = Gravity.CENTER
             setTextColor(if (filled) Color.WHITE else Color.BLACK)
-            minHeight = (48 * d).toInt()
+            minHeight = ((if (comfort) 56 else 48) * d).toInt()
             minWidth = (96 * d).toInt()
             setPadding((16 * d).toInt(), 0, (16 * d).toInt(), 0)
             background = GradientDrawable().apply {

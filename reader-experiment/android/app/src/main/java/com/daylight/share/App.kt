@@ -49,6 +49,7 @@ class App : Application() {
         instance = this
         prefs = Prefs(this)
         roleFlow.value = prefs.role
+        comfortFlow.value = prefs.comfort
         createChannels()
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) { started++ }
@@ -118,6 +119,16 @@ class App : Application() {
     fun setRole(role: Role?) {
         prefs.role = role
         onRoleChanged()
+    }
+
+    private val comfortFlow = MutableStateFlow(false)
+
+    /** Comfort (F27, not a Lab setting): every screen follows it. Change it with [setComfort]. */
+    val comfort: StateFlow<Boolean> get() = comfortFlow
+
+    fun setComfort(on: Boolean) {
+        prefs.comfort = on
+        comfortFlow.value = on
     }
 
     private fun createChannels() {
@@ -213,6 +224,12 @@ class Prefs(private val context: Context) {
     var askedNotifications: Boolean
         get() = sp.getBoolean("askedNotif", false)
         set(v) = sp.edit().putBoolean("askedNotif", v).apply()
+
+    // Accessibility (F27; not a Lab setting, and Lab never reads it).
+    /** Comfort: larger text and buttons, more contrast, no motion. Off by default; Lab on or off leaves it as it is. */
+    var comfort: Boolean
+        get() = sp.getBoolean("comfort", false)
+        set(v) = sp.edit().putBoolean("comfort", v).apply()
 
     /** The ids of waiting items in a notice state ([NOTICE_ANNOUNCED], [NOTICE_DISMISSED], [NOTICE_LATER]). */
     fun noticeIds(state: String): Set<String> = sp.getStringSet("notice.$state", null)?.toSet() ?: emptySet()

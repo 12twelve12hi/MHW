@@ -19,11 +19,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -102,29 +101,28 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Daylight Inbox", style = MaterialTheme.typography.headlineSmall)
-                    Text(
-                        when {
-                            // A limit reported while connected stays visible (what it held back arrives later).
-                            live == Live.State.LIVE && sync.error != null -> "Connected · ${sync.error}"
-                            live == Live.State.LIVE -> "Connected · items arrive right away"
-                            sync.checking -> "Checking…"
-                            sync.error != null -> sync.error!!
-                            sync.lastCheck > 0 -> "Checked ${ago(sync.lastCheck)}"
-                            else -> "Not checked yet"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
+            HeaderRow(title = {
+                Text("Daylight Inbox", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    when {
+                        // A limit reported while connected stays visible (what it held back arrives later).
+                        live == Live.State.LIVE && sync.error != null -> "Connected · ${sync.error}"
+                        live == Live.State.LIVE -> "Connected · items arrive right away"
+                        sync.checking -> "Checking…"
+                        sync.error != null -> sync.error!!
+                        sync.lastCheck > 0 -> "Checked ${ago(sync.lastCheck)}"
+                        else -> "Not checked yet"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }) {
                 SecondaryButton("Settings") { onSettings() }
             }
         }
         if (notice != null) item {
             Section {
-                Text(notice)
-                TextButton(onClick = { activity.notice.value = null }) { Text("OK") }
+                Text(notice, modifier = Modifier.announced())
+                TextAction("OK") { activity.notice.value = null }
             }
         }
         if (sync.storeFull) item {
@@ -154,7 +152,7 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(LIMITS_LINE, style = MaterialTheme.typography.bodySmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Buttons {
                         SecondaryButton("Reset pairing") { confirmReset = true }
                         if (received.isNotEmpty()) SecondaryButton("Hide") { showPairing = false }
                     }
@@ -167,20 +165,14 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
                 if (targets.isEmpty()) {
                     Text("Daylight Reader isn’t installed. Items stay here; open them with another app.", style = MaterialTheme.typography.bodyMedium)
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Instant delivery", style = MaterialTheme.typography.bodyLarge)
-                        Text("Keeps a connection open so items arrive within seconds (a small notification stays). Off: every 15 minutes, and whenever this screen is open.", style = MaterialTheme.typography.bodySmall)
-                    }
-                    Switch(
-                        checked = instant,
-                        onCheckedChange = {
-                            instant = it
-                            app.prefs.instantDelivery = it
-                            if (it) InstantDeliveryService.start(activity) else InstantDeliveryService.stop(activity)
-                        },
-                        colors = SwitchDefaults.colors(checkedTrackColor = Ink, checkedThumbColor = Paper, uncheckedBorderColor = Ink, uncheckedThumbColor = Ink),
-                    )
+                // One control (label, line and state together), and static: the Inbox never animates (F27).
+                SwitchRow(
+                    "Instant delivery", instant,
+                    detail = "Keeps a connection open so items arrive within seconds (a small notification stays). Off: every 15 minutes, and whenever this screen is open.",
+                ) {
+                    instant = it
+                    app.prefs.instantDelivery = it
+                    if (it) InstantDeliveryService.start(activity) else InstantDeliveryService.stop(activity)
                 }
                 if (instant && !unrestricted) {
                     Text("With the screen off, Android pauses connections to save battery. Let Daylight Share run unrestricted to keep Instant delivery instant.", style = MaterialTheme.typography.bodySmall)
@@ -209,10 +201,12 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
                 HorizontalDivider(color = Ink)
                 Text("Documents", style = MaterialTheme.typography.bodyLarge)
                 Text("When a PDF or another document arrives while you use another app:", style = MaterialTheme.typography.bodySmall)
-                for (m in DocumentMode.entries) {
-                    Choice(m.label, docMode == m, detail = documentModeDetail(m)) {
-                        docMode = m
-                        app.prefs.documentMode = m
+                Column(Modifier.selectableGroup()) {
+                    for (m in DocumentMode.entries) {
+                        Choice(m.label, docMode == m, detail = documentModeDetail(m)) {
+                            docMode = m
+                            app.prefs.documentMode = m
+                        }
                     }
                 }
                 if (docMode.automatic && !overlay) {
@@ -247,8 +241,7 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
         }
 
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Received", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            HeaderRow(title = { Text("Received", style = MaterialTheme.typography.titleLarge) }) {
                 SecondaryButton("Check now", enabled = !sync.checking) {
                     scope.launch { if (app.inbox.pollOnce() > 0) Handoff.dispatch(activity) }
                 }
@@ -287,7 +280,7 @@ private fun documentModeDetail(m: DocumentMode): String = when (m) {
 private fun ItemRow(activity: MainActivity, item: InboxItem, readerInstalled: Boolean) {
     val app = App.of(activity)
     Section {
-        Text(item.displayTitle, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        Text(item.displayTitle, style = MaterialTheme.typography.titleMedium, maxLines = titleLines(3), overflow = TextOverflow.Ellipsis)
         val kind = when (item.kind) {
             Kind.URL -> "Link"
             Kind.PAGE -> "Web page"
@@ -301,7 +294,7 @@ private fun ItemRow(activity: MainActivity, item: InboxItem, readerInstalled: Bo
         ).joinToString(" · ")
         Text(meta, style = MaterialTheme.typography.bodySmall)
         if (item.kind != Kind.FILE && item.url != null && item.title != null) {
-            Text(item.url, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(item.url, style = MaterialTheme.typography.bodySmall, maxLines = titleLines(1), overflow = TextOverflow.Ellipsis)
         }
         // "In your Reader ✓" only when the Reader confirmed it (SAVE_PAGE: saved or duplicate); documents get no answer.
         val status = when (item.state) {
@@ -324,7 +317,8 @@ private fun ItemRow(activity: MainActivity, item: InboxItem, readerInstalled: Bo
             }
             else -> item.readerLabel
         }
-        Text(status, style = MaterialTheme.typography.bodyLarge)
+        // Announced when it changes ("In your Reader ✓"); it wraps, never truncates (F27).
+        Text(status, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.announced())
         // Handed over without the Reader's confirmation (a document, a shared link, or no answer yet): the Reader may
         // have dropped it (DEVICE-CHECKS.md, round 2), so it can be handed over again.
         val unconfirmed = item.state == InboxItem.IN_READER && !item.confirmedInReader
@@ -332,7 +326,7 @@ private fun ItemRow(activity: MainActivity, item: InboxItem, readerInstalled: Bo
         if (unconfirmed) {
             Text(InboxText.unconfirmedHint(item.kind), style = MaterialTheme.typography.bodySmall)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Buttons {
             if (readerInstalled && canHandOver && item.state != InboxItem.IN_READER) {
                 PrimaryButton("Add to Reader") {
                     app.inbox.requeue(item.id)
@@ -355,7 +349,7 @@ private fun ItemRow(activity: MainActivity, item: InboxItem, readerInstalled: Bo
                     }
                 }
             }
-            TextButton(onClick = { app.inbox.remove(item.id) }) { Text("Remove") }
+            TextAction("Remove") { app.inbox.remove(item.id) }
         }
     }
 }

@@ -1,22 +1,18 @@
 package com.daylight.share.ui
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -80,6 +76,7 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
     var deliverTo by remember { mutableStateOf(app.prefs.deliverTo) }
     var saved by remember { mutableStateOf<String?>(null) }
     var checking by remember { mutableStateOf(false) }
+    val comfort by app.comfort.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     @Suppress("UNUSED_VARIABLE") val tick = activity.resumes.intValue
 
@@ -87,15 +84,21 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Settings", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+        HeaderRow(title = { Text("Settings", style = MaterialTheme.typography.headlineSmall) }) {
             SecondaryButton("Done") { onBack() }
         }
-        saved?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+        saved?.let { Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced()) }
+
+        // The accessibility baseline (F27): every build has it, Lab on or off.
+        Section {
+            SwitchRow(A11yText.COMFORT, comfort, detail = A11yText.COMFORT_FOOTER) { app.setComfort(it) }
+        }
 
         Section("This device") {
-            Choice("This is my Daylight (Inbox)", role == Role.INBOX) { if (role != Role.INBOX) confirmRole = Role.INBOX }
-            Choice("Send from this device", role == Role.SENDER) { if (role != Role.SENDER) confirmRole = Role.SENDER }
+            Column(Modifier.selectableGroup()) {
+                Choice("This is my Daylight (Inbox)", role == Role.INBOX) { if (role != Role.INBOX) confirmRole = Role.INBOX }
+                Choice("Send from this device", role == Role.SENDER) { if (role != Role.SENDER) confirmRole = Role.SENDER }
+            }
             OutlinedTextField(
                 value = name, onValueChange = { name = it.take(60) }, singleLine = true,
                 label = { Text(if (role == Role.INBOX) "Daylight name (shown to senders)" else "Device name (shown on the Daylight)") },
@@ -121,9 +124,9 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
                 isError = relayError != null, modifier = Modifier.fillMaxWidth(),
             )
-            relayError?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-            if (checking) Text("Checking the relay: sending a 2 MB test file through it…", style = MaterialTheme.typography.bodyMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            relayError?.let { Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced()) }
+            if (checking) Text("Checking the relay: sending a 2 MB test file through it…", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced())
+            Buttons {
                 SecondaryButton("Save relay", enabled = !checking) {
                     if (role != Role.INBOX) {
                         // Same secret, another relay: the outbox stays and pending items go through the new relay.
@@ -161,6 +164,7 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
             val apps = remember(activity.resumes.intValue) { ReaderApps.candidates(activity) }
             Section("Deliver to") {
                 Text("Which app gets the items. Automatic is the Daylight Reader; any other app that takes saved pages or documents (such as a side-by-side test copy of the Reader) can be chosen here. What the chosen app doesn’t take goes to Automatic.", style = MaterialTheme.typography.bodyMedium)
+                Column(Modifier.selectableGroup()) {
                 Choice(
                     "Automatic",
                     deliverTo.isEmpty(),
@@ -180,6 +184,7 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
                         deliverTo = c.pkg
                         app.prefs.deliverTo = c.pkg
                     }
+                }
                 }
                 if (deliverTo.isNotEmpty() && apps.none { it.pkg == deliverTo }) Text("$deliverTo is not installed; using Automatic.", style = MaterialTheme.typography.bodySmall)
             }
@@ -225,19 +230,11 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit) {
     }
 }
 
+/** The accessibility baseline's words (F27; `LAB_TEXT.comfort` and `comfortFooter` in share/js/daylight-lab.js). */
+object A11yText {
+    const val COMFORT = "Comfort"
+    const val COMFORT_FOOTER = "Larger text and buttons, more contrast, no motion."
+}
+
 /** What the relay takes and keeps (PROTOCOL 3.5), said plainly. */
 const val RELAY_LIMITS = "ntfy.sh, the default relay, is free and needs no account. It keeps links for 12 hours and files for 3 hours, takes files in parts of up to 2 MB (Send to Daylight sends files of up to 9 MB that way), and lets each network send about 250 messages and 200 MB a day. Another ntfy server works if anyone can use it without a login and it accepts files of at least 2 MB; the Inbox checks that before saving it."
-
-@Composable
-fun Choice(label: String, selected: Boolean, detail: String? = null, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onClick),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        RadioButton(selected = selected, onClick = onClick, colors = RadioButtonDefaults.colors(selectedColor = Ink, unselectedColor = Ink))
-        Column(Modifier.widthIn(min = 0.dp).padding(start = 4.dp)) {
-            Text(label, style = MaterialTheme.typography.bodyLarge)
-            if (detail != null) Text(detail, style = MaterialTheme.typography.bodySmall)
-        }
-    }
-}

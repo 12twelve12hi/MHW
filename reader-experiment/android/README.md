@@ -154,6 +154,26 @@ it and downloads it again, and keeps the old relay with a sentence when that fai
 turned off, a login needed, or files the Daylight can't download). A relay saved before this check existed is checked
 once in the background, and only a warning shows if it fails.
 
+## Accessibility and Comfort
+
+Every build has the accessibility baseline (LAB-PLAN F27; it is not a Lab feature, and turning Lab off leaves it as it
+is):
+
+- **Settings › Comfort** (off by default): "Larger text and buttons, more contrast, no motion." Text is 1.3 times the
+  system's size, buttons and rows are at least 56 dp tall, secondary text and outlines are black, and nothing ripples.
+  The share card and the Inbox's card over the Reader follow it (the card's text is larger, nothing is cut short, its
+  buttons are stacked).
+- Every control has a label; a switch or a choice is one control with its words (TalkBack reads "Instant delivery,
+  off, switch"). States are words and glyphs ("Delivered ✓", "In your Reader ✓"), never colour alone.
+- Status lines are announced when they change: a sent item's label ("Delivered ✓"), an Inbox item's ("In your Reader
+  ✓"), a share's result, the relay check's sentence. They wrap instead of being cut short, at any text size.
+- The Inbox (the DC-1's e-paper) never animates: no ripples, and the app's own switches and choices are drawn still.
+  The app uses no animated transitions in either role.
+- Pairing by typing the code always works: the phone has a "Pairing code" field, the Inbox shows the code in words
+  under its QR code.
+- The share card stays up, with **Close**, while Comfort, TalkBack or Switch Access is on, instead of closing after a
+  second or two.
+
 ## Build
 
 Requirements: JDK 17 or 21. The protocol module needs nothing else; the APK needs the Android SDK (platform 35).
@@ -162,15 +182,35 @@ Requirements: JDK 17 or 21. The protocol module needs nothing else; the APK need
 cd reader-experiment/android
 ./gradlew :share-core:test          # protocol tests: vectors, mock relay (needs node), JS interop
 ./gradlew :app:assembleRelease      # needs ANDROID_HOME or sdk.dir in local.properties
-./gradlew :app:testDebugUnitTest    # Robolectric: share parsing, Reader routing, hand-off and notification decisions, every screen composes
+./gradlew :app:testDebugUnitTest    # Robolectric: share parsing, Reader routing, hand-off and notification decisions, screens, accessibility, Lab-off parity
 ```
 
 Without an Android SDK, Gradle builds only `:share-core`. `DLS_LIVE_RELAY=https://ntfy.sh ./gradlew :share-core:test
 --tests '*LiveRelayTest*'` runs a round trip through a real relay.
 
-CI (`.github/workflows/rx-android.yml`) runs the tests, builds both APKs, uploads them as workflow artifacts
-(`daylight-share-apk` and `daylight-share-debug-apk`, the latter containing `daylight-share-debug.apk`), publishes
-`daylight-share.apk` to the release, and tries a live round trip through ntfy.sh.
+CI (`.github/workflows/rx-android.yml`) has a job per lane (LAB-PLAN 6.1): `core` runs the protocol tests and tries a
+live round trip through ntfy.sh; `app` builds both APKs, runs the app's tests and uploads the APKs as workflow
+artifacts (`daylight-share-apk` and `daylight-share-debug-apk`, the latter containing `daylight-share-debug.apk`);
+`publish` puts `daylight-share.apk` on the release once both passed. Android is not held by the Lab release gate.
+
+### Screen tests (accessibility and Lab-off parity)
+
+`MainScreen` (`app/src/test/.../ScreenKit.kt`) shows each main screen of the real app in a fixed state: the role
+choice; the phone unpaired, paired with a row in every state, and its Settings; the Inbox new (with its code), with
+items, and its Settings.
+
+- `AccessibilityTest` (F27) runs the Accessibility Test Framework on each (Compose `enableAccessibilityChecks()`,
+  F27.2), checks that every control has a label, and, with Comfort at 200 % text on a 360 dp phone, that no text's
+  layout overflows (`TextLayoutResult.hasVisualOverflow`) and no control is under 56 dp (F27.4). It also checks the
+  Comfort switch and its words against `LAB_TEXT`, the announcements, the static Inbox, the typed code, and the
+  Inbox's relay-check and out-of-space sentences on screen.
+- `LabOffParityTest` (LAB-PLAN 1.7, F00.2) compares what a screen reader gets from each screen (the merged Compose
+  semantics tree: type, label and value of each node, in order) with `app/src/test/lab-off-baseline/<screen>.json`,
+  recorded from the P0 close-out (protocol 1.1 and the F27 baseline). Relative times, the version and the Inbox's
+  connection line are replaced by placeholders. A baseline changes only together with a non-Lab change of its screen:
+  the test then writes the new tree to `app/build/lab-off-baseline/` (CI prints it and uploads it as
+  `daylight-share-lab-off-trees`) to review and copy over. Lab tasks set Lab off in `labOff()`, and tag the Lab switch
+  card `Modifier.testTag("lab-switch")`: the comparison leaves it out, as the one thing Lab off still shows.
 
 ### Layout
 
@@ -192,7 +232,8 @@ adb shell am start -a android.intent.action.VIEW \
 
 which makes the device the Inbox with that pairing secret and relay (`role=sender` pairs a sender instead;
 `instant=1` turns on Instant delivery; `docs=ask|quiet|open` sets **Documents**, and `auto=1` / `auto=0` mean
-`docs=open` / `docs=ask`; `to=<package>` sets **Deliver to**, `to=` puts it back to Automatic). Debug builds also allow
+`docs=open` / `docs=ask`; `to=<package>` sets **Deliver to**, `to=` puts it back to Automatic; `comfort=1` / `comfort=0`
+sets **Comfort**). Debug builds also allow
 plain HTTP to `10.0.2.2`, `127.0.0.1` and `localhost`. The setup link also skips the
 notification-permission prompt. Everything is logged under the tag `DaylightShare` (`adb logcat -s DaylightShare`):
 
