@@ -315,11 +315,10 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
   460 pt Settings sheet and the Share menu card's 360 pt) with Comfort on and accessibility3, and every text that
   carries a `truncationProbe` reports its frame and the size it needs; a text that got less, or runs past the
   window's edge, fails the test. Every text the apps lay out carries one: through `wrapping(_:)` or
-  `listRowText(_:)`, or a probe of its own where the text keeps a line limit outside Comfort (a row's title and link,
-  the share card's summary). A row's age (`Text(date, style: .relative)`), whose words change every second, is probed
-  under a fixed name per row (`HistoryRowView.timeProbe`), so the audit compares the same text whatever it says when
-  measured. Not measured: the system's own texts (confirmation dialogs, the menu bar item's menu). The audit checks itself on a deliberately cut text
-  first. On the iPhone, `testEveryTextGrowsWithTheTextSize` also measures every text of those screens (and of an
+  `listRowText(_:)`, or a probe of its own where the text keeps a line limit outside Comfort (the share card's
+  summary). A history row's time, whose words depend on when it is measured, is probed under a fixed name per row
+  (`HistoryRowView.timeProbe`). Not measured: the system's own texts (confirmation dialogs, the menu bar item's menu).
+  The audit checks itself on a deliberately cut text first. On the iPhone, `testEveryTextGrowsWithTheTextSize` also measures every text of those screens (and of an
   empty Home) at the default size and at accessibility3, and fails on one that does not grow. The menu bar item's
   menu is drawn by the system at the width its items need, so it is not measured.
 
