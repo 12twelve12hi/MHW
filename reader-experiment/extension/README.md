@@ -138,7 +138,19 @@ Server calls run in the background (the pairing secret and the server's token ne
 server feature or the Server address is used, the browser asks for access to the server's site; saying no shows
 *Needs access to this site*, with **Allow**. A server answer is used for 10 minutes; a server that doesn't answer within
 5 seconds reads as *Couldn’t reach the Daylight server*. Before this browser is paired with another Daylight, a server
-that knows the old pairing is locked (Lab on or off), so a lost or replaced pairing can't use it.
+that knows the old pairing is locked (Lab on or off), so a lost or replaced pairing can't use it, and a typed Server
+address (the old server's) is forgotten. Afterwards, while Lab is on, the popup shows the locked text with the new
+**Server code**, **Copy** and how to re-run the deploy, under *Daylight server*, until **OK** (or until the new server
+answers).
+
+The Safari extension inside the iPhone and Mac apps gets Lab only once the iPhone and Mac apps have this wave's Lab
+(below, *Lab release gate*); until then it is the plain extension, with no Lab switch.
+
+**Not there yet** (strings the shared copy, `LAB_TEXT`, doesn't have; reported to the share and server lanes): the
+sheet for a server that moved (*Your Daylight server moved to {host}. Use it?* exists, its buttons don't), so a server
+redeployed at a new address with the same pairing keeps reading *Couldn’t reach the Daylight server* here until its
+address is typed in *Server address*; **Set up with a link**, which the server's own messages point to (the iPhone and
+Mac apps have it); the setup steps in brief; and labels for the delivery mode and for the host and fingerprint line.
 
 ## Privacy
 
@@ -197,11 +209,12 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   (`daylight-lab.js` `LabLedger`, fed by every frame on the Daylight's confirmation topic through the Sender's
   `onAckHeader`, Lab on or off, and pruned to the outbox after each check), the gates (`labGate` with the 5 s deadline;
   the server's site access, then its state), the Daylight server (`DaylightServer`, discovery only with Lab on) and
-  the lock before re-pairing. Its messages are `labState`, `setLab`, `labOverview`, `labGate`, `labServer` and
-  `labServerAddress`. `src/lab.html` and `src/lab-page.js` are the page; `src/lab-ui.js` builds its parts (the note,
+  the lock before re-pairing (then the follow-up: `lab/repaired` until OK or a ready server). Its messages are
+  `labState`, `setLab`, `labOverview`, `labGate`, `labServer`, `labServerAddress`, `labRepaired` and `labRepairSeen`. `src/lab.html` and `src/lab-page.js` are the page; `src/lab-ui.js` builds its parts (the note,
   What's in Lab, the server section) from data alone, so the web sender's build can copy it (B0). Every word is
   `LAB_TEXT`'s or the server module's. `LAB_FEATURES`, `LAB_SERVER_FEATURES` and `BUILT_FEATURES` in `lab.js` say what
-  this build lists and runs; `LAB_NOTE_ENABLED` is `false` until a build has F01 or F04 (X1). Tests:
+  this build lists and runs; `LAB_NOTE_ENABLED` is `false` until a build has F01 or F04 (X1). A fresh What's in Lab
+  answer updates the rows' short states in place (`updateWhatsInLab`), so a note opened meanwhile stays. Tests:
   `test/unit/lab.test.mjs` (node, against the mock relay, a stand-in server in `test/helpers/fake-worker.mjs` and Lab
   Daylights from `daylight-lab.js`) and `test/e2e/lab.e2e.mjs` (Chromium: the popup's row and `lab.html`, Lab on and
   off, the notes, the Server code and Copy, OFFLINE at 5 s, no setup text before a tap, the header line).
@@ -228,20 +241,33 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   `UPDATE_LAB_OFF_BASELINE=1 node --test test/e2e/lab-off-parity.e2e.mjs test/e2e/web-lab-off-parity.e2e.mjs`.
   With Lab off the Lab switch row itself stays (LAB-PLAN 1.3); `expectBaseline(page, name, {omit: labSwitchLines(LAB_TEXT)})`
   drops exactly those lines (the switch and its footer) from Settings, and nothing else. `lab.e2e.mjs` also checks that
-  with Lab on, Wave 0 leaves the pairing and sending screens equal to the same baselines.
+  with Lab on, Wave 0 leaves the pairing and sending screens equal to the same baselines, and a build without Lab
+  (below) equals all three with nothing left out.
 - CI: [`.github/workflows/rx-extension.yml`](../../.github/workflows/rx-extension.yml) has one job per lane (LAB-PLAN
   6.1; each marked `# lane:`): **ext** builds the extension and runs every test whose file name doesn't start with
   `web` (the Safari bundle's and the accessibility test included), and **web** builds the web sender and runs the
   `*web*` tests. **publish** (ext's) puts the two zips on the release, and **pages** (web's) deploys the web sender to
   GitHub Pages (see [`../web/README.md`](../web/README.md)). `dist/safari` is the `send-to-daylight-safari`
   artifact, and the accessibility screenshots are `rx-extension-a11y-screenshots`.
-- **Lab release gate** (LAB-PLAN 6.2): the extension's and the web sender's Lab builds reach the release and Pages
-  only after the iPhone and Mac builds of the same wave. `lab-wave.json` here (and `../web/lab-wave.json`) names the
-  Lab wave of the folder's code: `null` until X0 (B0 for the web sender) sets `"w0"`, then `"w1"` from X1 (B1). The
-  extension's says `"w0"` since X0, so its zip waits for the gate's `w0`.
-  While [`../lab-release-gate.json`](../lab-release-gate.json) has that wave `false`, the build and its tests still
-  run, but its zip isn't uploaded and the run shows a notice saying so. A change to the gate file starts the workflow,
-  so opening a wave publishes the held builds.
+- **Lab release gate** (LAB-PLAN 6.2): the extension's and the web sender's Lab builds reach people only after the
+  iPhone and Mac builds of the same wave. `lab-wave.json` here (and `../web/lab-wave.json`) names the Lab wave of the
+  folder's code: `null` until X0 (B0 for the web sender) sets `"w0"`, then `"w1"` from X1 (B1). The extension's says
+  `"w0"` since X0. `scripts/lab-wave.mjs` reads the wave from the code too, so a `lab-wave.json` left behind can't open
+  the gate: `src/lab.js` or anything naming `daylight-lab` is W0; a W1 export of `daylight-lab.js` (the ones under its
+  `// W1 (L1)` heading, `fillText` among them), `describeLabRow`, the Sender's F07 calls, `LAB_NOTE_ENABLED = true` or
+  a quoted id of one of the extension's W1 features (`'F01'`, `'F03'`, … in `LAB_FEATURES`) is W1; a Lab feature of a
+  later wave makes it exit 2 (teach it that wave). It prints the later of the two waves; `--check` fails when
+  `lab-wave.json` is behind (the ext job runs it, and `build.test.mjs` checks it).
+  - **Chrome:** while [`../lab-release-gate.json`](../lab-release-gate.json) has that wave `false`, the build and its
+    tests still run, but **publish** doesn't upload the zip and the run shows a notice saying so; when the script
+    can't tell, the step fails and nothing is uploaded. A change to the gate file starts the workflow, so opening a
+    wave publishes the held builds.
+  - **Safari** ships inside the iPhone and Mac apps, which rx-apple.yml publishes with every build, so `build.mjs`
+    holds it: while the wave is closed (or can't be told), `node build.mjs --target safari` makes it **without Lab**
+    (`target.js` `LAB_BUILT = false`, no `lab.html`): no Lab switch, nothing written for Lab, no ledger; the popup equals
+    the non-Lab baselines with nothing left out. The build's log line (a notice in CI) says why. `--lab` builds it with
+    Lab anyway (the unit tests, a local Xcode run), `--no-lab` without. Once the gate opens the wave, the next Apple
+    build carries the extension's Lab.
 
 ## Limits
 

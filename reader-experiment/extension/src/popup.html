@@ -68,6 +68,10 @@
         </div>
       </div>
       <p id="status" class="status" role="status" aria-live="polite"></p>
+      <!-- Lab (LAB-PLAN 2.6, DESIGN 12.7): after a re-pairing that locked the Daylight server, its locked text with the
+           new Server code, Copy and the re-run help, until OK (lab-ui.js renderRepaired). Empty and hidden otherwise,
+           and always with Lab off. -->
+      <section id="repaired" class="lab-repaired" hidden></section>
 
       <h2 class="recent-h" id="recent-h" hidden>Recent</h2>
       <ol id="history" class="history" aria-labelledby="recent-h"></ol>
@@ -83,7 +87,7 @@
            open lab.html: What's in Lab and the Daylight server. The text is LAB_TEXT's (lab, whatsInLab, serverRow,
            switchFooter); the server row's subtitle is serverRowSubtitle(). With Lab off only the switch and its footer
            show (1.3). -->
-      <div class="switch-row">
+      <div id="lab-row" class="switch-row">
         <label for="lab" class="switch-label">Lab</label>
         <input id="lab" class="switch" type="checkbox" role="switch" aria-describedby="lab-footer">
       </div>

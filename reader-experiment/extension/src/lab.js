@@ -8,16 +8,23 @@
 //   lab/inbox, lab/heard, lab/states   the ledger (daylight-lab.js LabLedger), fed by every ack-topic frame that
 //                          decrypts, Lab on or off, through the Sender's onAckHeader
 //   lab/server             this file's last server answer {state, at}, for the popup's "Daylight server ›" row
+//   lab/repaired           {at}: this browser re-paired with another Daylight while it knew a Daylight server, which
+//                          it locked first (2.6, DESIGN 3.4). The popup shows the locked text with the new Server code,
+//                          Copy and the re-run help (DESIGN 12.7) until OK, or until the server answers ready again
 //   server/*               the server module's own keys (DESIGN 13.1); only daylight-server.js writes them
 //
 // Discovery and every server call run only with Lab on (DESIGN 4.3). A pairing change with another secret removes
 // every lab/* key with the outbox (applyPairingChange); before it, a server that knows the old pairing is locked
-// (lockBeforeRepair, 2.6), Lab on or off.
+// (lockBeforeRepair, 2.6), Lab on or off, and a typed Server address (the old server's) is forgotten.
+//
+// A build made while its Lab wave is closed in lab-release-gate.json (the Safari build that ships inside the iPhone and
+// Mac apps, LAB-PLAN 6.2; build.mjs) has `built` false: Lab is off and can't be turned on, nothing is written for it,
+// the ledger isn't fed, and the popup shows no Lab switch, so the extension is its last non-Lab build.
 
 import * as ds from './daylight-share.js';
 import {
   LAB_TEXT, LabLedger, labHook, labGate, needsMessage, inboxLabText, featureName, serverHeadingShort,
-  serverRowSubtitle, serverFeatureShort, labInboxSeenText, aiTodayText, fillText, GATE_DEADLINE_MS, SERVER_FEATURES,
+  serverRowSubtitle, serverFeatureShort, labInboxSeenText, aiTodayText, GATE_DEADLINE_MS, SERVER_FEATURES,
   SERVER_KEYS,
 } from './daylight-lab.js';
 import {
@@ -37,6 +44,9 @@ export const LAB_FEATURES = { chrome: [], safari: [] };
 export const LAB_SERVER_FEATURES = { chrome: ['F02', 'F37', 'F19', 'F36'], safari: ['F37'] };
 /** The Lab features this build runs (labGate's `built`). A server feature that is ready but not built is `later`. */
 export const BUILT_FEATURES = [];
+
+/** The storage key of the re-pairing follow-up (2.6): {at}. Under lab/, so the next pairing change removes it. */
+export const REPAIRED_KEY = 'lab/repaired';
 
 /** The states that belong to the whole server, not to one feature: the What's in Lab heading's line. */
 const SERVER_WIDE = ['needs-pairing', 'needs-server', 'pairing-mismatch', 'server-outdated', 'app-outdated', 'locked',
@@ -62,16 +72,19 @@ function withDeadline(promise, ms, fallback) {
 /**
  * api: the browser API; target: 'chrome' | 'safari'; storage: the protocol's storage adapter (storage.local);
  * run: core's settings and outbox lock; getPairing, getSettings, deviceName, appId: core's; refreshAcks: reads the ack
- * topic now (What's in Lab opening), or null; gateDeadlineMs: labGate's 5 s (tests shorten it).
+ * topic now (What's in Lab opening), or null; gateDeadlineMs: labGate's 5 s (tests shorten it); built: false in a build
+ * whose Lab wave is still closed (LAB_BUILT, build.mjs): then Lab is off whatever is stored.
  */
 export function createLab({
   api, target = 'chrome', storage, fetch: fetchFn, now = () => Date.now(), log = console, run, getPairing, getSettings,
-  deviceName, appId = '', refreshAcks = null, gateDeadlineMs = GATE_DEADLINE_MS,
+  deviceName, appId = '', refreshAcks = null, gateDeadlineMs = GATE_DEADLINE_MS, built = true,
 } = {}) {
   const platform = target === 'safari' ? 'safari' : 'chrome';
   const app = LAB_TEXT.appName[platform];
   const ledger = new LabLedger({ storage, now });
   const hook = labHook(ledger);
+  /** The switch as this build reads it: a build without Lab has it off. */
+  const on = (s) => built && isLabOn(s);
   let serverCache = null; // {key, server}
   let probing = null; // {key, force, promise}: one discovery at a time
 
@@ -81,6 +94,7 @@ export function createLab({
 
   /** The first start of a build with Lab writes lab = true when the key is missing (1.2); a stored value stays. */
   async function ensureDefault() {
+    if (!built) return;
     await run(async () => {
       const s = await settings();
       if (s.lab === undefined) await storage.set('settings', { ...s, lab: true });
@@ -88,9 +102,10 @@ export function createLab({
   }
 
   /** -> {lab} */
-  async function setLab(on) {
-    await run(async () => storage.set('settings', { ...(await settings()), lab: !!on }));
-    return { lab: isLabOn(await settings()) };
+  async function setLab(want) {
+    if (!built) return { lab: false };
+    await run(async () => storage.set('settings', { ...(await settings()), lab: !!want }));
+    return { lab: on(await settings()) };
   }
 
   // --- the Daylight server ------------------------------------------------------------------------------------------
@@ -148,7 +163,11 @@ export function createLab({
     if (!probing || probing.key !== key || (force && !probing.force)) {
       const p = { key, force, promise: null };
       p.promise = probeNow(pairing, force).catch((e) => ({ state: 'error', message: e?.message ?? null })).then(async (r) => {
-        try { await storage.set('lab/server', { state: r.state, at: now() }); } catch { /* shown anyway */ }
+        try {
+          await storage.set('lab/server', { state: r.state, at: now() });
+          // The new pairing's server answers: the re-pairing follow-up has done its job.
+          if (r.state === 'ready') await storage.remove(REPAIRED_KEY);
+        } catch { /* shown anyway */ }
         return r;
       }).finally(() => { if (probing === p) probing = null; });
       probing = p;
@@ -196,7 +215,7 @@ export function createLab({
       },
     };
     const r = await labGate(feature, {
-      lab: isLabOn(s), paired: !!pairing, app, platform,
+      lab: on(s), paired: !!pairing, app, platform,
       hasCap: (token) => ledger.hasCap(token),
       local: async (f) => {
         // Site access comes before the server (step 4): the server's origin is known once it was found or typed.
@@ -221,7 +240,7 @@ export function createLab({
   /** The popup's settings: the switch and the "Daylight server ›" row's subtitle (1.1). -> {lab, noteEnabled, ...} */
   async function state({ refresh = true } = {}) {
     const s = await settings();
-    const lab = isLabOn(s);
+    const lab = on(s);
     const out = { lab, labNoteShown: !!s.labNoteShown, noteEnabled: LAB_NOTE_ENABLED, serverState: null, serverSubtitle: null };
     if (!lab) return out;
     let last = null;
@@ -244,7 +263,7 @@ export function createLab({
    */
   async function overview({ refresh = true } = {}) {
     const s = await settings();
-    if (!isLabOn(s)) return { lab: false };
+    if (!on(s)) return { lab: false };
     const pairing = await getPairing();
     if (pairing && refresh && refreshAcks) await withDeadline(refreshAcks().catch(() => {}), gateDeadlineMs, () => {});
     const snap = await ledger.snapshot();
@@ -277,7 +296,7 @@ export function createLab({
    */
   async function serverView() {
     const s = await settings();
-    if (!isLabOn(s)) return { lab: false };
+    if (!on(s)) return { lab: false };
     const pairing = await getPairing();
     if (!pairing) {
       return { lab: true, paired: false, state: 'needs-pairing', message: needsMessage('needs-pairing', { platform }), rerun: RERUN_HELP };
@@ -312,7 +331,7 @@ export function createLab({
   async function setServerAddress(url) {
     const pairing = await getPairing();
     if (!pairing) return { error: needsMessage('needs-pairing', { platform }) };
-    if (!isLabOn(await settings())) return { error: fillText(LAB_TEXT.labOff, { app }) };
+    if (!on(await settings())) return { error: LAB_TEXT.labOff.replace('{app}', app) };
     const server = await serverFor(pairing);
     probing = null;
     try {
@@ -327,21 +346,54 @@ export function createLab({
 
   /**
    * Before a pairing with another secret replaces `current` (2.6 Re-pairing): a server that knows the old pairing is
-   * locked, Lab on or off, when a pin exists. Never throws; gives up after `ms`.
+   * locked, Lab on or off, when a pin exists (or a typed Server address). The typed address is then forgotten: it is
+   * the old server's, which the next deploy replaces (DESIGN 12.7), and it would hide the new one from discovery.
+   * Never throws; gives up on the lock after `ms`. -> {known: a server was known, locked: the lock request succeeded}
    */
   async function beforeRepair(current, next, ms = 10000) {
-    if (!current || !next || ds.samePairingSecret(current, next)) return false;
+    if (!current || !next || ds.samePairingSecret(current, next)) return { known: false, locked: false };
     let pin = null, manual = null;
     try { pin = await storage.get('server/pin'); manual = await storage.get('server/manualUrl'); } catch { /* none */ }
-    if (!pin && !manual) return false;
+    if (!pin && !manual) return { known: false, locked: false };
     const server = new DaylightServer({ pairing: current, storage, fetch: fetchFn, now, from: await deviceName(), app: appId });
     serverCache = null;
     probing = null;
-    return withDeadline(server.lockBeforeRepair().catch(() => false), ms, () => false);
+    const locked = await withDeadline(server.lockBeforeRepair().catch(() => false), ms, () => false);
+    if (manual) { try { await server.clearManualUrl(); } catch { /* kept: the section can clear it */ } }
+    return { known: true, locked };
+  }
+
+  /**
+   * After that pairing change (applyPairingChange removed the lab/* keys): the popup's follow-up (DESIGN 12.7), shown
+   * while Lab is on, whether the lock reached the server or not (DESIGN 3.4).
+   */
+  async function afterRepair() {
+    try { await storage.set(REPAIRED_KEY, { at: now() }); } catch (e) { log.warn?.('Send to Daylight: re-pairing note not kept', e); }
+  }
+
+  /**
+   * The re-pairing follow-up (2.6, DESIGN 12.7) for the popup, while Lab is on and until OK or a ready server:
+   * -> {lab, repaired: null | {state: 'locked', message, serverCode, rerun}}. Nothing goes on the network.
+   */
+  async function repaired() {
+    if (!on(await settings())) return { lab: false, repaired: null };
+    const pairing = await getPairing();
+    let mark = null, last = null;
+    try { mark = await storage.get(REPAIRED_KEY); last = await storage.get('lab/server'); } catch { /* none */ }
+    if (!pairing || !mark) return { lab: true, repaired: null };
+    if (last?.state === 'ready' && last.at >= mark.at) {
+      try { await storage.remove(REPAIRED_KEY); } catch { /* shown again next time */ }
+      return { lab: true, repaired: null };
+    }
+    return {
+      lab: true,
+      repaired: { state: 'locked', message: localMessage('locked'), serverCode: await (await serverFor(pairing)).serverCode(), rerun: RERUN_HELP },
+    };
   }
 
   /** Keeps the ledger's states for ids still in the outbox or the hosted outbox (2.2.6). */
   async function prune() {
+    if (!built) return; // no ledger to keep
     try {
       const ids = [...((await storage.get('outbox')) ?? []), ...((await storage.get('server/hosted')) ?? [])].map((r) => r?.id).filter(Boolean);
       await ledger.prune(ids);
@@ -357,9 +409,14 @@ export function createLab({
       case 'labGate': return gate(String(msg.feature ?? ''));
       case 'labServer': return serverView();
       case 'labServerAddress': return setServerAddress(msg.url);
+      case 'labRepaired': return repaired();
+      case 'labRepairSeen': await storage.remove(REPAIRED_KEY); return {};
       default: return undefined;
     }
   }
 
-  return { ledger, hook, ensureDefault, setLab, labOn: () => labOn(storage), state, overview, gate, serverView, setServerAddress, beforeRepair, prune, probe, onMessage };
+  return {
+    ledger, hook, built, ensureDefault, setLab, labOn: async () => built && labOn(storage), state, overview, gate, serverView,
+    setServerAddress, beforeRepair, afterRepair, repaired, prune, probe, onMessage,
+  };
 }

@@ -104,9 +104,13 @@ function makeBadge(action) {
   };
 }
 
+/**
+ * labBuilt: false in a build made while its Lab wave is closed (target.js LAB_BUILT, written by build.mjs; LAB-PLAN 6.2):
+ * then nothing of Lab runs or shows, and the extension is its last non-Lab build.
+ */
 export function createApp({
   api, target = 'chrome', storage, fetch: fetchImpl, now = () => Date.now(), log = console, pdfChunkSize = PDF_CHUNK,
-  gateDeadlineMs,
+  gateDeadlineMs, labBuilt = true,
 } = {}) {
   storage ??= areaStorage(api.storage.local);
   const fetchFn = fetchImpl ?? ((...a) => globalThis.fetch(...a));
@@ -138,7 +142,7 @@ export function createApp({
   const lab = createLab({
     api, target, storage, fetch: fetchFn, now, log, run, getPairing, getSettings, deviceName: () => deviceName(), appId,
     refreshAcks: async () => { const s = await getSender(); if (s) await run(() => s.checkAcks()); },
-    ...(gateDeadlineMs ? { gateDeadlineMs } : {}),
+    ...(gateDeadlineMs ? { gateDeadlineMs } : {}), built: labBuilt,
   });
 
   async function getSender() {
@@ -146,7 +150,10 @@ export function createApp({
     if (!pairing) return null;
     const from = await deviceName();
     const key = `${pairing.code}|${pairing.relay}|${from}`;
-    if (cache?.key !== key) cache = { key, sender: new ds.Sender({ pairing, storage, from, app: appId, fetch: fetchFn, now, onAckHeader: lab.hook }) };
+    if (cache?.key !== key) {
+      const onAckHeader = labBuilt ? lab.hook : undefined; // a build without Lab keeps no ledger, as before Lab
+      cache = { key, sender: new ds.Sender({ pairing, storage, from, app: appId, fetch: fetchFn, now, onAckHeader }) };
+    }
     return cache.sender;
   }
 
@@ -163,8 +170,10 @@ export function createApp({
    * the popup sends it again with confirm: true and that expect (the code in use when it asked). The same code with a
    * new relay or name keeps the outbox, whose items then go through the new relay; a different code deletes it
    * (applyPairingChange). relay: the Advanced field, for a typed code (a link names its own relay). from: this
-   * browser's name.
-   * -> {name, relay, notice} (notice: "Pairing updated…" for the same code, else null) | {needsConfirm}
+   * browser's name. Another Daylight while a Daylight server was known: the server is locked first, and the popup then
+   * shows the re-pairing follow-up (LAB-PLAN 2.6, DESIGN 12.7; lab.js `repaired`, while Lab is on).
+   * -> {name, relay, notice, serverLocked?} (notice: "Pairing updated…" for the same code, else null; serverLocked:
+   * true when a server was known, so the follow-up waits) | {needsConfirm}
    */
   async function pair({ input, from, relay, confirm = false, expect } = {}) {
     const next = await ds.parsePairing(input);
@@ -182,12 +191,15 @@ export function createApp({
       // A typed code (or a link without a name) for the Daylight already paired keeps the name it has.
       if (!ds.cleanName(next.name) && current && ds.samePairingSecret(current, next)) next.name = current.name;
       // Another Daylight: a Daylight server that knows this pairing is locked first (LAB-PLAN 2.6), Lab on or off.
-      await lab.beforeRepair(current, next);
+      const repair = await lab.beforeRepair(current, next);
       await ds.applyPairingChange(storage, current, next);
       await ds.savePairing(storage, next);
+      if (repair.known) await lab.afterRepair();
       if (from != null) await storage.set('settings', { ...(await getSettings()), from: ds.cleanName(from) });
       cache = null;
-      return { name: ds.cleanName(next.name), relay: ds.normalizeRelay(next.relay), notice: c.notice };
+      const out = { name: ds.cleanName(next.name), relay: ds.normalizeRelay(next.relay), notice: c.notice };
+      if (repair.known) out.serverLocked = true;
+      return out;
     });
   }
 
@@ -258,7 +270,7 @@ export function createApp({
       paired: !!pairing, name: pairing?.name ?? '', relay: pairing?.relay ?? '',
       defaultRelay: !pairing || pairing.relay === ds.DEFAULT_RELAY,
       from: settings.from ?? '', defaultFrom: await defaultFrom(), target, version, shortcut: await shortcut(),
-      comfort: !!settings.comfort, lab: settings.lab !== false,
+      comfort: !!settings.comfort, lab: labBuilt && settings.lab !== false, labBuilt,
     };
   }
 

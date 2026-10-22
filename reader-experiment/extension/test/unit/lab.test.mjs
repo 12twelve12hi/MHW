@@ -373,14 +373,64 @@ test('re-pairing with another Daylight locks a server that knows the old pairing
   try {
     await s.useWorker();
     await s.msg({ type: 'setLab', lab: false });
-    // The same Daylight again (a rename): no lock.
-    await s.app.pair({ input: s.link, from: 'Renamed' });
+    // The same Daylight again (a rename): no lock, no follow-up.
+    const same = await s.app.pair({ input: s.link, from: 'Renamed' });
+    assert.equal(same.serverLocked, undefined);
     assert.equal(s.worker.count('POST /v1/admin/lock'), 0);
     const r = await s.app.pair({ input: await ds.pairingLink({ secret: ds.generateSecret(), relay: s.relay.url }) });
     assert.ok(r.needsConfirm, 'another Daylight asks first');
     assert.equal(s.worker.count('POST /v1/admin/lock'), 0, 'nothing before the answer');
-    await s.app.pair({ input: await ds.pairingLink({ secret: ds.generateSecret(), relay: s.relay.url }), confirm: true });
+    const next = ds.generateSecret();
+    const done = await s.app.pair({ input: await ds.pairingLink({ secret: next, relay: s.relay.url }), confirm: true });
     assert.equal(s.worker.count('POST /v1/admin/lock'), 1, 'locked with the old pairing’s token');
+    assert.equal(done.serverLocked, true);
+    // The typed address was the old server's: forgotten, so discovery can find the new one (DESIGN 12.7).
+    assert.equal(await s.storage('server/manualUrl'), undefined);
+    // Lab off: nothing to show (1.3); it waits for Lab.
+    assert.deepEqual(await s.msg({ type: 'labRepaired' }), { lab: false, repaired: null });
+    assert.ok(await s.storage('lab/repaired'));
+
+    // Lab on: the locked text with the new pairing's Server code and the re-run help (DESIGN 12.7).
+    await s.msg({ type: 'setLab', lab: true });
+    const { repaired } = await s.msg({ type: 'labRepaired' });
+    assert.deepEqual(repaired, {
+      state: 'locked', message: S.STATE_MESSAGES.locked,
+      serverCode: await S.formatServerCode(await S.deriveServerSeed(next), { relay: s.relay.url }), rerun: S.RERUN_HELP,
+    });
+    // ...until OK.
+    assert.deepEqual(await s.msg({ type: 'labRepairSeen' }), {});
+    assert.deepEqual(await s.msg({ type: 'labRepaired' }), { lab: true, repaired: null });
+  } finally { await s.close(); }
+});
+
+test('the re-pairing follow-up shows when the lock didn’t reach the server too, and goes once the new server answers', async () => {
+  const s = await setup();
+  try {
+    // A pinned server for this pairing that can't be reached: the lock fails, the re-pair goes ahead (DESIGN 3.4).
+    const values = await S.deriveServerValues(await S.deriveServerSeed(s.secret));
+    await s.fb.api.storage.local.set({ 'server/pin': { origin: await deadAddress(), fingerprint: values.fingerprint } });
+    const next = ds.generateSecret();
+    const done = await s.app.pair({ input: await ds.pairingLink({ secret: next, relay: s.relay.url }), confirm: true });
+    assert.equal(done.serverLocked, true);
+    const { repaired } = await s.msg({ type: 'labRepaired' });
+    assert.equal(repaired?.message, S.STATE_MESSAGES.locked);
+    // The Server section says what discovery finds meanwhile: the old pin is an earlier pairing's.
+    assert.equal((await s.msg({ type: 'labServer' })).state, 'pairing-mismatch');
+    assert.ok((await s.msg({ type: 'labRepaired' })).repaired, 'still there');
+    // The new pairing's server answers ready: the follow-up has done its job.
+    s.fb.grant('http://localhost/*');
+    s.worker.state.token = (await S.deriveServerValues(await S.deriveServerSeed(next))).authToken;
+    assert.equal((await s.msg({ type: 'labServerAddress', url: s.worker.url })).manualUrl, s.worker.url);
+    assert.equal((await s.msg({ type: 'labServer' })).state, 'ready');
+    assert.deepEqual(await s.msg({ type: 'labRepaired' }), { lab: true, repaired: null });
+    assert.equal(await s.storage('lab/repaired'), undefined);
+
+    // No server known: no lock and no follow-up (a pairing change takes an earlier follow-up with the other lab/ keys).
+    await s.app.pair({ input: await ds.pairingLink({ secret: ds.generateSecret(), relay: s.relay.url }), confirm: true });
+    await s.fb.api.storage.local.remove(['server/pin', 'server/manualUrl']);
+    const plain = await s.app.pair({ input: await ds.pairingLink({ secret: ds.generateSecret(), relay: s.relay.url }), confirm: true });
+    assert.equal(plain.serverLocked, undefined);
+    assert.deepEqual(await s.msg({ type: 'labRepaired' }), { lab: true, repaired: null });
   } finally { await s.close(); }
 });
 

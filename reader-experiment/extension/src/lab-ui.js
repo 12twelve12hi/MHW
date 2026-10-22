@@ -5,7 +5,7 @@
 //
 // Class names (styled in popup.css; the web sender styles the same names): .lab-note, .lab-note-text, .lab-note-acts,
 // .lab-inbox, .lab-features, .lab-feature, .lab-row, .lab-name, .lab-sentence, .lab-short, .lab-use (W1's Use switch),
-// .lab-group, .lab-group-state, .lab-server-*.
+// .lab-group, .lab-group-state, .lab-server-*, .lab-repaired*.
 
 import { LAB_TEXT } from './daylight-lab.js';
 
@@ -120,7 +120,8 @@ export async function copyText(text) {
  * One feature of What's in Lab (1.4): a control with its name (the accessible name), its sentence and its short state
  * (both its description), then W1's Use switch (6.5 Q5) when there is one, and the note box under them.
  * f: {id, name, sentence, short (null: nothing shown)}. onTap(f, box, row) runs the feature's gate.
- * use(f): an element for the feature's Use switch (X1, for USE_FEATURES), or null; it goes in a .lab-use block.
+ * use(f): an element for the feature's Use switch (X1, for the features that have one), or null; it goes in a .lab-use
+ * block.
  */
 export function featureRow(f, { onTap, use = null } = {}) {
   const li = el('li', 'lab-feature');
@@ -131,15 +132,9 @@ export function featureRow(f, { onTap, use = null } = {}) {
   const sentence = el('span', 'lab-sentence', f.sentence);
   sentence.id = nextId('lab-sentence');
   row.append(name, sentence);
-  const described = [sentence.id];
-  if (f.short) {
-    const short = el('span', 'lab-short', f.short);
-    short.id = nextId('lab-short');
-    row.append(short);
-    described.push(short.id);
-  }
   row.setAttribute('aria-labelledby', name.id);
-  row.setAttribute('aria-describedby', described.join(' '));
+  row.setAttribute('aria-describedby', sentence.id);
+  setShort(row, f.short);
   const box = noteBox();
   row.addEventListener('click', () => onTap?.(f, box, row));
   li.append(row);
@@ -151,6 +146,24 @@ export function featureRow(f, { onTap, use = null } = {}) {
   }
   li.append(box);
   return li;
+}
+
+/** A feature row's short state (part of its description), or none (null). */
+function setShort(row, short) {
+  let span = row.querySelector('.lab-short');
+  const described = (row.getAttribute('aria-describedby') ?? '').split(' ').filter((id) => id && id !== span?.id);
+  if (!short) {
+    span?.remove();
+  } else {
+    if (!span) {
+      span = el('span', 'lab-short');
+      span.id = nextId('lab-short');
+      row.append(span);
+    }
+    span.textContent = short;
+    described.push(span.id);
+  }
+  row.setAttribute('aria-describedby', described.join(' '));
 }
 
 /**
@@ -179,6 +192,65 @@ export function renderWhatsInLab(box, model, { onTap, use = null, checking = fal
     group.append(ul);
     box.append(group);
   }
+}
+
+/** The feature ids of a What's in Lab model, in order. */
+const modelIds = (model) => [...(model.features ?? []), ...(model.server?.features ?? [])].map((f) => f.id);
+
+/**
+ * A newer What's in Lab answer for the list already in `box` (renderWhatsInLab's): the header line, the server
+ * heading's line and each row's short state change in place, so an open note and the focus stay (1.4: every row shows
+ * its short state, a tap or not). model.fresh false (no server answer in it yet): only the header line changes.
+ * -> false when the list on screen has other features (then render it again).
+ */
+export function updateWhatsInLab(box, model) {
+  const shown = [...box.querySelectorAll('li.lab-feature')].map((li) => li.dataset.feature);
+  if (shown.join(' ') !== modelIds(model).join(' ')) return false;
+  const header = box.querySelector('.lab-inbox');
+  if (header) header.textContent = model.header ?? '';
+  if (!model.fresh) return true;
+  const state = box.querySelector('.lab-group-state');
+  if (state) state.textContent = model.server?.short ?? '';
+  const rows = new Map([...box.querySelectorAll('li.lab-feature')].map((li) => [li.dataset.feature, li.querySelector('.lab-row')]));
+  for (const f of [...(model.features ?? []), ...(model.server?.features ?? [])]) {
+    const row = rows.get(f.id);
+    if (row) setShort(row, f.short);
+  }
+  return true;
+}
+
+/**
+ * After this device re-paired with another Daylight while it knew a Daylight server (2.6, DESIGN 3.4 and 12.7): under
+ * the "Daylight server" heading, the locked text, the new pairing's Server code with Copy, the re-run help, and OK,
+ * which closes it. Every word is LAB_TEXT's or the server module's (model).
+ * model: {message, serverCode, rerun}; on: {copy(code) -> Promise<boolean>, ok()}.
+ */
+export function renderRepaired(box, model, on = {}) {
+  const S = LAB_TEXT.serverSection;
+  box.textContent = '';
+  const h = el('h2', 'lab-repaired-h', LAB_TEXT.serverRow);
+  h.id = nextId('lab-repaired-h');
+  box.setAttribute('aria-labelledby', h.id);
+  const codeH = el('h3', 'lab-server-h', S.serverCode);
+  codeH.id = nextId('lab-code-h');
+  const copy = button(S.copy);
+  copy.classList.add('lab-server-copy');
+  copy.setAttribute('aria-describedby', codeH.id);
+  const copied = el('p', 'hint small lab-server-copied');
+  copied.setAttribute('role', 'status');
+  copy.addEventListener('click', async () => {
+    copied.textContent = '';
+    if (await on.copy?.(model.serverCode)) copied.textContent = LAB_TEXT.setup.copied;
+  });
+  const acts = el('div', 'lab-note-acts');
+  const ok = button(LAB_TEXT.noteButton);
+  ok.classList.add('lab-repaired-ok');
+  ok.addEventListener('click', () => on.ok?.());
+  acts.append(ok);
+  box.append(
+    h, el('p', 'lab-repaired-text', model.message ?? ''), codeH, el('p', 'lab-server-code', model.serverCode ?? ''), copy,
+    copied, el('p', 'hint small lab-server-rerun', model.rerun ?? ''), acts,
+  );
 }
 
 /**

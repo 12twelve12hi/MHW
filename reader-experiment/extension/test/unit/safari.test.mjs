@@ -1,4 +1,6 @@
-// Runs the Safari build's bundled classic background script (exactly as Safari loads it) against a fake `browser`.
+// Runs the Safari build's bundled classic background script (exactly as Safari loads it) against a fake `browser`: with
+// Lab, and as build.mjs makes it while its Lab wave is closed in lab-release-gate.json (LAB-PLAN 6.2), when the Safari
+// build that ships inside the iPhone and Mac apps must be the extension's last non-Lab build.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -7,16 +9,20 @@ import { built } from '../helpers/built.mjs';
 import { fakeBrowser } from '../helpers/fake-browser.mjs';
 import { startMockRelay } from '../../../share/js/mock-relay.mjs';
 
+/** Loads a Safari build's background.js the way Safari does: one classic script in the global scope. */
+function loadBackground(b, fb) {
+  globalThis.browser = fb.api;
+  (0, eval)(fs.readFileSync(path.join(b.dir, 'background.js'), 'utf8'));
+}
+
 test('the Safari background script pairs from the app, sends, and runs Lab', async () => {
-  const b = built('safari');
+  const b = built('safari', { lab: true });
   const ds = await b.load('daylight-share.js');
   const relay = await startMockRelay();
   try {
     const secret = ds.generateSecret();
     const fb = fakeBrowser({ os: 'ios', contextMenus: false, commands: false, native: async (_, msg) => (msg.type === 'getPairing' ? { code: await ds.formatCode(secret), relay: relay.url, name: 'Desk Daylight' } : null) });
-    globalThis.browser = fb.api;
-    // Load it the way Safari does: one classic script in the global scope.
-    (0, eval)(fs.readFileSync(path.join(b.dir, 'background.js'), 'utf8'));
+    loadBackground(b, fb);
     assert.equal(fb.listeners.message.length, 1);
     assert.equal(fb.listeners.alarm.length, 1);
     assert.equal(typeof globalThis.sendToDaylight?.sendTab, 'function');
@@ -72,6 +78,48 @@ test('the Safari background script pairs from the app, sends, and runs Lab', asy
     assert.equal(v.serverCode, g.serverCode);
     assert.equal((await fb.api.runtime.sendMessage({ type: 'setLab', lab: false })).result.lab, false);
     assert.equal((await fb.api.runtime.sendMessage({ type: 'labGate', feature: 'F37' })).result.state, 'lab-off');
+  } finally {
+    await relay.close();
+    delete globalThis.browser;
+  }
+});
+
+test('a Safari build without Lab (its wave closed) is the last non-Lab build: no switch, nothing written, no ledger', async () => {
+  const b = built('safari', { lab: false });
+  const ds = await b.load('daylight-share.js');
+  const L = await b.load('daylight-lab.js');
+  const relay = await startMockRelay();
+  try {
+    const secret = ds.generateSecret();
+    const pairing = { secret, relay: relay.url };
+    const fb = fakeBrowser({ os: 'macos', native: async (_, msg) => (msg.type === 'getPairing' ? { code: await ds.formatCode(secret), relay: relay.url, name: 'Desk Daylight' } : null) });
+    loadBackground(b, fb);
+    const send = async (m) => { const r = await fb.api.runtime.sendMessage(m); assert.equal(r.ok, true, r.error); return r.result; };
+    const st = await send({ type: 'state' });
+    assert.equal(st.paired, true);
+    assert.deepEqual([st.lab, st.labBuilt], [false, false]);
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal((await fb.api.storage.local.get('settings')).settings?.lab, undefined, 'no Lab default written');
+    assert.deepEqual(await send({ type: 'setLab', lab: true }), { lab: false }, 'Lab can’t be turned on');
+    assert.equal((await fb.api.storage.local.get('settings')).settings?.lab, undefined);
+    assert.equal((await send({ type: 'labState' })).lab, false);
+    assert.deepEqual(await send({ type: 'labOverview' }), { lab: false });
+    assert.deepEqual(await send({ type: 'labServer' }), { lab: false });
+    assert.equal((await send({ type: 'labGate', feature: 'F37' })).state, 'lab-off');
+    // A Lab Daylight's hello and states reach no ledger: nothing under lab/ (protocol 1.1 acks still work).
+    const tabId = fb.addTab({ url: 'https://example.com/plain', title: 'Plain', html: '<html><body><p>Plain</p></body></html>' });
+    assert.equal((await send({ type: 'sendTab', tabId })).row.status, 'sent');
+    const storage = new ds.MemoryStorage();
+    const labInbox = new L.LabInbox({
+      storage, relay: new ds.RelayClient({ relay: relay.url }), keys: await ds.deriveKeys(secret),
+      info: { lab: 1, app: 'android/1.5.0', caps: ['st', 'tap'], live: false }, from: 'Daylight', autoFlushMs: null,
+    });
+    const polled = await new L.LabInboxSim({ receiver: new ds.Receiver({ pairing, storage }), labInbox }).pollOnce();
+    assert.ok(polled.lab, 'the Daylight published a Lab frame');
+    await send({ type: 'tick' });
+    assert.equal((await fb.api.storage.local.get('outbox')).outbox[0].status, 'delivered');
+    assert.deepEqual(Object.keys(await fb.api.storage.local.get(null)).filter((k) => k.startsWith('lab/')), []);
+    assert.equal(fs.existsSync(path.join(b.dir, 'lab.html')), false, 'no Lab page');
   } finally {
     await relay.close();
     delete globalThis.browser;

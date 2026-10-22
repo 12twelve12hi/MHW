@@ -9,7 +9,8 @@
 import { api } from './api.js';
 import { LAB_TEXT } from './daylight-lab.js';
 import {
-  labNote, noteFollowUp, clearNote, dismissNotesOnOtherControls, copyText, renderWhatsInLab, renderServerSection,
+  labNote, noteFollowUp, clearNote, dismissNotesOnOtherControls, copyText, renderWhatsInLab, updateWhatsInLab,
+  renderServerSection,
 } from './lab-ui.js';
 
 const $ = (id) => document.getElementById(id);
@@ -97,20 +98,18 @@ async function renderWhats(seq) {
   ready(true);
   // It opened: read the ack topic and ask the server now (1.4).
   try { model = await call('labOverview', { refresh: true }); } catch { return; }
-  if (seq !== renderSeq || !model.lab || box.querySelector('.lab-note > *')) {
-    if (seq === renderSeq && model.lab) updateLines(box, model);
-    return;
-  }
-  renderWhatsInLab(box, model, { onTap: onFeature });
-  document.body.dataset.fresh = '1';
+  if (seq !== renderSeq || !model.lab) return;
+  updateLines(box, model);
 }
 
-/** A fresh answer while a note is open: only the lines change, so the note and the focus stay. */
+/**
+ * A newer answer for the list on screen: the header, the heading's line and every row's short state change in place,
+ * so a note that is open (a feature tapped while the server was asked) and the focus stay. A list with other features
+ * is drawn again, unless a note is open in it.
+ */
 function updateLines(box, model) {
-  box.querySelector('.lab-inbox').textContent = model.header ?? '';
-  const state = box.querySelector('.lab-group-state');
-  if (state) state.textContent = model.server?.short ?? '';
-  document.body.dataset.fresh = '1';
+  if (!updateWhatsInLab(box, model) && !box.querySelector('.lab-note > *')) renderWhatsInLab(box, model, { onTap: onFeature });
+  if (model.fresh) document.body.dataset.fresh = '1';
 }
 
 // --- the Daylight server ----------------------------------------------------------------------------------------------

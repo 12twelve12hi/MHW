@@ -5,17 +5,25 @@
 //   dist/chrome-test/                 dist/chrome plus host access to 127.0.0.1 and localhost, for the end-to-end test
 //   dist/send-to-daylight-chrome.zip  dist/chrome zipped (files at the root, as the Chrome Web Store expects)
 //
-//   node build.mjs [--target chrome|safari|chrome-test] [--no-zip]
+//   node build.mjs [--target chrome|safari|chrome-test] [--no-zip] [--lab|--no-lab]
 //
 // The protocol library is copied from ../share/js/daylight-share.js, the one source of truth, and so is the Lab module
 // ../share/js/daylight-lab.js (LAB-PLAN 2.7.2). The Daylight server's client module ../server/client/daylight-server.js
 // is copied with one change: its import of the protocol library points at the copy next to it. The version is
 // package.json's, with the CI run number as the patch number when GITHUB_RUN_NUMBER is set (or RX_EXT_VERSION).
+//
+// Lab release gate (LAB-PLAN 6.2): the extension's Lab reaches people only after the iPhone and Mac builds of the same
+// wave. The Chrome zip is held back by rx-extension.yml's publish job. The Safari build ships inside the iPhone and
+// Mac apps (rx-apple.yml runs `node build.mjs --target safari`), so it is held here: while the code's Lab wave
+// (scripts/lab-wave.mjs: the later of lab-wave.json's and the code's own) is false in ../lab-release-gate.json, or
+// can't be told, the Safari build has no Lab (target.js LAB_BUILT = false, no lab.html): the extension is its last
+// non-Lab build, and the log says why. --lab builds it with Lab anyway (tests, a local Xcode run), --no-lab without.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { zipDir } from './scripts/zip.mjs';
+import { releaseGate } from './scripts/lab-wave.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(here, 'src');
@@ -109,6 +117,30 @@ export function serverModule(text = fs.readFileSync(SERVER_LIB, 'utf8')) {
   return out;
 }
 
+/**
+ * Whether a build of `target` has Lab (LAB-PLAN 6.2). lab: true or false to say so; otherwise Chrome builds do (the
+ * publish job holds their zip), and a Safari build does once the code's Lab wave is open in lab-release-gate.json.
+ * gate: releaseGate (scripts/lab-wave.mjs), or its answer {hold, open} (tests). -> {lab, why}: why says, for a Safari
+ * build, what decided it.
+ */
+export function labFor(target, { lab, gate = releaseGate } = {}) {
+  if (lab === true || lab === false) return { lab, why: lab ? 'with Lab (--lab)' : 'without Lab (--no-lab)' };
+  if (target !== 'safari') return { lab: true, why: '' };
+  let g;
+  try { g = typeof gate === 'function' ? gate() : gate; } catch (e) {
+    return { lab: false, why: `Lab held back: can't tell the Lab wave of this code (${e.message}), so the build has no Lab (LAB-PLAN 6.2)` };
+  }
+  if (g.hold == null) return { lab: true, why: 'no Lab code' };
+  if (g.open) return { lab: true, why: `Lab wave ${g.hold} is open in lab-release-gate.json: with Lab` };
+  return {
+    lab: false,
+    why: `Lab held back: its wave ${g.hold} waits for the iPhone and Mac builds of that wave (lab-release-gate.json has "${g.hold}": false), so this build works as the last non-Lab build (LAB-PLAN 6.2); --lab builds it with Lab`,
+  };
+}
+
+/** The pages a build without Lab leaves out: nothing links to them there. lab-ui.js stays (the popup imports it). */
+export const LAB_PAGES = ['lab.html', 'lab-page.js'];
+
 function copyDir(from, to) {
   fs.mkdirSync(to, { recursive: true });
   for (const e of fs.readdirSync(from, { withFileTypes: true })) {
@@ -118,8 +150,10 @@ function copyDir(from, to) {
   }
 }
 
-export function buildTarget(target, distRoot = DIST) {
+/** opts: labFor's ({lab, gate}), which decides whether the build has Lab. -> the folder it built. */
+export function buildTarget(target, distRoot = DIST, opts = {}) {
   if (!TARGETS.includes(target)) throw new Error(`unknown target ${target}`);
+  const { lab } = labFor(target, opts);
   const out = path.join(distRoot, target);
   fs.rmSync(out, { recursive: true, force: true });
   copyDir(SRC, out);
@@ -127,7 +161,8 @@ export function buildTarget(target, distRoot = DIST) {
   fs.copyFileSync(LAB_LIB, path.join(out, 'daylight-lab.js'));
   fs.writeFileSync(path.join(out, 'daylight-server.js'), serverModule());
   const browser = target === 'safari' ? 'safari' : 'chrome';
-  fs.writeFileSync(path.join(out, 'target.js'), `// Written by build.mjs.\nexport const TARGET = '${browser}';\n`);
+  fs.writeFileSync(path.join(out, 'target.js'), `// Written by build.mjs.\nexport const TARGET = '${browser}';\nexport const LAB_BUILT = ${lab};\n`);
+  if (!lab) for (const f of LAB_PAGES) fs.rmSync(path.join(out, f), { force: true });
   fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify(manifestFor(target), null, 2) + '\n');
   if (target === 'safari') {
     fs.writeFileSync(path.join(out, 'background.js'), bundleClassic(path.join(out, 'background.js')));
@@ -139,8 +174,14 @@ function main() {
   const args = process.argv.slice(2);
   const ti = args.indexOf('--target');
   const targets = ti >= 0 ? [args[ti + 1]] : TARGETS;
+  const lab = args.includes('--lab') ? true : args.includes('--no-lab') ? false : undefined;
   fs.mkdirSync(DIST, { recursive: true });
-  for (const t of targets) console.log(`built ${path.relative(process.cwd(), buildTarget(t)) || '.'} (version ${version()})`);
+  for (const t of targets) {
+    const decided = labFor(t, { lab });
+    const out = buildTarget(t, DIST, { lab: decided.lab });
+    console.log(`built ${path.relative(process.cwd(), out) || '.'} (version ${version()})${decided.why ? `: ${decided.why}` : ''}`);
+    if (!decided.lab && process.env.GITHUB_ACTIONS) console.log(`::notice title=Lab release gate::${t}: ${decided.why}`);
+  }
   if (targets.includes('chrome') && !args.includes('--no-zip')) {
     const zip = path.join(DIST, 'send-to-daylight-chrome.zip');
     const n = zipDir(path.join(DIST, 'chrome'), zip);

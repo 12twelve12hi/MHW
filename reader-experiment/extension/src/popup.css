@@ -229,6 +229,11 @@ input.switch:checked::before { left: calc(100% - 1.23em); background: var(--btn-
 .lab-server-address { margin-top: 6px; }
 .lab-server-address .row .btn { width: auto; margin-top: 0; }
 .lab-server-rerun { margin-top: 14px; overflow-wrap: anywhere; }
+/* The popup's re-pairing follow-up (lab-ui.js renderRepaired): a card above the history while it waits for OK. */
+.lab-repaired { margin: 10px 0 4px; padding: 10px 12px; border: 1px solid var(--rule-strong); border-radius: 8px; background: var(--card); }
+.lab-repaired-h { margin: 0 0 4px; font-size: 1em; }
+.lab-repaired-text { margin: 0; font-size: .9333em; overflow-wrap: anywhere; }
+.lab-repaired .lab-server-rerun { margin-top: 10px; }
 
 /* Comfort (F27, not Lab): larger text and buttons, more contrast, no motion. */
 body.comfort { font-size: 125%; --muted: var(--ink); --rule: var(--rule-strong); }
@@ -239,7 +244,7 @@ body.comfort :is(button, summary, .switch-row) { min-height: 48px; }
 body.comfort summary { display: flex; align-items: center; }
 body.comfort :is(.back, .remove) { display: inline-flex; align-items: center; }
 body.comfort .icon-btn { min-width: 48px; display: inline-flex; align-items: center; justify-content: center; border: 2px solid var(--rule-strong); }
-body.comfort :is(.btn, .retry, input, textarea, .page-card, .permission, .kind, .nav-row, .lab-note-body) { border-width: 2px; }
+body.comfort :is(.btn, .retry, input, textarea, .page-card, .permission, .kind, .nav-row, .lab-note-body, .lab-repaired) { border-width: 2px; }
 body.comfort :is(.lab-feature, .history li) { border-top-width: 2px; }
 body.comfort .lab-feature:last-child { border-bottom-width: 2px; }
 body.comfort input.switch { border-width: 2px; }

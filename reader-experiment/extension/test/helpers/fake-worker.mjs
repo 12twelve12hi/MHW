@@ -1,5 +1,6 @@
 // A stand-in for the Daylight server (server/DESIGN.md 10) for the Lab tests: GET /v1/hello, GET /v1/status and
-// POST /v1/admin/lock, with the Server code's bearer token when one is given. The test sets the status it answers.
+// POST /v1/admin/lock, with the Server code's bearer token when one is given. The test sets the status it answers
+// (state.status), and may slow it down (state.statusDelayMs).
 //
 // Also: a relay that never answers (hangingServer) and an address where nothing listens (deadAddress), for the gate's
 // OFFLINE cases (F00.6).
@@ -30,7 +31,11 @@ export async function startFakeWorker({ status = statusJson(), token = null, hos
     req.resume();
     if (u.pathname === '/v1/hello') return send(200, { service: 'daylight-server', api: 1 });
     if (state.token && req.headers.authorization !== `Bearer ${state.token}`) return send(401, { error: { code: 'BAD_AUTH' } });
-    if (u.pathname === '/v1/status' && req.method === 'GET') return send(200, state.status);
+    if (u.pathname === '/v1/status' && req.method === 'GET') {
+      // statusDelayMs: a slow answer, for what a screen shows while it waits.
+      if (state.statusDelayMs) return void setTimeout(() => send(200, state.status), state.statusDelayMs);
+      return send(200, state.status);
+    }
     if (u.pathname === '/v1/admin/lock' && req.method === 'POST') return send(200, { locked: true });
     return send(404, { error: { code: 'NOT_FOUND', message: 'Not here.' } });
   });

@@ -2,8 +2,9 @@
 // All sending happens in the background (it outlives the popup); the popup reads the outbox from storage to show it.
 
 import { api } from './api.js';
-import { TARGET } from './target.js';
+import { TARGET, LAB_BUILT } from './target.js';
 import { webUrl } from './daylight-share.js';
+import { copyText, renderRepaired } from './lab-ui.js';
 import {
   statusInfo, rowMessage, kindLabel, displayTitle, relativeTime, hostOf, isPending, looksLikePdfUrl,
 } from './logic.js';
@@ -92,8 +93,17 @@ function announce(text) {
 
 // --- Lab (LAB-PLAN 1.1) ---------------------------------------------------------------------------------------------
 
+/**
+ * A build without Lab (LAB_BUILT false: its Lab wave is still closed, LAB-PLAN 6.2) has no Lab switch either: the
+ * popup is its last non-Lab build's.
+ */
+function removeLab() {
+  for (const id of ['lab-row', 'lab-rows', 'lab-footer']) $(id)?.remove();
+}
+
 /** The Lab switch, and the two rows under it while Lab is on. */
 function applyLab(on) {
+  if (!LAB_BUILT) return;
   $('lab').checked = !!on;
   $('lab-rows').hidden = !on;
   if (st) st.lab = !!on;
@@ -117,6 +127,30 @@ async function onLab() {
     applyLab(!want);
   }
   if (st?.lab) loadServerSubtitle();
+}
+
+/**
+ * After a re-pairing that locked the Daylight server (LAB-PLAN 2.6, DESIGN 12.7): the locked text with the new Server
+ * code, Copy and the re-run help, at the top of the send view while Lab is on, until OK or the server answers ready.
+ */
+async function loadRepaired({ say = false } = {}) {
+  const box = $('repaired');
+  let r = null;
+  if (LAB_BUILT && st?.lab && st?.paired) {
+    try { r = (await call('labRepaired')).repaired; } catch { r = null; }
+  }
+  box.hidden = !r;
+  if (!r) { box.textContent = ''; return; }
+  renderRepaired(box, r, {
+    copy: (code) => copyText(code ?? ''),
+    ok: async () => {
+      box.hidden = true;
+      box.textContent = '';
+      try { await call('labRepairSeen'); } catch { /* shown again next time */ }
+      ($('send-page').hidden ? $('open-settings') : $('send-page')).focus();
+    },
+  });
+  if (say) announce(r.message);
 }
 
 /** What's in Lab and the Daylight server open the extension page lab.html (1.1), in a tab. */
@@ -149,7 +183,7 @@ function renderPair({ fresh = false } = {}) {
 async function paired(r) {
   st = await call('state');
   $('code').value = '';
-  await renderSend();
+  await renderSend({ say: !!r.serverLocked });
   setStatus(r.notice || `Paired with ${r.name || 'your Daylight'}.`);
 }
 
@@ -452,11 +486,12 @@ async function onUnpair() {
 
 // --- start ----------------------------------------------------------------------------------------------------------
 
-async function renderSend() {
+async function renderSend({ say = false } = {}) {
   show('view-send');
   $('daylight-name').textContent = st.name || 'your Daylight';
   await loadTab();
   renderTab();
+  await loadRepaired({ say });
   await loadRows();
 }
 
@@ -473,9 +508,11 @@ async function init() {
   $('open-settings').addEventListener('click', renderSettings);
   $('close-settings').addEventListener('click', () => (backTo === 'view-pair' || !st?.paired ? renderPair() : renderSend()));
   $('comfort').addEventListener('change', onComfort);
-  $('lab').addEventListener('change', onLab);
-  $('open-whats-in-lab').addEventListener('click', () => openLab('whats-in-lab'));
-  $('open-server').addEventListener('click', () => openLab('server'));
+  if (LAB_BUILT) {
+    $('lab').addEventListener('change', onLab);
+    $('open-whats-in-lab').addEventListener('click', () => openLab('whats-in-lab'));
+    $('open-server').addEventListener('click', () => openLab('server'));
+  } else removeLab();
   $('name-form').addEventListener('submit', onSaveName);
   $('unpair').addEventListener('click', onUnpair);
   api.storage.onChanged.addListener((changes, area) => {
@@ -484,10 +521,15 @@ async function init() {
     if (changes.settings) {
       applyComfort(changes.settings.newValue?.comfort);
       // The switch may change in lab.html too.
-      const lab = changes.settings.newValue?.lab !== false;
-      if (st && lab !== st.lab) { applyLab(lab); if (lab) loadServerSubtitle(false); }
+      const lab = LAB_BUILT && changes.settings.newValue?.lab !== false;
+      if (st && lab !== st.lab) {
+        applyLab(lab);
+        if (lab) loadServerSubtitle(false);
+        if (!$('view-send').hidden) loadRepaired();
+      }
     }
     if (changes['lab/server'] && st?.lab) loadServerSubtitle(false);
+    if (changes['lab/repaired'] && st?.lab && !$('view-send').hidden) loadRepaired();
   });
   // Comfort first, so the popup opens at its size.
   try { applyComfort((await api.storage.local.get('settings'))?.settings?.comfort); } catch { /* the background says */ }

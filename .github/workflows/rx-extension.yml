@@ -9,8 +9,11 @@ name: Reader experiment - extension and web sender
 #
 # Lab release gate (LAB-PLAN 6.2): the extension's and the web sender's Lab builds reach the release (and Pages) only
 # after the iPhone and Mac builds of the same wave. Each folder's lab-wave.json names the Lab wave of its code (null
-# before any Lab code); while reader-experiment/lab-release-gate.json has that wave false, the build is tested but not
-# uploaded, and the log says so. Flipping the gate starts this workflow, which then publishes the held builds.
+# before any Lab code); a folder with scripts/lab-wave.mjs (the extension's) also reads it from the code, and the build
+# is held for the later of the two, so a lab-wave.json left behind can't open the gate. While
+# reader-experiment/lab-release-gate.json has that wave false, the build is tested but not uploaded, and the log says
+# so. Flipping the gate starts this workflow, which then publishes the held builds. The Safari build ships inside the
+# iPhone and Mac apps (rx-apple.yml): build.mjs leaves Lab out of it while its wave is closed.
 
 on:
   push:
@@ -58,7 +61,10 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Build the extension (Chrome, Safari, test build)
+      - name: The Lab wave of this code (scripts/lab-wave.mjs; fails when lab-wave.json is behind the code)
+        run: node scripts/lab-wave.mjs --check
+
+      - name: Build the extension (Chrome, Safari, test build; Safari without Lab while its wave is closed)
         run: node build.mjs
 
       - name: Unit tests (Lab and the Safari background bundle included)
@@ -156,6 +162,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - uses: actions/download-artifact@v4
         with:
           name: send-to-daylight-chrome
@@ -172,11 +182,17 @@ jobs:
           set -euo pipefail
           gate=reader-experiment/lab-release-gate.json
           files=""
-          # <what> <lab-wave.json> <file>: a build with no Lab code always goes; a Lab build only once its wave is open.
+          # The Lab wave a folder's build is held for: its scripts/lab-wave.mjs when it has one (the later of
+          # lab-wave.json's wave and the code's own; when it can't tell, it exits non-zero, this step fails and nothing
+          # is uploaded), else its lab-wave.json.
+          wave_of() {
+            if [ -f "$1/scripts/lab-wave.mjs" ]; then node "$1/scripts/lab-wave.mjs"; else jq -r '.wave // ""' "$1/lab-wave.json"; fi
+          }
+          # <what> <folder> <file>: a build with no Lab code always goes; a Lab build only once its wave is open.
           check() {
-            wave=$(jq -r '.wave // ""' "$2")
+            wave=$(wave_of "$2")
             if [ -z "$wave" ]; then
-              echo "$1: no Lab code in this build (wave none in $2): publishing $3."
+              echo "$1: no Lab code in this build (none in $2): publishing $3."
               files="$files $3"
             elif [ "$(jq -r --arg w "$wave" '.[$w] == true' "$gate")" = true ]; then
               echo "$1: Lab wave $wave is open in $gate: publishing $3."
@@ -185,8 +201,8 @@ jobs:
               echo "::notice title=Lab release gate::$1: NOT publishing $3. Its Lab wave $wave waits for the iPhone and Mac builds of that wave ($gate has \"$wave\": false). The tests ran."
             fi
           }
-          check "Chrome extension" reader-experiment/extension/lab-wave.json out/send-to-daylight-chrome.zip
-          check "Web sender" reader-experiment/web/lab-wave.json out/send-to-daylight-web.zip
+          check "Chrome extension" reader-experiment/extension out/send-to-daylight-chrome.zip
+          check "Web sender" reader-experiment/web out/send-to-daylight-web.zip
           [ -n "$files" ] || echo "Lab release gate: nothing to publish from this run."
           echo "files=${files# }" >> "$GITHUB_OUTPUT"
 

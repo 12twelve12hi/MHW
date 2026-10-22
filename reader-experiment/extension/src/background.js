@@ -2,10 +2,10 @@
 // top level so the browser can wake the worker for them.
 
 import { api } from './api.js';
-import { TARGET } from './target.js';
+import { TARGET, LAB_BUILT } from './target.js';
 import { createApp } from './core.js';
 
-const app = createApp({ api, target: TARGET });
+const app = createApp({ api, target: TARGET, labBuilt: LAB_BUILT });
 globalThis.sendToDaylight = app; // handy from the devtools console, and used by the end-to-end test
 
 api.runtime.onInstalled.addListener(() => { app.start(); });

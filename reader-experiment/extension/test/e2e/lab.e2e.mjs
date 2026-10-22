@@ -9,6 +9,9 @@
 //   F00.6  needs-server within 5 s; a relay that never answers: "Checking your Daylight server…", then OFFLINE at 5 s
 //   F00.7  no setup sentence or secret name on a screen before a feature is tapped or the server section opened
 //   F17.2  What's in Lab's header from the ledger: nothing heard, a v1.1 ack, a Lab hello
+//   2.6    re-pairing with another Daylight while a server is known: the popup's follow-up (the locked text, the new
+//          Server code with Copy, the re-run help) until OK; a fresh What's in Lab answer updates the rows' short
+//          states with a note open
 //
 //   PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node --test test/e2e/lab.e2e.mjs      (HEADED=1 to watch)
 
@@ -22,6 +25,7 @@ import { built } from '../helpers/built.mjs';
 import { startSite } from '../helpers/server.mjs';
 import { expectBaseline, parityRows, FIXED_SECRET, labDefaultWritten } from '../helpers/lab-off.mjs';
 import { startFakeWorker, statusJson, hangingServer } from '../helpers/fake-worker.mjs';
+import { axe, assertNotClipped, unnamed } from '../helpers/a11y.mjs';
 import { startMockRelay } from '../../../share/js/mock-relay.mjs';
 
 const b = built('chrome-test');
@@ -386,5 +390,109 @@ test('What’s in Lab’s header follows the Daylight: nothing heard, a v1.1 Day
   assert.equal(await page.textContent('.lab-inbox'), 'Your Daylight: Lab on · checked in just now');
   await shot(page, 'whats-in-lab-inbox-lab');
   await page.close();
+  await unpair();
+});
+
+// --- 2.6: what a fresh answer and a re-pairing show -------------------------------------------------------------------
+
+test('a fresh What’s in Lab answer gives every row its short state, also with a note open (F00.3)', { timeout: 120000 }, async () => {
+  await storageSet({ settings: { lab: true } });
+  const secret = ds.generateSecret();
+  await pair(await ds.pairingLink({ secret, relay: relay.url, name: 'Slow Daylight' }));
+  worker.state.token = (await S.deriveServerValues(await S.deriveServerSeed(secret))).authToken;
+  worker.state.status = statusJson({ features: { ai: 'needs-key', email: 'needs-domain' } });
+  await storageSet({ 'server/manualUrl': worker.url });
+  // The server takes 2 s to answer, so a feature can be tapped before What's in Lab has its states.
+  worker.state.statusDelayMs = 2000;
+  try {
+    const page = await ctx.newPage();
+    await page.setViewportSize({ width: 360, height: 760 });
+    await page.goto(`chrome-extension://${extId}/lab.html#whats-in-lab`);
+    await page.waitForSelector('body[data-ready="1"]');
+    assert.equal(await page.textContent('.lab-group-state'), LAB_TEXT.checking);
+    assert.equal(await page.locator('.lab-short').count(), 0, 'no states yet');
+    await page.getByRole('button', { name: LAB_TEXT.features.F02.name, exact: true }).click();
+    await featureRow(page, 'F02').locator('.lab-note-body[data-state="later"]').waitFor({ timeout: 9000 });
+    await page.waitForSelector('body[data-fresh="1"]', { timeout: 9000 });
+    // The note stays, and every row has its short state now.
+    assert.equal(await featureRow(page, 'F02').locator('.lab-note-text').textContent(), 'Your Daylight server is ready. Files over 9 MB comes to this app in a later Lab update.');
+    assert.equal(await page.textContent('.lab-group-state'), 'Ready');
+    const shorts = {};
+    for (const id of ['F02', 'F37', 'F19', 'F36']) shorts[id] = await featureRow(page, id).locator('.lab-short').textContent().catch(() => null);
+    assert.deepEqual(shorts, { F02: 'In a later update', F37: 'Needs a Claude key', F19: 'Needs an email domain', F36: 'In a later update' });
+    // ...in each row's description, for screen readers.
+    const row = featureRow(page, 'F37').locator('button.lab-row');
+    const described = await row.evaluate((b) => b.getAttribute('aria-describedby').split(' ').map((id) => document.getElementById(id)?.textContent));
+    assert.deepEqual(described, [LAB_TEXT.features.F37.sentence, 'Needs a Claude key']);
+    await shot(page, 'whats-in-lab-fresh-note');
+    await page.close();
+  } finally {
+    worker.state.statusDelayMs = 0;
+    await unpair();
+  }
+});
+
+test('re-pairing with another Daylight while a server is known: the popup shows the locked text, the new Server code with Copy and the re-run help, until OK (2.6)', { timeout: 120000 }, async () => {
+  await storageSet({ settings: { lab: true, comfort: true } });
+  const secret = ds.generateSecret();
+  await pair(await ds.pairingLink({ secret, relay: relay.url, name: 'Old Daylight' }));
+  worker.state.token = (await S.deriveServerValues(await S.deriveServerSeed(secret))).authToken;
+  worker.state.status = statusJson();
+  await storageSet({ 'server/manualUrl': worker.url });
+  const locks = worker.count('POST /v1/admin/lock');
+  const page = await ctx.newPage();
+  await page.goto(`${site.url}/parity.html`);
+  const tabId = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u }))[0]?.id, `${site.url}/parity.html`);
+  let popup = await openPopup(tabId);
+  assert.equal(await popup.isVisible('#repaired'), false, 'nothing before a re-pairing');
+  await popup.click('#open-settings');
+  await popup.click('#repair');
+  const next = ds.generateSecret();
+  await popup.fill('#code', await ds.formatCode(next));
+  await popup.click('#pair-btn');
+  await popup.waitForSelector('#view-confirm:not([hidden])');
+  await popup.click('#confirm-yes');
+  await popup.waitForSelector('#view-send:not([hidden])');
+  await popup.waitForSelector('#repaired:not([hidden])');
+  assert.equal(worker.count('POST /v1/admin/lock'), locks + 1, 'the old server was locked first');
+  assert.equal(await storageGet('server/manualUrl'), undefined, 'the old server’s typed address is gone');
+
+  const panel = popup.getByRole('region', { name: LAB_TEXT.serverRow });
+  assert.equal(await panel.isVisible(), true);
+  const code = await S.formatServerCode(await S.deriveServerSeed(next), { relay: relay.url });
+  assert.equal(await popup.textContent('#repaired .lab-repaired-text'), S.STATE_MESSAGES.locked);
+  assert.equal(await popup.textContent('#repaired .lab-server-h'), LAB_TEXT.serverSection.serverCode);
+  assert.equal(await popup.textContent('#repaired .lab-server-code'), code);
+  assert.equal(await popup.textContent('#repaired .lab-server-rerun'), S.RERUN_HELP);
+  // Said to screen readers, through the send view's polite live region.
+  await popup.waitForFunction((t) => document.querySelector('#announce').textContent === t, S.STATE_MESSAGES.locked);
+  // F27: no axe violations, every control named, nothing clipped at 360 px with Comfort.
+  await axe(popup, 'popup: the re-pairing follow-up');
+  assert.deepEqual(await unnamed(popup), []);
+  await assertNotClipped(popup, 'popup: the re-pairing follow-up, Comfort');
+  await shot(popup, 'popup-repaired');
+  const lastCopy = await recordCopies(popup);
+  await panel.getByRole('button', { name: LAB_TEXT.serverSection.copy, exact: true }).click();
+  await panel.getByText(LAB_TEXT.setup.copied).waitFor();
+  assert.equal(await lastCopy(), code);
+
+  // It stays until OK: the popup opened again still shows it; with Lab off it doesn't (1.3).
+  await popup.close();
+  popup = await openPopup(tabId);
+  assert.equal(await popup.isVisible('#repaired'), true);
+  await storageSet({ settings: { lab: false, comfort: true } });
+  await popup.waitForSelector('#repaired', { state: 'hidden' });
+  await storageSet({ settings: { lab: true, comfort: true } });
+  await popup.waitForSelector('#repaired:not([hidden])');
+  await popup.getByRole('region', { name: LAB_TEXT.serverRow }).getByRole('button', { name: LAB_TEXT.noteButton, exact: true }).click();
+  await popup.waitForSelector('#repaired', { state: 'hidden' });
+  assert.equal(await popup.evaluate(() => document.activeElement?.id), 'send-page');
+  assert.equal(await storageGet('lab/repaired'), undefined);
+  await popup.close();
+  popup = await openPopup(tabId);
+  assert.equal(await popup.isVisible('#repaired'), false, 'gone after OK');
+  await popup.close();
+  await page.close();
+  await storageSet({ settings: { lab: true } });
   await unpair();
 });
