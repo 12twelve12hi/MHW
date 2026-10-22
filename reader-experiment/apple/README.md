@@ -542,7 +542,7 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     - `LabNoteTests` (F00.3, F00.5, F00.6, F17.2): *Summaries with Claude* (and each server feature) says the
       needs-server sentence under itself within 5 s, enabled, said to VoiceOver (`-DLSAnnounceLog`), with Copy Server
       code and OK; offline it says the OFFLINE sentence, and with a relay that never answers *Checking your Daylight
-      server…* and then OFFLINE 5 s later (timed from when *Checking…* shows: a tap takes the test a second or two); the Server code is `server-vectors.json` › `derived` in the link form, and both
+      server…* and then OFFLINE 5 s later (at least 4.5 s after the tap started and at most 8 s after the test saw *Checking…*: a tap, and seeing a text, each take the test a second or two); the Server code is `server-vectors.json` › `derived` in the link form, and both
       Copy buttons put it on the clipboard (read back with Home's Paste button); with no hello, *Delivered ✓* and the
       needs-inbox header line.
     - `LabAccessibilityAuditTests` (F27.2 with Lab on): Settings with its Lab section, What's in Lab, a needs-setup note

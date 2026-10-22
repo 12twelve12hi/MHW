@@ -88,23 +88,29 @@ final class LabNoteTests: XCTestCase {
         LabUI.openWhatsInLab(hanging, short: short)
         let slow = LabUI.element(LabUI.feature("F37"), in: hanging)
         LabUI.scrollTo(slow, in: hanging)
+        // The gate starts with the tap; its note says "Checking your Daylight server…" 150 ms later. A tap, and seeing
+        // a text, each take the test a second or two, so the gate's 5 s lie between the tap's start (before the gate
+        // started: OFFLINE at least 4.5 s after it) and the test seeing "Checking…" (after it started: OFFLINE at most
+        // 8 s after it). In runs 39861246341 and 39864055620 one clock alone gave 7.4 to 14.9 s and 3.3 s.
+        var tapped = Date()
         LabUI.tapRow(slow, in: hanging)
-        // The gate starts with the tap; its note says "Checking your Daylight server…" 150 ms later. The 5 s are timed
-        // from when that shows (a tap itself takes the test a second or two).
         let note = LabUI.element(LabUI.note, in: hanging)
         let checking = LabUI.text(LabUI.string("checking"), in: note)
         if !checking.waitForExistence(timeout: 4) {
             print("UI test: no “Checking…” after tapping F37 (\(slow.frame)); tapping it again")
+            tapped = Date()
             LabUI.tapRow(slow, in: hanging)
         }
         XCTAssertTrue(checking.waitForExistence(timeout: 4), "the note did not say “Checking your Daylight server…”")
-        let asked = Date()
+        let seen = Date()
         UITestSupport.screenshot(hanging, "ios-lab-note-checking", in: self)
         XCTAssertTrue(LabUI.text(offline, in: hanging).waitForExistence(timeout: 12), "no OFFLINE sentence from a relay that never answers")
-        let took = Date().timeIntervalSince(asked)
-        print("UI test: a relay that never answers gave OFFLINE \(String(format: "%.1f", took)) s after “Checking…” showed")
-        XCTAssertGreaterThanOrEqual(took, 3.5, "OFFLINE came before the 5 s deadline")
-        XCTAssertLessThanOrEqual(took, 8, "OFFLINE came long after the 5 s deadline")
+        let fromTap = Date().timeIntervalSince(tapped)
+        let fromSeen = Date().timeIntervalSince(seen)
+        print("UI test: a relay that never answers gave OFFLINE \(String(format: "%.1f", fromTap)) s after the tap "
+              + "started, \(String(format: "%.1f", fromSeen)) s after “Checking…” was seen")
+        XCTAssertGreaterThanOrEqual(fromTap, 4.5, "OFFLINE came before the 5 s deadline")
+        XCTAssertLessThanOrEqual(fromSeen, 8, "OFFLINE came long after the 5 s deadline")
     }
 
     /// F00.5: the Daylight server section shows this pairing's Server code: the vectors' (server-vectors.json ›
