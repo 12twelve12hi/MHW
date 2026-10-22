@@ -5,6 +5,12 @@
 // pairing (the relay in use filled in), and "Delivered ✓" after the Daylight (a Receiver from daylight-share.js)
 // acknowledges.
 //
+// These are v1.1's flows: they run with Lab off (LAB-PLAN 1.3; the page's test hook ?lab=0 on 127.0.0.1, 1.7), and
+// again with Lab on, the default (web-lab-on.e2e.mjs sets DLS_WEB_E2E_LAB=1), so a Lab-on regression in them fails CI.
+// What Lab changes on purpose is in the LAB branches: an item sent offline waits for a connection in "Waiting to send"
+// and goes by itself once back online (F07), and a file over 9 MB gets the F02 entry point under its sentence. Lab's
+// Wave 1 itself is web-lab-w1.e2e.mjs.
+//
 //   PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node --test test/e2e/web.e2e.mjs
 
 import { test, before, after } from 'node:test';
@@ -16,7 +22,10 @@ import { webBuilt } from '../helpers/web-built.mjs';
 import { makePdf } from '../helpers/pdf.mjs';
 import { startMockRelay } from '../../../share/js/mock-relay.mjs';
 
-const OUT = path.join(path.dirname(new URL(import.meta.url).pathname), '..', '..', 'test-results');
+const LAB = process.env.DLS_WEB_E2E_LAB === '1';
+/** The test hook (LAB-PLAN 1.7) for a fresh browser's first visit: Lab on or off for these flows. */
+const HOOK = `lab=${LAB ? 1 : 0}`;
+const OUT = path.join(path.dirname(new URL(import.meta.url).pathname), '..', '..', 'test-results', ...(LAB ? ['web-lab-on'] : []));
 const PDF = makePdf({ pages: 2, fillerBytes: 50_000 });
 const LARGE_PDF = makePdf({ pages: 2, fillerBytes: 5_000_000 }); // over the relay's 2 MB per attachment: three pieces
 const w = webBuilt();
@@ -72,9 +81,10 @@ let ctx, page;
 test('pair in one tap from a #pair= link, then send a typed link and a PDF', { timeout: 60000 }, async () => {
   ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
   page = await ctx.newPage();
-  await page.goto(`${site.url}/`);
+  await page.goto(`${site.url}/?${HOOK}`);
   await ready(page);
   assert.equal(await page.isVisible('#view-pair'), true);
+  assert.equal(await page.evaluate(async () => (await (await import('./web-storage.js')).openStorage()).storage.get('settings').then((x) => x?.lab)), LAB);
   await page.screenshot({ path: path.join(OUT, 'web-pair.png') });
 
   // A pairing from outside the page asks first (PROTOCOL 1.3), on the page, in the protocol module's words.
@@ -145,6 +155,9 @@ test('a file over 9 MB is refused before it is read, in the protocol’s words',
   assert.equal(await page.textContent('#status'), 'Too big to send. Files can be up to 9 MB; this one is 9.1 MB.');
   assert.equal(await page.evaluate(() => window.__reads), 0, 'the file was not read');
   assert.equal(await page.$$eval('#history li', (li) => li.length), rows, 'nothing was queued');
+  // Lab (LAB-PLAN 3.1): the F02 entry point under the too-big sentence; v1.1 has none.
+  assert.equal(await page.isVisible('#lab-after .lab-big-files'), LAB);
+  if (LAB) assert.equal(await page.textContent('#lab-after .lab-big-files'), 'Send files over 9 MB ›');
   await page.reload(); // drop the patched Blob
   await ready(page);
 });
@@ -253,8 +266,30 @@ test('offline: the page still opens, a send waits with Retry now, and Retry now 
   await page.reload();
   await ready(page);
   assert.equal(await page.textContent('#daylight-name'), 'Web Daylight');
+  // With Lab on the page also asks Background Sync to send it (F07). Playwright's offline mode doesn't always reach the
+  // service worker, and Chromium, really online, would fire that at once; this test is about the page's own way back
+  // online (web-lab-w1.e2e.mjs runs the worker's).
+  if (LAB) await page.evaluate(() => { SyncManager.prototype.register = async () => {}; });
   await page.fill('#url', 'https://example.com/offline');
   await page.click('#send-url');
+  if (LAB) {
+    // F07: it waits for a connection in "Waiting to send (1)", with Cancel and no Retry now, then goes by itself.
+    const waiting = '#lab-queue-list li[data-status="failed"]';
+    await page.waitForSelector(waiting, { timeout: 30000 });
+    await statusStarts(page, 'Waiting for connection.');
+    assert.equal(await page.textContent('#status'), 'Waiting for connection. It will send when this device is back online.');
+    assert.equal(await page.textContent('#lab-queue-h'), 'Waiting to send (1)');
+    assert.equal(await page.textContent(`${waiting} .st`), 'Waiting for connection');
+    assert.equal(await page.locator(`${waiting} .retry`).count(), 0);
+    assert.equal(await page.textContent(`${waiting} .remove`), 'Cancel');
+    assert.equal(await page.inputValue('#url'), '', 'it is on its way: the form is cleared');
+    await page.screenshot({ path: path.join(OUT, 'web-waiting.png') });
+    await ctx.setOffline(false);
+    await page.waitForSelector('#lab-queue', { state: 'hidden', timeout: 30000 });
+    const items = await receive(7);
+    assert.ok(items.find((i) => i.header.url === 'https://example.com/offline'));
+    return;
+  }
   const failed = '#history li[data-status="failed"]';
   await page.waitForSelector(`${failed} .retry`, { timeout: 30000 });
   await statusStarts(page, 'Waiting to send.'); // the history row can show before the send's status line is set
@@ -350,7 +385,7 @@ test('Delivered ✓ once the Daylight acknowledges', { timeout: 60000 }, async (
 test('a fresh browser opening the Shortcut link (#autosend=1&pair=…&url=…) pairs and sends', { timeout: 60000 }, async () => {
   const c = await browser.newContext();
   const p = await c.newPage();
-  const prefix = `${site.url}/#autosend=1&pair=${encodeURIComponent(link)}&url=`;
+  const prefix = `${site.url}/?${HOOK}#autosend=1&pair=${encodeURIComponent(link)}&url=`;
   await p.goto(prefix + encodeURIComponent('https://example.com/via-shortcut'));
   const q = await question(p);
   assert.equal(q.title, 'Pair with Web Daylight?');
@@ -365,7 +400,7 @@ test('a fresh browser opening the Shortcut link (#autosend=1&pair=…&url=…) p
 test('unpaired autosend waits for pairing, then sends', { timeout: 60000 }, async () => {
   const c = await browser.newContext();
   const p = await c.newPage();
-  await p.goto(`${site.url}/?url=${encodeURIComponent('https://example.com/later')}&autosend=1`);
+  await p.goto(`${site.url}/?${HOOK}&url=${encodeURIComponent('https://example.com/later')}&autosend=1`);
   await ready(p);
   await p.waitForSelector('#pending-share:not([hidden])');
   await p.fill('#code', await ds.formatCode(secret));

@@ -2,8 +2,8 @@
 // settings.lab = false in its IndexedDB), the pairing, sending and settings screens' accessibility trees equal the
 // non-Lab baselines recorded from the P0 close-out (test/e2e/lab-off-baseline/web-*.yml; helpers in
 // test/helpers/lab-off.mjs). Settings keeps one thing with Lab off (1.3): the Lab switch row and its footer, which are
-// the only lines left out before comparing. With Lab on, web-lab.e2e.mjs checks that W0 leaves the pairing and sending
-// screens as these baselines too.
+// the only lines left out before comparing. With Lab on, web-lab.e2e.mjs checks that W1 leaves the pairing screen as its
+// baseline too (the sending screen has W1's timeline, queue and Paste and send with Lab on).
 //
 //   PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node --test test/e2e/web-lab-off-parity.e2e.mjs
 //   UPDATE_LAB_OFF_BASELINE=1 …   re-records, only together with a matching non-Lab change

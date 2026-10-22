@@ -261,6 +261,48 @@ input.switch:checked::before { left: calc(100% - 1.23em); background: var(--btn-
 .lab-repaired .lab-server-h { margin-top: 12px; }
 .lab-repaired .lab-server-rerun { margin-top: 12px; }
 
+/* Lab, Wave 1 (LAB-PLAN 3.3; web-lab-page.js with the extension's lab-popup.js): the one-time note, the timeline's
+   rows and check-in header, the queue, Paste and send, the F02 entry point, the Use switches, Setup check and the
+   bookmarklet. Nothing here is greyed out, and every state is said in words and glyphs (2.5), never colour alone. */
+.lab-banner { margin: 0 0 16px; }
+.lab-banner .lab-note-body { margin: 0; }
+.lab-checkin { margin: 24px 0 0; color: var(--muted); font-size: .8824em; overflow-wrap: anywhere; }
+.lab-checkin + .lab-queue .recent-h, .lab-checkin + .lab-queue[hidden] + .recent-h { margin-top: 10px; }
+.lab-steps { margin: 3px 0 0; font-size: .7647em; color: var(--muted); overflow-wrap: anywhere; }
+.item-title.item-open {
+  font: inherit; font-weight: 500; color: var(--ink); background: none; border: 0; padding: 0; text-align: left;
+  cursor: pointer; text-decoration: underline; text-decoration-color: var(--rule-strong); text-underline-offset: 2px;
+}
+.lab-paste .btn { margin-top: 10px; }
+.lab-paste-said:empty { display: none; }
+.lab-paste-said .lab-note-body { margin-top: 8px; }
+.lab-paste-none { font-size: .8235em; }
+.lab-after { margin-top: 8px; }
+.lab-after .nav-row { margin-top: 2px; }
+.lab-use { margin: -2px 0 4px 2px; }
+.lab-use .switch-row { margin: 0; min-height: 36px; }
+.lab-use .switch-label { font-size: .9412em; }
+.lab-use .switch-footer { margin: 0 0 4px; }
+.lab-checks { list-style: none; margin: 0 0 6px; padding: 0; }
+.lab-check-item { border-top: 1px solid var(--rule); padding: 8px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.lab-check-item:last-child { border-bottom: 1px solid var(--rule); }
+.lab-check-line { margin: 0; flex: 1 1 12em; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.lab-check-fix { width: auto; margin-top: 0; }
+.lab-test { margin: 16px 0 6px; }
+.lab-test-footer { margin: 6px 0 4px; overflow-wrap: anywhere; }
+.lab-test-progress p { margin: 4px 0 0; }
+.lab-activity { margin: 14px 0 0; }
+.lab-activity-lines { margin: 6px 0 0; padding: 8px; max-height: 14em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .7647em; border: 1px solid var(--rule); border-radius: 8px; background: var(--card); }
+.lab-diagnostics { width: auto; }
+.lab-diagnostics-copied:empty { display: none; }
+.lab-f09-sentence { margin: 2px 0 14px; overflow-wrap: anywhere; }
+.lab-bookmarklet {
+  display: inline-block; margin: 0 0 12px; padding: 10px 14px; border: 1.5px dashed var(--rule-strong); border-radius: 10px;
+  font-weight: 600; text-decoration: none; background: var(--card); cursor: grab;
+}
+.lab-bookmarklet-copied:empty { display: none; }
+.lab-bookmarklet-copied { margin: 6px 0 0; }
+
 /* Comfort (F27, not Lab): larger text and buttons, more contrast, no motion. */
 body.comfort { font-size: 125%; --muted: var(--ink); --rule: var(--rule-strong); }
 body.comfort *, body.comfort *::before, body.comfort *::after { transition: none !important; animation: none !important; }
@@ -273,7 +315,9 @@ body.comfort .drop { border-width: 2px; }
 body.comfort input.switch { border-width: 2px; }
 body.comfort .history li { border-top-width: 2px; }
 body.comfort .history li:last-child { border-bottom-width: 2px; }
-body.comfort :is(.nav-row, .lab-note-body, .lab-repaired) { border-width: 2px; }
+body.comfort :is(.nav-row, .lab-note-body, .lab-repaired, .lab-bookmarklet) { border-width: 2px; }
+body.comfort .lab-check-item { border-top-width: 2px; }
+body.comfort .lab-check-item:last-child { border-bottom-width: 2px; }
 body.comfort .lab-feature { border-top-width: 2px; }
 body.comfort .lab-feature:last-child { border-bottom-width: 2px; }
 /* Nothing is cut short: titles wrap instead of ending in "…". */

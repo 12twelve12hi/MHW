@@ -2,6 +2,10 @@
 
 import { webUrl, findUrl, cleanTitle, safeFileName } from './daylight-share.js';
 
+/** The web sender's version, and the `app` its items carry (PROTOCOL 2.1); the service worker's sends carry it too. */
+export const VERSION = '1.1.0';
+export const APP = `web/${VERSION}`;
+
 const KEYS = ['pair', 'url', 'text', 'title', 'autosend', 'share'];
 
 /**

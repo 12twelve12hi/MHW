@@ -1,15 +1,21 @@
 // The web sender: pair with a Daylight, send links and files, see what arrived. Runs on any modern browser; an iPhone
 // Shortcut or Android's share sheet (when installed) hands it a link with ?url=…&autosend=1 or #…&url=….
+//
+// With Lab on (LAB-PLAN 3.3, card B1, Wave 1): every link goes through smart intake (F16); the history speaks the
+// delivery timeline (F01) under a check-in header, with what waits to send in its own list (F07); sends made offline
+// wait for a connection and go when the browser is back online, through the service worker's Background Sync where the
+// browser has it (F07); Paste and send (F33), the F02 entry point under the too-big sentence, Setup check (F26) and the
+// bookmarklet (F09) are web-lab-page.js's. With Lab off the page is v1.1's.
 
 import * as ds from './daylight-share.js';
-import { statusInfo, rowMessage, kindLabel, displayTitle, relativeTime, titleFromName, maintain, relayForInput } from './logic.js';
-import { readParams, hasShareParams, sharedLink, normalizeUserUrl, mimeFor, deviceName, shortcutPrefix, serial } from './web-logic.js';
+import { statusInfo, rowMessage, kindLabel, displayTitle, relativeTime, titleFromName, maintain, relayForInput, wantsAcks } from './logic.js';
+import { readParams, hasShareParams, sharedLink, normalizeUserUrl, mimeFor, deviceName, shortcutPrefix, serial, APP } from './web-logic.js';
 import { openStorage, takeShared, pruneShared } from './web-storage.js';
-import { createWebLab, labTestHook, withoutLabParam } from './web-lab.js';
+import { createWebLab, labTestHook, withoutLabParam, labLinkItem, copiedLink } from './web-lab.js';
 import { createLabPage, LAB_VIEWS } from './web-lab-page.js';
+import { WebSender, flushPass, flushDue, isWaitingRow, SYNC_TAG, OUTBOX_LOCK } from './web-flush.js';
+import { wantsStates } from './lab-send.js';
 
-const VERSION = '1.1.0';
-const APP = `web/${VERSION}`;
 const HISTORY_SHOWN = 8;
 const TICK_MS = 60 * 1000;
 /** CHANGES-v1.1 2.5: a shared file the device had no room to keep (the share target's copy failed). */
@@ -17,7 +23,7 @@ const NO_SPACE = 'This device is out of space, so it can’t send this.';
 
 const $ = (id) => document.getElementById(id);
 const local = serial();
-const lock = (fn) => (navigator.locks?.request ? navigator.locks.request('send-to-daylight-outbox', () => fn()) : local(fn));
+const lock = (fn) => (navigator.locks?.request ? navigator.locks.request(OUTBOX_LOCK, () => fn()) : local(fn));
 const channel = 'BroadcastChannel' in self ? new BroadcastChannel('send-to-daylight') : null;
 
 let storage = null;
@@ -35,6 +41,8 @@ let unpairArmed = null;
 let backTo = 'view-send'; // the view Settings' Back returns to
 const lastStatus = new Map(); // row id -> the status last shown, to announce changes (F27)
 const defaultFrom = deviceName(navigator.userAgent, navigator.maxTouchPoints);
+let flushTimer = null; // F07: the next capped pass, while rows wait for a connection
+let installPrompt = null; // F26: the browser's install prompt, kept while Lab is on (Setup check's "Installed as an app")
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -53,6 +61,7 @@ function show(view) {
   for (const v of ['view-pair', 'view-confirm', 'view-send', 'view-settings', ...LAB_VIEWS]) $(v).hidden = v !== view;
   // Settings (Comfort among them) is one tap away before pairing too.
   $('open-settings').hidden = view !== 'view-send' && view !== 'view-pair';
+  labPage?.showNote(view); // Lab's one-time note, over pairing and sending only (1.2)
 }
 
 // --- accessibility (F27, not Lab) -----------------------------------------------------------------------------------
@@ -90,13 +99,18 @@ async function loadState() {
   pairing = await ds.loadPairing(storage).catch(() => null);
   settings = (await storage.get('settings')) ?? {};
   // Every ack-topic frame that decrypts feeds the Lab ledger, Lab on or off (LAB-PLAN 2.2.6).
-  sender = pairing ? new ds.Sender({ pairing, storage, from: settings.from || defaultFrom, app: APP, onAckHeader: lab?.hook }) : null;
+  // WebSender: F07's rule (web-flush.js): while Lab is on, rows waiting for a connection leave only in capped passes.
+  sender = pairing ? new WebSender({ pairing, storage, from: settings.from || defaultFrom, app: APP, onAckHeader: lab?.hook }) : null;
+  if (sender) sender.holdNetwork = settings.lab !== false;
   applyComfort(settings.comfort);
   labPage?.apply(settings);
+  await labPage?.refresh();
 }
 
 async function loadRows() {
   rows = (await storage.get('outbox')) ?? [];
+  // With Lab on, the ledger's states as they are now: a row that is delivered and already in the Reader reads so at once.
+  await labPage?.refreshTimeline();
   renderHistory();
 }
 
@@ -246,13 +260,40 @@ function afterSend() {
   setTimeout(tick, 30000);
 }
 
-async function sendLink(url, title) {
-  const u = normalizeUserUrl(url);
-  if (!u) throw new ds.ShareError('url', 'That isn’t a web address. It should look like https://example.com/story.');
-  const row = await lock(() => sender.send({ kind: 'url', url: u, title }));
-  afterSend();
+/** Lab is on, as the page last read it (labPage.apply): Wave 1's send path, rows and boxes. */
+const labOn = () => !!labPage?.model;
+
+/**
+ * Shares one item. With Lab on (F07): while this browser is offline the row is stored to wait for a connection
+ * (Sender.send defer), and goes once it is back online (the `online` event, or Background Sync with the page closed);
+ * every send goes into the activity log (F26). With Lab off: v1.1's send.
+ */
+async function sendItem(item) {
+  const defer = labOn() && navigator.onLine === false;
+  const row = await lock(() => sender.send(item, { defer }));
+  if (labOn()) {
+    await lab.logEvent({ type: defer ? 'defer' : 'send', id: row.id, kind: row.kind, status: row.status });
+    if (defer || isWaitingRow(row)) requestSync();
+  }
+  if (!defer) afterSend();
   await changed();
   return row;
+}
+
+/**
+ * A link: typed, from the address or the share sheet. With Lab on it goes through smart intake (F16, labLinkItem):
+ * redirectors unwrapped, tracking dropped (unless F16's Use switch is off), the link as shared in x-orig. text: a
+ * share's text, read for its address and title (Lab only; v1.1 read it before, sharedLink).
+ */
+async function sendLink(url, title, { text = '' } = {}) {
+  if (labOn()) {
+    const item = labLinkItem({ url, text, title }, labPage.model.settings);
+    if (!item) throw new ds.ShareError('url', 'That isn’t a web address. It should look like https://example.com/story.');
+    return sendItem(item);
+  }
+  const u = normalizeUserUrl(url);
+  if (!u) throw new ds.ShareError('url', 'That isn’t a web address. It should look like https://example.com/story.');
+  return sendItem({ kind: 'url', url: u, title });
 }
 
 async function sendFile(file) {
@@ -262,10 +303,12 @@ async function sendFile(file) {
   if (file.size > ds.MAX_ITEM) throw new ds.ShareError('too-large', ds.tooBigMessage(file.size));
   const bytes = new Uint8Array(await file.arrayBuffer());
   const name = file.name || 'document';
-  const row = await lock(() => sender.send({ kind: 'file', name, mime: mimeFor(name, file.type), title: titleFromName(name), content: bytes }));
-  afterSend();
-  await changed();
-  return row;
+  return sendItem({ kind: 'file', name, mime: mimeFor(name, file.type), title: titleFromName(name), content: bytes });
+}
+
+/** F07: asks the service worker for Background Sync's dls-flush, where the browser has it (Chromium). */
+function requestSync() {
+  navigator.serviceWorker?.ready?.then((r) => r.sync?.register(SYNC_TAG)).catch(() => {});
 }
 
 /**
@@ -275,7 +318,8 @@ async function sendFile(file) {
 function describe(results) {
   // A row's own `error` is technical detail for logs; only {name, error} entries (no id) show theirs.
   const isRow = (r) => typeof r.id === 'string';
-  const say = (r) => (isRow(r) ? rowMessage(r) : r.error);
+  // With Lab on, the timeline's words (2.5): "Waiting for connection" while offline; v1.1's until delivered.
+  const say = (r) => (isRow(r) ? (labPage?.resultText(r)?.text ?? rowMessage(r)) : r.error);
   const tone = results.some((r) => !isRow(r) || r.status === 'expired') ? 'bad'
     : results.every((r) => r.status === 'sent' || r.status === 'delivered') ? 'ok' : '';
   if (results.length === 1) return { text: say(results[0]), tone };
@@ -288,13 +332,17 @@ async function withBusy(label, fn) {
   $('app').setAttribute('aria-busy', 'true');
   for (const id of ['send-url', 'file']) $(id).disabled = true;
   setStatus(label);
+  labPage?.clearAfter();
   try {
     const sent = await fn();
     const m = describe(sent);
     setStatus(m.text, m.tone);
+    // Lab (LAB-PLAN 3.1): under the too-big sentence, the F02 entry point "Send files over 9 MB ›".
+    if (sent.some((r) => r.code === 'too-large')) labPage?.bigFiles();
     return sent;
   } catch (e) {
     setStatus(e.message ?? String(e), 'bad');
+    if (e?.code === 'too-large') labPage?.bigFiles();
     return [];
   } finally {
     for (const id of ['send-url', 'file']) $(id).disabled = false;
@@ -305,7 +353,9 @@ async function withBusy(label, fn) {
 async function onSendUrl(ev) {
   ev.preventDefault();
   const sent = await withBusy('Sending…', async () => [await sendLink($('url').value, $('title').value)]);
-  if (sent.length && sent[0].status !== 'failed' && sent[0].status !== 'expired') { $('url').value = ''; $('title').value = ''; }
+  // A link on its way is cleared from the form; so is one Lab keeps to send once back online (F07).
+  const going = (r) => r.status !== 'failed' && r.status !== 'expired';
+  if (sent.length && (going(sent[0]) || (labOn() && isWaitingRow(sent[0]) && !sent[0].attempts))) { $('url').value = ''; $('title').value = ''; }
 }
 
 async function sendFiles(list) {
@@ -315,7 +365,7 @@ async function sendFiles(list) {
     if (files.length === 1) return [await sendFile(files[0])];
     const out = [];
     for (const f of files) {
-      try { out.push(await sendFile(f)); } catch (e) { out.push({ name: f.name || 'document', error: e.message ?? String(e) }); }
+      try { out.push(await sendFile(f)); } catch (e) { out.push({ name: f.name || 'document', error: e.message ?? String(e), code: e.code }); }
     }
     return out;
   });
@@ -324,8 +374,25 @@ async function sendFiles(list) {
 /** A share from a Shortcut, a link or the Android share sheet: {url, title, files}. */
 async function sendShare(share) {
   if (share.files?.length) return sendFiles(share.files); // the files are the content; a link alongside is their source
-  if (share.url) return withBusy('Sending…', async () => [await sendLink(share.url, share.title)]);
-  return [];
+  if (!share.url) return [];
+  // Lab reads the share as it came (F16: the URL as shared goes as x-orig); v1.1 sends sharedLink's reading.
+  if (labOn() && share.raw) return withBusy('Sending…', async () => [await sendLink(share.raw.url || share.url, share.raw.title, { text: share.text })]);
+  return withBusy('Sending…', async () => [await sendLink(share.url, share.title)]);
+}
+
+/** F33's Paste and send: the link in copied text, through smart intake (F16); its question named the host already. */
+async function sendCopied(text) {
+  const got = copiedLink(text, labPage?.model?.settings ?? {});
+  if (!got || !sender) return;
+  await withBusy('Sending…', async () => [await sendItem(got.item)]);
+}
+
+/** F26's test article: sent as a page with x-cap "test"; Setup check follows its row. */
+async function sendTest() {
+  if (!sender || !labOn()) throw new ds.ShareError('pairing', 'Pair with your Daylight first.');
+  const row = await sendItem(await lab.testItem());
+  await lab.noteTest(row.id);
+  return row;
 }
 
 async function retry(id, button) {
@@ -333,6 +400,7 @@ async function retry(id, button) {
   button.textContent = 'Sending…';
   try {
     const row = await lock(() => sender.retry(id));
+    if (row && labOn()) await lab.logEvent({ type: 'retry', id: row.id, kind: row.kind, status: row.status });
     if (row) {
       const m = describe([row]);
       setStatus(m.text, m.tone);
@@ -345,7 +413,10 @@ async function retry(id, button) {
 /** "Remove": the row and its stored content. */
 async function remove(id, button) {
   button.disabled = true;
-  try { await lock(() => sender.remove(id)); } catch (e) { setStatus(e.message, 'bad'); }
+  try {
+    const removed = await lock(() => sender.remove(id));
+    if (removed && labOn()) await lab.logEvent({ type: 'remove', id });
+  } catch (e) { setStatus(e.message, 'bad'); }
   await changed();
 }
 
@@ -356,8 +427,53 @@ async function remove(id, button) {
 async function tick() {
   if (!sender) return;
   const s = sender;
-  try { await lock(() => maintain(s)); } catch { /* offline: next time */ }
+  const on = labOn();
+  const before = on ? await lab.rowStates().catch(() => null) : null;
+  let flush = false;
+  try {
+    await lock(async () => {
+      s.holdNetwork = on; // F07: rows waiting for a connection leave only in capped passes while Lab is on
+      await maintain(s);
+      if (on) {
+        // F01: the ack topic is read after delivery too, while a row delivered in the last 48 hours has no settled state.
+        const list = await s.list();
+        if (!wantsAcks(list) && wantsStates(list, labPage.model?.timeline?.states ?? {})) await s.checkAcks().catch(() => {});
+        flush = navigator.onLine !== false && flushDue(s, await s.list(), Date.now());
+      }
+    });
+  } catch { /* offline: next time */ }
   await lab?.prune();
+  if (before) await lab.logChanges(before);
+  await changed();
+  labPage?.ledgerChanged();
+  if (flush) await flushOffline();
+}
+
+/**
+ * F07: back online (or a tick found the oldest waiting row due). With Lab on, the rows that wait for a connection go
+ * now in one capped pass (web-flush.js flushPass: at most 30 frames and 18 MB, passes at least 3 minutes apart, shared
+ * with the service worker and the other tabs); another follows while the last one stopped at a cap and nothing
+ * failed, or at the end of the 3 minutes when this one came too soon. -> the rows attempted
+ */
+async function flushOffline() {
+  if (!sender || !labOn() || navigator.onLine === false) return [];
+  const s = sender;
+  let r = { attempted: [], again: null };
+  try {
+    r = await lock(() => flushPass({ storage, sender: s, online: navigator.onLine }));
+  } catch { /* the relay: the next pass */ }
+  if (r.attempted.length) { afterSend(); await changed(); labPage?.ledgerChanged(); }
+  if (r.again != null && !flushTimer) flushTimer = setTimeout(() => { flushTimer = null; flushOffline(); }, r.again);
+  return r.attempted;
+}
+
+/** Reads the ack topic now (F01's faster checks, Setup check's test article). */
+async function checkAcksNow() {
+  if (!sender) return;
+  const s = sender;
+  const before = labOn() ? await lab.rowStates().catch(() => null) : null;
+  try { await lock(() => s.checkAcks()); } catch { /* offline */ }
+  if (before) await lab.logChanges(before);
   await changed();
   labPage?.ledgerChanged();
 }
@@ -365,6 +481,8 @@ async function tick() {
 // --- rendering ------------------------------------------------------------------------------------------------------
 
 function renderHistory() {
+  // With Lab on, the timeline's rows, the queue and the check-in header (web-lab-page.js); v1.1's otherwise.
+  if (labPage?.history(rows)) { for (const row of rows) lastStatus.set(row.id, row.status); return; }
   const list = $('history');
   list.textContent = '';
   const shown = rows.slice(0, HISTORY_SHOWN);
@@ -507,11 +625,12 @@ async function takeShareFromAddress() {
         return { name: f.name || 'document', type: f.type || '', size: Number(f.size) || 0, noSpace: !!f.noSpace };
       });
       const link = sharedLink({ url: e.url, text: e.text, title: e.title });
-      share = { url: link.url, title: link.title, files };
+      // text: the share's own text, which Lab's smart intake reads for the address and the title (F16).
+      share = { url: link.url, title: link.title, text: e.text ?? '', raw: { url: e.url ?? '', title: e.title ?? '' }, files };
     }
   } else if (params.url || params.text || params.title) {
     const link = sharedLink(params);
-    share = { url: link.url ?? params.url ?? '', title: link.title, files: [] };
+    share = { url: link.url ?? params.url ?? '', title: link.title, text: params.text ?? '', raw: { url: params.url ?? '', title: params.title ?? '' }, files: [] };
   }
   return { params, share };
 }
@@ -557,6 +676,12 @@ function wire() {
   for (const t of ['dragleave', 'drop']) drop.addEventListener(t, () => drop.classList.remove('over'));
   drop.addEventListener('drop', (e) => { e.preventDefault(); if (sender) sendFiles(e.dataTransfer?.files ?? []); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+  // F07: the timeline says "Waiting for connection" while offline; back online, the waiting rows go now.
+  window.addEventListener('online', () => { if (labOn()) { renderHistory(); flushOffline(); } });
+  window.addEventListener('offline', () => { if (labOn()) renderHistory(); });
+  // F26's "Installed as an app": with Lab on, the browser's install prompt waits for Setup check's button.
+  window.addEventListener('beforeinstallprompt', (e) => { if (labOn()) { e.preventDefault(); installPrompt = e; } });
+  window.addEventListener('appinstalled', () => { installPrompt = null; });
   window.addEventListener('hashchange', async () => {
     await handleAddress();
     if (!pairing) renderPair();
@@ -566,6 +691,7 @@ function wire() {
     if (pairing) await loadRows();
     labPage?.ledgerChanged();
     if (!$('view-send').hidden) await labPage?.loadRepaired();
+    if (!$('view-setup').hidden) await labPage?.updateTest();
   });
 }
 
@@ -577,6 +703,14 @@ async function startLab() {
   lab = createWebLab({
     storage, run: settingsRun, getPairing: () => ds.loadPairing(storage), getSettings: () => storage.get('settings'),
     deviceName: async () => settings.from || defaultFrom, appId: APP,
+    // Setup check (F26): installed as an app, and this page's storage kept by the browser.
+    env: {
+      installed: () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true,
+      canInstall: () => !!installPrompt,
+      persisted: async () => !!(await navigator.storage?.persisted?.()),
+      canPersist: () => typeof navigator.storage?.persist === 'function',
+      online: () => navigator.onLine,
+    },
     // What's in Lab opening reads the ack topic (1.4). An ack it finds delivers rows, so the history (announcing
     // Delivered) and the other tabs follow at once, as after a tick, not only when the send view is drawn again.
     refreshAcks: async () => {
@@ -593,6 +727,19 @@ async function startLab() {
     changed: async () => { channel?.postMessage('changed'); await loadState(); },
     isPaired: () => !!pairing,
     afterRepairSeen: () => $('url').focus(),
+    // Wave 1
+    sendCopied, sendTest, checkAcks: checkAcksNow, retry, remove,
+    toPairing: () => { $('pair-error').textContent = ''; renderPair({ fresh: true }); },
+    install: async () => {
+      const p = installPrompt;
+      if (!p) return;
+      installPrompt = null;
+      try { await p.prompt(); await p.userChoice; } catch { /* the browser said no */ }
+    },
+    persist: async () => { try { await navigator.storage?.persist?.(); } catch { /* the browser decides */ } },
+    noteDone: () => ($('view-send').hidden ? $('code') : $('url')).focus(),
+    pageUrl: () => location.href,
+    visible: () => !document.hidden,
   });
   labPage.wire();
   const hook = labTestHook(location);

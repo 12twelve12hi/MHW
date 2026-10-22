@@ -2,9 +2,11 @@
 // rows, What's in Lab, the Daylight server section and the re-pairing follow-up, against the mock relay, a stand-in
 // Daylight server behind the server's own CORS answer (DESIGN 10.2) and Daylights from daylight-lab.js.
 //
-//   F00.1  a fresh page has Lab on (settings.lab written), with no one-time note in W0
-//   F00.2  with Lab on, W0 leaves the pairing and sending screens as the non-Lab baselines (Lab off is
+//   F00.1  a fresh page has Lab on (settings.lab written), and the one-time note once from W1 (1.2); an upgrade keeps
+//          the pairing and history
+//   F00.2  with Lab on and the note seen, W1 leaves the pairing screen as the non-Lab baseline (Lab off is
 //          web-lab-off-parity.e2e.mjs); with Lab off only the switch shows, and a Lab view open in another tab closes
+//   (Wave 1's features are web-lab-w1.e2e.mjs.)
 //   1.7    ?lab=0 and ?lab=1 on 127.0.0.1
 //   F00.3  a server feature's tap shows exactly its sentence under it, announced, never greyed out; OK or another tap
 //          closes it; with a server: Ready, `later` and the server's own states
@@ -12,6 +14,7 @@
 //   F00.6  needs-server within 5 s; a relay that never answers: "Checking your Daylight server…", then OFFLINE at 5 s
 //   F00.7  no setup sentence or secret name on a screen before a feature is tapped or the server section opened
 //   F17.2  What's in Lab's header from the ledger: nothing heard, a v1.1 ack, a Lab hello
+//   F02e.1 a file over 9 MB: "Send files over 9 MB ›" under v1.1's sentence, needs-server, then `later`; none with Lab off
 //   2.6    re-pairing with another Daylight while a server is known: the follow-up until OK; Set up with a link; the
 //          server moved ("Use it?"); What's in Lab's cached states (1.5); Unpair forgets a typed Server address
 //
@@ -151,19 +154,33 @@ async function serveFor(secret, status = statusJson()) {
 
 // --- F00.1, F00.2, 1.7 ---------------------------------------------------------------------------------------------------
 
-test('a fresh page has Lab on and no one-time note in W0; Settings starts with the switch and its rows; W0 leaves pairing and sending as the baselines', { timeout: 90000 }, async () => {
+test('a fresh page has Lab on and the one-time note once (W1, 1.2); Settings starts with the switch and its rows; an upgrade keeps everything', { timeout: 90000 }, async () => {
   const { ctx, page } = await openWeb('/', { width: 390, height: 844 });
   try {
     assert.deepEqual(await storageGet(page, 'settings'), { lab: true }, 'the first start wrote lab = true (F00.1)');
-    assert.equal(await page.getByText(LAB_TEXT.note).count(), 0, 'no one-time note in a W0 build');
-    await store(page, { settings: { from: 'Parity web', lab: true } });
+    // The one-time note (1.2): this build has the delivery timeline, so it shows, once, until OK.
+    const note = page.locator('#lab-note');
+    await note.waitFor();
+    assert.equal(await note.locator('.lab-note-text').textContent(), LAB_TEXT.note);
+    assert.equal(await note.locator('[role="note"]').count(), 1);
+    await note.getByRole('button', { name: LAB_TEXT.noteButton }).click();
+    assert.equal(await note.isHidden(), true);
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'code', 'the focus goes on to the pairing field');
+    assert.deepEqual(await storageGet(page, 'settings'), { lab: true, labNoteShown: true });
+    await page.reload();
+    await ready(page);
+    assert.equal(await page.isHidden('#lab-note'), true, 'once');
+    // W1 adds nothing to the pairing screen, so with the note seen it is the non-Lab baseline.
+    await store(page, { settings: { from: 'Parity web', lab: true, labNoteShown: true } });
     await expectBaseline(page, 'web-pair');
-    // An upgrade from the last non-Lab build (a pairing, a history, settings without lab): Lab on, the rest kept (F00.1).
+    // An upgrade from the last non-Lab build (a pairing, a history, settings without lab): Lab on, the rest kept
+    // (F00.1), and the note shows there too.
     await pairStored(page, { code: await ds.formatCode(FIXED_SECRET), name: 'Parity Daylight', extra: { outbox: parityRows(), settings: { from: 'Parity web' } } });
     assert.deepEqual(await storageGet(page, 'settings'), { from: 'Parity web', lab: true });
-    assert.equal(await page.locator('#history li').count(), 6, 'the history is kept');
-    await expectBaseline(page, 'web-send');
-    assert.equal(await page.getByText(LAB_TEXT.note).count(), 0);
+    assert.equal(await page.locator('#history li').count() + await page.locator('#lab-queue-list li').count(), 6, 'the history is kept');
+    assert.equal(await page.locator('#lab-note .lab-note-text').textContent(), LAB_TEXT.note);
+    await page.locator('#lab-note').getByRole('button', { name: LAB_TEXT.noteButton }).click();
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'url', 'the focus goes on to the link field');
 
     await openSettings(page);
     const sw = page.getByRole('switch', { name: LAB_TEXT.lab, exact: true });
@@ -448,6 +465,57 @@ test('the server moved: the section asks “moved to {host}. Use it?”; Cancel 
     assert.equal(await page.textContent('.lab-group-state'), 'Ready');
   } finally {
     worker.state.statusDelayMs = 0;
+    await ctx.close();
+  }
+});
+
+test('F02e.1: a file over 9 MB is refused in v1.1’s words, with “Send files over 9 MB ›” under it: needs-server, then `later` with a ready server; none with Lab off', { timeout: 120000 }, async () => {
+  const { ctx, page } = await openWeb();
+  try {
+    const secret = ds.generateSecret();
+    await pairStored(page, { code: await ds.formatCode(secret), name: 'Big Daylight', extra: { settings: { lab: true, labNoteShown: true } } });
+    const refuse = async () => {
+      await page.setInputFiles('#file', { name: 'Scan.pdf', mimeType: 'application/pdf', buffer: Buffer.alloc(14_200_000, 1) });
+      await page.waitForFunction(() => document.querySelector('#status').textContent.startsWith('Too big to send.'));
+      assert.equal(await page.textContent('#status'), ds.tooBigMessage(14_200_000));
+    };
+    await refuse();
+    const entry = page.getByRole('button', { name: LAB_TEXT.bigFiles, exact: true });
+    assert.equal(await entry.isVisible(), true, 'under the too-big sentence');
+    assert.ok(await page.evaluate(() => document.querySelector('#status').compareDocumentPosition(document.querySelector('#lab-after')) & Node.DOCUMENT_POSITION_FOLLOWING));
+    await entry.click();
+    const note = page.locator('#lab-after .lab-note-body[data-state="needs-server"]');
+    await note.waitFor({ timeout: 6000 });
+    assert.equal(await note.locator('.lab-note-text').textContent(), LAB_TEXT.needs['needs-server']);
+    assert.equal(await page.locator('#lab-after .lab-note').getAttribute('aria-live'), 'polite');
+    await page.evaluate(() => navigator.clipboard.writeText(''));
+    await note.getByRole('button', { name: LAB_TEXT.buttons['needs-server'] }).click();
+    await note.getByText(LAB_TEXT.setup.copied).waitFor();
+    assert.match(await page.evaluate(() => navigator.clipboard.readText()), /^daylightserver:\/\/setup\?c=/);
+    await shot(page, 'f02e-needs-server');
+    // A ready server: the page has no F02 yet (Wave S), so `later`.
+    await serveFor(secret);
+    await openLabView(page, 'server');
+    await page.getByLabel(LAB_TEXT.serverSection.serverAddress).fill(front.url);
+    await page.getByRole('button', { name: LAB_TEXT.serverSection.addressSave, exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('.lab-server-ready')?.textContent === 'Ready', null, { timeout: 15000 });
+    await page.getByRole('button', { name: '‹ Back' }).first().click();
+    await page.click('#close-settings');
+    await page.waitForSelector('#view-send:not([hidden])');
+    await refuse();
+    await entry.click();
+    await page.locator('#lab-after .lab-note-body[data-state="later"]').waitFor({ timeout: 6000 });
+    assert.equal(await page.textContent('#lab-after .lab-note-text'), 'Your Daylight server is ready. Files over 9 MB comes to this app in a later Lab update.');
+    // A link sent next clears it; Lab off has none.
+    await page.fill('#url', 'https://example.com/after');
+    await page.click('#send-url');
+    await page.waitForFunction(() => document.querySelector('#status').textContent.startsWith('Sent'));
+    assert.equal(await page.isHidden('#lab-after'), true);
+    await store(page, { settings: { lab: false } });
+    await refuse();
+    assert.equal(await page.isHidden('#lab-after'), true, 'Lab off: v1.1’s screen');
+  } finally {
+    worker.state.token = null;
     await ctx.close();
   }
 });

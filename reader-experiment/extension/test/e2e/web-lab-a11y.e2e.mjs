@@ -2,7 +2,9 @@
 // Chromium: axe-core finds no violations, light and dark, Comfort off and on; every control has a name; with Comfort
 // on at 360 px nothing is clipped; at 200% text the notes wrap. Screens: pairing, sending and Settings with Lab off and
 // on, What's in Lab with a note open, the Daylight server section (not set up, and ready), and the send view's
-// re-pairing follow-up. Screenshots go to test-results/web-lab (uploaded by CI for review, not compared).
+// re-pairing follow-up; and Wave 1's (B1): the one-time note, the timeline's rows with the queue and check-in header,
+// Paste and send's question, the F02 entry point's note, What's in Lab with the Use switches, Setup check and the
+// bookmarklet. Screenshots go to test-results/web-lab (uploaded by CI for review, not compared).
 //
 //   PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node --test test/e2e/web-lab-a11y.e2e.mjs
 
@@ -22,6 +24,9 @@ const ds = await w.load('daylight-share.js');
 const S = await w.load('daylight-server.js');
 const { LAB_TEXT } = await w.load('daylight-lab.js');
 const OUT = path.join(path.dirname(new URL(import.meta.url).pathname), '..', '..', 'test-results', 'web-lab');
+/** The send view's Lab text (W1): the one-time note, Paste and send, the F02 note, the check-in, the queue's heading,
+ * the rows' sentences and step lines, and the status line. */
+const W1_SEND_TEXT = '#lab-note, #lab-paste, #lab-after, #lab-checkin, #lab-queue-h, .sentence, .lab-steps, #status';
 
 let relay, site, worker, front, browser;
 
@@ -219,6 +224,85 @@ test('Lab’s screens: What’s in Lab with a note open, the Daylight server (no
       await scaleText(page, 1);
       await page.getByRole('button', { name: LAB_TEXT.serverSection.setupCancel, exact: true }).click();
       await page.getByRole('button', { name: '‹ Back' }).click();
+      await page.click('#close-settings');
+    }
+  } finally { await ctx.close(); }
+});
+
+test('Wave 1’s screens: the one-time note, the timeline’s rows with the queue and check-in, Paste and send’s question, the F02 note, What’s in Lab’s Use switches, Setup check and the bookmarklet; notes wrap at 200%', { timeout: 300000 }, async () => {
+  const ctx = await browser.newContext({ viewport: { width: 360, height: 760 } });
+  await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: site.url });
+  const page = await ctx.newPage();
+  await page.goto(`${site.url}/`);
+  await ready(page);
+  try {
+    for (const comfort of [false, true]) {
+      const tag = comfort ? ', Comfort' : '';
+      const now = Date.now();
+      // The history's states (CHANGES-v1.1 2.5), plus delivered rows a Lab Daylight placed: in the Reader, and
+      // waiting for a tap (F01). The ledger as the Sender's onAckHeader writes it (LabLedger).
+      const rows = historyRows(now);
+      const delivered = rows.find((r) => r.status === 'delivered');
+      rows.unshift({ ...delivered, id: 'a11y-waiting', title: 'A document that waits for a tap on the Daylight', kind: 'file', name: 'Waits.pdf', mime: 'application/pdf', created: now - 30000, delivered: now - 20000 });
+      await store(page, {
+        settings: { from: 'A11y web', lab: true, comfort },
+        pairing: { code: await ds.formatCode(ds.generateSecret()), relay: relay.url, name: 'A11y Daylight' },
+        outbox: rows,
+        'lab/inbox': { android: { lab: 1, app: 'android/1.5.0', caps: ['reader-link', 'st', 'tap'], poll: now - 60000, live: false, at: now - 60000 } },
+        'lab/heard': now - 60000,
+        'lab/states': { [delivered.id]: { s: 'reader', t: Math.floor(now / 1000) - 100 }, 'a11y-waiting': { s: 'waiting', t: Math.floor(now / 1000) - 10 } },
+      });
+      await page.waitForSelector('#view-send:not([hidden])');
+      assert.equal(await page.isVisible('#lab-note'), true, 'the one-time note');
+      assert.equal(await page.locator('#lab-queue-list li').count(), 2, 'the rows waiting to send, in their own list (F07)');
+      assert.equal(await page.textContent('#lab-checkin'), 'Your Daylight checked in 1 min ago.');
+      assert.equal(await page.locator('#history li[data-lab-state="reader"] .st').textContent(), 'In your Reader ✓');
+      await page.evaluate(() => navigator.clipboard.writeText('https://www.example.org/a/very/long/path/that/goes/on?utm_source=x'));
+      await page.getByRole('button', { name: LAB_TEXT.copiedLink.pasteAndSend, exact: true }).click();
+      await page.locator('.lab-paste-confirm').waitFor();
+      await page.setInputFiles('#file', { name: 'Big scan.pdf', mimeType: 'application/pdf', buffer: Buffer.alloc(9_100_000, 1) });
+      await page.getByRole('button', { name: LAB_TEXT.bigFiles, exact: true }).click();
+      await page.locator('#lab-after .lab-note-body[data-state="needs-server"]').waitFor({ timeout: 6000 });
+      await check(page, 'web: W1 send view (note, rows, queue, Paste and send, F02)', 'a11y-w1-send', comfort);
+      await scaleText(page, 2);
+      // Lab's own lines wrap at 200%. A row's title ends in "…" outside Comfort, as in v1.1 (a11y.e2e.mjs checks only
+      // the status text at 200% there), and Comfort's full check at 360 px is check()'s.
+      await assertNotClipped(page, `web: W1 send view at 200%${tag}`, { only: W1_SEND_TEXT });
+      await shot(page, `a11y-w1-send-200${comfort ? '-comfort' : ''}`);
+      await scaleText(page, 1);
+      // A settled row opened: its sentence and step line.
+      await page.locator('#history li[data-lab-state="reader"] .item-open').click();
+      await axeBoth(page, `web: W1 send view, a settled row opened${tag}`);
+      await page.locator('#lab-note').getByRole('button', { name: LAB_TEXT.noteButton }).click();
+
+      await openSettings(page);
+      await page.click('#open-whats-in-lab');
+      await page.waitForSelector('body[data-fresh="1"]', { timeout: 20000 });
+      await page.locator('li[data-feature="F07"] .lab-row').click();
+      await check(page, 'web: W1 What’s in Lab, the Use switches', 'a11y-w1-whats', comfort);
+      await scaleText(page, 2);
+      await assertNotClipped(page, `web: W1 What’s in Lab at 200%${tag}`);
+      await scaleText(page, 1);
+
+      await page.locator('li[data-feature="F26"] .lab-row').click();
+      await page.waitForSelector('#view-setup:not([hidden]) .lab-checks');
+      await page.locator('.lab-activity summary').click();
+      await check(page, 'web: Setup check', 'a11y-w1-setup', comfort);
+      await scaleText(page, 2);
+      await assertNotClipped(page, `web: Setup check at 200%${tag}`);
+      await scaleText(page, 1);
+      await page.getByRole('button', { name: '‹ Back' }).first().click();
+      await page.waitForFunction(() => document.activeElement?.closest('li')?.dataset.feature === 'F26', null, { timeout: 20000 });
+
+      await page.locator('li[data-feature="F09"] .lab-row').click();
+      await page.waitForSelector('#view-f09:not([hidden]) .lab-bookmarklet');
+      await check(page, 'web: Shortcuts and automation (the bookmarklet)', 'a11y-w1-f09', comfort);
+      await scaleText(page, 2);
+      await assertNotClipped(page, `web: the bookmarklet at 200%${tag}`);
+      await scaleText(page, 1);
+      await page.getByRole('button', { name: '‹ Back' }).first().click();
+      await page.waitForFunction(() => document.activeElement?.closest('li')?.dataset.feature === 'F09', null, { timeout: 20000 });
+      await page.getByRole('button', { name: '‹ Back' }).first().click();
       await page.click('#close-settings');
     }
   } finally { await ctx.close(); }

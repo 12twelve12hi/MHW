@@ -29,6 +29,10 @@
 
     <noscript><p class="error">This page needs JavaScript to encrypt and send.</p></noscript>
 
+    <!-- Lab (LAB-PLAN 1.2): the one-time note over the pairing and sending views, until OK (web-lab-page.js). Empty and
+         hidden otherwise, and always with Lab off. -->
+    <div id="lab-note" class="lab-banner" hidden></div>
+
     <!-- Not paired yet (or "Change pairing…" in Settings) -->
     <section id="view-pair" hidden>
       <button id="pair-back" class="back" type="button" hidden>‹ Back</button>
@@ -74,6 +78,8 @@
         <input id="title" type="text" autocomplete="off" maxlength="300">
         <button id="send-url" class="btn primary big" type="submit">Send link</button>
       </form>
+      <!-- Lab (F33): Paste and send, while its Use switch is on (lab-popup.js renderPaste). Hidden with Lab off. -->
+      <div id="lab-paste" class="lab-paste" hidden></div>
 
       <div class="divider" role="separator"><span>or</span></div>
 
@@ -85,11 +91,20 @@
       </label>
 
       <p id="status" class="status" role="status" aria-live="polite"></p>
+      <!-- Lab (LAB-PLAN 3.1, the F02 entry point): "Send files over 9 MB ›" under the too-big sentence. Hidden otherwise. -->
+      <div id="lab-after" class="lab-after" hidden></div>
       <!-- Lab (LAB-PLAN 2.6, DESIGN 12.7): after a re-pairing that locked the Daylight server, its locked text with the
            new Server code, Copy and the re-run help, until OK (lab-ui.js renderRepaired). Empty and hidden otherwise,
            and always with Lab off. -->
       <section id="repaired" class="lab-repaired" hidden></section>
 
+      <!-- Lab (F01, F07; LAB-PLAN 2.5): the check-in header, then "Waiting to send ({n})" with Cancel on each row, above
+           Recent; the rows in the timeline's words. Hidden with Lab off: the history is v1.1's. -->
+      <p id="lab-checkin" class="lab-checkin" hidden></p>
+      <section id="lab-queue" class="lab-queue" aria-labelledby="lab-queue-h" hidden>
+        <h2 class="recent-h" id="lab-queue-h"></h2>
+        <ol id="lab-queue-list" class="history" aria-labelledby="lab-queue-h"></ol>
+      </section>
       <h2 id="recent-h" class="recent-h" hidden>Recent</h2>
       <ol id="history" class="history" aria-labelledby="recent-h"></ol>
       <!-- F27: a history row's new state (Delivered ✓, Waiting to send, Not delivered), said to screen readers. -->
@@ -160,6 +175,20 @@
       <button class="back" type="button" data-lab-back>‹ Back</button>
       <h2 id="server-h" tabindex="-1">Daylight server</h2>
       <div id="server"></div>
+    </section>
+
+    <!-- Lab, Wave 1 (LAB-PLAN 3.4: a feature's own view, opened from its row in What's in Lab): Setup check (F26) and
+         Shortcuts and automation (F09: the bookmarklet). web-lab-page.js fills them with LAB_TEXT's words. -->
+    <section id="view-setup" hidden aria-labelledby="setup-h">
+      <button class="back" type="button" data-lab-back>‹ Back</button>
+      <h2 id="setup-h" tabindex="-1"></h2>
+      <div id="setup"></div>
+    </section>
+
+    <section id="view-f09" hidden aria-labelledby="f09-h">
+      <button class="back" type="button" data-lab-back>‹ Back</button>
+      <h2 id="f09-h" tabindex="-1"></h2>
+      <div id="f09"></div>
     </section>
   </main>
 </body>

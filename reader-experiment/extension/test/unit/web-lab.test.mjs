@@ -117,8 +117,8 @@ test('Lab is on by default: the first start writes settings.lab = true, a stored
     assert.equal(await WL.labOn(s.storage), true, 'a missing key means on');
     await s.lab.setLab(true);
     assert.deepEqual(await s.settings(), { from: 'Kept', comfort: true, lab: true }, 'the switch writes only lab');
-    assert.equal(WL.LAB_NOTE_ENABLED, false, 'no one-time note in Wave 0 (1.2)');
-    assert.equal((await s.lab.state()).noteEnabled, false);
+    assert.equal(WL.LAB_NOTE_ENABLED, true, 'the one-time note from the build with the timeline, W1 (1.2)');
+    assert.equal((await s.lab.state()).noteEnabled, true);
   } finally { await s.close(); }
 });
 
@@ -139,7 +139,7 @@ test('Lab off: no discovery and no server call; the gate says how to turn it on;
   try {
     await s.lab.setLab(false);
     s.log.length = 0;
-    assert.deepEqual(await s.lab.state(), { lab: false, labNoteShown: false, noteEnabled: false, serverState: null, serverSubtitle: null });
+    assert.deepEqual(await s.lab.state(), { lab: false, labNoteShown: false, noteEnabled: true, serverState: null, serverSubtitle: null });
     assert.deepEqual(await s.lab.overview(), { lab: false });
     assert.deepEqual(await s.lab.serverView(), { lab: false });
     assert.deepEqual(await s.lab.repaired(), { lab: false, repaired: null });
@@ -154,22 +154,24 @@ test('Lab off: no discovery and no server call; the gate says how to turn it on;
 
 // --- What's in Lab and the gates (1.4, 1.5, F00.3, F00.6) ------------------------------------------------------------
 
-test('What’s in Lab: the web lists the four server features (none of its own in Wave 0), under the server’s short state', async () => {
-  assert.deepEqual(WL.LAB_FEATURES, []);
+test('What’s in Lab: the web’s Wave 1 features, then the four server features under the server’s short state', async () => {
+  assert.deepEqual(WL.LAB_FEATURES, ['F01', 'F07', 'F09', 'F16', 'F26', 'F33'], 'LAB-PLAN 3.1, in 1.4’s order');
   assert.deepEqual(WL.LAB_SERVER_FEATURES, ['F02', 'F37', 'F19', 'F36']);
   assert.deepEqual(WL.LAB_SERVER_FEATURES, L.LAB_TEXT.serverFeatureOrder, 'in 1.4’s order, every one of them a web feature');
-  assert.deepEqual(WL.BUILT_FEATURES, []);
+  assert.deepEqual(WL.BUILT_FEATURES, WL.LAB_FEATURES, 'the server features are `later` once a server is ready');
   const s = await setup({ paired: false });
   try {
     let o = await s.lab.overview();
+    assert.deepEqual(o.features.map((f) => [f.id, f.name, f.sentence, f.short]), WL.LAB_FEATURES.map((id) => [id, L.LAB_TEXT.features[id].name, L.LAB_TEXT.features[id].sentence, 'Pair first']));
     assert.deepEqual(o.server.features.map((f) => [f.id, f.name, f.sentence, f.short]), WL.LAB_SERVER_FEATURES.map((id) => [id, L.LAB_TEXT.features[id].name, L.LAB_TEXT.features[id].sentence, null]));
     assert.deepEqual([o.header, o.fresh, o.server.state, o.server.short], ['Needs Lab on your Daylight', true, 'needs-pairing', 'Pair first']);
     assert.equal((await s.lab.state()).serverSubtitle, 'Optional · Pair first');
     await s.pair(s.link);
-    // Without refresh nothing goes on the network and no short state is shown yet.
+    // Without refresh nothing goes on the network: the page's own features have their states, the server's none yet.
     s.log.length = 0;
     o = await s.lab.overview({ refresh: false });
     assert.deepEqual([o.fresh, o.server.short, o.server.features.map((f) => f.short)], [false, null, [null, null, null, null]]);
+    assert.deepEqual(o.features.map((f) => f.short), ['Needs Lab on your Daylight', 'Ready', 'Ready', 'Ready', 'Ready', 'Ready'], 'the timeline waits for a Lab hello (F17)');
     assert.deepEqual(s.log, []);
     o = await s.lab.overview();
     assert.deepEqual([o.fresh, o.cached, o.server.state, o.server.short], [true, false, 'needs-server', 'Not set up']);
@@ -684,8 +686,15 @@ test('a server check that outlives a pairing change keeps nothing: the follow-up
 test('the build copies the Lab modules from their one source, and the service worker keeps every module offline', () => {
   const same = (name, src) => assert.ok(fs.readFileSync(path.join(w.dir, name)).equals(fs.readFileSync(src)), name);
   same('daylight-lab.js', LAB_LIB);
-  same('lab-ui.js', COPIED['lab-ui.js']);
-  same('logic.js', COPIED['logic.js']);
+  for (const name of ['lab-ui.js', 'logic.js', 'lab-popup.js', 'lab-send.js']) same(name, COPIED[name]);
+  same('web-flush.js', path.join(WEB, 'web-flush.js'));
+  // F07's Background Sync: sw-sync.js bundled into the classic sw-lab.js, which sw.js imports; the module itself isn't
+  // served.
+  assert.equal(fs.existsSync(path.join(w.dir, 'sw-sync.js')), false);
+  const bundle = fs.readFileSync(path.join(w.dir, 'sw-lab.js'), 'utf8');
+  assert.doesNotMatch(bundle, /^\s*(import|export)\b/m, 'a classic script');
+  assert.match(bundle, /addEventListener\('sync'/);
+  assert.match(fs.readFileSync(path.join(w.dir, 'sw.js'), 'utf8'), /try \{\n  importScripts\('sw-lab\.js'\);\n\} catch/);
   const server = fs.readFileSync(path.join(w.dir, 'daylight-server.js'), 'utf8');
   const src = fs.readFileSync(path.join(WEB, '..', 'server', 'client', 'daylight-server.js'), 'utf8');
   assert.equal(server, src.replace("from '../../share/js/daylight-share.js';", "from './daylight-share.js';"), 'only its import changes');
@@ -733,14 +742,24 @@ test('the page’s storage lists its keys, so a pairing change can remove every 
 
 // --- the release gate (LAB-PLAN 6.2) ---------------------------------------------------------------------------------------
 
-test('web/scripts/lab-wave.mjs reads the Lab wave from the code: W0 now, W1 for W1 code, can’t tell for a later wave', () => {
+test('web/scripts/lab-wave.mjs reads the Lab wave from the code: W1 now (B1), W0 for W0 code, can’t tell for a later wave', () => {
   const w1 = w1Names(fs.readFileSync(LAB_LIB, 'utf8'));
   const tree = readTree();
-  assert.deepEqual(codeWave(tree, { w1 }).wave, 'w0', 'B0 is Wave 0');
-  assert.ok(codeWave(tree, { w1 }).why.includes('web-lab.js'));
+  const now = codeWave(tree, { w1 });
+  assert.equal(now.wave, 'w1', 'B1 is Wave 1');
+  for (const why of ['web-lab.js sets LAB_NOTE_ENABLED = true', 'web-lab.js uses normaliseShare', 'web-flush.js uses flushNetwork', 'web-lab.js names F09', 'lab-popup.js uses describeLabRow']) {
+    assert.ok(now.why.includes(why), why);
+  }
+  assert.ok(tree.some((f) => f.name === 'sw-sync.js'), 'the service worker’s Lab code is read too (build.mjs bundles it into sw-lab.js)');
+  assert.ok(Object.hasOwn(COPIED, 'lab-popup.js') && Object.hasOwn(COPIED, 'lab-send.js'), 'the extension files the build copies count');
   assert.deepEqual(codeWave([{ name: 'app.js', text: 'import x from "./logic.js";' }], { w1 }), { wave: null, why: [] });
-  const with1 = (name, text) => codeWave([...tree.filter((f) => f.name !== name), { name, text: `${tree.find((f) => f.name === name)?.text ?? ''}\n${text}` }], { w1 }).wave;
-  // B1 lists a feature, turns the note on, or uses W1 code, and leaves lab-wave.json at w0: held for w1 all the same.
+  // A W0 page (B0's): Lab code, none of W1's; each W1 mark holds it for w1.
+  const w0tree = [
+    { name: 'web-lab.js', text: "import { LAB_TEXT, labGate } from './daylight-lab.js';\nexport const LAB_FEATURES = [];\nexport const LAB_NOTE_ENABLED = false;\nconst S = ['F02', 'F37'];" },
+    { name: 'app.js', text: "import { createWebLab } from './web-lab.js';" },
+  ];
+  assert.equal(codeWave(w0tree, { w1 }).wave, 'w0');
+  const with1 = (name, text) => codeWave([...w0tree.filter((f) => f.name !== name), { name, text: `${w0tree.find((f) => f.name === name)?.text ?? ''}\n${text}` }], { w1 }).wave;
   assert.equal(with1('web-lab.js', "export const LAB_FEATURES = ['F07'];"), 'w1');
   assert.equal(with1('web-lab.js', 'export const LAB_NOTE_ENABLED = true;'), 'w1');
   assert.equal(with1('app.js', 'const d = describeLabRow(row, now, ctx);'), 'w1');
@@ -749,6 +768,7 @@ test('web/scripts/lab-wave.mjs reads the Lab wave from the code: W0 now, W1 for 
   // The extension's copied files ship here too: W1 code in lab-ui.js holds this build.
   assert.equal(with1('lab-ui.js', "if (f.id === 'F34') return;"), 'w1');
   assert.throws(() => with1('web-lab.js', "const X = 'F06';"), /later wave/);
+  assert.throws(() => codeWave([...tree, { name: 'web-next.js', text: "const X = 'F13';" }], { w1 }), /later wave/);
   assert.throws(() => w1Names('export const A = 1;'), /W1 \(L1\)/);
   assert.equal(waveRank(null), -1);
   assert.throws(() => waveRank('wave1'), /not a Lab wave/);
@@ -757,12 +777,12 @@ test('web/scripts/lab-wave.mjs reads the Lab wave from the code: W0 now, W1 for 
 test('web/lab-wave.json names the code’s wave (not behind it), and the publish and Pages jobs hold a Lab build by it', () => {
   const gate = JSON.parse(fs.readFileSync(path.join(WEB, '..', 'lab-release-gate.json'), 'utf8'));
   const { wave } = JSON.parse(fs.readFileSync(path.join(WEB, 'lab-wave.json'), 'utf8'));
-  assert.equal(wave, 'w0', 'the web sender has Lab code from B0 on');
+  assert.equal(wave, 'w1', 'B1 brings Wave 1');
   assert.equal(typeof gate[wave], 'boolean');
   const { declared, code, own, hold, why } = holdFor();
   assert.ok(waveRank(declared) >= waveRank(own), `web/lab-wave.json says ${declared}, but this folder's code is ${own} (${why.join('; ')})`);
   assert.equal(hold, waveRank(code) > waveRank(declared) ? code : declared, 'held for the later of the two');
-  assert.ok(waveRank(hold) >= waveRank('w0'));
+  assert.ok(waveRank(hold) >= waveRank('w1'));
   assert.deepEqual(releaseGate().open, gate[hold] === true);
   // A gate file with the wave open lets it through; closed holds it.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dls-gate-'));
@@ -771,11 +791,14 @@ test('web/lab-wave.json names the code’s wave (not behind it), and the publish
     fs.writeFileSync(g, JSON.stringify({ w0: open, w1: open }));
     assert.deepEqual(releaseGate({ gate: g }), { hold, open, why });
   }
-  // Extension code the build copies holds the build for its wave too, without failing this folder's --check.
-  const copied = path.join(tmp, 'lab-ui.js');
-  fs.writeFileSync(copied, `${fs.readFileSync(COPIED['lab-ui.js'], 'utf8')}\nconst LIST = ['F34'];\n`);
-  const h = holdFor(WEB, LAB_LIB, { ...COPIED, 'lab-ui.js': copied });
-  assert.deepEqual([h.code, h.own, h.hold], ['w1', 'w0', 'w1']);
+  // Extension code the build copies holds the build for its wave too, without failing this folder's --check: a W0 page
+  // (B0's lab-wave.json and web-lab.js) with today's copied extension files is held for w1.
+  const w0root = path.join(tmp, 'web');
+  fs.mkdirSync(w0root);
+  fs.writeFileSync(path.join(w0root, 'lab-wave.json'), JSON.stringify({ wave: 'w0' }));
+  fs.writeFileSync(path.join(w0root, 'web-lab.js'), "import { LAB_TEXT } from './daylight-lab.js';\nexport const LAB_NOTE_ENABLED = false;\n");
+  const h = holdFor(w0root, LAB_LIB, COPIED);
+  assert.deepEqual([h.declared, h.code, h.own, h.hold], ['w0', 'w1', 'w0', 'w1']);
   // The publish job (ext lane) holds send-to-daylight-web.zip by this script; the Pages job (web lane) holds the deploy
   // by it too, and both say why in the log.
   const wf = fs.readFileSync(path.join(WEB, '..', '..', '.github', 'workflows', 'rx-extension.yml'), 'utf8');

@@ -10,10 +10,10 @@
 //                                        doesn't fail the check: the ext lane changes it, and only this lane edits
 //                                        lab-wave.json. The log says so.)
 //
-// What counts: this folder's own page files (*.js, *.html, *.css, *.json, *.webmanifest at its top level, build.mjs
-// included; not dist/ or scripts/), and the files build.mjs copies in from the extension (logic.js and lab-ui.js),
-// because their code ships in this build too. The copied share/ and server/ modules are libraries, not this build's
-// Lab code.
+// What counts: this folder's own page files (*.js, *.html, *.css, *.json, *.webmanifest at its top level, build.mjs and
+// sw-sync.js, which build.mjs bundles into sw-lab.js, included; not dist/ or scripts/), and the files build.mjs copies
+// in from the extension (logic.js, lab-ui.js, lab-popup.js and lab-send.js), because their code ships in this build
+// too. The copied share/ and server/ modules are libraries, not this build's Lab code.
 //   W0 (any Lab code): web-lab.js, or anything that names daylight-lab (the module build.mjs copies in).
 //   W1: a W1 export of ../share/js/daylight-lab.js (the exports after its "// W1 (L1)" heading), the timeline's row
 //       text or the outbox's offline calls (W1_CALLS, and send(…, {defer})), LAB_NOTE_ENABLED = true (1.2: from the
@@ -36,6 +36,8 @@ export const GATE = path.join(ROOT, '..', 'lab-release-gate.json');
 export const COPIED = {
   'logic.js': path.join(ROOT, '..', 'extension', 'src', 'logic.js'),
   'lab-ui.js': path.join(ROOT, '..', 'extension', 'src', 'lab-ui.js'),
+  'lab-popup.js': path.join(ROOT, '..', 'extension', 'src', 'lab-popup.js'),
+  'lab-send.js': path.join(ROOT, '..', 'extension', 'src', 'lab-send.js'),
 };
 const OWN_TEXT = /\.(m?js|html|css|json|webmanifest)$/;
 

@@ -3,6 +3,14 @@
 // build.mjs replaces __BUILD__ with a hash of the site, so each release installs fresh files.
 
 const BUILD = '__BUILD__';
+
+// Lab's F07 (LAB-PLAN F07, Web): Background Sync's `dls-flush` sends rows queued offline once the browser is online
+// again, with Lab on (sw-sync.js, bundled by build.mjs). A browser that can't load it keeps everything else here.
+try {
+  importScripts('sw-lab.js');
+} catch (e) {
+  console.warn('Send to Daylight: Background Sync is off in this browser', e);
+}
 /**
  * The largest file the page sends (MAX_ITEM in daylight-share.js, protocol 1.1; a unit test keeps them equal). A larger
  * shared file is never copied: the page gets its name and size and refuses it in the protocol's words.
@@ -11,7 +19,8 @@ const MAX_ITEM = 9000000;
 const CACHE = `send-to-daylight-${BUILD}`;
 const SHELL = [
   './', 'app.js', 'styles.css', 'daylight-share.js', 'logic.js', 'web-logic.js', 'web-storage.js', 'manifest.webmanifest',
-  'web-lab.js', 'web-lab-page.js', 'daylight-lab.js', 'daylight-server.js', 'lab-ui.js',
+  'web-lab.js', 'web-lab-page.js', 'daylight-lab.js', 'daylight-server.js', 'lab-ui.js', 'lab-popup.js', 'lab-send.js',
+  'web-flush.js', 'sw-lab.js',
   'icons/icon.svg', 'icons/favicon-32.png', 'icons/icon-192.png', 'icons/apple-touch-icon.png',
 ];
 

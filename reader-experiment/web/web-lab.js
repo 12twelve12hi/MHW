@@ -1,12 +1,16 @@
-// Lab in the web sender (LAB-PLAN 1, 2.2.6 and 2.6; card B0, Wave 0): the Lab switch, the sender ledger, the gates and
-// the Daylight server, as data for the page (web-lab-page.js draws it). No DOM here, so node tests run it as it is.
-// It follows the extension's src/lab.js, without what only an extension has: the page calls the Daylight server itself
-// (the server answers any origin, server DESIGN 10.2), so there is no site access to ask for.
+// Lab in the web sender (LAB-PLAN 1, 2.2.6 and 2.6, card B0, Wave 0; 3.3, card B1, Wave 1): the Lab switch, the sender
+// ledger, the gates and the Daylight server, and Wave 1's data: the timeline (F01), smart intake (F16) for every link
+// the page sends, Paste and send (F33), the per-feature Use switches (6.5 Q5), Setup check with the test article, the
+// activity log and diagnostics (F26), and the bookmarklet (F09), as data for the page (web-lab-page.js draws it). No
+// DOM here, so node tests run it as it is. It follows the extension's src/lab.js, without what only an extension has:
+// the page calls the Daylight server itself (the server answers any origin, server DESIGN 10.2), so there is no site
+// access to ask for. F07's offline outbox is web-flush.js, which the service worker runs too.
 //
 //   settings.lab           the Lab switch: missing means on, and the first start writes true (1.2); never synced and
 //                          never in a pairing link, so pairing, unpairing and renaming leave it as it is
-//   settings.labNoteShown  the one-time note (1.2), shown only from a build with the timeline or share in place:
-//                          LAB_NOTE_ENABLED, false in Wave 0
+//   settings.labNoteShown  the one-time note (1.2), shown once from a build with the timeline: LAB_NOTE_ENABLED, true
+//                          from Wave 1
+//   settings.labUse        the Use switches (6.5 Q5): {F16: false, F33: false} when turned off; a missing key is on
 //   lab/inbox, lab/heard, lab/states   the ledger (daylight-lab.js LabLedger), fed by every ack-topic frame that
 //                          decrypts, Lab on or off, through the Sender's onAckHeader
 //   lab/server             the last server answer {state, at}, for the "Daylight server ›" row's subtitle and What's
@@ -14,6 +18,9 @@
 //   lab/repaired           {at}: this browser re-paired with another Daylight while it knew a Daylight server, which it
 //                          locked first (2.6, DESIGN 3.4); the send view shows the locked text with the new Server code,
 //                          Copy and the re-run help (DESIGN 12.7) until OK, or until the server answers ready again
+//   lab/activity           F26's activity log, the last 200 events {time, type, id8, kind, status, http}
+//   lab/testId             the id of the last test article (F26), which Setup check follows along the timeline
+//   lab/flushAt            when F07's last capped pass ran (web-flush.js)
 //   server/*               the server module's own keys (DESIGN 13.1); only daylight-server.js writes them
 //
 // Discovery and every server call run only with Lab on (DESIGN 4.3). A pairing change with another secret removes every
@@ -24,8 +31,11 @@ import * as ds from './daylight-share.js';
 import {
   LAB_TEXT, LabLedger, labHook, labGate, needsMessage, inboxLabText, featureName, serverHeadingShort,
   serverRowSubtitle, serverFeatureShort, labInboxSeenText, aiTodayText, setupConfirmText, serverMovedText,
-  GATE_DEADLINE_MS,
+  GATE_DEADLINE_MS, USE_FEATURES, labUseOn, normaliseShare, testArticle, activityLine, diagnosticsReport,
+  describeLabRow, checkedInText, fillText,
 } from './daylight-lab.js';
+import { ACTIVITY_KEY, logActivity } from './web-flush.js';
+import { normalizeUserUrl, VERSION } from './web-logic.js';
 import {
   DaylightServer, localMessage, stateFromStatus, showFingerprint, noticeText, parseSetupLink, RERUN_HELP,
   SERVER_API, SERVER_API_MIN, STATUS_REFRESH_MS,
@@ -34,17 +44,32 @@ import {
 /** needsMessage's platform and LAB_TEXT.appName's key (1.6: {app} is "Send to Daylight"). */
 export const PLATFORM = 'web';
 
-/** The one-time note (1.2) waits for a build with the timeline or share in place: none in Wave 0. */
-export const LAB_NOTE_ENABLED = false;
+/** The one-time note (1.2) waits for a build with the timeline or share in place: this one (B1, Wave 1) has F01. */
+export const LAB_NOTE_ENABLED = true;
+
+/** The web sender's Wave 1 features (LAB-PLAN 3.1: F01, F07, F09, F16, F26, F33; F02's entry point is not a row). */
+const W1 = ['F01', 'F07', 'F09', 'F16', 'F26', 'F33'];
 
 /**
- * What's in Lab (1.4) for the web sender: the Lab features this build has (none in Wave 0; B1 adds the web's Wave 1
- * features), then the four server features, listed from Wave 0 as LAB-DECISIONS asks.
+ * What's in Lab (1.4) for the web sender: the Lab features this build has, in LAB_TEXT's order, then the four server
+ * features, listed from Wave 0 as LAB-DECISIONS asks.
  */
-export const LAB_FEATURES = [];
+export const LAB_FEATURES = LAB_TEXT.featureOrder.filter((f) => W1.includes(f));
 export const LAB_SERVER_FEATURES = ['F02', 'F37', 'F19', 'F36'];
 /** The Lab features this build runs (labGate's `built`): a server feature that is ready but not built is `later`. */
-export const BUILT_FEATURES = [];
+export const BUILT_FEATURES = [...W1];
+
+/**
+ * The Use switches this page shows (6.5 Q5; LAB-PROTOCOL 2.9.6): the USE_FEATURES the web sender has. F16's turns
+ * smart intake off (links go exactly as shared); F33's takes Paste and send away. F03, F04, F08 and F10 are other apps'.
+ */
+export const WEB_USE_FEATURES = USE_FEATURES.filter((f) => W1.includes(f));
+
+/** A feature's own view (3.4), opened from its row when it is ready: F09's bookmarklet, F26's Setup check. */
+export const FEATURE_VIEWS = { F09: 'view-f09', F26: 'view-setup' };
+
+/** The last test article's id (F26), under lab/: a pairing change removes it with the outbox. */
+export const TEST_KEY = 'lab/testId';
 
 export const SERVER_KEY = 'lab/server';
 /** The re-pairing follow-up (2.6): {at}. Under lab/, so the next pairing change removes it. */
@@ -82,6 +107,48 @@ export function withoutLabParam(href) {
   return `${u.pathname}${u.search}${u.hash}`;
 }
 
+/**
+ * A link as Lab sends it (F16, every entry point while Lab is on): `url` (typed, from the address or the share sheet;
+ * https:// added to "example.com/story" as the plain page does), `text` (a share's text) and `title` go through
+ * normaliseShare, which unwraps redirectors and drops tracking unless F16's Use switch is off; the link as shared goes
+ * as x-orig when it changed. Headline + link shares stay links, with the headline as the title. -> the url item for
+ * Sender.send, or null when there is no web address (a note: the web sender sends no text, F11 is not one of its
+ * features).
+ */
+export function labLinkItem({ url = '', text = '', title = '' } = {}, settings = {}) {
+  const typed = normalizeUserUrl(url);
+  const n = normaliseShare({
+    url: typed ?? '', text: typed ? String(text ?? '') : [url, text].filter(Boolean).join(' '), subject: String(title ?? ''),
+    clean: labUseOn(settings, 'F16'),
+  });
+  if (n.kind !== 'link' || !n.url) return null;
+  const item = { kind: 'url', url: n.url, title: n.title && n.title !== n.url ? n.title : '' };
+  if (n.orig) item.extras = { 'x-orig': n.orig };
+  return item;
+}
+
+/**
+ * Paste and send (F33): the link in copied text, through normaliseShare as every entry point (F16). -> {item, host}
+ * (the host the question names, "Send {host}?") or null for no link ("No link on the clipboard.").
+ */
+export function copiedLink(text, settings = {}) {
+  const item = labLinkItem({ text: String(text ?? '') }, settings);
+  if (!item) return null;
+  let host = item.url;
+  try { host = new URL(item.url).hostname.replace(/^www\./, ''); } catch { /* the address itself */ }
+  return { item, host };
+}
+
+/**
+ * F09's bookmarklet (LAB-PLAN F09, Web; SEND-API.md): it opens this page with the current page's address and title in
+ * the fragment, which never reaches a server, and autosend=1. The pairing stays in this browser. pageUrl: the page's
+ * own address (its query and fragment are dropped; a ' or \ in it is percent-encoded, so it can't end the string).
+ */
+export function bookmarklet(pageUrl) {
+  const base = String(pageUrl ?? '').split('#')[0].split('?')[0].replace(/'/g, '%27').replace(/\\/g, '%5C');
+  return `javascript:location.href='${base}#autosend=1&url='+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title)`;
+}
+
 function withDeadline(promise, ms, fallback) {
   let timer;
   return Promise.race([promise, new Promise((resolve) => { timer = setTimeout(() => resolve(fallback()), ms); })])
@@ -91,11 +158,13 @@ function withDeadline(promise, ms, fallback) {
 /**
  * storage: the page's storage adapter (web-storage.js); fetch: the page's; run: serialises settings writes;
  * getPairing, getSettings, deviceName, appId: the page's; refreshAcks: reads the ack topic now (What's in Lab opening),
- * or null; gateDeadlineMs: labGate's 5 s (tests shorten it).
+ * or null; gateDeadlineMs: labGate's 5 s (tests shorten it); env: what Setup check asks the browser (F26):
+ * {installed() (display-mode: standalone), canInstall() (the browser offered to install the page), persisted()
+ * (navigator.storage.persisted()), canPersist() (navigator.storage.persist exists)}.
  */
 export function createWebLab({
   storage, fetch: fetchFn, now = () => Date.now(), log = console, run = (fn) => fn(), getPairing, getSettings,
-  deviceName = async () => '', appId = '', refreshAcks = null, gateDeadlineMs = GATE_DEADLINE_MS,
+  deviceName = async () => '', appId = '', refreshAcks = null, gateDeadlineMs = GATE_DEADLINE_MS, env = {},
 } = {}) {
   const app = LAB_TEXT.appName[PLATFORM];
   const ledger = new LabLedger({ storage, now });
@@ -262,7 +331,13 @@ export function createWebLab({
     return out;
   }
 
-  const row = (id, short) => ({ id, name: featureName(id), sentence: LAB_TEXT.features[id].sentence, short });
+  /** A row of What's in Lab; a feature with a Use switch carries its state (use {on}), one with a view its view. */
+  const rowOf = (s) => (id, short) => {
+    const r = { id, name: featureName(id), sentence: LAB_TEXT.features[id].sentence, short };
+    if (WEB_USE_FEATURES.includes(id)) r.use = { on: labUseOn(s, id) };
+    if (FEATURE_VIEWS[id]) r.view = FEATURE_VIEWS[id];
+    return r;
+  };
 
   /**
    * The server's last answer as a probe result, read from storage without asking anyone (1.5: What's in Lab uses
@@ -286,7 +361,9 @@ export function createWebLab({
    * -> {lab, header, fresh, cached, features: [{id, name, sentence, short}], server: {state, short, features: [...]}}
    */
   async function overview({ refresh = true } = {}) {
-    if (!isLabOn(await settings())) return { lab: false };
+    const s = await settings();
+    if (!isLabOn(s)) return { lab: false };
+    const row = rowOf(s);
     const pairing = await pairingNow();
     const acks = pairing && refresh && refreshAcks ? withDeadline(refreshAcks().catch(() => {}), gateDeadlineMs, () => {}) : null;
     const asked = pairing && refresh ? probeInTime({ force: true }) : null;
@@ -297,16 +374,16 @@ export function createWebLab({
     if (!pairing) p = { state: 'needs-pairing' };
     else if (asked) p = await asked;
     else p = await cachedProbe();
+    // The features that don't run on the server get their short state here and now, server answer or not (W1).
+    const features = [];
+    for (const id of LAB_FEATURES) features.push(row(id, (await gate(id, { probeResult: p ?? { state: 'ready' } })).short ?? LAB_TEXT.ready));
     if (!p) {
       return {
-        lab: true, header, fresh: false, cached: false,
-        features: LAB_FEATURES.map((id) => row(id, null)),
+        lab: true, header, fresh: false, cached: false, features,
         server: { state: null, short: null, features: LAB_SERVER_FEATURES.map((id) => row(id, null)) },
       };
     }
     const heading = SERVER_WIDE.includes(p.state) ? p.state : 'ready';
-    const features = [];
-    for (const id of LAB_FEATURES) features.push(row(id, (await gate(id, { probeResult: p })).short ?? LAB_TEXT.ready));
     const serverRows = [];
     for (const id of LAB_SERVER_FEATURES) serverRows.push(row(id, serverFeatureShort((await gate(id, { probeResult: p })).state, heading)));
     return {
@@ -529,8 +606,163 @@ export function createWebLab({
     } catch (e) { log.warn?.('Send to Daylight: Lab ledger prune failed', e); }
   }
 
+  // --- Wave 1: the Use switches, the timeline's data, Setup check, the activity log and diagnostics ------------------
+
+  /** Writes settings one at a time (run), as every settings write here is. -> the new settings */
+  async function patchSettings(fn) {
+    let out = null;
+    await run(async () => {
+      const s = await settings();
+      out = fn({ ...s }) ?? s;
+      await storage.set('settings', out);
+    });
+    return out;
+  }
+
+  /** A feature's Use switch (6.5 Q5): settings.labUse[feature]; a missing key is on. -> {feature, on} */
+  async function setUse(feature, want) {
+    if (!WEB_USE_FEATURES.includes(feature)) return { feature, on: false };
+    const s = await patchSettings((x) => ({ ...x, labUse: { ...(x.labUse ?? {}), [feature]: !!want } }));
+    return { feature, on: labUseOn(s, feature) };
+  }
+
+  /** Marks the one-time note (1.2) as seen. */
+  async function seen(key) {
+    if (key !== 'labNoteShown') return {};
+    await patchSettings((x) => ({ ...x, labNoteShown: true }));
+    return {};
+  }
+
+  /** The ledger's view for F01's rows and check-in header (2.5): {inboxLab, caps, states, checkedIn, checkedInText}. */
+  async function timeline() {
+    const snap = await ledger.snapshot();
+    return { inboxLab: snap.inboxLab, caps: snap.caps, states: snap.states, checkedIn: snap.checkedIn, checkedInText: checkedInText(snap.checkedIn, now()) };
+  }
+
+  /**
+   * What the send view needs from Lab: the switch, the one-time note (1.2), the Use switches and the timeline.
+   * -> {lab: false} with Lab off, else {lab: true, noteEnabled, labNoteShown, use: {F16, F33}, timeline, settings}
+   */
+  async function page() {
+    const s = await settings();
+    if (!isLabOn(s)) return { lab: false };
+    return {
+      lab: true, noteEnabled: LAB_NOTE_ENABLED, labNoteShown: !!s.labNoteShown,
+      use: Object.fromEntries(WEB_USE_FEATURES.map((f) => [f, labUseOn(s, f)])), timeline: await timeline(), settings: s,
+    };
+  }
+
+  let logChain = Promise.resolve();
+  /** F26's activity log (lab/activity, the last 200 events; no title, URL or name ever goes in), with Lab on. */
+  function logEvent(event) {
+    const p = logChain.then(async () => {
+      if (!isLabOn(await settings())) return;
+      await logActivity(storage, [event], now());
+    }).catch((e) => log?.warn?.('Send to Daylight: activity not logged', e));
+    logChain = p;
+    return p;
+  }
+
+  /** Each row's status, last publish and Lab state, for logChanges. -> Map id -> {status, lastPublish, s, kind} */
+  async function rowStates() {
+    const rows = (await storage.get('outbox')) ?? [];
+    const states = (await ledger.snapshot()).states ?? {};
+    return new Map(rows.map((r) => [r.id, { status: r.status, lastPublish: r.lastPublish, s: states[r.id]?.s ?? null, kind: r.kind }]));
+  }
+
+  /**
+   * After a check of the ack topic and a re-send pass (F26): each row whose status changed, that went again, or whose
+   * Lab state changed goes into the activity log. before: rowStates() from before them.
+   */
+  async function logChanges(before) {
+    if (!before || !isLabOn(await settings())) return;
+    const after = await rowStates();
+    for (const [id, a] of after) {
+      const b = before.get(id);
+      if (!b) continue;
+      if (a.status !== b.status) await logEvent({ type: a.status, id, kind: a.kind, status: a.status });
+      else if (a.lastPublish !== b.lastPublish) await logEvent({ type: 'resend', id, kind: a.kind, status: a.status });
+      if (a.s && a.s !== b.s) await logEvent({ type: 'state', id, kind: a.kind, status: a.s });
+    }
+  }
+
+  /** -> {lines}: the activity log, oldest first (activityLine). */
+  async function activity() {
+    const entries = (await storage.get(ACTIVITY_KEY)) ?? [];
+    return { lines: entries.map(activityLine) };
+  }
+
+  /** F26's Copy diagnostics: diagnosticsReport, redacted. -> {text} */
+  async function diagnostics() {
+    const s = await settings();
+    const pairing = await pairingNow();
+    const snap = await ledger.snapshot();
+    const text = diagnosticsReport({
+      app, version: VERSION, platform: PLATFORM, lab: isLabOn(s), caps: snap.caps, checkedIn: snap.checkedIn,
+      rows: (await storage.get('outbox')) ?? [], relay: pairing?.relay ?? ds.DEFAULT_RELAY,
+      log: (await storage.get(ACTIVITY_KEY)) ?? [], now: now(),
+    });
+    return { text };
+  }
+
+  /** F26's test article: testArticle() as a page with x-cap "test", titled "Test article from {device}". */
+  async function testItem() {
+    return testArticle({ device: await deviceName() });
+  }
+
+  /** The test article that went: Setup check follows it (lab/testId). */
+  async function noteTest(id) {
+    try { await storage.set(TEST_KEY, id); } catch (e) { log.warn?.('Send to Daylight: test article not followed', e); }
+  }
+
+  /** The test article along the timeline (F26): its row's Lab label, and whether it was delivered and is in the Reader. */
+  async function testProgress() {
+    let id = null;
+    try { id = await storage.get(TEST_KEY); } catch { id = null; }
+    const row = id ? ((await storage.get('outbox')) ?? []).find((r) => r.id === id) : null;
+    if (!row) return null;
+    const snap = await ledger.snapshot();
+    const st = snap.states[row.id] ?? null;
+    const d = describeLabRow(row, now(), { lab: true, inboxLab: snap.inboxLab, hasCap: snap.caps, state: st, online: env.online?.() });
+    const delivered = row.status === 'delivered';
+    const reader = delivered && st?.s === 'reader';
+    const L = LAB_TEXT.setup;
+    const line = (ok, name) => (ok ? fillText(L.ok, { check: name }) : name);
+    return { id: row.id, label: d.label, delivered, reader, lines: [line(delivered, L.delivered), line(reader, L.inReader)] };
+  }
+
+  /**
+   * F26's Setup check for the web sender (LAB-PLAN F26: installed as an app, storage kept by the browser), after the
+   * pairing; then the test article along its way. Each check: {id, name, ok, line ("✓ …" or "! …"), button, action}.
+   * A check's button is there only when this page can act on it: the pairing (Open setting: the pairing form), the
+   * browser's own install prompt when it offered one (Open setting), and asking the browser to keep this page's storage
+   * (Allow). -> {lab: false} | {lab: true, checks, test}
+   */
+  async function checks() {
+    const s = await settings();
+    if (!isLabOn(s)) return { lab: false };
+    const L = LAB_TEXT.setup;
+    const C = L.checks;
+    const out = [];
+    const add = (id, name, ok, button = null, action = null) => out.push({
+      id, name, ok, line: fillText(ok ? L.ok : L.notOk, { check: name }),
+      button: ok ? null : button, action: ok || !button ? null : action,
+    });
+    add('paired', C.paired, !!(await pairingNow()), LAB_TEXT.buttons['needs-quick-sends'], 'pair');
+    let installed = false;
+    try { installed = !!env.installed?.(); } catch { installed = false; }
+    add('installed', C.installed, installed, env.canInstall?.() ? LAB_TEXT.buttons['needs-quick-sends'] : null, 'install');
+    let kept = false;
+    try { kept = !!(await env.persisted?.()); } catch { kept = false; }
+    add('storage', C.storage, kept, env.canPersist?.() ? LAB_TEXT.buttons['needs-site-access'] : null, 'persist');
+    return { lab: true, checks: out, test: await testProgress() };
+  }
+
   return {
     ledger, hook, ensureDefault, setLab, labOn: () => labOn(storage), state, overview, gate, serverView, setServerAddress,
     confirmMove, checkSetupLink, setupServer, beforeRepair, beforeUnpair, afterRepair, repaired, repairSeen, prune, probe,
+    // Wave 1
+    setUse, seen, timeline, page, logEvent, rowStates, logChanges, activity, diagnostics, testItem, noteTest,
+    testProgress, checks,
   };
 }
