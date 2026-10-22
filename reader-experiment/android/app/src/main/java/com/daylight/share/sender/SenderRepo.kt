@@ -24,12 +24,17 @@ import com.daylight.share.core.RelayClient
 import com.daylight.share.core.ShareException
 import com.daylight.share.core.Text
 import com.daylight.share.core.UrlConnectionHttp
+import com.daylight.share.core.lab.Excerpt
 import com.daylight.share.core.lab.Lab
 import com.daylight.share.core.lab.LabLedger
+import com.daylight.share.core.lab.Normalise
+import com.daylight.share.core.lab.SetupCheck
+import com.daylight.share.Role
 import com.daylight.share.logi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
@@ -42,6 +47,21 @@ sealed interface Shared {
     data class Text(val text: String, val subject: String?) : Shared
     data class Stream(val uri: Uri, val mime: String?) : Shared
 }
+
+/**
+ * What the share card's Options chose, and what the card prepared (Lab, LAB-PLAN F04 and F11). The defaults are a
+ * share as it came.
+ */
+data class ShareOptions(
+    /** An edited title; null keeps the one the share brings. */
+    val title: String? = null,
+    /** "Send as excerpt" (F11; 6.5 Q1 = b: text becomes an excerpt only when the user chose it). */
+    val asExcerpt: Boolean = false,
+    /** A shared stream the card already copied into private storage while its countdown ran. */
+    val copied: SenderRepo.Copy? = null,
+    /** The app the text came from, for a note's "— shared from {app} on {date}". */
+    val sourceApp: String? = null,
+)
 
 /** The sender's data: the pairing with a Daylight and the [Outbox] (PROTOCOL 3.3) with its history. */
 class SenderRepo(private val app: App) {
@@ -57,6 +77,20 @@ class SenderRepo(private val app: App) {
     private var outbox: Outbox? = null
     private var outboxKey: String? = null
     private var ledger: LabLedger? = null
+
+    private val _lab = MutableStateFlow<LabLedger.Snapshot?>(null)
+
+    /**
+     * What the Daylight said about Lab and this phone's items (the ledger's snapshot, LAB-PROTOCOL 2.2.6), for the
+     * delivery timeline (F01); null while unpaired or not read yet.
+     */
+    val labSnapshot: StateFlow<LabLedger.Snapshot?> get() = _lab
+
+    init {
+        // F08: the Direct Share shortcut goes when Lab goes off, and in the Inbox role (it comes back with the next send).
+        app.scope.launch { app.labOn.collect { on -> if (!on) Shortcuts.remove(app) } }
+        app.scope.launch { app.role.collect { r -> if (r == Role.INBOX) Shortcuts.remove(app) } }
+    }
 
     /** The HTTP of the outbox's relay client (tests plug in a fake relay); null: the app's own. */
     @VisibleForTesting
@@ -88,7 +122,12 @@ class SenderRepo(private val app: App) {
             app.prefs.senderLink = p.link()
             _pairing.value = p
         }
-        if (old == null || !old.sameSecret(p)) _rows.value = emptyList()
+        if (old == null || !old.sameSecret(p)) {
+            _rows.value = emptyList()
+            _lab.value = null
+        }
+        // Lab (F08): the Direct Share shortcut carries the Daylight's name.
+        Shortcuts.update(app)
         logi("sender: paired with ${p.name.ifEmpty { "a Daylight" }} via ${p.relay}")
     }
 
@@ -102,6 +141,9 @@ class SenderRepo(private val app: App) {
             outbox = null
         }
         _rows.value = emptyList()
+        _lab.value = null
+        // Lab (F08): no Daylight, no Direct Share target.
+        Shortcuts.remove(app)
     }
 
     /**
@@ -152,6 +194,12 @@ class SenderRepo(private val app: App) {
 
     suspend fun refresh() = withContext(Dispatchers.IO) {
         _rows.value = outbox()?.rows() ?: emptyList()
+        readLab()
+    }
+
+    /** Reads the ledger's snapshot again (F01). */
+    private fun readLab() {
+        _lab.value = runCatching { ledger()?.snapshot() }.getOrNull()
     }
 
     /**
@@ -159,28 +207,112 @@ class SenderRepo(private val app: App) {
      * the activity that received it). Anything over 9 MB is refused before it is read or copied, with the shared
      * sentence ("Too big to send. Files can be up to 9 MB; this one is 14.2 MB."). Throws [ShareException] with a
      * message for the user.
+     *
+     * With Lab on (LAB-PLAN 3.3): links and text go through smart intake (F16: `Normalise.normaliseShare`, cleaning only
+     * while F16's Use switch is on; the URL as shared goes as `x-orig`); text becomes an excerpt only when [options] say
+     * "Send as excerpt" (F11, 6.5 Q1 = b), and text without a link becomes a note (`Excerpt.item`); a share while this
+     * device is offline waits for a connection (F07: `defer`, then [FlushWorker]); and the Direct Share shortcut is
+     * pushed (F08). With Lab off it is exactly v1.1.
      */
-    suspend fun add(shared: Shared): OutboxRow = withContext(Dispatchers.IO) {
+    suspend fun add(shared: Shared, options: ShareOptions = ShareOptions()): OutboxRow = withContext(Dispatchers.IO) {
         // The Daylight this share is for: if the user pairs with another one while a file is being copied, the share
         // is refused rather than written into the deleted outbox (or sent to a Daylight it was not shared to).
         val topic = outbox()?.pairing?.keys?.inboxTopic ?: throw ShareException("pairing", "Pair with your Daylight first.")
+        if (app.prefs.lab) return@withContext addLab(topic, shared, options)
         when (shared) {
             is Shared.Link -> {
                 val url = Text.webUrl(shared.url) ?: Text.findUrl(shared.url) ?: throw ShareException("url", "That isn’t a web address.")
-                addTo(topic, OutgoingItem(Kind.URL, url = url, title = shared.title), null)
+                addTo(topic, OutgoingItem(Kind.URL, url = url, title = options.title ?: shared.title), null)
             }
             is Shared.Text -> {
                 val name = Text.safeFileName((shared.subject?.take(60)?.ifBlank { null } ?: "Shared text") + ".txt")
-                addTo(topic, OutgoingItem(Kind.FILE, name = name, mime = "text/plain", title = shared.subject), BytesBody(shared.text.toByteArray()))
+                addTo(topic, OutgoingItem(Kind.FILE, name = name, mime = "text/plain", title = options.title ?: shared.subject), BytesBody(shared.text.toByteArray()))
             }
             is Shared.Stream -> {
-                val copy = copyIn(shared.uri, shared.mime)
+                val copy = options.copied ?: copyIn(shared.uri, shared.mime)
                 try {
-                    addTo(topic, OutgoingItem(Kind.FILE, name = copy.name, mime = copy.mime, title = copy.title), FileBody(copy.file), moveContent = true)
+                    addTo(topic, OutgoingItem(Kind.FILE, name = copy.name, mime = copy.mime, title = options.title ?: copy.title), FileBody(copy.file), moveContent = true)
                 } finally {
                     copy.file.delete()
                 }
             }
+        }
+    }
+
+    /** What a share becomes with Lab on (F16, F11), before it is stored: the item, its bytes, and how it was read. */
+    class Intake(val item: OutgoingItem, val body: Body?, val kind: String)
+
+    /**
+     * Smart intake (F16) and F11's rule for a link or text share, Lab on. [Intake.kind] is `Normalise.Kinds`' (link,
+     * excerpt, note). Throws [ShareException] when nothing in it can be sent.
+     */
+    fun intake(shared: Shared, options: ShareOptions = ShareOptions()): Intake {
+        val clean = PhoneLab.useOn(app, "F16")
+        val r = when (shared) {
+            is Shared.Link -> {
+                val url = Text.webUrl(shared.url) ?: Text.findUrl(shared.url) ?: throw ShareException("url", "That isn’t a web address.")
+                Normalise.normaliseShare(text = "", url = url, subject = shared.title ?: "", clean = clean)
+            }
+            is Shared.Text -> Normalise.normaliseShare(
+                text = shared.text, subject = shared.subject ?: "",
+                source = if (options.asExcerpt) Normalise.SOURCE_SELECTION else "", clean = clean,
+            )
+            is Shared.Stream -> throw IllegalArgumentException("a stream is not read by intake")
+        }
+        return when (r.kind) {
+            Normalise.Kinds.LINK -> Intake(OutgoingItem(Kind.URL, url = r.url, title = options.title?.ifBlank { null } ?: r.title, extras = r.extras), null, r.kind)
+            Normalise.Kinds.EXCERPT, Normalise.Kinds.NOTE -> {
+                val subject = (shared as? Shared.Text)?.subject ?: ""
+                val e = Excerpt.item(
+                    text = r.excerpt, url = r.url ?: "", pageTitle = subject, site = PhoneLab.host(r.url),
+                    app = options.sourceApp ?: "", date = System.currentTimeMillis(),
+                ) ?: throw ShareException("content", NOTHING_TO_SEND)
+                val (item, body) = e.toOutgoing()
+                Intake(item.copy(title = options.title?.ifBlank { null } ?: item.title), body, r.kind)
+            }
+            else -> throw ShareException("content", NOTHING_TO_SEND)
+        }
+    }
+
+    /** [add] with Lab on. */
+    private fun addLab(topic: String, shared: Shared, options: ShareOptions): OutboxRow {
+        val defer = !PhoneLab.online(app)
+        val row = when (shared) {
+            is Shared.Stream -> {
+                val copy = options.copied ?: copyIn(shared.uri, shared.mime)
+                try {
+                    addTo(topic, OutgoingItem(Kind.FILE, name = copy.name, mime = copy.mime, title = options.title?.ifBlank { null } ?: copy.title), FileBody(copy.file), moveContent = true, defer = defer)
+                } finally {
+                    copy.file.delete()
+                }
+            }
+            else -> {
+                val i = intake(shared, options)
+                addTo(topic, i.item, i.body, defer = defer)
+            }
+        }
+        ActivityLog.add(app, "share", row.id, row.kind, row.status)
+        if (FlushWorker.waiting(row)) FlushWorker.schedule(app)
+        Shortcuts.push(app)
+        return row
+    }
+
+    /**
+     * F26: sends Setup check's test article (`SetupCheck.testArticle`, a page with `x-cap: "test"`) now, or when the
+     * network is back. Remembers its id, which Setup check follows. -> its row.
+     */
+    suspend fun sendTestArticle(): OutboxRow = withContext(Dispatchers.IO) {
+        val topic = outbox()?.pairing?.keys?.inboxTopic ?: throw ShareException("pairing", "Pair with your Daylight first.")
+        val (item, body) = SetupCheck.testArticle(device = app.prefs.deviceName).toOutgoing()
+        val defer = !PhoneLab.online(app)
+        val row = addTo(topic, item, body, defer = defer)
+        app.prefs.labTestId = row.id
+        ActivityLog.add(app, "test", row.id, row.kind, row.status)
+        if (defer) {
+            FlushWorker.schedule(app)
+            row
+        } else {
+            publish(row.id) ?: row
         }
     }
 
@@ -189,21 +321,70 @@ class SenderRepo(private val app: App) {
      * [ShareException] "pairing" ([PAIRING_CHANGED]) when the user paired with another Daylight (or unpaired) meanwhile.
      */
     @VisibleForTesting
-    internal fun addTo(topic: String, item: OutgoingItem, content: Body?, moveContent: Boolean = false): OutboxRow = synchronized(this) {
+    internal fun addTo(topic: String, item: OutgoingItem, content: Body?, moveContent: Boolean = false, defer: Boolean = false): OutboxRow = synchronized(this) {
         val o = outbox()?.takeIf { it.pairing.keys.inboxTopic == topic } ?: throw ShareException("pairing", PAIRING_CHANGED)
-        val row = o.add(item, content, moveContent)
+        val row = o.add(item, content, moveContent, defer)
         _rows.value = o.rows()
         row
     }
 
-    /** Publishes item [id] now; then ack checks follow in the background. */
+    /**
+     * Publishes item [id] now; then ack checks follow in the background. Lab (F07): a row that waits for a connection
+     * while this device is offline is left to wait ([FlushWorker]), and a publish that fails for want of a network
+     * waits for the connection too.
+     */
     suspend fun publish(id: String): OutboxRow? = withContext(Dispatchers.IO) {
         val o = outbox() ?: return@withContext null
+        if (app.prefs.lab) {
+            val row = o.row(id)
+            if (row != null && FlushWorker.waiting(row) && !PhoneLab.online(app)) {
+                FlushWorker.schedule(app)
+                return@withContext row
+            }
+        }
         val r = o.publish(id)
         _rows.value = o.rows()
         Work.syncLater(app, 30)
         Work.syncLater(app, 180)
+        if (r != null && app.prefs.lab) {
+            ActivityLog.add(app, "send", r.id, r.kind, r.status)
+            if (FlushWorker.waiting(r)) FlushWorker.schedule(app)
+        }
         r
+    }
+
+    /**
+     * F07: one offline flush pass (`Outbox.flushNetwork`, both caps and the pass rules). FlushWorker spaces the passes.
+     * -> the rows it attempted.
+     */
+    suspend fun flush(): List<OutboxRow> = withContext(Dispatchers.IO) {
+        val o = outbox() ?: return@withContext emptyList()
+        val out = o.flushNetwork()
+        _rows.value = o.rows()
+        for (r in out) ActivityLog.add(app, "flush", r.id, r.kind, r.status)
+        if (out.isNotEmpty()) {
+            logi("sender: ${out.size} sent after waiting for a connection")
+            Work.syncLater(app, 30)
+            Work.syncLater(app, 180)
+        }
+        out
+    }
+
+    /**
+     * After attempts outside the app's screens (the share-in-place job, a flush pass): F04's notices for items shared
+     * in place that ended badly, and, unless [scheduleFlush] is false, a flush pass for what waits for a connection.
+     */
+    suspend fun afterAttempts(rows: List<OutboxRow>, scheduleFlush: Boolean = true) = withContext(Dispatchers.IO) {
+        if (!app.prefs.lab) return@withContext
+        if (scheduleFlush && rows.any { FlushWorker.waiting(it) }) FlushWorker.schedule(app)
+        Notices.review(app, outbox()?.rows() ?: rows, _lab.value)
+    }
+
+    /** F04: remembers items shared in place, whose failure (or arrival in the Reader) may be told by a notice. */
+    fun noteInPlace(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        app.prefs.setLabInPlaceIds(app.prefs.labInPlaceIds() + ids)
+        app.prefs.labAskNotices = true
     }
 
     /** One pass: acks, re-sends, expiry. */
@@ -215,6 +396,14 @@ class SenderRepo(private val app: App) {
         val rows = o.rows()
         _rows.value = rows
         pruneLedger(rows)
+        readLab()
+        if (app.prefs.lab) {
+            if (t.delivered > 0) ActivityLog.add(app, "acks", "", "", "delivered ${t.delivered}")
+            // F04: an item shared in place that ended badly, or reached the Reader, is told about once.
+            Notices.review(app, rows, _lab.value)
+            // F07: rows that wait for a connection go as soon as it is back.
+            if (rows.any { FlushWorker.waiting(it) }) FlushWorker.schedule(app)
+        }
     }
 
     /** Keeps the ledger's states for the outbox's ids only, at most 200 (LAB-PROTOCOL 2.2.6); writes only when needed. */
@@ -255,7 +444,11 @@ class SenderRepo(private val app: App) {
         }
     }
 
-    internal class Copy(val file: File, val name: String, val mime: String, val title: String?)
+    /** A shared stream copied into private storage: the file, its name, type and title. */
+    class Copy(val file: File, val name: String, val mime: String, val title: String?)
+
+    /** Copies a shared stream now, off the main thread (the share card does it while its countdown runs). */
+    suspend fun copy(uri: Uri, mimeHint: String?): Copy = withContext(Dispatchers.IO) { copyIn(uri, mimeHint) }
 
     /** The size a content or file URI says it has (OpenableColumns.SIZE, or the file's length); null when unknown. */
     @VisibleForTesting
@@ -323,6 +516,9 @@ class SenderRepo(private val app: App) {
 
         /** "Save relay" on a sender that is not paired: the relay comes with the pairing. */
         const val NOT_PAIRED_RELAY = "Pair with your Daylight first. The relay comes with its code."
+
+        /** Nothing in a share can be sent. */
+        const val NOTHING_TO_SEND = "There’s nothing here Daylight Share can send."
 
         /** The share started for one Daylight, and the user paired with another (or unpaired) before it was stored. */
         const val PAIRING_CHANGED = "The pairing changed while this was being prepared, so it wasn’t sent. Share it again."

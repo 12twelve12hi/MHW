@@ -222,8 +222,9 @@ With Lab on, the Lab card has two more rows:
   feature that is not set up shows one sentence under it that says what is missing and where to add it ("Needs your
   Daylight server. Add the Cloudflare secrets to turn this on (Lab › Daylight server shows how).", with **Copy Server
   code**), announced to TalkBack, until OK, another tap or leaving the screen. A server that does not answer within 5 s
-  is "Couldn’t reach the Daylight server." Wave 0 has no Lab feature of its own on Android yet (the delivery timeline
-  and the rest come with Wave 1), and no one-time note (it comes with the first Wave 1 build).
+  is "Couldn’t reach the Daylight server." On the phone the list has Wave 1's features (below), the features that
+  change how sharing behaves each with a **Use** switch, and F04's and F09's settings on their rows; the Inbox's Wave 1
+  features come with card K5.
 - **Daylight server ›** ("Optional · Not set up"): where the server is set up, so it has the long texts, every word
   from `LAB_TEXT.serverSection` or the server module (LAB-PLAN 2.6, "The rest of the server section's copy"): its
   state (with the exact secret names); while it is not set up, **Turn it on** with the five steps, numbered (LAB_TEXT's
@@ -260,6 +261,81 @@ the relay answered 429 or 413; hellos when Lab goes on, when the caps or the ver
 off sends one frame with `lab: 0`, repeated after each digest for 48 hours; then nothing. With no network it waits for
 the `lab-flush` job. Reset pairing clears its store (`files/inbox/lab-<inboxTopic>.json`). Items that come from the
 Daylight server (Wave S) get no states.
+
+### Wave 1 on the phone (card K4)
+
+With Lab on, the phone has these (LAB-PLAN 3.3; every word is `LAB_TEXT`'s). The one-time note ("Lab is on. New
+features to try are in Settings › Lab, where you can turn it off.") shows once on the home screen from this build (the
+Inbox's waits for its own Wave 1 build).
+
+- **Delivery timeline (F01).** History rows read as `LabRowText` says ("On your Daylight ✓", "Waiting for a tap on your
+  Daylight", "Handed to the Reader", "In your Reader ✓", …), from what the Daylight's Lab frames told the ledger. The
+  sentence and the step line ("Sent ✓ · On your Daylight ✓ · In the Reader …") show on the newest row and on rows that are
+  not final; elsewhere a tap on the title shows them. TalkBack reads "{label}. {sentence}" and never the step line. Above
+  the history: "Your Daylight checked in 4 min ago." While a row delivered in the last 10 minutes has no settled state
+  and the app is in front, the ack topic is read every 30 s. No row says Delivered or In your Reader without an ack.
+- **Share in place (F04).** Share › Send to Daylight shows "Sending to {name}" with **Options** for 1.5 s, then the item
+  goes into the outbox, an expedited job `send-<id>` (`sender/SendWorker.kt`) publishes it, and the card closes. Options:
+  an editable title and, for text with a link, **Send link** / **Send as excerpt**. With Comfort, TalkBack, Switch Access
+  or "Always show Options before sending", the card opens with the choices and **Send**, and nothing goes until Send. A
+  share-in-place item that ends failed or expired posts "Couldn’t send ‘{title}’ to {name}" / "Open to try again." in the
+  channel **Send results** ("Tell me when a send fails", on); "Tell me when it’s in my Reader" (off) posts a quiet "In your
+  Reader ✓: {title}". Without notification permission nothing is posted and F04's row says "Needs notifications"; the
+  app asks once, after a share in place (Android 13 and later). F04's Use switch off: the v1.1 card.
+- **Pages as you see them, the hint (F03).** The first share that brings only a link shows once: "Only the link came
+  through. For pages behind a login, send from your computer’s browser with the Send to Daylight extension." After that
+  it is listed in Setup check.
+- **Works offline (F07).** A share while offline is stored as waiting for a connection (`defer`) and listed under "Waiting
+  to send ({n})" with **Cancel**; the job `flush` (`sender/FlushWorker.kt`, `CONNECTED`) sends it when the network is
+  back (`flushNetwork`: oldest first, at most 30 frames and 18 MB a pass, passes 3 minutes apart). With Lab off, v1.1's
+  back-off sends it.
+- **Your Daylight in the share sheet (F08).** `sender/Shortcuts.kt` pushes one long-lived Direct Share shortcut, id
+  `daylight`, on every send (short label: the name cut to 10 characters with "…"); `res/xml/shortcuts.xml` makes it a
+  share target of the share activity. Unpair, Lab off, F08's Use switch off and the Inbox role remove it.
+- **Automation (F09).** `sender/AutomationActivity.kt`: the action `com.daylight.share.action.SEND_URL` (`EXTRA_TEXT`,
+  `EXTRA_TITLE`, boolean `com.daylight.share.extra.QUICK`; it answers `RESULT_OK` with `id` and `status`) and
+  `daylightshare://send?url=…&title=…[&text=…][&quick=1]` (through MainActivity; never a file path). A sheet asks "Send to
+  {name}?" with the title and host, unless "Allow quick sends from other apps" (off; under Shortcuts and automation in
+  What's in Lab) is on, at most 10 a minute. Lab off: "Turn on Lab in Daylight Share to use this."
+- **Send a selection (F11, 6.5 Q1 = b).** Text becomes an excerpt only when the share card's Options say **Send as
+  excerpt** (an HTML document with the source link and a `#:~:text=` fragment, `x-cap: "excerpt"`); the first one shows
+  once "Excerpts wait for a tap on your Daylight for now." Every "headline + link" share stays a link with the headline
+  as its title; text without a link goes as a Markdown note.
+- **Clean links (F16).** Every link and text share goes through `Normalise.normaliseShare`: the first link, unwrapped
+  (AMP, Google, Facebook, LinkedIn, Substack) and without tracking parameters, the URL as shared in `x-orig`. F16's Use
+  switch off: links go exactly as shared.
+- **Setup check (F26).** From its row in What's in Lab: Pairing, Notifications and Battery optimisation, each unmet one
+  with the button that opens the right screen; the hints shown once; **Send a test article** (`x-cap: "test"`, followed
+  to "✓ Delivered" and "✓ In your Reader"); the activity log (type, id8, kind, status, nothing else); **Copy diagnostics**,
+  redacted (`SetupCheck.diagnosticsReport`).
+- **Send copied link (F33).** On resume only the clipboard's description is read (a `text/uri-list` clip, or on Android
+  12+ a text Android's classifier is at least 0.5 sure is a URL), so no "pasted from" notice shows; **Send copied link**
+  reads it on tap and asks "Send {host} to {name}?" with **Send** and **Cancel**.
+- **Files over 9 MB (the F02 entry point).** Under the too-big sentence, on the share card and on the home screen: **Send
+  files over 9 MB ›**, which shows the needs-server sentence (with Copy Server code) until a Daylight server exists, and
+  "In a later update" once one is ready (F02 comes to Android in Wave S).
+
+The **Use** switches (6.5 Q5) are on the rows of F03, F04, F08, F16 and F33, on by default, each with its footer ("When
+it’s off, …"); TalkBack reads "Use {feature}". The one Lab switch still turns all of Lab off.
+
+**Still to check on a device** (W1 device round on Rooted 2, with an Android 13 or 14 phone and the real ntfy.sh relay):
+
+- **F04.4:** from Chrome, the card closes within 1 s of the countdown, and the upload completes with the app swiped away.
+- **F04.6:** the relay answering 413 after the card closed posts the "Send results" notice (here the mock relay drives
+  it); the permission question after the first share in place.
+- **F04.5 / F27.3 (TalkBack):** with TalkBack on, the card opens with Options and Send and reads "Sending to {name}".
+- **F07.1:** in flight mode a share reads "Waiting for connection", and goes within a minute once the network is back,
+  with the app open and with it closed (WorkManager's `CONNECTED` job).
+- **F08.1, F08.2 (Android 13 and 14):** after one send the Daylight's name is in Chrome's Direct Share row, a tap there
+  sends with no other screen, Unpair removes it, and `adb shell cmd shortcut get-shortcuts --user 0 com.daylight.share`
+  keeps the id `daylight` across an update.
+- **F09:** an automation app (Tasker, or `adb shell am start -a com.daylight.share.action.SEND_URL --es
+  android.intent.extra.TEXT https://example.com`) gets the sheet; a `daylightshare://send` link from a web page asks.
+- **F33.2 (Android 13):** no "pasted from" toast before the chip is tapped.
+- **F11.5:** an NYT "headline + link" shared from Chrome arrives as a link the Reader downloads; Chrome's "Share" of a
+  selection (`#:~:text=`) arrives as a link unless sent as an excerpt.
+- **F01.1, F01.2, F26.1:** a link reaching "In your Reader ✓", a PDF reading "Waiting for a tap on your Daylight" then
+  "Handed to the Reader", and the test article ticking Delivered and In your Reader, in each condition of F01.1.
 
 ## Build
 
@@ -340,6 +416,20 @@ unless a test says so.
 | `LabScreensAccessibilityTest` | F27 on Lab's screens: What's in Lab with a note open and the Daylight server section, phone and Inbox, as shipped and with Comfort at 200 % text (`lab-*.png` among the screenshots) |
 | `LabOffParityTest` | F00.2: with Lab off each main screen equals its baseline, and the Settings of both roles have the Lab card holding only the switch, off |
 
+### Lab tests (K4, the phone's Wave 1)
+
+| Test | Covers |
+|---|---|
+| `SenderTimelineTest` | F01.3 (the check-in header), F01.4 (no Delivered or In your Reader without an ack; failed rows keep v1.1's sentence and button), F01.5 (a v1.1 Inbox's rows), F01.6 (three rows: the step line only on the newest and the unfinished, "{label}. {sentence}" for TalkBack, the step line hidden from it, details on tap), F07.1/F07.2 ("Waiting for connection" in "Waiting to send (n)", Cancel), the one-time note |
+| `ShareInPlaceTest` | F04.4 and F04.5 on Robolectric's clock (nothing in the 1.5 s countdown, then the outbox and `send-<id>`, the card gone; Options stops it; Comfort and "Always show Options before sending" wait for Send; a card that goes, or comes back from saved state, sends nothing), F03.3 (the hint once), F11 (a headline + link stays a link; "Send as excerpt"), F02e.1 (a 14.2 MB file: the too-big sentence and "Send files over 9 MB ›" with its needs-server sentence), F04's Use switch off |
+| `PhoneJobsTest` | F04.6 (413 after the card closed: the "Send results" notice, once; off, or without permission: none; a network failure waits instead; "In your Reader ✓" only when asked; nothing with Lab off; the job through `TestListenableWorkerBuilder`), F07 (`defer`, the flush when the network is back, passes 3 minutes apart, nothing with Lab off) |
+| `ShortcutsTest` | F08: pushed on a send with the name (short label cut at 10), updated with the name, removed on Unpair, Lab off, F08's Use switch off and the Inbox role; the share target in `shortcuts.xml` |
+| `AutomationActivityTest` | F09.3: the sheet before anything goes, `RESULT_OK` with id and status, Cancel, quick sends only with the setting (and the note that says how), 10 a minute, Lab off, unpaired, not a link; `daylightshare://send` routed from MainActivity, and a web page cannot send silently |
+| `CopiedLinkTest` | F33.1-F33.3: the chip from the clipboard's description only, the host before Send, Cancel, no chip for text that is not a URL, the classifier's confidence (API 31+), the Use switch and Lab off |
+| `WhatsInLabPhoneTest` | 1.4 and 6.5 Q5 on the phone: its features, the Use switches (on by default, "Use {feature}", one feature off at a time), F04's and F09's settings; F04's needs-notifications note with Open Settings; F26 (the checks, the test article followed to ✓ Delivered and ✓ In your Reader, the activity log, Copy diagnostics with no URL, title, code or topic; a hint shown once stays listed) |
+| `SharePathVectorsTest` | F16.1 and F11.5 on the phone's own share path: every share-sheet case of `normalise.json` through `parseLab` and the intake; Lab off is v1.1's path |
+| `LabScreensAccessibilityTest` | also the phone's home with the timeline and the queue, and Setup check (as shipped and with Comfort at 200 %) |
+
 ### Layout
 
 - `share-core/`: the protocol in plain Kotlin/JVM, no Android classes, no dependencies, so the Reader can embed it:
@@ -350,7 +440,11 @@ unless a test says so.
   connection, Instant delivery service, hand-off to the Reader), WorkManager jobs (`Work.kt`). Lab: `LabRepo.kt` (the
   gates, What's in Lab, the Daylight server; `LAB_NOTE_ENABLED`), `ui/LabScreen.kt` (the Lab card, What's in Lab, the
   note, the server section) and `inbox/LabReporter.kt` (the Inbox's Lab frames and the `lab-flush` job); `Prefs.lab`
-  with `App.labOn` is the one reading of the switch.
+  with `App.labOn` is the one reading of the switch. The phone's Wave 1 (K4) is in `sender/`: `PhoneLab.kt` (its
+  features, the Use switches, online, the activity log), `ShareInPlace.kt` (the card), `SendWorker.kt` and
+  `FlushWorker.kt` (the `send-<id>` and `flush` jobs; `Work.kt` is the Inbox's, K5), `Notices.kt` ("Send results"),
+  `Shortcuts.kt` (Direct Share) and `AutomationActivity.kt`; its screens are `ui/SenderScreen.kt` (the timeline, the
+  queue, the copied link) and `ui/LabPhone.kt` (What's in Lab's switches, the F02 entry point, Setup check).
 
 ### Debug builds: setup without the UI
 

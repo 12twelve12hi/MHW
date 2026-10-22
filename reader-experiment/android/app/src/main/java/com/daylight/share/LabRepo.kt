@@ -25,7 +25,7 @@ import java.io.File
 
 /**
  * The one-time Lab note (LAB-PLAN 1.2) shows only in builds where the app has F01 or F04: from the first W1 build
- * (K4, K5). A W0 build shows none.
+ * (K4, K5). A W0 build shows none. This is the Inbox's (K5 turns it on); the phone's is `LAB_NOTE_ENABLED_PHONE` (K4).
  */
 const val LAB_NOTE_ENABLED = false
 
@@ -241,6 +241,8 @@ class LabRepo(private val app: App) {
                 lab = app.prefs.lab,
                 paired = pairing() != null,
                 hasCap = { heard?.hasCap(it) == true },
+                // The phone's own checks (K4): F04's notices need notifications.
+                local = { com.daylight.share.sender.PhoneLab.localCheck(app, it) },
                 server = if (inbox) null else ServerStateSource { key -> featureState(p ?: probe(), key) },
                 serverMessage = ServerMessages::localMessage,
                 built = { it in BUILT },
@@ -408,14 +410,14 @@ class LabRepo(private val app: App) {
         const val PLATFORM_INBOX = "inbox"
         const val NEEDS_PAIRING = "needs-pairing"
 
-        /** What's in Lab's features on the phone, W0: none yet (K4 adds F01, F04, F07, F08, F09, F16, F26, F33). */
-        val PHONE_FEATURES: List<String> = emptyList()
+        /** What's in Lab's features on the phone (W1, K4): `PhoneLab.FEATURES`. */
+        val PHONE_FEATURES: List<String> = com.daylight.share.sender.PhoneLab.FEATURES
 
         /** … and on the DC-1 Inbox, W0: none yet (K5 adds F15 and F26). */
         val INBOX_FEATURES: List<String> = emptyList()
 
         /** The Lab features this build runs (the gate's `built`): a server feature that is ready but not built is `later`. */
-        val BUILT: Set<String> = emptySet()
+        val BUILT: Set<String> get() = (PHONE_FEATURES + INBOX_FEATURES).toSet()
 
         /** The states of the whole server (not of one feature): the What's in Lab heading's and the row's. */
         val SERVER_WIDE = setOf(NEEDS_PAIRING, "needs-server", "pairing-mismatch", "server-outdated", "app-outdated", "locked", "OFFLINE", "error")

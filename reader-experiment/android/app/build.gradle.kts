@@ -120,6 +120,8 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("androidx.test:core:1.6.1")
+    // Lab (K4): the share-in-place and offline-flush jobs under a test WorkManager.
+    testImplementation("androidx.work:work-testing:2.10.0")
     // Screen tests under Robolectric: semantics, text layout, and the accessibility checks (F27, LAB-PLAN 1.7).
     testImplementation(platform("androidx.compose:compose-bom:2025.05.01"))
     testImplementation("androidx.compose.ui:ui-test-junit4")

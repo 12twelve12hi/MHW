@@ -54,8 +54,8 @@ const val LAB_CARD_TAG = "lab-switch"
 /** The test tag of a needs-setup note ([LabNote]). */
 const val LAB_NOTE_TAG = "lab-note"
 
-/** The pages under the Lab card. */
-enum class LabPage { WHATS_IN_LAB, SERVER }
+/** The pages under the Lab card ([SETUP]: Setup check, F26, opened from its row in What's in Lab). */
+enum class LabPage { WHATS_IN_LAB, SERVER, SETUP }
 
 /**
  * The Lab card, first in Settings (1.1): the switch with its footer and, while Lab is on, "What’s in Lab ›" and
@@ -103,16 +103,21 @@ private fun LabNavRow(label: String, detail: String? = null, onClick: () -> Unit
     }
 }
 
-/** What's in Lab or the Daylight server section; back to Settings when Lab goes off meanwhile. */
+/**
+ * What's in Lab, the Daylight server section or Setup check; back to Settings when Lab goes off meanwhile. [onOpen]
+ * opens another Lab page (What's in Lab opens Setup check, which goes back to What's in Lab); [onExit] leaves Settings
+ * for the home screen (Setup check's "Pairing" button).
+ */
 @Composable
-fun LabScreen(activity: MainActivity, page: LabPage, onBack: () -> Unit) {
+fun LabScreen(activity: MainActivity, page: LabPage, onBack: () -> Unit, onOpen: (LabPage) -> Unit = {}, onExit: () -> Unit = onBack) {
     val app = App.of(activity)
     val lab by app.labOn.collectAsStateWithLifecycle()
     LaunchedEffect(lab) { if (!lab) onBack() }
     if (!lab) return
     when (page) {
-        LabPage.WHATS_IN_LAB -> WhatsInLab(activity, onBack)
+        LabPage.WHATS_IN_LAB -> WhatsInLab(activity, onBack, onOpen)
         LabPage.SERVER -> ServerSection(activity, onBack)
+        LabPage.SETUP -> PhoneSetupCheck(activity, onBack = { onOpen(LabPage.WHATS_IN_LAB) }, onExit = onExit)
     }
 }
 
@@ -128,7 +133,7 @@ private data class Note(val feature: String, val text: String, val button: Strin
  * leaving the screen.
  */
 @Composable
-private fun WhatsInLab(activity: MainActivity, onBack: () -> Unit) {
+private fun WhatsInLab(activity: MainActivity, onBack: () -> Unit, onOpen: (LabPage) -> Unit = {}) {
     val app = App.of(activity)
     var overview by remember { mutableStateOf<LabRepo.Overview?>(null) }
     var refreshing by remember { mutableStateOf(true) }
@@ -151,17 +156,24 @@ private fun WhatsInLab(activity: MainActivity, onBack: () -> Unit) {
             if (quick == null && tapped == n) note = Note(row.id, LabText.CHECKING, checking = true)
             val r = quick ?: gate.await()
             if (tapped != n) return@launch
-            // Ready: in W0 no Lab feature runs yet (the server features are `later` once the server is ready).
+            // Ready: Setup check opens (F26, the phone); the other features have nothing more to open here (the server
+            // features are `later` once the server is ready).
             note = if (r.ready) null else Note(row.id, r.message ?: "", r.button)
+            if (r.ready && row.id == "F26" && app.prefs.role == com.daylight.share.Role.SENDER) onOpen(LabPage.SETUP)
         }
     }
 
     fun noteButton(n: Note) {
-        if (n.button == LabText.button("needs-server")) {
-            copyText(activity, LabText["serverSection.serverCode"], app.lab.serverCode())
-            note = n.copy(followUp = LabText["setup.copied"])
+        when (n.button) {
+            LabText.button("needs-server") -> {
+                copyText(activity, LabText["serverSection.serverCode"], app.lab.serverCode())
+                note = n.copy(followUp = LabText["setup.copied"])
+            }
+            // Android's notification settings for this app (F04's "Send results" need them).
+            LabText.button("needs-notifications") -> openNotificationSettings(activity)
         }
     }
+    val phone = app.prefs.role == com.daylight.share.Role.SENDER
 
     ScreenColumn(padding = 16.dp) {
         HeaderRow(title = {
@@ -177,11 +189,12 @@ private fun WhatsInLab(activity: MainActivity, onBack: () -> Unit) {
         o?.header?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
         if (o != null && o.features.isNotEmpty()) {
             Section {
-                for (f in o.features) {
+                for ((i, f) in o.features.withIndex()) {
+                    if (i > 0 && phone) HorizontalDivider(color = Ink)
                     LabFeatureRow(f, note?.takeIf { it.feature == f.id }, onTap = { tap(f) }, onButton = ::noteButton, onOk = {
                         tapped++
                         note = null
-                    })
+                    }, use = if (phone) phoneRowExtras(app, f.id) else null)
                 }
             }
         }

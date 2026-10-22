@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lab (K4, F08): your Daylight in the share sheet's Direct Share row. Shortcuts.kt pushes one long-lived dynamic
+     shortcut in this category; Android then offers it for these types, and a tap shares to ShareActivity. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <share-target android:targetClass="com.daylight.share.sender.ShareActivity">
+        <data android:mimeType="text/plain" />
+        <data android:mimeType="application/pdf" />
+        <data android:mimeType="application/epub+zip" />
+        <data android:mimeType="*/*" />
+        <category android:name="com.daylight.share.category.SEND_TO_DAYLIGHT" />
+    </share-target>
+</shortcuts>

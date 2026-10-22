@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -29,6 +30,7 @@ import com.daylight.share.inbox.Handoff
 import com.daylight.share.inbox.InstantDeliveryService
 import com.daylight.share.inbox.Live
 import com.daylight.share.logi
+import com.daylight.share.sender.AutomationActivity
 import kotlinx.coroutines.launch
 
 /** The app: role choice, the Daylight Inbox, the sender, settings. Also opens `daylightshare://pair` links. */
@@ -47,10 +49,16 @@ class MainActivity : ComponentActivity() {
     /** The pairing the dialog asks about, or null. */
     val pendingPair = mutableStateOf<PendingPairing?>(null)
 
+    /** Lab: a Lab page to open in Settings (the automation sheet's "Open setting" opens What's in Lab), or null. */
+    val openLab = mutableStateOf<LabPage?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         app = App.of(this)
-        if (savedInstanceState == null) handleLink(intent)
+        if (savedInstanceState == null) {
+            handleLink(intent)
+            handleLabPage(intent)
+        }
         setContent { AppContent() }
     }
 
@@ -68,6 +76,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleLink(intent)
+        handleLabPage(intent)
     }
 
     override fun onStart() {
@@ -107,7 +116,15 @@ class MainActivity : ComponentActivity() {
                 offerPairing(p, PairingConfirmation.Source.LINK)
             }
             "setup" -> if (BuildConfig.DEBUG) debugSetup(data.toString()) else notice.value = "Setup links work in debug builds only."
+            // Lab (F09): daylightshare://send?url=…&title=…[&text=…][&quick=1] goes to the automation sheet.
+            "send" -> startActivity(AutomationActivity.fromLink(this, data))
         }
+    }
+
+    private fun handleLabPage(intent: Intent?) {
+        val page = intent?.getStringExtra(EXTRA_LAB_PAGE)?.let { runCatching { LabPage.valueOf(it) }.getOrNull() } ?: return
+        intent.removeExtra(EXTRA_LAB_PAGE)
+        if (app.prefs.lab) openLab.value = page
     }
 
     /**
@@ -187,10 +204,25 @@ class MainActivity : ComponentActivity() {
         var settings by remember { mutableStateOf(false) }
         var labPage by remember { mutableStateOf<LabPage?>(null) }
         BackHandler(enabled = settings) { if (labPage != null) labPage = null else settings = false }
+        // Lab: a page asked for from outside (the automation sheet's "Open setting").
+        val asked = openLab.value
+        LaunchedEffect(asked) {
+            if (asked != null) {
+                settings = true
+                labPage = asked
+                openLab.value = null
+            }
+        }
         val page = labPage
         when {
             role == null -> RoleScreen(this, onPick = { r -> app.setRole(r) })
-            settings && page != null -> LabScreen(this, page, onBack = { labPage = null })
+            settings && page != null -> LabScreen(
+                this, page, onBack = { labPage = null }, onOpen = { labPage = it },
+                onExit = {
+                    labPage = null
+                    settings = false
+                },
+            )
             settings -> SettingsScreen(this, onBack = { settings = false }, onLab = { labPage = it })
             role == Role.INBOX -> InboxScreen(this, onSettings = { settings = true })
             else -> SenderScreen(this, onSettings = { settings = true })
@@ -211,6 +243,9 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val LIVE_HOLDER = "screen"
+
+        /** Lab: the extra that opens a Lab page in Settings ([LabPage]'s name). */
+        const val EXTRA_LAB_PAGE = "com.daylight.share.extra.LAB_PAGE"
 
         /** Added to the pairing question on a device set up as the Inbox. */
         const val INBOX_LINE = "This device is set up as the Daylight Inbox. Pairing makes it a sender instead; it stops receiving."

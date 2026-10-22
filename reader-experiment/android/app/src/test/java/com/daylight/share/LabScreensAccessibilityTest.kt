@@ -17,8 +17,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * The accessibility baseline (F27) on Lab's screens (K1): What's in Lab with a needs-setup note open, and the Daylight
- * server section, on the phone and the Inbox. As shipped, the Accessibility Test Framework's rules on the semantics
+ * The accessibility baseline (F27) on Lab's screens (K1, K4): What's in Lab with a needs-setup note open (with the
+ * phone's Use switches and feature settings), and the Daylight server section, on the phone and the Inbox; the phone's
+ * home with the delivery timeline and the queue, and Setup check. As shipped, the Accessibility Test Framework's rules on the semantics
  * tree (labels, 48 dp targets, one control per spot); with Comfort at the largest text on a 360 dp phone, no text cut
  * short and no control under 56 dp (F27.4). Each is saved as a PNG for review (`lab-*.png` among the F27 screenshots).
  */
@@ -52,6 +53,7 @@ class LabScreensAccessibilityTest {
     private fun phone() {
         LabKit.useRelay(app, relay)
         app.prefs.askedNotifications = true
+        app.prefs.labNoteShown = true
         app.sender.pair(LabKit.vectorPairing)
         app.setRole(Role.SENDER)
         compose.waitForIdle()
@@ -63,6 +65,29 @@ class LabScreensAccessibilityTest {
         compose.waitForIdle()
     }
 
+    /** K4: the phone's home with the timeline (a row in every state, a Lab Daylight that said hello). */
+    private fun phoneWithTimeline() {
+        phone()
+        val now = System.currentTimeMillis()
+        val rows = ScreenKit.outboxRows(now)
+        PhoneKit.writeRows(app, rows)
+        PhoneKit.hello(relay, mapOf(rows[2].id to "reader"))
+        kotlinx.coroutines.runBlocking { app.sender.tick() }
+        compose.waitForIdle()
+    }
+
+    private fun openHome() = waitForText(LabText.fill(LabText["queue.heading"], mapOf("n" to 1)))
+
+    private fun openSetupCheck() {
+        compose.onNodeWithText("Settings").performClick()
+        compose.onNodeWithText("${LabText.WHATS_IN_LAB} ›").performClick()
+        waitForText(LabText.serverHeadingShort("needs-server"))
+        compose.onNode(hasText(LabText.featureName("F26")) and hasClickAction()).performClick()
+        waitForText(LabText["setup.testSend"])
+    }
+
+    @Test fun phoneHomeTimeline() = check("lab-home", ::phoneWithTimeline, ::openHome)
+    @Test fun phoneSetupCheck() = check("lab-setup-check", ::phone, ::openSetupCheck)
     @Test fun phoneWhatsInLab() = check("lab-whats-in-lab", ::phone, ::openWhatsInLabWithANote)
     @Test fun phoneServerSection() = check("lab-server", ::phone, ::openServerSection)
     @Test fun inboxWhatsInLab() = check("lab-inbox-whats-in-lab", ::inbox, ::openWhatsInLabWithANote)

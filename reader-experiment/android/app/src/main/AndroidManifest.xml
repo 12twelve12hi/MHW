@@ -72,6 +72,10 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="daylightshare" />
             </intent-filter>
+            <!-- Lab: K4 (F08): the Direct Share target, your Daylight in the share sheet's top row. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
 
         <!-- The share target: small and translucent, finishes as soon as the item is on its way. -->
@@ -100,6 +104,22 @@
                 <data android:mimeType="text/plain" />
                 <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
                 <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
+        <!-- Lab: K4 (F09): other apps and scripts send a link (com.daylight.share.action.SEND_URL; daylightshare://send
+             comes here through MainActivity). It asks first, unless quick sends are allowed in Lab settings. -->
+        <activity
+            android:name=".sender.AutomationActivity"
+            android:exported="true"
+            android:label="@string/automation_label"
+            android:excludeFromRecents="true"
+            android:taskAffinity="com.daylight.share.send"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|density|uiMode"
+            android:theme="@style/Theme.DaylightShare.Translucent">
+            <intent-filter>
+                <action android:name="com.daylight.share.action.SEND_URL" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
 

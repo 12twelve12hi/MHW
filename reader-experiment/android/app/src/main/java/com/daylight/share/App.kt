@@ -335,6 +335,69 @@ class Prefs(private val context: Context) {
         if (changed) e.apply()
     }
 
+    // Lab: K4 (the phone's Wave 1 features, LAB-PLAN 3.3). Like the switch, these belong to the device: never synced,
+    // never in a pairing link, and Lab off leaves them as they are (1.3).
+
+    /** A feature's Use switch in What's in Lab (6.5 Q5): `labUse.<feature>`; a missing one means on. */
+    fun labUse(feature: String): Boolean = sp.getBoolean("labUse.$feature", true)
+
+    fun setLabUse(feature: String, on: Boolean) = sp.edit().putBoolean("labUse.$feature", on).apply()
+
+    /** Every Use switch, for `LabText.labUseOn`. */
+    fun labUseMap(): Map<String, Boolean> = com.daylight.share.core.lab.Lab.USE_FEATURES.associateWith { labUse(it) }
+
+    /** F04: "Always show Options before sending" (off by default). */
+    var labAlwaysOptions: Boolean
+        get() = sp.getBoolean("labAlwaysOptions", false)
+        set(v) = sp.edit().putBoolean("labAlwaysOptions", v).apply()
+
+    /** F04: "Tell me when a send fails" (on by default). */
+    var labTellFails: Boolean
+        get() = sp.getBoolean("labTellFails", true)
+        set(v) = sp.edit().putBoolean("labTellFails", v).apply()
+
+    /** F04: "Tell me when it’s in my Reader" (off by default). */
+    var labTellReader: Boolean
+        get() = sp.getBoolean("labTellReader", false)
+        set(v) = sp.edit().putBoolean("labTellReader", v).apply()
+
+    /** F09: "Allow quick sends from other apps" (off by default). */
+    var labQuickSends: Boolean
+        get() = sp.getBoolean("labQuickSends", false)
+        set(v) = sp.edit().putBoolean("labQuickSends", v).apply()
+
+    /** F03: the link-only hint was shown on this device (once; then it lives in Setup check). */
+    var labLinkOnlyShown: Boolean
+        get() = sp.getBoolean("labLinkOnlyShown", false)
+        set(v) = sp.edit().putBoolean("labLinkOnlyShown", v).apply()
+
+    /** F11: "Excerpts wait for a tap on your Daylight for now." was shown after this device's first excerpt. */
+    var labExcerptNoteShown: Boolean
+        get() = sp.getBoolean("labExcerptNoteShown", false)
+        set(v) = sp.edit().putBoolean("labExcerptNoteShown", v).apply()
+
+    /** F04: a share in place happened and the app has not asked for notifications since (Android 13 and later). */
+    var labAskNotices: Boolean
+        get() = sp.getBoolean("labAskNotices", false)
+        set(v) = sp.edit().putBoolean("labAskNotices", v).apply()
+
+    /** F07: when the last offline flush pass ran (ms); passes are at least 3 minutes apart. */
+    var labFlushAt: Long
+        get() = sp.getLong("labFlushAt", 0L)
+        set(v) = sp.edit().putLong("labFlushAt", v).apply()
+
+    /** F26: the id of the last test article, which Setup check follows along the timeline. */
+    var labTestId: String?
+        get() = sp.getString("labTestId", null)
+        set(v) = sp.edit().putString("labTestId", v).apply()
+
+    /** F04: items shared in place whose failure or arrival in the Reader may still be told (a notice each, once). */
+    fun labInPlaceIds(): Set<String> = sp.getStringSet("labInPlace", null)?.toSet() ?: emptySet()
+
+    fun setLabInPlaceIds(ids: Set<String>) {
+        sp.edit().putStringSet("labInPlace", HashSet(ids)).apply()
+    }
+
     fun senderPairing(): Pairing? = senderLink?.let { runCatching { Pairing.parse(it) }.getOrNull() }
 
     private fun defaultDeviceName(): String {

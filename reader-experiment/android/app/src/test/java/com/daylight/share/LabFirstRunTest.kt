@@ -21,8 +21,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * The first run of a build with Lab (LAB-PLAN F00.1, F00.7), both roles: Lab is on, a W0 build shows no one-time
- * note, an upgrade keeps its pairing and history, and nothing on any screen reachable without tapping a Lab feature or
+ * The first run of a build with Lab (LAB-PLAN F00.1, F00.7), both roles: Lab is on, the one-time note shows only in
+ * a build whose role has F01 or F04 (the phone from K4; not the Inbox yet), an upgrade keeps its pairing and history, and nothing on any screen reachable without tapping a Lab feature or
  * opening the Daylight server section names a secret or says how to set something up. What's in Lab shows short states
  * only. No server is deployed: the relay (in memory) has nothing on the server's config topic.
  */
@@ -58,16 +58,18 @@ class LabFirstRunTest {
     }
 
     @Test
-    fun aFreshInstallHasLabOnAndAW0BuildShowsNoNote() {
+    fun aFreshInstallHasLabOnAndTheNoteShowsWhereTheBuildHasF01OrF04() {
         LabKit.useRelay(app, relay)
         assertTrue(app.prefs.lab)
         assertTrue(app.getSharedPreferences("daylight-share", Context.MODE_PRIVATE).contains("lab"))
         assertFalse(app.prefs.labNoteShown)
-        for (screen in listOf(MainScreen.SENDER, MainScreen.INBOX)) {
-            screen.prepare(app)
-            screen.open(compose)
-            assertTrue("${screen.file}: no one-time note in a W0 build", compose.onAllNodes(hasText(LabText.NOTE)).fetchSemanticsNodes().isEmpty())
-        }
+        // The phone's W1 build has F01 and F04 (K4): the note shows; the Inbox's W1 (K5) is not built yet.
+        MainScreen.SENDER.prepare(app)
+        MainScreen.SENDER.open(compose)
+        compose.onNodeWithText(LabText.NOTE).assertIsDisplayed()
+        MainScreen.INBOX.prepare(app)
+        MainScreen.INBOX.open(compose)
+        assertTrue("inbox: no one-time note before its W1 build", compose.onAllNodes(hasText(LabText.NOTE)).fetchSemanticsNodes().isEmpty())
         openSettings()
         compose.onNode(isToggleable() and hasText(LabText.SWITCH_FOOTER)).assertIsOn()
         compose.onNodeWithText("${LabText.WHATS_IN_LAB} ›").assertIsDisplayed()

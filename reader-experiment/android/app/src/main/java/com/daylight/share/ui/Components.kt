@@ -77,6 +77,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalCursorBlinkEnabled
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.text
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.error
@@ -299,7 +302,7 @@ fun titleLines(usual: Int): Int = if (LocalComfort.current) Int.MAX_VALUE else u
  * off differ in shape (the thumb's side, a filled track and a check mark), not colour.
  */
 @Composable
-fun SwitchRow(label: String, checked: Boolean, detail: String? = null, onChange: (Boolean) -> Unit) {
+fun SwitchRow(label: String, checked: Boolean, detail: String? = null, a11yLabel: String? = null, onChange: (Boolean) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -308,7 +311,13 @@ fun SwitchRow(label: String, checked: Boolean, detail: String? = null, onChange:
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.bodyLarge)
+            // [a11yLabel]: what a screen reader says for the label, when the words on screen need their context ("Use"
+            // reads "Use Clean links"); it starts with the label, so the visible words are in it.
+            if (a11yLabel != null) {
+                Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.clearAndSetSemantics { this.text = AnnotatedString(a11yLabel) })
+            } else {
+                Text(label, style = MaterialTheme.typography.bodyLarge)
+            }
             if (detail != null) Text(detail, style = MaterialTheme.typography.bodySmall)
         }
         SwitchMark(checked, Modifier.padding(start = 12.dp))
@@ -445,10 +454,17 @@ fun Field(
 
 /**
  * The small card shown by the translucent activities (sharing, hand-off). Tapping outside it closes it. [close] adds a
- * Close button (with an [action], or alone for someone who needs time to read it).
+ * Close button (with an [action], or alone for someone who needs time to read it). [extra] goes under the sentence
+ * (Lab only; none in the v1.1 card).
  */
 @Composable
-fun StatusCard(text: String, action: Pair<String, () -> Unit>? = null, onDismiss: (() -> Unit)? = null, close: Boolean = action != null) {
+fun StatusCard(
+    text: String,
+    action: Pair<String, () -> Unit>? = null,
+    onDismiss: (() -> Unit)? = null,
+    close: Boolean = action != null,
+    extra: (@Composable ColumnScope.() -> Unit)? = null,
+) {
     val none = remember { MutableInteractionSource() }
     Box(
         Modifier
@@ -469,6 +485,8 @@ fun StatusCard(text: String, action: Pair<String, () -> Unit>? = null, onDismiss
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Daylight Share", style = MaterialTheme.typography.bodySmall)
                 Text(text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.announced())
+                // Lab: what goes under the sentence (the F02 entry point under the too-big sentence).
+                extra?.invoke(this)
                 if (action != null || (close && onDismiss != null)) {
                     Buttons {
                         if (action != null) PrimaryButton(action.first) { action.second() }

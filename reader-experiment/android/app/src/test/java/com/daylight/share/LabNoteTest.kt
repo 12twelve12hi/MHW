@@ -280,8 +280,8 @@ class LabNoteTest {
         compose.onNodeWithText("Done").performClick()
         compose.onNodeWithText("Done").performClick()
         compose.waitForIdle()
-        // No timeline in W0: the row stays as v1.1 says it.
-        compose.onNodeWithText("Delivered ✓").assertIsDisplayed()
+        // W1's timeline (F01, K4): a Daylight with Lab on and no state yet for the row reads "On your Daylight ✓".
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText(LabText["rows.delivered.label"])).fetchSemanticsNodes().isNotEmpty() }
     }
 
     // ------------------------------------------------------------------------------------- the switch and its card
