@@ -1,0 +1,4 @@
+{
+  "about": "LAB-PLAN 6.2: the Lab wave of the code in this folder, which the release gate (../lab-release-gate.json) checks before rx-windows.yml publishes this build. null: no Lab code yet, so the build is published as before. WIN0 sets \"w0\"; WIN1 sets \"w1\".",
+  "wave": null
+}

@@ -2,8 +2,16 @@ name: Reader experiment - Windows app
 
 # Builds Send to Daylight for Windows (Tauri), tests it end to end on the runner against the mock relay (installer,
 # pairing links with their confirmation, Send to, the clipboard hotkey's path, acks, restarts, an update, uninstall),
-# then publishes Send-to-Daylight-windows-setup.exe to the "reader-experiment-latest" release. Unsigned for now:
-# SmartScreen warns on first run.
+# checks the window's page for accessibility and Lab-off parity in Chromium, then publishes
+# Send-to-Daylight-windows-setup.exe to the "reader-experiment-latest" release. Unsigned for now: SmartScreen warns on
+# first run.
+#
+# Lanes (LAB-PLAN 6.1): this file belongs to the win lane; every job carries a "# lane: win" comment.
+#
+# Lab release gate (LAB-PLAN 6.2): the Windows Lab build reaches the release only after the iPhone and Mac builds of
+# the same wave. reader-experiment/windows/lab-wave.json names the Lab wave of the code (null before any Lab code);
+# while reader-experiment/lab-release-gate.json has that wave false, the build is tested but not uploaded, and the log
+# says so. Flipping the gate starts this workflow, which then publishes the held build.
 on:
   push:
     branches: [claude/sweet-goldberg-ej1nb0]
@@ -11,6 +19,7 @@ on:
       - 'reader-experiment/windows/**'
       - 'reader-experiment/share/js/**'
       - '!reader-experiment/share/**/*.md'
+      - 'reader-experiment/lab-release-gate.json'
       - '.github/workflows/rx-windows.yml'
   workflow_dispatch:
 
@@ -23,12 +32,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  windows:
-    name: Build, test end to end, publish
+  # lane: win
+  app:
+    name: Build, test end to end
     runs-on: windows-latest
     timeout-minutes: 60
-    permissions:
-      contents: write
     defaults:
       run:
         shell: bash
@@ -101,10 +109,88 @@ jobs:
           path: reader-experiment/windows/test-results
           if-no-files-found: ignore
 
-      - name: Publish Send-to-Daylight-windows-setup.exe to the release
+  # lane: win
+  # The window's page (dist/index.html) in Chromium, WebView2's engine, with a fake bridge in place of Rust and Windows'
+  # own fonts: axe-core, no text cut short at the narrowest window with Comfort, announcements (LAB-PLAN F27), and the
+  # Lab-off parity baselines (1.7).
+  ui:
+    name: Window accessibility and Lab-off parity
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
         shell: bash
-        working-directory: .
+        working-directory: reader-experiment/windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: reader-experiment/windows/package-lock.json
+
+      - name: Install Playwright and axe-core
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install chromium
+
+      - name: Build the frontend
+        run: node build.mjs
+
+      - name: Accessibility (axe-core, F27.4 at the narrowest window, announcements) and Lab-off parity
+        run: node --test --test-concurrency=1 test/ui/*.test.mjs
+
+      - name: Keep the accessibility screenshots (F27.4, for review)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rx-windows-a11y-screenshots
+          path: reader-experiment/windows/test-results/a11y
+          if-no-files-found: ignore
+
+  # lane: win
+  publish:
+    name: Publish to the release
+    needs: [app, ui]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/scripts
+            reader-experiment/lab-release-gate.json
+            reader-experiment/windows/lab-wave.json
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Send-to-Daylight-windows-setup
+          path: out
+
+      - name: Check the Lab release gate (LAB-PLAN 6.2)
+        id: gate
+        run: |
+          set -euo pipefail
+          gate=reader-experiment/lab-release-gate.json
+          wave=$(jq -r '.wave // ""' reader-experiment/windows/lab-wave.json)
+          if [ -z "$wave" ]; then
+            echo "Windows app: no Lab code in this build (wave none in reader-experiment/windows/lab-wave.json): publishing the installer."
+            echo "open=true" >> "$GITHUB_OUTPUT"
+          elif [ "$(jq -r --arg w "$wave" '.[$w] == true' "$gate")" = true ]; then
+            echo "Windows app: Lab wave $wave is open in $gate: publishing the installer."
+            echo "open=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Lab release gate::Windows app: NOT publishing Send-to-Daylight-windows-setup.exe. Its Lab wave $wave waits for the iPhone and Mac builds of that wave ($gate has \"$wave\": false). The tests ran."
+            echo "open=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish Send-to-Daylight-windows-setup.exe to the release
+        if: steps.gate.outputs.open == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: bash .github/scripts/rx-publish.sh reader-experiment/windows/out/Send-to-Daylight-windows-setup.exe
+        run: bash .github/scripts/rx-publish.sh out/Send-to-Daylight-windows-setup.exe

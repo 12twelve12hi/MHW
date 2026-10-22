@@ -170,9 +170,16 @@ uses an installed Microsoft Edge, the engine of WebView2). Icons come from the e
 
 ### CI and the end-to-end test
 
-[`.github/workflows/rx-windows.yml`](../../.github/workflows/rx-windows.yml) runs on `windows-latest` for every push
-that touches this folder or `share/js/`: unit tests (node, and Rust's `args.rs` and `atomic.rs`), `tauri build`, then
-`test/e2e/windows.e2e.mjs` against the mock relay (`../share/js/mock-relay.mjs`), with `Receiver`s from
+[`.github/workflows/rx-windows.yml`](../../.github/workflows/rx-windows.yml) (the win lane's, LAB-PLAN 6.1: every job
+carries `# lane: win`) runs for every push that touches this folder, `share/js/` or the Lab release gate. Its jobs:
+
+- **app** (`windows-latest`): unit tests (node, and Rust's `args.rs` and `atomic.rs`), `tauri build`, then
+  `test/e2e/windows.e2e.mjs` against the mock relay;
+- **ui** (`windows-latest`, so with Windows' own fonts): `test/ui/` in Playwright's Chromium, the accessibility checks
+  and the Lab-off parity baselines (below); screenshots are kept as the `rx-windows-a11y-screenshots` artifact;
+- **publish** (after both): the Lab release gate, then the upload (below).
+
+The end-to-end test runs against the mock relay (`../share/js/mock-relay.mjs`), with `Receiver`s from
 `daylight-share.js` acting as the Daylight. Test mode is `--e2e-status <file>`: the app writes its state (pairing,
 outbox, view, the pairing question, the status line) to the file as it changes. The test hooks `--e2e-confirm`,
 `--e2e-cancel` (answer the pairing question), `--e2e-hotkey` (the hotkey's code path; pressing a global hotkey on a CI
@@ -241,6 +248,13 @@ UPDATE_LAB_OFF_BASELINE=1 node --test test/ui/lab-off-parity.test.mjs
 
 The workflow then uploads the installer to the `reader-experiment-latest` release; the bare `send-to-daylight.exe`
 and the test output (status file, screenshot) are kept as workflow artifacts.
+
+**Lab release gate** (LAB-PLAN 6.2): a Windows Lab build reaches the release only after the iPhone and Mac builds of
+the same wave. [`lab-wave.json`](lab-wave.json) names the Lab wave of the code in this folder (`null` until WIN0 sets
+`"w0"`; WIN1 sets `"w1"`). While [`../lab-release-gate.json`](../lab-release-gate.json) has that wave `false`, the
+publish job skips the upload and says so in the log (a "Lab release gate" notice); the tests run all the same. Flipping
+the gate starts the workflow again, which then publishes the held build. A unit test checks that `lab-wave.json` names
+no wave or one the gate knows, and that every job carries its lane.
 
 ## Not yet
 

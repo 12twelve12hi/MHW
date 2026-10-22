@@ -181,3 +181,25 @@ test('Comfort (F27, not Lab): its switch and footer in LAB_TEXT’s words; the c
   const fixed = [...css.matchAll(/font(?:-size)?:[^;]*\b\d+(?:\.\d+)?px/g)].map((m) => m[0]);
   assert.deepEqual(fixed, []);
 });
+
+test('lab-wave.json names no Lab wave, or one the release gate knows (LAB-PLAN 6.2)', () => {
+  const gate = JSON.parse(fs.readFileSync(path.join(root, '..', 'lab-release-gate.json'), 'utf8'));
+  const { wave } = JSON.parse(fs.readFileSync(path.join(root, 'lab-wave.json'), 'utf8'));
+  assert.ok(wave === null || typeof gate[wave] === 'boolean', `windows/lab-wave.json: unknown wave ${wave}`);
+  // The workflow's publish job reads both files before it uploads the installer.
+  const wf = fs.readFileSync(path.join(root, '..', '..', '.github', 'workflows', 'rx-windows.yml'), 'utf8');
+  assert.ok(wf.includes('reader-experiment/windows/lab-wave.json') && wf.includes('reader-experiment/lab-release-gate.json'));
+  const jobs = wf.slice(wf.search(/^jobs:$/m));
+  const names = [...jobs.matchAll(/^ {2}([a-z][\w-]*):$/gm)];
+  assert.deepEqual(names.map((m) => m[1]), ['app', 'ui', 'publish']);
+  for (const job of names) {
+    // The comment block right above the job names its lane.
+    const above = jobs.slice(0, job.index).trimEnd().split('\n');
+    const block = [];
+    while (above.length && /^ {2}#/.test(above.at(-1))) block.push(above.pop());
+    assert.ok(block.some((l) => /^ {2}# lane: win$/.test(l)), `job ${job[1]} carries "# lane: win" (LAB-PLAN 6.1)`);
+  }
+  // publish uploads only after both test jobs, and only when the gate lets the build through.
+  assert.match(jobs, /publish:\n[\s\S]*needs: \[app, ui\]/);
+  assert.match(jobs, /if: steps\.gate\.outputs\.open == 'true'\n[\s\S]*rx-publish\.sh/);
+});
