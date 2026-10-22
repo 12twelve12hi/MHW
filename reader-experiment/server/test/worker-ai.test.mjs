@@ -156,7 +156,8 @@ test('a timeout keeps the worst-case reservation as spent', async () => {
 test('two concurrent requests near the daily cap: exactly one runs', async () => {
   const cap = await setup();
   try {
-    assert.equal((await cap.api('PATCH', '/v1/settings', { json: { ai: { dailyUsd: 0.5 } } })).status, 200);
+    // Each reservation is about US$0.80 (a small input, 16,000 output tokens, a fallback): one fits under US$1.20.
+    assert.equal((await cap.api('PATCH', '/v1/settings', { json: { ai: { dailyUsd: 1.2 } } })).status, 200);
     cap.claude.next({ delayMs: 400 }).next({ delayMs: 400 });
     const [a, b] = await Promise.all([
       cap.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'first' } } }),
@@ -165,10 +166,26 @@ test('two concurrent requests near the daily cap: exactly one runs', async () =>
     const codes = [a, b].map((r) => r.json.error?.code ?? 'ok').sort();
     assert.deepEqual(codes, ['AI_DAILY_LIMIT', 'ok']);
     const limited = [a, b].find((r) => r.json.error).json.error;
-    assert.equal(limited.limit, 0.5);
+    assert.equal(limited.limit, 1.2);
+    assert.equal(limited.needUsd, undefined, 'it would fit on its own');
     assert.ok(limited.resetAt.endsWith('T00:00:00.000Z'));
     assert.match(limited.message, /resets at 00:00 UTC/);
     assert.equal(cap.claude.messageRequests().length, 1);
+  } finally { await cap.close(); }
+});
+
+test('a request whose worst case alone is over today’s cap says how much it needs, and Claude is never called', async () => {
+  const cap = await setup();
+  try {
+    assert.equal((await cap.api('PATCH', '/v1/settings', { json: { ai: { dailyUsd: 0.5 } } })).status, 200);
+    const r = await cap.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'short' } } });
+    assert.equal(r.json.error.code, 'AI_DAILY_LIMIT');
+    assert.equal(r.json.error.limit, 0.5);
+    assert.ok(r.json.error.needUsd >= 0.8 && r.json.error.needUsd <= 0.82, String(r.json.error.needUsd));
+    assert.match(r.json.error.message, /could cost up to US\$0\.8\d? with Claude, more than today’s AI limit\. Raise the limit in Lab settings \(up to US\$10\)/);
+    assert.equal(cap.claude.messageRequests().length, 0);
+    const [u] = await cap.rows("SELECT n, reserved_micros FROM usage WHERE kind = 'ai'");
+    assert.deepEqual(u, { n: 0, reserved_micros: 0 });
   } finally { await cap.close(); }
 });
 

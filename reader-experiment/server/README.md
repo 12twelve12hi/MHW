@@ -107,8 +107,9 @@ pairing). Apps find the server through an encrypted config frame on the server's
 
 Claude is called with the official `@anthropic-ai/sdk`: model `claude-opus-5-5`, `client.beta.messages.create` with
 `betas: ["server-side-fallback-2026-07-01"]` and `fallbacks: "default"`, an explicit `output_config.effort`, structured
-outputs for summaries, `max_tokens` 16000, no retries; `stop_reason` is checked before content and errors are mapped by
-the SDK's typed classes. The worst-case cost is reserved atomically in D1 before every call.
+outputs for summaries, `max_tokens` 16000, no sampling parameters, not streamed (the Free plan's CPU), no retries;
+`stop_reason` is checked before content and errors are mapped by the SDK's typed classes. The worst-case cost,
+including a fallback model's attempt, is reserved atomically in D1 before every call (DESIGN 9.3).
 
 ## Development
 

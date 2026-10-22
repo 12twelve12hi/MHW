@@ -178,6 +178,8 @@ test('every error code has a message; states and notices name what is missing', 
   assert.match(srv.errorMessage('NOT_CONFIGURED', { missing: ['DAYLIGHT_EMAIL_DOMAIN'] }), /DAYLIGHT_EMAIL_DOMAIN/);
   assert.match(srv.errorMessage('NOT_CONFIGURED', { missing: ['R2'] }), /R2/);
   assert.match(srv.errorMessage('AI_DAILY_LIMIT', { resetAt: '2026-10-21T00:00:00.000Z', ceilingUsd: 10 }), /00:00 UTC.*US\$10/);
+  assert.equal(srv.errorMessage('AI_DAILY_LIMIT', { resetAt: '2026-10-21T00:00:00.000Z', ceilingUsd: 10, limit: 3, needUsd: 3.07 }),
+    'This request could cost up to US$3.07 with Claude, more than today’s AI limit. Raise the limit in Lab settings (up to US$10).');
   assert.match(srv.errorMessage('AI_TOO_LARGE', { tokens: 250000, limit: 200000 }), /250,000.*200,000/);
   assert.match(srv.errorMessage('WHATEVER'), /Something went wrong on the Daylight server \(WHATEVER\)/);
   for (const s of ['needs-server', 'pairing-mismatch', 'server-outdated', 'app-outdated', 'OFFLINE']) assert.ok(srv.localMessage(s));

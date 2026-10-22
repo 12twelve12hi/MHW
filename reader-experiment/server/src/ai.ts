@@ -8,7 +8,7 @@ import type { Identity } from './keys.ts';
 import { ServerError, baseHeaders, json } from './errors.ts';
 import { readJson } from './auth.ts';
 import type { AiInput, DocSource, Length, Mode, Op } from './claude.ts';
-import { buildParams, costMicros, countParams, inputChars, makeClient, mapClaudeError, readResponse, reserveMicros } from './claude.ts';
+import { attemptMicros, buildParams, costMicros, countParams, inputChars, makeClient, mapClaudeError, readResponse, reserveMicros, writesCache } from './claude.ts';
 import type { ResolvedSource } from './sources.ts';
 import { checkFetchUrl, checkText, fetchUrlSource, loadSource, newPlaceholder, splicingFetch, storeTextSource } from './sources.ts';
 import { buildItem, storeManyStatements } from './outbox.ts';
@@ -184,7 +184,9 @@ export async function reserve(ctx: Ctx, s: Settings, micros: number, job?: JobWr
     ),
   ]);
   if ((res[res.length - 1]?.meta?.changes ?? 0) === 0) {
-    throw new ServerError(429, 'AI_DAILY_LIMIT', { limit: l.dailyUsd, resetAt: iso(nextUtcMidnight(ctx.now)), ceilingUsd: l.ceilingUsd });
+    // A request whose worst case alone is over today's cap says so (needUsd), instead of "used up".
+    const needUsd = micros > max ? Math.ceil(micros / 1e4) / 100 : undefined;
+    throw new ServerError(429, 'AI_DAILY_LIMIT', { limit: l.dailyUsd, resetAt: iso(nextUtcMidnight(ctx.now)), ceilingUsd: l.ceilingUsd, ...(needUsd ? { needUsd } : {}) });
   }
   return { day, micros };
 }
@@ -247,9 +249,9 @@ export async function runClaude(ctx: Ctx, s: Settings, input: AiInput, src: Reso
   if (!reservation) {
     const tokens = await inputTokens(ctx, client, params, src);
     if (tokens > ctx.limits.aiInputTokens) {
-      throw new ServerError(413, 'AI_TOO_LARGE', { tokens, limit: ctx.limits.aiInputTokens, estimateUsd: Math.round(reserveMicros(tokens) / 1e4) / 100 });
+      throw new ServerError(413, 'AI_TOO_LARGE', { tokens, limit: ctx.limits.aiInputTokens, estimateUsd: Math.round(attemptMicros(tokens) / 1e4) / 100 });
     }
-    reservation = await reserve(ctx, s, reserveMicros(tokens), jobId ? { kind: 'update', id: jobId } : undefined);
+    reservation = await reserve(ctx, s, reserveMicros(tokens, { cached: writesCache(params) }), jobId ? { kind: 'update', id: jobId } : undefined);
   }
   // A job's own record of the reservation is cleared together with the settlement, so a job retried after the run
   // was cut short can never reuse a reservation that is already settled (9.3).
@@ -393,10 +395,10 @@ export async function aiJobCreate(ctx: Ctx, id: Identity, s: Settings, req: Requ
   const params = buildParams(r.input, doc);
   const tokens = await inputTokens(ctx, clientFor(ctx, src, placeholder), params, src);
   if (tokens > ctx.limits.aiInputTokens) {
-    throw new ServerError(413, 'AI_TOO_LARGE', { tokens, limit: ctx.limits.aiInputTokens, estimateUsd: Math.round(reserveMicros(tokens) / 1e4) / 100 });
+    throw new ServerError(413, 'AI_TOO_LARGE', { tokens, limit: ctx.limits.aiInputTokens, estimateUsd: Math.round(attemptMicros(tokens) / 1e4) / 100 });
   }
   const jobId = randomHex(16);
-  await reserve(ctx, s, reserveMicros(tokens), { kind: 'insert', id: jobId, op: r.input.op, input, expires: ctx.now + ctx.limits.jobTtl });
+  await reserve(ctx, s, reserveMicros(tokens, { cached: writesCache(params) }), { kind: 'insert', id: jobId, op: r.input.op, input, expires: ctx.now + ctx.limits.jobTtl });
   return json(ctx.rid, 202, { job: { id: jobId, state: 'queued', created: iso(ctx.now) } });
 }
 

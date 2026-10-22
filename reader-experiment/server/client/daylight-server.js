@@ -70,7 +70,9 @@ const fmtTime = (iso) => {
 export const ERROR_MESSAGES = {
   AI_KEY_INVALID: () => 'Claude didn’t accept the API key. Check ANTHROPIC_API_KEY in GitHub › Settings › Secrets, then re-run the deploy.',
   AI_BILLING: () => 'Your Anthropic account is out of credit. Add credit in the Claude Console to keep using AI.',
-  AI_DAILY_LIMIT: (x) => `Today’s AI limit is used up. It resets at ${fmtTime(x.resetAt)}, or raise it in Lab settings (up to ${fmtUsd(x.ceilingUsd ?? 10)}).`,
+  AI_DAILY_LIMIT: (x) => (Number(x.needUsd) > 0
+    ? `This request could cost up to ${fmtUsd(x.needUsd)} with Claude, more than today’s AI limit. Raise the limit in Lab settings (up to ${fmtUsd(x.ceilingUsd ?? 10)}).`
+    : `Today’s AI limit is used up. It resets at ${fmtTime(x.resetAt)}, or raise it in Lab settings (up to ${fmtUsd(x.ceilingUsd ?? 10)}).`),
   AI_TOO_LARGE: (x) => `This is too long for one AI request (about ${Number(x.tokens ?? 0).toLocaleString('en-US')} tokens; the limit is ${Number(x.limit ?? 200000).toLocaleString('en-US')}).`,
   AI_QUEUE_FULL: () => 'Too many AI requests are waiting. Try again in a few minutes.',
   AI_REFUSED: () => 'Claude declined to work on this one.',
@@ -195,13 +197,13 @@ export function noticeText(feature, { delivery = 'lab' } = {}) {
 }
 
 export class ServerError extends Error {
-  /** code: the server's error code (or OFFLINE); extra: status, message, feature, missing, retryAfter, limit, resetAt, missingParts, tokens, estimateUsd. */
+  /** code: the server's error code (or OFFLINE); extra: status, message, feature, missing, retryAfter, limit, resetAt, missingParts, tokens, estimateUsd, needUsd. */
   constructor(code, extra = {}) {
     super(extra.message || errorMessage(code, extra));
     this.name = 'ServerError';
     this.code = code;
     this.status = extra.status ?? 0;
-    for (const k of ['feature', 'missing', 'retryAfter', 'limit', 'resetAt', 'missingParts', 'tokens', 'estimateUsd']) {
+    for (const k of ['feature', 'missing', 'retryAfter', 'limit', 'resetAt', 'missingParts', 'tokens', 'estimateUsd', 'needUsd']) {
       if (extra[k] !== undefined) this[k] = extra[k];
     }
   }

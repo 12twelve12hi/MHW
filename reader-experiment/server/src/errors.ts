@@ -12,6 +12,7 @@ export interface ErrorExtra {
   resetAt?: string;
   missingParts?: number[];
   ceilingUsd?: number;
+  needUsd?: number;
   message?: string;
 }
 
