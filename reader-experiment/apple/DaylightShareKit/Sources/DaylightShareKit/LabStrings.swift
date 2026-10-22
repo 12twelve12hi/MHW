@@ -269,6 +269,7 @@ enum LabStrings {
         "arrivals.channelQuiet": "Arrivals",
         "arrivals.channelAlert": "Arrivals (alert)",
         "arrivals.quietHours": "Quiet hours",
+        "arrivals.quietHoursFooter": "From 22:00 to 07:00, arrivals don’t make a sound.",
         "arrivals.addToReader": "Add to Reader",
         "arrivals.keepForLater": "Keep for later",
         "arrivals.keptForLater": "Kept for later",
@@ -278,6 +279,7 @@ enum LabStrings {
         "arrivals.savedGroup": "{n} saved from {from}",
         "arrivals.yourDevices": "your devices",
         "arrivals.excerptsGroup": "{n} excerpts from {from}",
+        "arrivals.excerptOne": "New excerpt from {from}",
         "arrivals.healthOn": "Last checked {rel} · Instant delivery on",
         "arrivals.healthOff": "Last checked {rel} · Instant delivery off",
         "arrivals.stopped": "Instant delivery stopped. Turn it back on to get items within seconds.",
@@ -320,6 +322,8 @@ enum LabStrings {
         "setup.steps.shareItem": "In the share sheet, scroll the row of apps to More, tap Edit, and add Daylight.",
         "setup.steps.safariExtension": "Open Settings › Apps › Safari › Extensions and turn on Send to Daylight.",
         "setup.steps.shareMenu": "Open System Settings › General › Login Items & Extensions › Sharing and turn on Daylight.",
+        "setup.steps.toolbarButton": "Click the puzzle piece in Chrome’s toolbar, then the pin next to Send to Daylight.",
+        "setup.steps.readerReadLater": "The Reader turned down the last pages it was handed. Open the Reader’s settings, allow pages from other apps, then tap Test the Reader hand-off.",
         "testArticle.title": "Test article from {device}",
         "testArticle.heading": "A test article from Send to Daylight",
         "testArticle.p1": "This short article was sent by Setup check in Send to Daylight. If you are reading it on your Daylight, the whole path works: your device sealed it, the relay carried it, Daylight Share on your Daylight opened it, and the Reader saved it to your library. Nothing in it needs the network, so it reads the same with Wi-Fi off.",
@@ -355,6 +359,11 @@ enum LabStrings {
         "contextMenu.image": "Send this image’s page to Daylight",
         "contextMenu.pdf": "Send PDF link to Daylight",
         "contextMenu.showInMenu": "Show in the right-click menu",
+        "handover.letReceive": "Let Daylight Reader (lab) receive",
+        "handover.armed": "Open Daylight Reader (lab) › Settings › Labs › Send to Daylight and choose Take over.",
+        "handover.receivingElsewhere": "Daylight Reader (lab) receives for this Daylight now.",
+        "handover.receiveHereAgain": "Receive here again",
+        "handover.unreachable": "Can’t reach Daylight Reader (lab) right now.",
     ]
 
     /// Every LAB_TEXT array as a list, by its dotted id. Read lists here: an item may hold a comma.
