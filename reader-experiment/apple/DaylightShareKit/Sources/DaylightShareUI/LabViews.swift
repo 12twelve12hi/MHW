@@ -447,8 +447,9 @@ public struct WhatsInLabView: View {
                 Text(LabText.serverHeading).dlsSecondary().listRowText(LabText.serverHeading)
             }
             if let footer {
+                // Callout, not footnote: the Mac's 10 pt footnote fails the contrast audit as a paragraph of its own.
                 Section {
-                    Text(footer).dlsFont(.footnote).dlsSecondary().listRowText(footer)
+                    Text(footer).dlsFont(.callout).dlsSecondary().listRowText(footer)
                 }
             }
         }
@@ -785,7 +786,11 @@ public struct ServerSettingsView: View {
             .accessibilityLabel(label)
             .accessibilityIdentifier(id)
         #else
-        TextField(placeholder, text: text)
+        // A Mac form shows a text field's title as a label beside it and leaves the field itself empty and borderless:
+        // here the placeholder goes inside a field with a border, and the title only names it for VoiceOver.
+        TextField(label, text: text, prompt: Text(placeholder))
+            .labelsHidden()
+            .textFieldStyle(.roundedBorder)
             .autocorrectionDisabled()
             .onSubmit(submit)
             .accessibilityLabel(label)
