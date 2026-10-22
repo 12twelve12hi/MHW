@@ -38,15 +38,21 @@ export const NORMALISE_CASES = [
   ['A headline over 40 words + link stays a link', { text: `${LONG_HEADLINE} https://www.example.com/live/storm` }],
   ['Three sentences + link stay a link', { text: 'Big news today. The library is open late. Bring a friend! https://example.org/library' }],
   ['A dash-separated headline', { text: 'Readers Are Back — and They Want Paper - The Verge https://www.theverge.com/2026/10/20/readers' }],
-  // Explicit selections (F11 rules 1-3)
+  // Text fragments (#:~:text=) do not make an excerpt under 6.5 Q1 (b): Google adds them to result links
+  ['Chrome on Android, a page opened from a Google result: "Title\\nURL#:~:text=" stays a link with its title', { text: 'How to bake bread - BBC Food\nhttps://www.bbc.co.uk/food/bread#:~:text=Knead%20the%20dough' }],
+  ['A URL with a text fragment alone stays a link (copied link, URL scheme, intents)', { text: 'https://example.com/article#:~:text=The%20quick%20brown,lazy%20dog' }],
+  ['A URL with a text fragment and a subject: the subject is the title', { url: 'https://example.com/a#:~:text=hello', subject: 'My title' }],
+  ['Chrome on Android shares a selection ("quote"\\nURL#:~:text=) without "Send as excerpt": a link', { text: '"Lorem ipsum dolor sit amet, consectetur adipiscing elit."\nhttps://example.com/article#:~:text=Lorem%20ipsum%20dolor%20sit' }],
+  ['A text fragment and tracking: tracking goes, the fragment stays', { text: 'https://example.com/article?utm_source=share#:~:text=keep%20this' }],
+  // Explicit selections (F11 rule 1) and text with no URL (rule 3)
   ['Rule 1: a selection with its page', { text: 'The quick brown fox jumps over the lazy dog.', url: 'https://example.com/fox', subject: 'Fox facts', source: 'selection' }],
   ['Rule 1: a selection without a URL is a note', { text: 'Remember to pack the charger.', source: 'selection' }],
   ['Rule 1: a selection with no text is a link', { text: '  ', url: 'https://example.com/fox', subject: 'Fox facts', source: 'selection' }],
-  ['Rule 2: Chrome on Android shares a selection with a text fragment', { text: '"Lorem ipsum dolor sit amet, consectetur adipiscing elit."\nhttps://example.com/article#:~:text=Lorem%20ipsum%20dolor%20sit' }],
-  ['Rule 2: curly quotes around the selection', { text: '“A passage worth keeping.” https://example.com/article#:~:text=A%20passage%20worth' }],
-  ['Rule 2: only the URL: the fragment’s text', { text: 'https://example.com/article#:~:text=The%20quick%20brown,lazy%20dog' }],
-  ['Rule 2: prefix and suffix are left out', { url: 'https://example.com/article#:~:text=see-,the%20quiet%20year,-ends' }],
-  ['Rule 2: tracking is still removed, the fragment kept', { text: 'https://example.com/article?utm_source=share#:~:text=keep%20this' }],
+  ['Rule 1: "Send as excerpt" on Chrome’s shared selection: the quote without its quotes', { text: '"Lorem ipsum dolor sit amet, consectetur adipiscing elit."\nhttps://example.com/article#:~:text=Lorem%20ipsum%20dolor%20sit', source: 'selection' }],
+  ['Rule 1: curly quotes around a selection with a text fragment', { text: '“A passage worth keeping.” https://example.com/article#:~:text=A%20passage%20worth', subject: 'Article', source: 'selection' }],
+  ['Rule 1: quotes stay when the URL has no text fragment', { text: '“To be, or not to be.”', url: 'https://example.com/hamlet', source: 'selection' }],
+  ['Rule 1: "Send as excerpt" on a text-fragment URL alone: the fragment’s text', { text: 'https://example.com/article#:~:text=The%20quick%20brown,lazy%20dog', source: 'selection' }],
+  ['Rule 1: the fragment’s prefix and suffix are left out', { url: 'https://example.com/article#:~:text=see-,the%20quiet%20year,-ends', source: 'selection' }],
   ['Rule 3: text without a URL is a note', { text: 'Ideas for the weekend:\n- walk\n- read\n' }],
   ['Nothing to send', { text: '' }],
   ['Only whitespace', { text: ' \n\t ' }],
@@ -221,25 +227,28 @@ export const FILE_NAME_CASES = [
 ];
 
 export const CLASSIFY_CASES = [
-  // The four excerpt rules of F11 (rule 4 is off under 6.5 Q1 = b)
-  ['rule 1: context menu selection', { text: 'A passage the user selected.', url: 'https://example.com/a', title: 'Page', source: 'selection' }],
-  ['rule 1: Safari selectionText', { text: '  Selected in Safari.  ', url: 'https://example.com/b', title: 'B', source: 'selection' }],
-  ['rule 1: "Send as excerpt" on a headline + link', { text: 'Opinion | The Real Reason Inflation Is Still Too High, According to Economists https://nyti.ms/3XyZabc', source: 'selection' }],
-  ['rule 1: a selection without a URL: a note', { text: 'No link here.', source: 'selection' }],
-  ['rule 2: a text fragment with the quote', { text: '"Quoted words here."\nhttps://example.com/p#:~:text=Quoted%20words%20here' }],
-  ['rule 2: a text fragment alone', { url: 'https://example.com/p#:~:text=start%20words,end%20words' }],
-  ['rule 3: no URL: a note', { text: 'Plain text from Notes.' }],
-  ['rule 4 is off: 40+ words + link is a link', { text: `${LONG_TWEET} https://x.com/a/status/1` }],
-  ['rule 4 is off: three sentences + link is a link', { text: 'One. Two. Three. https://example.com/three' }],
+  // F11's rules under 6.5 Q1 = (b): rule 1 (an explicit selection) and rule 3 (no URL); rules 2 and 4 are off
+  ['rule 1: context menu selection', { text: 'A passage the user selected.', url: 'https://example.com/a', title: 'Page', source: 'selection' }, 'excerpt'],
+  ['rule 1: Safari selectionText', { text: '  Selected in Safari.  ', url: 'https://example.com/b', title: 'B', source: 'selection' }, 'excerpt'],
+  ['rule 1: "Send as excerpt" on a headline + link', { text: 'Opinion | The Real Reason Inflation Is Still Too High, According to Economists https://nyti.ms/3XyZabc', source: 'selection' }, 'excerpt'],
+  ['rule 1: a selection without a URL: a note', { text: 'No link here.', source: 'selection' }, 'note'],
+  ['rule 1: "Send as excerpt" on Chrome’s shared selection', { text: '"Quoted words here."\nhttps://example.com/p#:~:text=Quoted%20words%20here', source: 'selection' }, 'excerpt'],
+  ['rule 1: "Send as excerpt" on a text fragment alone', { url: 'https://example.com/p#:~:text=start%20words,end%20words', source: 'selection' }, 'excerpt'],
+  ['rule 3: no URL: a note', { text: 'Plain text from Notes.' }, 'note'],
+  ['rule 2 is off: Chrome’s shared selection without "Send as excerpt" is a link', { text: '"Quoted words here."\nhttps://example.com/p#:~:text=Quoted%20words%20here' }, 'link'],
+  ['rule 2 is off: a text fragment alone is a link', { url: 'https://example.com/p#:~:text=start%20words,end%20words' }, 'link'],
+  ['rule 2 is off: a Google result’s fragment on "Title\\nURL" is a link', { text: 'How to bake bread - BBC Food\nhttps://www.bbc.co.uk/food/bread#:~:text=Knead%20the%20dough', title: 'How to bake bread - BBC Food' }, 'link'],
+  ['rule 4 is off: 40+ words + link is a link', { text: `${LONG_TWEET} https://x.com/a/status/1` }, 'link'],
+  ['rule 4 is off: three sentences + link is a link', { text: 'One. Two. Three. https://example.com/three' }, 'link'],
   // Headline + link shares stay links
-  ['NYT headline + link', { text: 'Opinion | The Real Reason Inflation Is Still Too High, According to Economists https://nyti.ms/3XyZabc' }],
-  ['Guardian headline + link', { text: 'Climate crisis: world on track for 2.7C of heating, UN says | Climate crisis | The Guardian https://www.theguardian.com/environment/2026/oct/20/climate-un-report' }],
-  ['Apple News headline + link', { text: 'Why the Fed Can’t Stop Worrying — The Atlantic https://apple.news/AJkLmNoPqRsTuVwXyZ' }],
-  ['Substack share', { text: 'Read “The Quiet Year” by Jane Doe on Substack: https://open.substack.com/pub/janedoe/p/the-quiet-year' }],
-  ['X post + link', { text: 'Thread on e-paper. https://x.com/someone/status/1849123456789012345' }],
-  ['Chrome on Android Title\\nURL', { text: 'Why Paper Still Wins for Reading\nhttps://www.example.com/news/paper-wins-123' }],
-  ['a URL alone', { url: 'https://example.com/only' }],
-  ['nothing', { text: '' }],
+  ['NYT headline + link', { text: 'Opinion | The Real Reason Inflation Is Still Too High, According to Economists https://nyti.ms/3XyZabc' }, 'link'],
+  ['Guardian headline + link', { text: 'Climate crisis: world on track for 2.7C of heating, UN says | Climate crisis | The Guardian https://www.theguardian.com/environment/2026/oct/20/climate-un-report' }, 'link'],
+  ['Apple News headline + link', { text: 'Why the Fed Can’t Stop Worrying — The Atlantic https://apple.news/AJkLmNoPqRsTuVwXyZ' }, 'link'],
+  ['Substack share', { text: 'Read “The Quiet Year” by Jane Doe on Substack: https://open.substack.com/pub/janedoe/p/the-quiet-year' }, 'link'],
+  ['X post + link', { text: 'Thread on e-paper. https://x.com/someone/status/1849123456789012345' }, 'link'],
+  ['Chrome on Android Title\\nURL', { text: 'Why Paper Still Wins for Reading\nhttps://www.example.com/news/paper-wins-123' }, 'link'],
+  ['a URL alone', { url: 'https://example.com/only' }, 'link'],
+  ['nothing', { text: '' }, 'none'],
 ];
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -256,6 +265,7 @@ export const REDACT_CASES = [
   'state=server-outdated needs-server error SERVER problem',
   'www.example.com/path and http://localhost:8787/x and chrome-extension://abcdef/popup.html',
   'quotes "https://example.com/a" and <https://example.com/b>',
+  'scheme runs: .https://a.example/x 1://b x_y://c git+ssh://d AAAA-AAAA-https://e and ://f; no scheme: a-b-c: 1.2.3',
   '',
 ];
 
@@ -278,12 +288,17 @@ export async function buildW1() {
   const normaliseCases = NORMALISE_CASES.map(([name, input]) => ({ name, input, expect: lab.normaliseShare(input) }));
   const byName = (n) => normaliseCases.find((c) => c.name === n).expect;
   // Pins from the plan (F11.5, F16.1, F16.3, 2.3)
-  for (const c of normaliseCases.slice(0, 16)) assert.equal(c.expect.kind, 'link', c.name);
+  const firstSelection = normaliseCases.findIndex((c) => c.name.startsWith('Rule 1'));
+  assert.ok(firstSelection >= 21);
+  for (const c of normaliseCases.slice(0, firstSelection)) assert.equal(c.expect.kind, 'link', `F11.5, F16.1, 6.5 Q1 (b): ${c.name}`);
   assert.equal(byName('NYT app: "Opinion | headline" + short link').title, 'Opinion | The Real Reason Inflation Is Still Too High, According to Economists');
   assert.equal(byName('Chrome on Android: "Title\\nURL"').title, 'Why Paper Still Wins for Reading');
   assert.equal(byName('Substack app: "Read “…” by … on Substack:" + open.substack.com').url, 'https://janedoe.substack.com/p/the-quiet-year');
-  assert.equal(byName('Rule 2: Chrome on Android shares a selection with a text fragment').kind, 'excerpt');
-  assert.equal(byName('Rule 2: only the URL: the fragment’s text').excerpt, 'The quick brown … lazy dog');
+  assert.equal(byName('Chrome on Android, a page opened from a Google result: "Title\\nURL#:~:text=" stays a link with its title').title, 'How to bake bread - BBC Food');
+  assert.equal(byName('A URL with a text fragment and a subject: the subject is the title').title, 'My title');
+  assert.equal(byName('Rule 1: "Send as excerpt" on Chrome’s shared selection: the quote without its quotes').excerpt, 'Lorem ipsum dolor sit amet, consectetur adipiscing elit.');
+  assert.equal(byName('Rule 1: "Send as excerpt" on a text-fragment URL alone: the fragment’s text').excerpt, 'The quick brown … lazy dog');
+  assert.equal(byName('Rule 1: quotes stay when the URL has no text fragment').excerpt, '“To be, or not to be.”');
   assert.equal(byName('Names compare exactly: UTM_source stays (byte-identical)').url, 'https://example.com/p?UTM_source=x&Fbclid=y');
   assert.equal(byName('Names compare exactly: UTM_source stays (byte-identical)').orig, null);
   assert.equal(byName('Only tracking: the ? goes').url, 'https://example.com/p');
@@ -319,7 +334,7 @@ export async function buildW1() {
     generatedBy: 'reader-experiment/share/vectors/generate-lab.mjs',
     notes: [
       'Deterministic: CI regenerates this file and requires no diff.',
-      'cases: normaliseShare(input) must equal expect exactly. input: {text?, url?, subject?, source?} (absent = ""). expect: {kind ("link", "excerpt", "note" or "none"), url (cleaned, or null), title (links only, or null), excerpt (excerpts and notes, or null), orig (the URL as shared when the cleaned one differs and it is at most 1,024 characters, or null)}. Under LAB-PLAN 6.5 Q1 = (b), text is an excerpt only for an explicit selection (source "selection") or a text-fragment URL; a note has no URL; every headline + link share is a link.',
+      'cases: normaliseShare(input) must equal expect exactly. input: {text?, url?, subject?, source?} (absent = ""). expect: {kind ("link", "excerpt", "note" or "none"), url (cleaned, or null), title (links only, or null), excerpt (excerpts and notes, or null), orig (the URL as shared when the cleaned one differs and it is at most 1,024 characters, or null)}. Under LAB-PLAN 6.5 Q1 = (b), text is an excerpt only for an explicit selection (source "selection"; with a text-fragment URL one pair of quotes is removed, and with no text the fragment\'s own text is used); a note has no URL; every other share is a link, a text-fragment URL included, and a headline + link share keeps the headline (or the subject) as its title.',
       'xOrigFrames: build an item (id X, sent 2026-10-20T08:00:00.000Z; contentHex bytes or contentText UTF-8 for pages and files, no compression) with the Lab extras requested; part 0 must carry exactly expect.fields (its x- header fields), and be small (base64 at most 3,800 characters) when expect.small. x-orig is left out over 1,024 characters, when it fails the web URL rule, and when it alone would turn a small frame into a large one; an unknown x-cap is left out.',
       'appleNews: extractAppleNewsTarget(html) must equal expect (a URL or null).',
     ],
@@ -349,8 +364,9 @@ export async function buildW1() {
   assert.equal(dates[0].expect, '22 October 2026');
   const fileNames = FILE_NAME_CASES.map(([name, text, note]) => ({ name, text, note, expect: lab.excerptFileName(text, { note }) }));
   const classify = CLASSIFY_CASES.map(([name, input]) => ({ name, input, expect: lab.classifyShare(input) }));
-  for (const c of classify.slice(0, 7)) assert.notEqual(c.expect.kind, 'link', c.name);
-  for (const c of classify.slice(7, 16)) assert.equal(c.expect.kind, 'link', `F11.5: ${c.name}`);
+  for (const [i, [name, , kind]] of CLASSIFY_CASES.entries()) assert.equal(classify[i].expect.kind, kind, `F11.5, 6.5 Q1 (b): ${name}`);
+  assert.equal(classify[4].expect.text, 'Quoted words here.');
+  assert.equal(classify[5].expect.text, 'start words … end words');
   // The 50,000-character limit (F11.3), pinned by length, hash and ending
   const big = (s) => ({ length: s.length, sha256: sha(s), tail: s.slice(-160) });
   const bigItem = lab.excerptItem({ text: BIG, url: 'https://example.com/big', pageTitle: 'Big', date: DATE });

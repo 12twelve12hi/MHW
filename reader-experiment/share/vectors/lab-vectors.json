@@ -5575,6 +5575,7 @@
       "badge.delivered": "✓",
       "badge.error": "!",
       "badge.waiting": "⌛",
+      "readerToast": "In your Reader: {title}",
       "bigFiles": "Send files over 9 MB ›",
       "linkOnly.iphone": "Only the link came through. If this needs your login, open it in Safari and share from there.",
       "linkOnly.android": "Only the link came through. For pages behind a login, send from your computer’s browser with the Send to Daylight extension.",
@@ -7699,9 +7700,10 @@
         }
       },
       {
-        "name": "rule 2: a text fragment with the quote",
+        "name": "rule 1: \"Send as excerpt\" on Chrome’s shared selection",
         "input": {
-          "text": "\"Quoted words here.\"\nhttps://example.com/p#:~:text=Quoted%20words%20here"
+          "text": "\"Quoted words here.\"\nhttps://example.com/p#:~:text=Quoted%20words%20here",
+          "source": "selection"
         },
         "expect": {
           "kind": "excerpt",
@@ -7710,9 +7712,10 @@
         }
       },
       {
-        "name": "rule 2: a text fragment alone",
+        "name": "rule 1: \"Send as excerpt\" on a text fragment alone",
         "input": {
-          "url": "https://example.com/p#:~:text=start%20words,end%20words"
+          "url": "https://example.com/p#:~:text=start%20words,end%20words",
+          "source": "selection"
         },
         "expect": {
           "kind": "excerpt",
@@ -7729,6 +7732,40 @@
           "kind": "note",
           "url": null,
           "text": "Plain text from Notes."
+        }
+      },
+      {
+        "name": "rule 2 is off: Chrome’s shared selection without \"Send as excerpt\" is a link",
+        "input": {
+          "text": "\"Quoted words here.\"\nhttps://example.com/p#:~:text=Quoted%20words%20here"
+        },
+        "expect": {
+          "kind": "link",
+          "url": "https://example.com/p#:~:text=Quoted%20words%20here",
+          "text": "\"Quoted words here.\""
+        }
+      },
+      {
+        "name": "rule 2 is off: a text fragment alone is a link",
+        "input": {
+          "url": "https://example.com/p#:~:text=start%20words,end%20words"
+        },
+        "expect": {
+          "kind": "link",
+          "url": "https://example.com/p#:~:text=start%20words,end%20words",
+          "text": ""
+        }
+      },
+      {
+        "name": "rule 2 is off: a Google result’s fragment on \"Title\\nURL\" is a link",
+        "input": {
+          "text": "How to bake bread - BBC Food\nhttps://www.bbc.co.uk/food/bread#:~:text=Knead%20the%20dough",
+          "title": "How to bake bread - BBC Food"
+        },
+        "expect": {
+          "kind": "link",
+          "url": "https://www.bbc.co.uk/food/bread#:~:text=Knead%20the%20dough",
+          "text": "How to bake bread - BBC Food"
         }
       },
       {
@@ -7910,6 +7947,10 @@
       {
         "text": "quotes \"https://example.com/a\" and <https://example.com/b>",
         "expect": "quotes \"[url]\" and <[url]>"
+      },
+      {
+        "text": "scheme runs: .https://a.example/x 1://b x_y://c git+ssh://d AAAA-AAAA-https://e and ://f; no scheme: a-b-c: 1.2.3",
+        "expect": "scheme runs: [url] [url] x_[url] [url] [url] and [url] no scheme: a-b-c: 1.2.3"
       },
       {
         "text": "",

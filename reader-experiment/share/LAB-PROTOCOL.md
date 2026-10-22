@@ -618,14 +618,17 @@ invalid UTF-8 counts as a failure.*
    web URL rule unchanged is the URL.
 2. **Link or excerpt** (`classifyShare`). The URL is `url` when it passes the web URL rule, else the one found in
    `text`; `rest` is `text` without the found URL's characters, trimmed. Then, in order: `source` is `selection` →
-   `excerpt` of `rest` (`note` without a URL; `link` when `rest` is empty, `none` when there is no URL either); the URL's
-   fragment holds `:~:text=` → `excerpt` of `rest` without one pair of surrounding quotes (`"…"`, `“…”`, `'…'`, `‘…’`,
-   `«…»`, `„…“`), or, when that is empty, of the fragment's text (`textFragmentText`: the first `text=` directive after
-   `:~:`, split on `,`, a first part ending in `-` and a last part starting with `-` dropped when more than one part
-   is left, each part percent-decoded (kept as it is when that fails) and trimmed, empty parts dropped, joined with
-   ` … `); no URL → `note`
-   of `rest` (`none` when empty); otherwise `link`. **There is no word-count rule**: plan rule 4 (40 words or 3
-   sentences) is off under 6.5 Q1 = (b), so every headline + link share is a link.
+   `excerpt` of `rest` (`note` without a URL; `link` when nothing is left, `none` when there is no URL either), where,
+   when the URL's fragment holds `:~:text=` (Chrome on Android shares a selection as `"…"` + line feed + URL with a
+   text fragment), `rest` first loses one pair of surrounding quotes (`"…"`, `“…”`, `'…'`, `‘…’`, `«…»`, `„…“`) and,
+   when that leaves nothing, is the fragment's text (`textFragmentText`: the first `text=` directive after `:~:`,
+   split on `,`, a first part ending in `-` and a last part starting with `-` dropped when more than one part is left,
+   each part percent-decoded (kept as it is when that fails) and trimmed, empty parts dropped, joined with ` … `); no
+   URL → `note` of `rest` (`none` when empty); otherwise `link`. Under 6.5 Q1 = (b) only an explicit selection makes
+   an excerpt: **a text fragment alone does not** (Google adds them to result links, so "Title" + line feed +
+   URL`#:~:text=…` is an ordinary headline + link share, and keeps its title), and **there is no word-count rule**
+   (plan rule 4, 40 words or 3 sentences, is off), so every headline + link share is a link. (*Changed Oct 22 after
+   review: an earlier draft of this section made any text-fragment URL an excerpt.*)
 3. **Cleaning** (`cleanShareUrl`), for every kind with a URL: up to 5 unwrap steps, each result kept only when it
    passes the web URL rule (and differs), then tracking removal. Host comparisons are on the lowercased host
    (`authority` after the last `@`, without the port); "host is D" means equal to D or ending in `.D`.
@@ -693,10 +696,13 @@ requested extras on the row (`row.extras`, only when there are any), so every re
      end);
   2. for each name of `EXCERPT_DROP` in order, remove (ignoring case) each `<name` followed by whitespace, `/` or `>`,
      up to the next `>`, and everything after it to the first `</name` + optional whitespace + `>`, or to the end (an
-     opening tag with no `>` after it stays, and becomes text in step 3);
-  3. tags are `<`, an optional `/`, a name (`[A-Za-z][A-Za-z0-9-]*`), then any run of characters other than `<`, `>`,
-     `"` and `'`, or of whole `"…"` / `'…'` strings with no `<` in them, then `>` (so scanning a tag never passes a
-     `<`, and stays linear). Between tags is text: each character is copied and counted,
+     opening tag with no `>` after it stays, and becomes text in step 3). Scan once, left to right (the reference's
+     `dropElement`): once an opening tag has no `>` after it, no later one can, so the pass ends there; a backtracking
+     regular expression for this step is quadratic on `<script ` repeated;
+  3. tags are `<`, an optional `/`, a name (`[A-Za-z][A-Za-z0-9-]*`, as long as possible: no name character follows
+     it), then any run of characters other than `<`, `>`, `"` and `'`, or of whole `"…"` / `'…'` strings with no `<`
+     in them, then `>` (so scanning a tag never passes a `<`, and a name is not tried again at shorter lengths: it
+     stays linear). Between tags is text: each character is copied and counted,
      except `&` (a character reference `&name;`, `&#digits;` or `&#xhex;` of at most 32, 7 and 6 characters is copied
      and counts as one; any other `&` becomes `&amp;`), `<` (`&lt;`) and `>` (`&gt;`). When `maxChars` characters have
      been copied and any text remains, the rest of the input is dropped and `trimmed` is true;
@@ -723,8 +729,10 @@ requested extras on the row (`row.extras`, only when there are any), so every re
   p1 to p6 in order + `</article></body></html>` (text-escaped; no spaces between the tags; one string).
 - `redactDiagnostics(text)`, in this order: `daylightserver://` and what follows up to whitespace, `"`, `'`, `<` or
   `>` (any case) → `[server code]`; `SERVER-` (case-sensitive, at a word boundary) and the following run of
-  `A-Z a-z 0-9 -` → `[server code]`; a scheme (`[A-Za-z][A-Za-z0-9+.-]*` at a word boundary) + `://` + what follows up
-  to whitespace, `"`, `'`, `<` or `>` → `[url]`; `www.` (any case, at a word boundary) + at least one character up to
+  `A-Z a-z 0-9 -` → `[server code]`; a scheme (the whole run of `A-Z a-z 0-9 + . -` before `://`: no such character
+  before it, and it may be empty: `(?<![A-Za-z0-9+.-])[A-Za-z0-9+.-]*`) + `://` + what follows up to whitespace,
+  `"`, `'`, `<` or `>` → `[url]` (*changed Oct 22 after review: a scheme starting at every word boundary was quadratic
+  on `AAAA-` repeated; the run redacts at least as much*); `www.` (any case, at a word boundary) + at least one character up to
   the same stops → `[url]`; `dls-` + 32 hex (any case, word boundaries) → `[topic]`; 4 base32 characters followed by
   six groups of an optional `-` and 4 more (any case, word boundaries) → `[code]`.
 - `activityEvent({time, type, id, kind, status, http})` keeps only `{time, type, id8 (the id's first 8 characters),

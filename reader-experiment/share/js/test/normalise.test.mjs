@@ -130,6 +130,25 @@ test('normaliseShare: a headline is always a title, however long; excerpts need 
   assert.equal(s.excerpt, long);
 });
 
+test('normaliseShare: a text fragment alone never makes an excerpt; the title or subject stays (6.5 Q1 b)', () => {
+  // Chrome on Android sharing a page opened from a Google result (Google adds the fragment)
+  const g = lab.normaliseShare({ text: 'How to bake bread - BBC Food\nhttps://www.bbc.co.uk/food/bread#:~:text=Knead%20the%20dough' });
+  assert.deepEqual(g, { kind: 'link', url: 'https://www.bbc.co.uk/food/bread#:~:text=Knead%20the%20dough', title: 'How to bake bread - BBC Food', excerpt: null, orig: null });
+  // a bare URL with a fragment (the copied link, the URL scheme, intents, the command line)
+  for (const input of [{ url: 'https://example.com/a#:~:text=hello' }, { text: 'https://example.com/a#:~:text=hello' }]) {
+    const n = lab.normaliseShare(input);
+    assert.equal(n.kind, 'link');
+    assert.equal(n.excerpt, null);
+    assert.equal(lab.normaliseShare({ ...input, subject: 'My title' }).title, 'My title');
+  }
+  // the same shares with "Send as excerpt" (source: 'selection') are excerpts
+  const quoted = '“Knead the dough.”\nhttps://example.com/bread#:~:text=Knead%20the%20dough';
+  assert.equal(lab.normaliseShare({ text: quoted }).kind, 'link');
+  assert.deepEqual(lab.normaliseShare({ text: quoted, source: 'selection' }),
+    { kind: 'excerpt', url: 'https://example.com/bread#:~:text=Knead%20the%20dough', title: null, excerpt: 'Knead the dough.', orig: null });
+  assert.equal(lab.normaliseShare({ url: 'https://example.com/a#:~:text=hello', source: 'selection' }).excerpt, 'hello');
+});
+
 test('excerpts: only allowed tags survive hostile selection HTML, and nothing escapes the blockquote (F11.3)', () => {
   const hostile = [
     '<img src=x onerror=alert(1)>', '<svg/onload=alert(1)>', '<a href="java&#115;cript:alert(1)">x</a>',
@@ -162,6 +181,15 @@ test('hostile input stays linear: no rule backtracks over a long run', () => {
     () => lab.normaliseShare({ text: '. '.repeat(100000) + 'https://e.com/a' }),
     () => lab.extractAppleNewsTarget('<body>' + '<a "'.repeat(60000)),
     () => lab.extractAppleNewsTarget('redirectToUrlAfterTimeout("' + 'x'.repeat(200000)),
+    // found in review: the drop pass, a tag name with no > after it, and the scheme rule of redactDiagnostics
+    () => lab.sanitizeExcerptHtml('<script '.repeat(20000)),
+    () => lab.sanitizeExcerptHtml('<style/'.repeat(20000) + '</style'),
+    () => lab.sanitizeExcerptHtml('<' + 'a'.repeat(100000)),
+    () => lab.sanitizeExcerptHtml('<' + 'a-'.repeat(50000) + ' x'),
+    () => lab.redactDiagnostics('AAAA-'.repeat(80000)),
+    () => lab.redactDiagnostics('a.'.repeat(100000)),
+    () => lab.redactDiagnostics('www.'.repeat(50000)),
+    () => lab.redactDiagnostics('a1+'.repeat(100000) + ':/'),
   ];
   for (const [i, run] of inputs.entries()) {
     const t = performance.now();

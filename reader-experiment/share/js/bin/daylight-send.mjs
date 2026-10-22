@@ -139,19 +139,25 @@ async function view(ctx, row) {
   };
 }
 
-function print(o, v, { withTitle = false } = {}) {
+/**
+ * A row on stdout: one JSON line with --json, else the title (status), label, sentence, step line and id. With
+ * failed: true (the run exits 1 or 3) the sentence goes to stderr instead (F09, SEND-API.md), and also to stderr
+ * with --json, where it is in the JSON too.
+ */
+function print(o, v, { withTitle = false, failed = false } = {}) {
   if (o.json) {
     const { id, status, label, sentence, state, kind } = v;
     process.stdout.write(JSON.stringify({ id, status, label, sentence, state, kind }) + '\n');
-    return;
+  } else {
+    const lines = [];
+    if (withTitle && v.title) lines.push(v.title);
+    lines.push(v.label);
+    if (v.sentence && !failed) lines.push(v.sentence);
+    if (v.stepLine) lines.push(v.stepLine);
+    lines.push(`id ${v.id}`);
+    process.stdout.write(lines.join('\n') + '\n');
   }
-  const lines = [];
-  if (withTitle && v.title) lines.push(v.title);
-  lines.push(v.label);
-  if (v.sentence) lines.push(v.sentence);
-  if (v.stepLine) lines.push(v.stepLine);
-  lines.push(`id ${v.id}`);
-  process.stdout.write(lines.join('\n') + '\n');
+  if (failed && v.sentence) process.stderr.write(v.sentence + '\n');
 }
 
 const MIME = {
@@ -228,16 +234,15 @@ async function cmdSend(target, o) {
     throw e;
   }
   if (row.status === 'failed' || row.status === 'expired') {
-    const v = await view(ctx, row);
-    print(o, v);
-    if (o.json && v.sentence) process.stderr.write(v.sentence + '\n');
+    print(o, await view(ctx, row), { failed: true });
     return row.errorCode === 'refused' ? EXIT.refused : EXIT.other;
   }
   const until = o.waitFor ?? (o.wait !== null ? 'delivered' : null);
   if (!until) { print(o, await view(ctx, row)); return EXIT.ok; }
   const secs = o.wait ?? DEFAULT_WAIT_S;
   const r = await waitFor(ctx, row.id, until, secs);
-  if (r.row) print(o, await view(ctx, r.row));
+  if (r.row) print(o, await view(ctx, r.row), { failed: r.code === EXIT.other });
+  else process.stderr.write(fillText(LAB_TEXT.cli.noItem, { id: row.id }) + '\n');
   if (r.code === EXIT.timeout) process.stderr.write(fillText(LAB_TEXT.cli.timedOut, { secs, id: row.id }) + '\n');
   return r.code;
 }

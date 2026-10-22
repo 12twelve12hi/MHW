@@ -154,6 +154,12 @@ test('smart intake: tracking removed, x-orig sent, --title kept (F16)', async ()
     assert.equal(h.url, 'https://example.com/a?id=1');
     assert.equal(h.title, 'A title');
     assert.equal(h['x-orig'], 'https://www.google.com/url?q=https%3A%2F%2Fexample.com%2Fa%3Futm_source%3Dx%26id%3D1');
+    // a text fragment does not make an excerpt (6.5 Q1 b): the link keeps its fragment and the title given
+    const f = await run(['https://example.com/a#:~:text=hello', '--title', 'My title', '--json'], { dir: s.dir, env: s.env });
+    assert.equal(f.code, 0, f.stderr);
+    const [, hf] = await s.inbox();
+    assert.deepEqual([hf.kind, hf.url, hf.title], ['url', 'https://example.com/a#:~:text=hello', 'My title']);
+    assert.ok(!('x-cap' in hf) && !('x-orig' in hf));
   } finally { await s.close(); }
 });
 
@@ -196,15 +202,28 @@ test('a relay that refuses the item exits 3 with the v1.1 sentence; other failur
   const s = await setup({ failPublish: () => (fail ? fail : null) });
   try {
     fail = 400;
+    const refused = 'The relay set on your Daylight turned this down. It will try again in about 3 hours.';
     const r = await run(['https://example.com/refused', '--json'], { dir: s.dir, env: s.env });
     assert.equal(r.code, 3);
     assert.equal(r.json.status, 'failed');
     assert.equal(r.json.label, 'Waiting to send');
-    assert.equal(r.stderr.trim(), 'The relay set on your Daylight turned this down. It will try again in about 3 hours.');
+    assert.equal(r.json.sentence, refused);
+    assert.equal(r.stderr.trim(), refused);
+    // without --json too: the sentence on stderr (F09, SEND-API.md), the label and id on stdout
+    const rh = await run(['https://example.com/refused-too'], { dir: s.dir, env: s.env });
+    assert.equal(rh.code, 3);
+    assert.equal(rh.stderr.trim(), refused);
+    assert.match(rh.stdout, /^Waiting to send\n(?:.*\n)?id [0-9a-f]{32}\n$/);
+    assert.ok(!rh.stdout.includes('turned this down'));
     fail = 413;
     const f = await run(['https://example.com/full'], { dir: s.dir, env: s.env });
     assert.equal(f.code, 1);
-    assert.match(f.stdout, /^Waiting to send\nA lot has been sent from this network/);
+    assert.match(f.stderr, /^A lot has been sent from this network/);
+    assert.match(f.stdout, /^Waiting to send\n(?:.*\n)?id [0-9a-f]{32}\n$/);
+    const fj = await run(['https://example.com/full-json', '--json'], { dir: s.dir, env: s.env });
+    assert.equal(fj.code, 1);
+    assert.equal(fj.stderr.trim(), fj.json.sentence);
+    assert.match(fj.json.sentence, /^A lot has been sent from this network/);
   } finally { await s.close(); }
 });
 
@@ -247,7 +266,10 @@ test('two runs at once lose no rows: concurrent sends, one of them waiting, then
       const stop = polling(s.receiver());
       const waiting = run([`https://example.com/wait-${round}`, '--json', '--wait=30'], { dir: s.dir, env: s.env });
       const sends = Array.from({ length: 7 }, (_, i) => run([`https://example.com/r${round}-${i}`, '--json'], { dir: s.dir, env: s.env }));
-      const status = run(['status', '--json'], { dir: s.dir, env: s.env });
+      // status starts once this round's first row is stored (in round 0 an empty outbox would rightly exit 1), while
+      // the waiting run and most sends are still going
+      const status = until(async () => (await s.outbox()).length > 8 * round, 30000)
+        .then(() => run(['status', '--json'], { dir: s.dir, env: s.env }));
       const results = await Promise.all([waiting, ...sends, status]);
       await stop();
       for (const r of results) assert.equal(r.code, 0, r.stderr);

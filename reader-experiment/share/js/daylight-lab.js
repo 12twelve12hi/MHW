@@ -460,6 +460,8 @@ export const LAB_TEXT = {
   },
   // F01: the extension's toolbar badge (the state of the most recent row)
   badge: { sending: '…', delivered: '✓', error: '!', waiting: '⌛' },
+  // F01: the Windows toast for a row that reaches `reader` while the window is hidden (F04's notice is shareInPlace.inReader)
+  readerToast: 'In your Reader: {title}',
   // F02 entry point, under v1.1's too-big sentence
   bigFiles: 'Send files over 9 MB ›',
   // F03: the link-only hint (once on the device, then in Setup check) and the Inbox's row lines (F03, F11)
@@ -1480,15 +1482,16 @@ function unquote(s) {
 }
 
 /**
- * Link or excerpt (F11, with the user's answer to LAB-PLAN 6.5 Q1 = (b)): text becomes an excerpt only when the share
- * is clearly a selection. Rules, in order:
- *   1. source is 'selection' (the extension's context menu or Selection mode, a Safari share's selectionText, or the
- *      Options choice "Send as excerpt"): an excerpt of the text (without its URL), or a note when there is no URL;
- *   2. the URL carries a text fragment (#:~:text=, Chrome on Android's shared selection): an excerpt of the text
- *      without the URL (one pair of surrounding quotes removed), or else of the fragment's own text;
+ * Link or excerpt (F11, with the user's answer to LAB-PLAN 6.5 Q1 = (b)): text becomes an excerpt only from an
+ * explicit selection: the extension's context menu or Selection mode, a Safari share's selectionText, or the Options
+ * choice "Send as excerpt". Rules, in order:
+ *   1. source is 'selection': an excerpt of the text (without its URL), or a note when there is no URL. When the URL
+ *      carries a text fragment (#:~:text=; Chrome on Android shares a selection as "“quote”\nURL#:~:text=…"), one
+ *      pair of quotes around the text is removed, and with no text left the fragment's own text is the excerpt;
  *   3. there is no URL at all (Notes, Books, the Mac Services text type): a note;
  *   everything else is a link, with the text left over as its title: "headline + link" shares stay links, however
- *   long. (Rule 4 of the plan, 40 words or 3 sentences, is not used under 6.5 Q1 (b).)
+ *   long, and so does a URL with a text fragment (Google adds them to result links). Plan rules 2 (a text fragment
+ *   alone) and 4 (40 words or 3 sentences) are not used under 6.5 Q1 (b); rule 3 keeps its number.
  * text: the shared text; url: a URL shared on its own (used when it passes webUrl; else the first URL in the text);
  * title: the page title or subject (kept in the signature, unused under (b)); source: 'selection' or anything else.
  * -> {kind: 'link' | 'excerpt' | 'note' | 'none', url (or null), text (the text without its URL, trimmed)}
@@ -1499,12 +1502,9 @@ export function classifyShare({ text = '', url = '', title = '', source = '' } =
   const u = (url ? webUrl(url) : null) ?? found?.url ?? null;
   const rest = (found ? t.slice(0, found.start) + t.slice(found.end) : t).trim();
   if (source === 'selection') {
-    if (rest) return { kind: u ? 'excerpt' : 'note', url: u, text: rest };
+    const quote = u && hasTextFragment(u) ? unquote(rest) || textFragmentText(u) : rest;
+    if (quote) return { kind: u ? 'excerpt' : 'note', url: u, text: quote };
     return u ? { kind: 'link', url: u, text: '' } : { kind: 'none', url: null, text: '' };
-  }
-  if (u && hasTextFragment(u)) {
-    const quote = unquote(rest) || textFragmentText(u);
-    if (quote) return { kind: 'excerpt', url: u, text: quote };
   }
   if (!u) return rest ? { kind: 'note', url: null, text: rest } : { kind: 'none', url: null, text: '' };
   return { kind: 'link', url: u, text: rest };
@@ -1651,7 +1651,34 @@ export function excerptDate(date) {
 }
 
 const ENTITY_AT = /^&(?:[A-Za-z][A-Za-z0-9]{0,31}|#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6});/;
-const TAG_RE = /<(\/?)([A-Za-z][A-Za-z0-9-]*)((?:[^<>"']|"[^<"]*"|'[^<']*')*)>/g;
+// The name is as long as possible ((?![A-Za-z0-9-])), so a long name with no > after it is not tried again at every
+// shorter length (which made '<' + 'a' x 100,000 quadratic); the attributes never pass a '<'.
+const TAG_RE = /<(\/?)([A-Za-z][A-Za-z0-9-]*)(?![A-Za-z0-9-])((?:[^<>"']|"[^<"]*"|'[^<']*')*)>/g;
+
+/**
+ * Step 2 of sanitizeExcerptHtml for one name, in one pass: each <name followed by whitespace, / or > (any case), up to
+ * the next >, and everything after it to the first </name + optional whitespace + > (or to the end), is removed. An
+ * opening tag with no > after it stays (and so does everything after it). The same result as
+ * s.replace(/<name(?=[\s/>])[^>]*>[\s\S]*?(?:<\/name\s*>|$)/gi, ''), which is quadratic on '<name ' repeated.
+ */
+function dropElement(s, name) {
+  const open = new RegExp(`<${name}(?=[\\s/>])`, 'gi');
+  const close = new RegExp(`</${name}\\s*>`, 'gi');
+  let out = '', from = 0;
+  for (;;) {
+    open.lastIndex = from;
+    const m = open.exec(s);
+    if (!m) break;
+    const gt = s.indexOf('>', m.index + 1 + name.length);
+    if (gt < 0) break; // no > after this one, so none after any later one either
+    out += s.slice(from, m.index);
+    close.lastIndex = gt + 1;
+    const c = close.exec(s);
+    if (!c) return out;
+    from = c.index + c[0].length;
+  }
+  return out + s.slice(from);
+}
 
 /**
  * An excerpt's selection HTML, sanitised (F11; LAB-PROTOCOL 2.9 has the exact steps):
@@ -1667,7 +1694,7 @@ const TAG_RE = /<(\/?)([A-Za-z][A-Za-z0-9-]*)((?:[^<>"']|"[^<"]*"|'[^<']*')*)>/g
  */
 export function sanitizeExcerptHtml(html, maxChars = EXCERPT_MAX_CHARS) {
   let s = String(html ?? '').replace(/<!--[\s\S]*?(?:-->|$)/g, '').replace(/<[!?][^>]*>?/g, '');
-  for (const name of EXCERPT_DROP) s = s.replace(new RegExp(`<${name}(?=[\\s/>])[^>]*>[\\s\\S]*?(?:</${name}\\s*>|$)`, 'gi'), '');
+  for (const name of EXCERPT_DROP) s = dropElement(s, name);
   let out = '', count = 0, trimmed = false, last = 0;
   const stack = [];
   const text = (raw) => {
@@ -1838,13 +1865,15 @@ export function testArticle({ id = newItemId(), device = '' } = {}) {
 /**
  * Removes what diagnostics must never carry (F26), in this order: daylightserver://… links and SERVER- codes ->
  * "[server code]"; anything that looks like a URL (scheme://…, or www.…) -> "[url]"; "dls-" + 32 hex -> "[topic]";
- * 28-character base32 codes, with or without dashes between groups of 4 -> "[code]".
+ * 28-character base32 codes, with or without dashes between groups of 4 -> "[code]". The scheme is the whole run of
+ * A-Z a-z 0-9 + . - before "://" (none before it; it may be empty), so a long run with no "://" is read once
+ * (a scheme starting at every word boundary made 'AAAA-' x 20,000 quadratic).
  */
 export function redactDiagnostics(text) {
   return String(text ?? '')
     .replace(/daylightserver:\/\/[^\s"'<>]*/gi, '[server code]')
     .replace(/\bSERVER-[A-Za-z0-9-]+/g, '[server code]')
-    .replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"'<>]*/g, '[url]')
+    .replace(/(?<![A-Za-z0-9+.-])[A-Za-z0-9+.-]*:\/\/[^\s"'<>]*/g, '[url]')
     .replace(/\bwww\.[^\s"'<>]+/gi, '[url]')
     .replace(/\bdls-[0-9a-f]{32}\b/gi, '[topic]')
     .replace(/\b[A-Z2-7]{4}(?:-?[A-Z2-7]{4}){6}\b/gi, '[code]');

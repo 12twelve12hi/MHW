@@ -3,7 +3,7 @@
   "generatedBy": "reader-experiment/share/vectors/generate-lab.mjs",
   "notes": [
     "Deterministic: CI regenerates this file and requires no diff.",
-    "cases: normaliseShare(input) must equal expect exactly. input: {text?, url?, subject?, source?} (absent = \"\"). expect: {kind (\"link\", \"excerpt\", \"note\" or \"none\"), url (cleaned, or null), title (links only, or null), excerpt (excerpts and notes, or null), orig (the URL as shared when the cleaned one differs and it is at most 1,024 characters, or null)}. Under LAB-PLAN 6.5 Q1 = (b), text is an excerpt only for an explicit selection (source \"selection\") or a text-fragment URL; a note has no URL; every headline + link share is a link.",
+    "cases: normaliseShare(input) must equal expect exactly. input: {text?, url?, subject?, source?} (absent = \"\"). expect: {kind (\"link\", \"excerpt\", \"note\" or \"none\"), url (cleaned, or null), title (links only, or null), excerpt (excerpts and notes, or null), orig (the URL as shared when the cleaned one differs and it is at most 1,024 characters, or null)}. Under LAB-PLAN 6.5 Q1 = (b), text is an excerpt only for an explicit selection (source \"selection\"; with a text-fragment URL one pair of quotes is removed, and with no text the fragment's own text is used); a note has no URL; every other share is a link, a text-fragment URL included, and a headline + link share keeps the headline (or the subject) as its title.",
     "xOrigFrames: build an item (id X, sent 2026-10-20T08:00:00.000Z; contentHex bytes or contentText UTF-8 for pages and files, no compression) with the Lab extras requested; part 0 must carry exactly expect.fields (its x- header fields), and be small (base64 at most 3,800 characters) when expect.small. x-orig is left out over 1,024 characters, when it fails the web URL rule, and when it alone would turn a small frame into a large one; an unknown x-cap is left out.",
     "appleNews: extractAppleNewsTarget(html) must equal expect (a URL or null)."
   ],
@@ -220,6 +220,72 @@
       }
     },
     {
+      "name": "Chrome on Android, a page opened from a Google result: \"Title\\nURL#:~:text=\" stays a link with its title",
+      "input": {
+        "text": "How to bake bread - BBC Food\nhttps://www.bbc.co.uk/food/bread#:~:text=Knead%20the%20dough"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.bbc.co.uk/food/bread#:~:text=Knead%20the%20dough",
+        "title": "How to bake bread - BBC Food",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "A URL with a text fragment alone stays a link (copied link, URL scheme, intents)",
+      "input": {
+        "text": "https://example.com/article#:~:text=The%20quick%20brown,lazy%20dog"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/article#:~:text=The%20quick%20brown,lazy%20dog",
+        "title": null,
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "A URL with a text fragment and a subject: the subject is the title",
+      "input": {
+        "url": "https://example.com/a#:~:text=hello",
+        "subject": "My title"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/a#:~:text=hello",
+        "title": "My title",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Chrome on Android shares a selection (\"quote\"\\nURL#:~:text=) without \"Send as excerpt\": a link",
+      "input": {
+        "text": "\"Lorem ipsum dolor sit amet, consectetur adipiscing elit.\"\nhttps://example.com/article#:~:text=Lorem%20ipsum%20dolor%20sit"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/article#:~:text=Lorem%20ipsum%20dolor%20sit",
+        "title": "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "A text fragment and tracking: tracking goes, the fragment stays",
+      "input": {
+        "text": "https://example.com/article?utm_source=share#:~:text=keep%20this"
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/article#:~:text=keep%20this",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://example.com/article?utm_source=share#:~:text=keep%20this"
+      }
+    },
+    {
       "name": "Rule 1: a selection with its page",
       "input": {
         "text": "The quick brown fox jumps over the lazy dog.",
@@ -266,9 +332,10 @@
       }
     },
     {
-      "name": "Rule 2: Chrome on Android shares a selection with a text fragment",
+      "name": "Rule 1: \"Send as excerpt\" on Chrome’s shared selection: the quote without its quotes",
       "input": {
-        "text": "\"Lorem ipsum dolor sit amet, consectetur adipiscing elit.\"\nhttps://example.com/article#:~:text=Lorem%20ipsum%20dolor%20sit"
+        "text": "\"Lorem ipsum dolor sit amet, consectetur adipiscing elit.\"\nhttps://example.com/article#:~:text=Lorem%20ipsum%20dolor%20sit",
+        "source": "selection"
       },
       "expect": {
         "kind": "excerpt",
@@ -279,9 +346,11 @@
       }
     },
     {
-      "name": "Rule 2: curly quotes around the selection",
+      "name": "Rule 1: curly quotes around a selection with a text fragment",
       "input": {
-        "text": "“A passage worth keeping.” https://example.com/article#:~:text=A%20passage%20worth"
+        "text": "“A passage worth keeping.” https://example.com/article#:~:text=A%20passage%20worth",
+        "subject": "Article",
+        "source": "selection"
       },
       "expect": {
         "kind": "excerpt",
@@ -292,9 +361,25 @@
       }
     },
     {
-      "name": "Rule 2: only the URL: the fragment’s text",
+      "name": "Rule 1: quotes stay when the URL has no text fragment",
       "input": {
-        "text": "https://example.com/article#:~:text=The%20quick%20brown,lazy%20dog"
+        "text": "“To be, or not to be.”",
+        "url": "https://example.com/hamlet",
+        "source": "selection"
+      },
+      "expect": {
+        "kind": "excerpt",
+        "url": "https://example.com/hamlet",
+        "title": null,
+        "excerpt": "“To be, or not to be.”",
+        "orig": null
+      }
+    },
+    {
+      "name": "Rule 1: \"Send as excerpt\" on a text-fragment URL alone: the fragment’s text",
+      "input": {
+        "text": "https://example.com/article#:~:text=The%20quick%20brown,lazy%20dog",
+        "source": "selection"
       },
       "expect": {
         "kind": "excerpt",
@@ -305,9 +390,10 @@
       }
     },
     {
-      "name": "Rule 2: prefix and suffix are left out",
+      "name": "Rule 1: the fragment’s prefix and suffix are left out",
       "input": {
-        "url": "https://example.com/article#:~:text=see-,the%20quiet%20year,-ends"
+        "url": "https://example.com/article#:~:text=see-,the%20quiet%20year,-ends",
+        "source": "selection"
       },
       "expect": {
         "kind": "excerpt",
@@ -315,19 +401,6 @@
         "title": null,
         "excerpt": "the quiet year",
         "orig": null
-      }
-    },
-    {
-      "name": "Rule 2: tracking is still removed, the fragment kept",
-      "input": {
-        "text": "https://example.com/article?utm_source=share#:~:text=keep%20this"
-      },
-      "expect": {
-        "kind": "excerpt",
-        "url": "https://example.com/article#:~:text=keep%20this",
-        "title": null,
-        "excerpt": "keep this",
-        "orig": "https://example.com/article?utm_source=share#:~:text=keep%20this"
       }
     },
     {

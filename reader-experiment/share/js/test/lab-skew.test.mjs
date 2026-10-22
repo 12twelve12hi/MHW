@@ -100,6 +100,51 @@ test('F17.1 skew matrix: every pair delivers url, page and file; Lab states only
   } finally { await relay.close(); }
 });
 
+test('LAB-PLAN 0.3: v1.0 and v1.1 Receivers accept every W1 item (x-orig, x-cap, excerpts, notes, the test article)', async () => {
+  let clock = T0 + 9 * HOUR + 30 * MIN;
+  const now = () => clock;
+  const relay = await startMockRelay({ now, ...NTFY_SH_LIMITS });
+  try {
+    const n = lab.normaliseShare({ text: 'A story https://example.com/story?utm_source=share&id=7#:~:text=Knead%20the%20dough' });
+    assert.equal(n.kind, 'link');
+    assert.ok(n.orig);
+    const page = ITEMS.page;
+    const W1 = {
+      'url with x-orig and a text fragment': { kind: 'url', url: n.url, title: n.title, extras: { 'x-orig': n.orig } },
+      'page with x-cap seen': { ...page, extras: { 'x-cap': 'seen' } },
+      'page with x-cap clean': { ...page, url: 'https://example.com/clean', extras: { 'x-cap': 'clean', 'x-orig': 'https://example.com/clean?fbclid=1' } },
+      'the test article (x-cap test)': lab.testArticle({ device: 'Lab phone' }),
+      'an excerpt: text/html, url with #:~:text=': lab.excerptItem({ text: 'Knead the dough for ten minutes.\n\nThen let it rest.', html: '<p>Knead the dough for <b>ten</b> minutes.</p><p>Then let it rest.</p>', url: 'https://www.example.com/bread?x=1', pageTitle: 'Bread', date: '2026-10-22' }),
+      'a note: text/markdown, no url': lab.excerptItem({ text: 'Buy flour\nand yeast', app: 'Notes', date: '2026-10-22' }),
+      'an excerpt trimmed at 50,000 characters': lab.excerptItem({ text: 'word '.repeat(10010).trim(), url: 'https://example.com/big', pageTitle: 'Big', date: '2026-10-22' }),
+    };
+    assert.ok(W1['an excerpt: text/html, url with #:~:text='].url.includes('#:~:text='));
+    for (const rv of ['v1.0', 'v1.1', 'lab']) {
+      for (const [name, item] of Object.entries(W1)) {
+        const pairing = { secret: ds.generateSecret(), relay: relay.url, name: 'Daylight' };
+        const { sender } = makeSender('lab', pairing, now);
+        const receiver = await makeReceiver(rv, pairing, now);
+        const { id, ...toSend } = item; // the test article brings its own id
+        const row = await sender.send(id ? { ...toSend, id } : toSend);
+        assert.equal(row.status, 'sent', `${rv} ${name}: sent`);
+        const got = await receiver.poll();
+        assert.equal(got.items.length, 1, `${rv} ${name}: received`);
+        const { header, content } = got.items[0];
+        assert.equal(header.id, row.id, name);
+        assert.equal(header.kind, item.kind, name);
+        if (item.url) assert.equal(header.url, item.url, `${rv} ${name}: the url as sent`);
+        if (item.title) assert.equal(header.title, item.title, name);
+        if (item.kind === 'file') assert.deepEqual([header.name, header.mime], [item.name, item.mime], name);
+        if (item.kind !== 'url') assert.deepEqual(content, typeof item.content === 'string' ? ds.utf8(item.content) : item.content, `${rv} ${name}: content`);
+        clock += 5 * SEC;
+        assert.equal(await sender.checkAcks(), 1, `${rv} ${name}: acked`);
+        clock += MIN;
+      }
+    }
+    assert.deepEqual(relay.state.limited, [], 'no 429');
+  } finally { await relay.close(); }
+});
+
 test('old senders read every kind of Lab frame on their ack topic without throwing or delivering', async () => {
   let clock = T0 + 10 * HOUR;
   const now = () => clock;

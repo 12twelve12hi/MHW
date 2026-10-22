@@ -59,7 +59,8 @@ A file whose name is `status`, `tick` or `pair` goes as `./status`.
 **Exit codes.** `0` sent (with `--wait` or `--wait-for`: delivered, or in the Reader); `2` timed out (the item stays
 in the outbox; `status` checks it again); `3` refused or too big, with the v1.1 sentence on stderr ("Too big to send.
 Files can be up to 9 MB; this one is 14 MB.", "The relay set on your Daylight turned this down. …"); `1` anything else
-(not paired, no such file, an empty file, offline: the sentence is on stderr).
+(not paired, no such file, an empty file, offline: the sentence is on stderr). The sentence is on stderr with or
+without `--json`; stdout still has the item when one was stored (its label, step line and id, or the `--json` line).
 
 **Re-sends need a run.** The outbox re-sends an item until your Daylight acknowledges it, as every app does, but only
 while `daylight-send` runs. Every run, `status` included, first does `tick()`: it reads the acks and re-sends what is

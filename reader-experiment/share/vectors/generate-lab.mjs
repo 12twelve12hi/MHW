@@ -564,6 +564,7 @@ assert.equal(serverSection.aiToday[1].expect, 'AI today: US$0.23 of US$3');
 assert.equal(serverSection.aiToday[5].expect, 'AI today: US$1 of US$3', '1.005 × 100 is 100.49999999999999');
 assert.equal(serverSection.aiToday[6].expect, 'AI today: US$0.02 of US$3', '0.015 × 100 is 1.5');
 assert.equal(labText.strings['short.needs-inbox'], 'Needs Lab on your Daylight');
+assert.equal(labText.strings.readerToast, 'In your Reader: {title}', 'F01: the Windows toast (LAB-PLAN 3.3 F01)');
 assert.equal(labText.checkedIn[4].expect, 'Your Daylight checked in 4 min ago.');
 assert.equal(labText.checkedIn[0].expect, 'Your Daylight hasn’t checked in since this device paired.');
 assert.equal(labText.checkedIn[8].expect, 'Your Daylight checked in 2 days ago.');

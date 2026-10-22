@@ -110,17 +110,19 @@ fields (LAB-PLAN 1.3: queued items go out as stored).
 `excerptItem`, `excerptHtml`, `excerptMarkdown`, `excerptTextHtml`, `sanitizeExcerptHtml`, `excerptFileName`,
 `excerptFirstLine`, `excerptTitle`, `excerptDate`, `textFragment` (F11); `testArticle`, `redactDiagnostics`,
 `activityEvent`, `appendActivity`, `activityLine`, `diagnosticsReport` (F26); `inboxKindLine`, `cleanedFromText` (F03,
-2.3); `USE_FEATURES`, `labUseOn` (6.5 Q5); `fillText`; and the W1 strings in `LAB_TEXT` (184 new ids: the Use switches
-and their footers, share in place, the queue, automation and the command line, Send as, excerpts, arrival notices and
+2.3); `USE_FEATURES`, `labUseOn` (6.5 Q5); `fillText`; and the W1 strings in `LAB_TEXT` (185 new ids: the Use switches
+and their footers, F01's toolbar badge and Windows toast, share in place, the queue, automation and the command line, Send as, excerpts, arrival notices and
 Inbox health, Setup check with its checks and steps, the test article, diagnostics, the copied link and the
 right-click menu).
 
 **Choices L1 made where the plan leaves room** (the vectors pin them):
 
-- **6.5 Q1 = (b):** `classifyShare` has no word-count rule. An excerpt needs `source: 'selection'` (the context menu,
-  Selection mode, a Safari selection, "Send as excerpt") or a text-fragment URL (Chrome on Android shares a highlighted
-  passage that way: it is a selection the user made). Text with no URL at all is a note (there is nothing else to
-  send). Everything else, however long, is a link with the text as its title.
+- **6.5 Q1 = (b):** `classifyShare` has no word-count rule and no text-fragment rule. An excerpt needs
+  `source: 'selection'` (the context menu, Selection mode, a Safari selection, "Send as excerpt"). A URL with
+  `#:~:text=` alone stays a link with its title (Google adds fragments to result links); with "Send as excerpt",
+  Chrome on Android's shared selection (`"quote"` + URL with a fragment) loses its quotes, and a bare fragment URL
+  gives the fragment's text. Text with no URL at all is a note (there is nothing else to send; plan rule 3, still to
+  be confirmed with the user under (b)). Everything else, however long, is a link with the text as its title.
 - **6.5 Q5 = yes:** Use switches on F03 (the link-only hint), F04, F08, F10, F16 and F33. Footers start "When it’s off,
   …". Store keys next to `lab`: `dls.labUse.<id>`, `labUse.<id>`, `settings.labUse[<id>]`; a missing key is on.
 - `normaliseShare` also returns `kind` (`link`, `excerpt`, `note`, `none`), and `orig` is null over 1,024 characters
