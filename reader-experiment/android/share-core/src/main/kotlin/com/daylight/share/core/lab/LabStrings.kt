@@ -270,6 +270,7 @@ internal object LabStrings {
         "arrivals.channelQuiet" to "Arrivals",
         "arrivals.channelAlert" to "Arrivals (alert)",
         "arrivals.quietHours" to "Quiet hours",
+        "arrivals.quietHoursFooter" to "From 22:00 to 07:00, arrivals don’t make a sound.",
         "arrivals.addToReader" to "Add to Reader",
         "arrivals.keepForLater" to "Keep for later",
         "arrivals.keptForLater" to "Kept for later",
@@ -279,6 +280,7 @@ internal object LabStrings {
         "arrivals.savedGroup" to "{n} saved from {from}",
         "arrivals.yourDevices" to "your devices",
         "arrivals.excerptsGroup" to "{n} excerpts from {from}",
+        "arrivals.excerptOne" to "New excerpt from {from}",
         "arrivals.healthOn" to "Last checked {rel} · Instant delivery on",
         "arrivals.healthOff" to "Last checked {rel} · Instant delivery off",
         "arrivals.stopped" to "Instant delivery stopped. Turn it back on to get items within seconds.",
@@ -321,6 +323,8 @@ internal object LabStrings {
         "setup.steps.shareItem" to "In the share sheet, scroll the row of apps to More, tap Edit, and add Daylight.",
         "setup.steps.safariExtension" to "Open Settings › Apps › Safari › Extensions and turn on Send to Daylight.",
         "setup.steps.shareMenu" to "Open System Settings › General › Login Items & Extensions › Sharing and turn on Daylight.",
+        "setup.steps.toolbarButton" to "Click the puzzle piece in Chrome’s toolbar, then the pin next to Send to Daylight.",
+        "setup.steps.readerReadLater" to "The Reader turned down the last pages it was handed. Open the Reader’s settings, allow pages from other apps, then tap Test the Reader hand-off.",
         "testArticle.title" to "Test article from {device}",
         "testArticle.heading" to "A test article from Send to Daylight",
         "testArticle.p1" to "This short article was sent by Setup check in Send to Daylight. If you are reading it on your Daylight, the whole path works: your device sealed it, the relay carried it, Daylight Share on your Daylight opened it, and the Reader saved it to your library. Nothing in it needs the network, so it reads the same with Wi-Fi off.",
@@ -356,6 +360,11 @@ internal object LabStrings {
         "contextMenu.image" to "Send this image’s page to Daylight",
         "contextMenu.pdf" to "Send PDF link to Daylight",
         "contextMenu.showInMenu" to "Show in the right-click menu",
+        "handover.letReceive" to "Let Daylight Reader (lab) receive",
+        "handover.armed" to "Open Daylight Reader (lab) › Settings › Labs › Send to Daylight and choose Take over.",
+        "handover.receivingElsewhere" to "Daylight Reader (lab) receives for this Daylight now.",
+        "handover.receiveHereAgain" to "Receive here again",
+        "handover.unreachable" to "Can’t reach Daylight Reader (lab) right now.",
     )
 
     /** Every LAB_TEXT array as a list, by its dotted id. Read lists here: an item may hold a comma. */
