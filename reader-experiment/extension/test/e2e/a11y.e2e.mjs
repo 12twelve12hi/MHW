@@ -291,7 +291,8 @@ test('web sender, paired, every history state: no axe violations, light and dark
     await webStore(page, { settings: { from: 'A11y web', comfort }, outbox: historyRows() });
     const tag = comfort ? ', Comfort' : '';
     assert.equal(await page.evaluate(() => document.body.classList.contains('comfort')), comfort);
-    assert.equal(await page.locator('#history li').count(), 6);
+    assert.equal(await page.locator('#lab-queue-list li').count(), 2);
+    assert.equal(await page.locator('#history li').count(), 4);
     await page.fill('#url', 'https://example.com/a-link-typed-in');
     await axeBoth(page, `web: send${tag}`);
     if (comfort) await assertNotClipped(page, 'web: send, Comfort');
