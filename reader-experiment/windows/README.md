@@ -197,14 +197,20 @@ there: the window is the plain app's.
   that isn't settled yet, and elsewhere clicking the title shows them. Screen readers hear "{label}. {sentence}", never
   the step line. Above the history: *Your Daylight checked in 4 min ago.* With a Daylight without Lab the rows read
   exactly as the plain app's (*Delivered ✓*). While the window is closed to the tray, an item that reaches the Reader
-  shows a notification: *In your Reader: {title}*.
+  shows a notification: *In your Reader: {title}*. After an item arrives the app keeps looking for its state for up to
+  48 hours (every 30 s for the first 10 minutes while the window shows), also when the Daylight hasn't said it has Lab
+  yet: its first Lab message can come after the arrival.
 - **Files over 9 MB** (F02's entry point). Under the too-big sentence of a refused file: **Send files over 9 MB ›**,
   which says what is missing: your Daylight server (with **Copy Server code**) until one exists, then *comes to this app
   in a later Lab update*.
 - **Works offline** (F07). Shared while Windows says the PC is offline, an item isn't tried: it waits as *Waiting for
   connection* (*It will send when this device is back online.*) and goes as soon as Windows says the PC is back online,
-  oldest first, at most 30 messages and 18 MB of attachments at a time, passes at least 3 minutes apart. What waits to
-  send is listed first, under *Waiting to send ({n})*, each with **Cancel**.
+  oldest first, at most 30 messages and 18 MB of attachments at a time, passes at least 3 minutes apart. An item that
+  couldn't go for want of a network (or a busy relay) while Windows said the PC was online waits the same way. These
+  passes are the only way such items go: when Windows says the PC is back online, when the app starts (items left from
+  an earlier run), and at the 15-minute check once the plain app's back-off would try them again; never all at once,
+  so the PC doesn't use up the relay's allowance it shares with the Daylight. What waits to send is listed first, under
+  *Waiting to send ({n})*, each with **Cancel**.
 - **Sent to {name}** (F08). The notifications after Send To, the hotkey and a quick send name your Daylight: *Sent to
   Desk Daylight* / *Paper: Sent · waiting for your Daylight.*
 - **Send links** (F09). `daylightshare://send?url=<address>&title=<title>[&text=<text>][&quick=1]` (from Shortcuts, a
@@ -409,10 +415,14 @@ release gate).
 `test/unit/lab-w1.test.mjs` runs Wave 1 the same way: smart intake at each entry point (the clipboard, a dropped text,
 an AMP link, a `.url` file), `x-orig` on the wire, F16's Use switch and v1.1 exactly with Lab off (F16); an item shared
 offline is deferred (nothing published, *Waiting for connection* in the window and the notification), goes back online,
-passes 3 minutes apart, and 70 links go out in passes of 30 with no 429 (F07, F07.3); a Lab Daylight's states as the
-rows' words (*In your Reader ✓*, *Handed to the Reader*, *Waiting for a tap…*), v1.1's words for a v1.1 Daylight, the
-ack topic read after delivery only while a row waits for its state, the faster checks only while the window shows, the
-toast's hook once (F01); "Sent to {name}" and the host (F08, F33); the copied link prepared without sending (F33);
+passes 3 minutes apart; against the mock relay with ntfy.sh's limits and the clock past v1.1's back-off, 70 links go
+out oldest first in three passes of at most 30 with no 429, and no tick between passes (the one after a pass, the
+send's 30 s check, the 15-minute tick, the window opening) re-sends anything; at start, rows queued in an earlier run go
+in a capped pass; a row that failed while Windows said online goes in a pass once v1.1's back-off says so, and with Lab
+off v1.1 re-sends it (F07, F07.3); a Lab Daylight's states as the rows' words (*In your Reader ✓*, *Handed to the
+Reader*, *Waiting for a tap…*), v1.1's words for a v1.1 Daylight, the ack topic read after delivery only while a row
+waits for its state, also before any hello is heard (the Lab frame after the ack: the tick and the faster checks read
+on to *In your Reader ✓* and the toast), the faster checks only while the window shows, the toast's hook once (F01); "Sent to {name}" and the host (F08, F33); the copied link prepared without sending (F33);
 send links: what they read, Lab off, unpaired, not a web address (a file path among them), the question, quick sends
 and their limit (F09); F02's gate; the test article to the Reader, the activity log and redacted diagnostics, Setup
 check's lines (F26).

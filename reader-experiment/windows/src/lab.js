@@ -89,18 +89,25 @@ export const DEVICE = 'Windows PC';
 export const isQueued = (row) => row?.status === 'failed';
 
 /**
- * Whether the ack topic is worth reading for the timeline's states (F01, 2.5): the Daylight speaks Lab and a row
- * delivered within the state digest's 48 hours (2.2.4) has no settled state yet. tl: timeline()'s answer.
+ * Whether the ack topic is worth reading for the timeline's states (F01, 2.5): Lab is on and a row delivered within
+ * the state digest's 48 hours (2.2.4) has no settled state yet, as the extension reads it. Whatever inboxLab says: a Lab
+ * Daylight's first frame (its hello, with the states) can come after the ack (a fresh pairing, the 30 s between Lab
+ * frames, the Inbox giving way for an hour after a 429 or 413, 2.2.4), and only reading on hears it. With a v1.1
+ * Daylight this reads for 48 hours after a delivery, at the 15-minute tick; v1.1 itself reads for 15 days after an
+ * unacked share. tl: timeline()'s answer.
  */
 export function wantsStates(rows, tl, now = Date.now()) {
-  if (!tl?.lab || !tl.inboxLab) return false;
+  if (!tl?.lab) return false;
   return (rows ?? []).some((r) => r?.status === 'delivered' && now - (r.delivered ?? 0) <= STATE_DIGEST_WINDOW_MS
     && !SETTLED_STATES.includes(tl.states?.[r.id]?.s));
 }
 
-/** Faster checks (2.5): while the window shows, every 30 s, as long as a delivered row of the last 10 minutes waits. */
+/**
+ * Faster checks (2.5): while the window shows, every 30 s, as long as a delivered row of the last 10 minutes has no
+ * settled state. 2.5 sets no inboxLab condition (a hello that comes after the ack is heard by these checks).
+ */
 export function wantsFaster(rows, tl, now = Date.now()) {
-  return !!tl?.lab && !!tl.inboxLab && wantsFastChecks(rows, now, tl.states ?? {});
+  return !!tl?.lab && wantsFastChecks(rows, now, tl.states ?? {});
 }
 
 /**

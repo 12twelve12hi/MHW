@@ -18,7 +18,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { load } from '../helpers/built.mjs';
-import { startMockRelay } from '../../../share/js/mock-relay.mjs';
+import { startMockRelay, NTFY_SH_LIMITS } from '../../../share/js/mock-relay.mjs';
 
 const ds = await load('daylight-share.js');
 const core = await load('core.js');
@@ -59,11 +59,20 @@ function fakeBridge(files = {}) {
   return b;
 }
 
+/** Waits until the relay has had no request for 100 ms (the app's background ticks and passes are done). */
+async function relayIdle(r = relay) {
+  let n = -1;
+  for (let i = 0; i < 50 && n !== r.state.requests.length; i++) {
+    n = r.state.requests.length;
+    await new Promise((ok) => setTimeout(ok, 100));
+  }
+}
+
 /**
  * An app paired with a Daylight on the mock relay. opts: online (a function), now, settings (merged in before the app
- * starts), lab (a Lab Daylight: LabInboxSim, its states by stateFor), files (Send To's).
+ * starts), lab (a Lab Daylight: LabInboxSim, its states by stateFor), files (Send To's), rel (another mock relay).
  */
-async function setup({ online = () => true, now = () => Date.now(), settings = {}, lab = false, stateFor = undefined, files = {}, name = 'Desk Daylight' } = {}) {
+async function setup({ online = () => true, now = () => Date.now(), settings = {}, lab = false, stateFor = undefined, files = {}, name = 'Desk Daylight', rel = relay } = {}) {
   const storage = new ds.MemoryStorage();
   if (Object.keys(settings).length) await storage.set('settings', settings);
   const bridge = fakeBridge(files);
@@ -74,14 +83,14 @@ async function setup({ online = () => true, now = () => Date.now(), settings = {
   });
   await app.lab.ensureDefault();
   const secret = ds.generateSecret();
-  const pairing = { secret, relay: relay.url };
-  await app.pair(await ds.pairingLink({ secret, relay: relay.url, name }));
+  const pairing = { secret, relay: rel.url };
+  await app.pair(await ds.pairingLink({ secret, relay: rel.url, name }));
   const receiver = new ds.Receiver({ pairing, storage: new ds.MemoryStorage(), from: 'Daylight' });
   let day = null;
   if (lab) {
     let skew = 0;
     const labInbox = new L.LabInbox({
-      storage: new ds.MemoryStorage(), relay: new ds.RelayClient({ relay: relay.url }), keys: await ds.deriveKeys(secret),
+      storage: new ds.MemoryStorage(), relay: new ds.RelayClient({ relay: rel.url }), keys: await ds.deriveKeys(secret),
       info: () => ({ lab: 1, app: 'android/1.5.0', caps: ['st', 'tap', 'reader-link'], live: false }), from: 'Daylight',
       now: () => Date.now() + skew, autoFlushMs: null,
     });
@@ -184,30 +193,115 @@ test('F07: shared while Windows is offline, an item waits for a connection (noth
   } finally { s.app.stop(); }
 });
 
-test('F07.3 on Windows: 70 links queued offline go out in passes of at most 30 frames, 3 minutes apart, oldest first, with no 429', async () => {
+test('F07.3 on Windows, with ntfy.sh’s limits and the clock past the back-off: three passes of at most 30, oldest first, nothing re-sent between them, no 429', async () => {
   let online = false;
   let clock = Date.now();
-  const s = await setup({ online: () => online, now: () => clock });
+  const limited = await startMockRelay({ ...NTFY_SH_LIMITS, now: () => clock });
+  const s = await setup({ online: () => online, now: () => clock, rel: limited });
   try {
     const rows = [];
     for (let i = 0; i < 70; i++) { clock += 1; rows.push(await s.app.sendLink(`https://example.com/queued/${i}`)); }
-    const published = () => relay.state.publishLog.length;
-    const at = published();
+    // Offline for 5 minutes: v1.1's back-off (a minute at attempts 0) has run out for every row.
+    clock += 5 * MIN;
+    const published = () => limited.state.publishLog.length;
     online = true;
     const first = await s.app.onOnline();
     assert.equal(first.length, 30, 'the first pass stops at 30 frames');
     assert.deepEqual(first.map((r) => r.url), rows.slice(0, 30).map((r) => r.url), 'oldest first');
-    assert.equal(published() - at, 30);
-    assert.ok(s.timers.timeouts.some((h) => h.ms === core.FLUSH_GAP_MS), 'the next pass in 3 minutes');
+    await relayIdle(limited);
+    assert.equal(published(), 30, 'the tick after the pass reads the acks and re-sends nothing');
+    // Inside the 3 minutes: the send's 30 s check, the 15-minute tick and the window opening re-send nothing either.
+    clock += 30000;
+    await s.timers.run(core.SOON_MS);
+    await relayIdle(limited);
+    clock += MIN;
+    await s.app.tick();
+    s.app.tickIfStale();
+    await relayIdle(limited);
+    assert.equal(published(), 30);
+    assert.equal(s.timers.timeouts.filter((h) => h.ms === core.FLUSH_GAP_MS).length, 1, 'one next pass, 3 minutes after the first');
+    clock += core.FLUSH_GAP_MS - 90000;
+    await s.timers.run(core.FLUSH_GAP_MS);
+    await relayIdle(limited);
+    assert.equal(published(), 60, 'the second pass');
     clock += core.FLUSH_GAP_MS;
     await s.timers.run(core.FLUSH_GAP_MS);
-    clock += core.FLUSH_GAP_MS;
-    await s.timers.run(core.FLUSH_GAP_MS);
-    assert.equal(published() - at, 70);
+    await relayIdle(limited);
+    assert.equal(published(), 70, 'the third pass');
     assert.ok((await s.app.rows()).every((r) => r.status === 'sent'));
     assert.equal(s.timers.timeouts.filter((h) => h.ms === core.FLUSH_GAP_MS).length, 0, 'nothing left: no more passes');
-    assert.deepEqual(relay.state.limited, []);
+    assert.deepEqual(limited.state.limited, [], 'no 429');
+    const { items } = await s.receiver.pollOnce();
+    assert.deepEqual(items.map((i) => i.header.id), rows.map((r) => r.id), 'in order');
+    const flushed = (await s.lab.activity()).filter((e) => e.type === 'flush');
+    assert.equal(flushed.length, 70, 'each row went in a pass (the activity log)');
+  } finally { s.app.stop(); await limited.close(); }
+});
+
+test('F07 at start: rows queued offline in an earlier run go in a capped pass, and the rest 3 minutes later', async () => {
+  let online = false;
+  let clock = Date.now();
+  const limited = await startMockRelay({ ...NTFY_SH_LIMITS, now: () => clock });
+  const s = await setup({ online: () => online, now: () => clock, rel: limited });
+  const rows = [];
+  try {
+    for (let i = 0; i < 45; i++) { clock += 1; rows.push(await s.app.sendLink(`https://example.com/earlier/${i}`)); }
   } finally { s.app.stop(); }
+  // Windows restarts an hour later, online: a new app on the same store.
+  clock += 60 * MIN;
+  online = true;
+  const timers = fakeTimers();
+  const app = core.createApp({ bridge: fakeBridge(), storage: s.storage, timers, version: '1.2.0', log: quiet, now: () => clock, online: () => online });
+  try {
+    app.start();
+    await relayIdle(limited);
+    assert.equal(limited.state.publishLog.length, 30, 'one pass of 30, not all 45 at once');
+    assert.equal(timers.timeouts.filter((h) => h.ms === core.FLUSH_GAP_MS).length, 1, 'the rest in 3 minutes');
+    // The 15-minute tick inside those 3 minutes re-sends nothing.
+    clock += MIN;
+    await timers.intervals.find((h) => h.ms === core.TICK_MS).fn();
+    await relayIdle(limited);
+    assert.equal(limited.state.publishLog.length, 30);
+    clock += 2 * MIN;
+    await timers.run(core.FLUSH_GAP_MS);
+    await relayIdle(limited);
+    assert.equal(limited.state.publishLog.length, 45);
+    assert.deepEqual(limited.state.limited, []);
+    assert.deepEqual((await s.receiver.pollOnce()).items.map((i) => i.header.id), rows.map((r) => r.id));
+  } finally { app.stop(); await limited.close(); }
+});
+
+test('F07: a row that failed while Windows said online (a 429) goes in a pass once v1.1’s back-off says so; with Lab off, v1.1 re-sends it', async () => {
+  let clock = Date.now();
+  let full = true;
+  const busy = await startMockRelay({ now: () => clock, failPublish: () => (full ? 429 : null) });
+  const s = await setup({ now: () => clock, rel: busy });
+  try {
+    const row = await s.app.sendLink('https://example.com/busy');
+    assert.deepEqual([row.status, row.errorCode, row.attempts], ['failed', 'network', 1]);
+    await relayIdle(busy);
+    full = false;
+    const published = () => busy.state.publishLog.length;
+    clock += 30000;
+    await s.app.tick();
+    await relayIdle(busy);
+    assert.equal(published(), 0, 'not due yet (v1.1: 2 minutes after one failure)');
+    clock += 2 * MIN;
+    await s.app.tick();
+    await relayIdle(busy);
+    assert.equal(published(), 1);
+    assert.equal((await s.app.rows()).find((r) => r.id === row.id).status, 'sent', 'due: sent');
+    assert.ok((await s.lab.activity()).some((e) => e.type === 'flush' && e.id8 === row.id.slice(0, 8)), 'in a pass (flushOffline), not the re-send pass');
+    // Lab off (LAB-PLAN 1.3): v1.1's back-off re-sends a waiting row in the tick's re-send pass.
+    full = true;
+    const two = await s.app.sendLink('https://example.com/busy-2');
+    await relayIdle(busy);
+    await s.lab.setLab(false);
+    full = false;
+    clock += 3 * MIN;
+    await s.app.tick();
+    assert.equal((await s.app.rows()).find((r) => r.id === two.id).status, 'sent');
+  } finally { s.app.stop(); await busy.close(); }
 });
 
 test('F07 with Lab off: an offline PC tries as v1.1 does (no deferring, no flush); the queue keeps v1.1’s rows', async () => {
@@ -311,6 +405,66 @@ test('F01’s faster checks (2.5): every 30 s while the window shows and a deliv
     clock += 11 * MIN;
     assert.equal(labMod.wantsFaster(await s.app.rows(), { lab: true, inboxLab: true, states: {} }, clock), false);
   } finally { s.app.stop(); }
+});
+
+test('F01: a Lab Daylight’s first frame after the ack (no hello heard yet): the ticks and the faster checks read on, and the row reaches In your Reader ✓ with its toast', async () => {
+  const rule4 = { label: 'Delivered ✓', sentence: 'Saved on your Daylight.', action: null, stepLine: null, final: false };
+  const polls = () => relay.state.requests.filter((r) => /\/json/.test(r)).length;
+  // The window hidden: the ack is read before the Daylight's Lab frame (a fresh pairing, 2.2.4's 30 s between Lab
+  // frames, or the Inbox giving way after a 429); the next tick reads on and hears the hello with the state.
+  let clock = Date.now();
+  const s = await setup({ lab: true, now: () => clock });
+  try {
+    const link = await s.app.sendLink('https://example.com/late', 'Late');
+    await s.receiver.pollOnce(); // the ack only
+    await s.app.tick();
+    assert.equal((await s.app.rows())[0].status, 'delivered');
+    assert.equal((await s.lab.timeline()).inboxLab, false, 'no hello heard yet');
+    assert.deepEqual(await labelOf(s.app, link.id), rule4, 'rule 4 until a hello is heard');
+    await s.day.report(link.id, 'reader'); // the hello, with the state
+    const at = polls();
+    clock += 15 * MIN;
+    await s.app.tick();
+    assert.ok(polls() > at, 'the tick read the ack topic though no hello had been heard');
+    assert.equal((await labelOf(s.app, link.id)).label, 'In your Reader ✓');
+    assert.deepEqual(s.readers, [link.id], 'the toast’s hook');
+  } finally { s.app.stop(); }
+
+  // The window shows: the faster checks run though no hello has been heard (2.5 has no such condition).
+  clock = Date.now();
+  const v = await setup({ lab: true, now: () => clock });
+  try {
+    const link = await v.app.sendLink('https://example.com/late-2', 'Late 2');
+    await v.receiver.pollOnce();
+    await v.app.tick();
+    assert.equal((await v.lab.timeline()).inboxLab, false);
+    v.timers.timeouts = [];
+    const fast = () => v.timers.timeouts.filter((h) => h.ms === L.FAST_CHECK_MS).length;
+    v.app.setVisible(true);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(fast(), 1, 'shown: a check in 30 s');
+    await v.day.report(link.id, 'reader');
+    clock += L.FAST_CHECK_MS;
+    await v.timers.run(L.FAST_CHECK_MS);
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal((await labelOf(v.app, link.id)).label, 'In your Reader ✓');
+    assert.deepEqual(v.readers, [link.id]);
+    assert.equal(fast(), 0, 'settled: no more');
+  } finally { v.app.stop(); }
+
+  // The rules alone: Lab on and a delivered row with no settled state, whatever inboxLab says; 48 hours for the state
+  // digest, 10 minutes for the faster checks; nothing with Lab off.
+  const now = Date.now();
+  const rows = [{ id: 'a', status: 'delivered', delivered: now - MIN }];
+  for (const inboxLab of [false, true]) {
+    assert.equal(labMod.wantsStates(rows, { lab: true, inboxLab, states: {} }, now), true);
+    assert.equal(labMod.wantsFaster(rows, { lab: true, inboxLab, states: {} }, now), true);
+    assert.equal(labMod.wantsStates(rows, { lab: true, inboxLab, states: { a: { s: 'reader' } } }, now), false, 'settled');
+    assert.equal(labMod.wantsStates(rows, { lab: false, inboxLab, states: {} }, now), false, 'Lab off');
+    assert.equal(labMod.wantsFaster(rows, { lab: true, inboxLab, states: {} }, now + 11 * MIN), false, '10 minutes');
+    assert.equal(labMod.wantsStates(rows, { lab: true, inboxLab, states: {} }, now + 47 * 60 * MIN), true);
+    assert.equal(labMod.wantsStates(rows, { lab: true, inboxLab, states: {} }, now + 49 * 60 * MIN), false, '48 hours');
+  }
 });
 
 // --- F08 and F33: the notifications -----------------------------------------------------------------------------------------

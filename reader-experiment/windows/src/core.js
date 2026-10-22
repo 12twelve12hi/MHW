@@ -31,6 +31,36 @@ export const MAX_FILE = ds.MAX_ITEM;
 /** The library's sentence for a file over MAX_FILE: "Too big to send. Files can be up to 9 MB; this one is … MB." */
 export const tooBig = (size) => ds.tooBigMessage(size);
 
+/** A row waiting for a connection (F07): failed with error code network, whatever made it fail. */
+export const isWaitingRow = (row) => row?.status === 'failed' && row?.errorCode === 'network';
+
+/**
+ * daylight-share's Sender with F07's one rule (LAB-PLAN 2.7.1, F07 "Common"): while `holdNetwork` is true (Lab on), a
+ * row waiting for a connection is never due in a re-send pass. That pass (resendDue, in every tick) has no caps, so
+ * once the rows' v1.1 back-off has run out it would send all of them at once and empty the request bucket the
+ * household shares with the Daylight. Such rows leave only through flushOffline's passes (flushNetwork: at most 30
+ * frames and 18 MB, passes at least 3 minutes apart). With Lab off, v1.1's back-off re-sends them (LAB-PLAN 1.3). The
+ * library's re-send pass asks _due about every row; the unit tests pin that (lab-w1.test.mjs, F07.3 with ntfy.sh's
+ * limits).
+ */
+export class AppSender extends ds.Sender {
+  constructor(opts) { super(opts); this.holdNetwork = false; }
+  _due(row, now) { return this.holdNetwork && isWaitingRow(row) ? false : super._due(row, now); }
+  /** Whether v1.1's back-off says the row is due for a re-send, holdNetwork or not. */
+  dueByBackoff(row, now) { return super._due(row, now); }
+}
+
+/**
+ * Whether a capped pass is due (F07, Lab on): the oldest row waiting for a connection, the one flushNetwork tries first,
+ * is due by v1.1's back-off. The back-off of the pass's head keeps a pass from repeating every 3 minutes while the
+ * network stays down; a pass that got through sets its own next pass (flushOffline).
+ */
+export function flushDue(sender, rows, now) {
+  const head = (rows ?? []).filter((r) => isWaitingRow(r) && now - r.created <= ds.OUTBOX_EXPIRY_MS)
+    .sort((a, b) => a.created - b.created)[0];
+  return !!head && sender.dueByBackoff(head, now);
+}
+
 /** Runs async functions one at a time, in call order (the outbox is read-modify-write). */
 export function serial() {
   let chain = Promise.resolve();
@@ -83,6 +113,7 @@ export function createApp({
   let fastTimer = null;
   let flushTimer = null;
   let lastFlush = -Infinity;
+  const flushRun = serial(); // F07: one pass decision at a time (a tick's and the online event's)
   const quickSends = []; // F09: times of the last quick sends (QUICK_SENDS_PER_MINUTE)
   const toldReader = new Set(); // F01: rows onReader was told about, so two ticks that overlap tell it once
 
@@ -107,7 +138,7 @@ export function createApp({
     const pairing = await getPairing();
     if (!pairing) return null;
     const key = `${pairing.code}|${pairing.relay}`;
-    if (cache?.key !== key) cache = { key, sender: new ds.Sender({ pairing, storage, from: FROM, app, fetch, now, onAckHeader: lab.hook }) };
+    if (cache?.key !== key) cache = { key, sender: new AppSender({ pairing, storage, from: FROM, app, fetch, now, onAckHeader: lab.hook }) };
     return cache.sender;
   }
 
@@ -435,23 +466,33 @@ export function createApp({
 
   /**
    * Acks and re-sends (PROTOCOL 3.3, logic.maintain): the local re-send pass always runs (it ends week-old rows and
-   * drops expired rows' content after 14 days); the ack topic is read only while a row could still be acked.
+   * drops expired rows' content after 14 days); the ack topic is read only while a row could still be acked. With Lab
+   * on (F07), rows waiting for a connection are left out of that pass (AppSender): when the oldest of them is due by
+   * v1.1's back-off, the tick runs flushOffline's capped pass instead, which waits for the rest of the 3 minutes when
+   * the last pass was sooner. This covers the tick right after a pass, the 15-minute tick and the one at start (rows
+   * queued in an earlier run), and rows that failed for want of a network while Windows said it was online.
    */
   async function tick() {
     lastTick = now();
     const before = await rowStates();
+    let flush = false;
     const r = await withSender(async (s) => {
       if (!s) return { delivered: 0, resent: 0 };
       try {
+        const labOn = isLabOn(await getSettings());
+        s.holdNetwork = labOn;
         // With Lab on, the timeline (F01) reads the ack topic after delivery too, while a row waits for its state.
         const tl = await lab.timeline();
-        return await maintain(s, now(), { readAcks: wantsStates(await s.list(), tl, now()) });
+        const out = await maintain(s, now(), { readAcks: wantsStates(await s.list(), tl, now()) });
+        flush = labOn && flushDue(s, await s.list(), now());
+        return out;
       } catch (e) { log.warn?.('Send to Daylight: tick failed', e); return { delivered: 0, resent: 0 }; }
     });
     // Lab's ledger keeps the states of the rows still here (LAB-PLAN 2.2.6).
     await lab.prune();
     await afterAcks(before);
     scheduleFast();
+    if (flush) await flushOffline().catch((e) => log.warn?.('Send to Daylight: flush failed', e));
     return r;
   }
 
@@ -496,8 +537,8 @@ export function createApp({
   }
 
   /**
-   * F01's faster checks (2.5): while the window shows and a delivered row of the last 10 minutes has no settled state
-   * (the Daylight speaks Lab), a tick every 30 s instead of every 15 minutes.
+   * F01's faster checks (2.5): while the window shows and a delivered row of the last 10 minutes has no settled state,
+   * a tick every 30 s instead of every 15 minutes (whether a hello has been heard yet or not: wantsFaster).
    */
   async function scheduleFast() {
     if (fastTimer || !visible) return;
@@ -517,18 +558,25 @@ export function createApp({
   /**
    * F07: back online. With Lab on, the rows that wait for a connection go now (Sender.flushNetwork: oldest first, at
    * most 30 frames and 18 MB of attachments a pass, nothing more after a 429, no attachments after a 413), passes at
-   * least 3 minutes apart; another pass follows while the last one stopped at a cap and nothing failed. With Lab off,
-   * v1.1's back-off does it (LAB-PLAN 1.3). -> the rows attempted
+   * least 3 minutes apart; another pass follows while the last one stopped at a cap and nothing failed, and otherwise
+   * when a tick finds the oldest waiting row due by v1.1's back-off. These passes are the only way such rows leave while
+   * Lab is on (AppSender). With Lab off, v1.1's back-off does it (LAB-PLAN 1.3). -> the rows attempted
    */
-  async function flushOffline() {
+  function flushOffline() { return flushRun(flushOnce); }
+
+  async function flushOnce() {
     if (online() === false || !isLabOn(await getSettings())) return [];
     const wait = lastFlush + FLUSH_GAP_MS - now();
-    if (wait > 0) { scheduleFlush(wait); return []; }
+    if (wait > 0) {
+      // Too soon after the last pass: the next one comes at the end of the 3 minutes, if anything still waits then.
+      if ((await rows()).some(isWaitingRow)) scheduleFlush(wait);
+      return [];
+    }
     lastFlush = now();
     const attempted = await withSender(async (s) => (s ? s.flushNetwork() : []));
     for (const r of attempted) lab.logEvent({ type: 'flush', id: r.id, kind: r.kind, status: statusOf(r) });
     if (attempted.length) afterSend();
-    const left = (await rows()).some((r) => r.status === 'failed' && r.errorCode === 'network');
+    const left = (await rows()).some(isWaitingRow);
     if (left && attempted.length && attempted.every((r) => r.status !== 'failed' && r.status !== 'expired')) scheduleFlush(FLUSH_GAP_MS);
     return attempted;
   }
@@ -564,7 +612,8 @@ export function createApp({
     tickQuietly();
     timers.clearInterval(interval);
     interval = timers.setInterval(tickQuietly, TICK_MS);
-    // Items queued offline in an earlier run (F07) are due by then (their back-off is a minute): the tick sends them.
+    // Items queued offline in an earlier run (F07) are due by now (their back-off is a minute): with Lab on, this first
+    // tick sends them in a capped pass (flushOffline), and the rest 3 minutes later; with Lab off, as v1.1 does.
   }
 
   function stop() {

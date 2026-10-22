@@ -437,8 +437,10 @@ test('tick stays off the relay with nothing to wait for; the local pass still dr
   assert.equal(relay.state.requests.length, before, 'past the ack window (15 days) nothing reads the relay');
   assert.equal((await app.rows())[0].status, 'expired');
 
-  // A delivered row alone never reads the relay either.
+  // A delivered row alone never reads the relay either (v1.1, Lab off). With Lab on, the timeline reads on for the
+  // row's state for the state digest's 48 hours (F01, LAB-PLAN 2.5; this Daylight is a v1.1 one), then stops.
   const { app: app2 } = newApp({ extra: { now: () => clock } });
+  await app2.lab.setLab(false);
   await app2.pair(d.link);
   await app2.sendLink('https://example.com/delivered-only');
   await d.receiver.pollOnce();
@@ -446,6 +448,13 @@ test('tick stays off the relay with nothing to wait for; the local pass still dr
   before = relay.state.requests.length;
   await app2.tick();
   assert.equal(relay.state.requests.length, before);
+  await app2.lab.setLab(true);
+  await app2.tick();
+  assert.ok(relay.state.requests.length > before, 'Lab on: it reads for the row’s state');
+  clock += 48 * 3600000 + 60000;
+  before = relay.state.requests.length;
+  await app2.tick();
+  assert.equal(relay.state.requests.length, before, 'Lab on, 48 hours later: no more');
 });
 
 test('an expired link is marked delivered when the Daylight comes back and acks the last re-send', async () => {
