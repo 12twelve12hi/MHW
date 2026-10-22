@@ -1,0 +1,14 @@
+- main:
+  - heading "Send to Daylight" [level=1]
+  - button "Settings"
+  - heading "Pair with your Daylight" [level=2]
+  - paragraph: On your Daylight, open Daylight Share. Type the 28-character code it shows, or paste its pairing link.
+  - text: Pairing code or link
+  - textbox "Pairing code or link":
+    - /placeholder: ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23
+  - text: Name for this browser (optional)
+  - textbox "Name for this browser (optional)":
+    - /placeholder: <default name>
+    - text: Parity Chrome
+  - group: Advanced
+  - button "Pair"

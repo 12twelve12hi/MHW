@@ -1,0 +1,23 @@
+- main:
+  - heading "Send to Daylight" [level=1]
+  - button "‹ Back"
+  - heading "Settings" [level=2]
+  - text: Comfort
+  - switch "Comfort"
+  - paragraph: Larger text and buttons, more contrast, no motion.
+  - term: Daylight
+  - definition: Parity Daylight
+  - term: Relay
+  - definition: http://127.0.0.1:<port>
+  - term: Shortcut
+  - definition: <shortcut>
+  - text: Name for this browser
+  - textbox "Name for this browser":
+    - /placeholder: <default name>
+    - text: Parity Chrome
+  - button "Save"
+  - status
+  - button "Change pairing…"
+  - paragraph: Everything you send is end-to-end encrypted with a key from the pairing code. The relay only sees scrambled data.
+  - button "Unpair this browser"
+  - paragraph: Send to Daylight <version> (chrome)

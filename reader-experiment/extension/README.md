@@ -166,9 +166,29 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   control has a name; Comfort's switch and its words (`LAB_TEXT.comfort`, `.comfortFooter`); the announcements; and
   typed-code pairing. Its screenshots (`test-results/a11y/`) are uploaded by CI for review, not compared. The checks
   live in `test/helpers/a11y.mjs`.
-- CI: [`.github/workflows/rx-extension.yml`](../../.github/workflows/rx-extension.yml) builds, runs both test suites,
-  publishes the two zips to the release, uploads `dist/safari` as the `send-to-daylight-safari` artifact, and deploys
-  the web sender to GitHub Pages (see [`../web/README.md`](../web/README.md)).
+- **Lab-off parity** (LAB-PLAN 1.7, F00.2): `test/e2e/lab-off-parity.e2e.mjs` (popup) and
+  `test/e2e/web-lab-off-parity.e2e.mjs` (web sender) compare each main screen's accessibility tree (pairing, sending
+  with a row in every state, settings), taken with Playwright's `locator('body').ariaSnapshot()`, with the baselines in
+  [`test/e2e/lab-off-baseline/`](test/e2e/lab-off-baseline/), recorded from the P0 close-out (protocol 1.1 plus the
+  accessibility baseline, before any Lab code). The tests seed `settings.lab = false` (the extension's test hook, and
+  the web sender's stored Lab key). The mock relay's port, the version, the shortcut and the default device name are
+  replaced by `<port>`, `<version>`, `<shortcut>` and `<default name>`; the pairing, names and row ages are fixed
+  (`test/helpers/lab-off.mjs`). Re-record only together with a matching non-Lab change:
+  `UPDATE_LAB_OFF_BASELINE=1 node --test test/e2e/lab-off-parity.e2e.mjs test/e2e/web-lab-off-parity.e2e.mjs`.
+  With Lab off the Lab switch row itself stays (LAB-PLAN 1.3); `expectBaseline(page, name, {omit})` drops exactly
+  those lines and nothing else.
+- CI: [`.github/workflows/rx-extension.yml`](../../.github/workflows/rx-extension.yml) has one job per lane (LAB-PLAN
+  6.1; each marked `# lane:`): **ext** builds the extension and runs every test whose file name doesn't start with
+  `web` (the Safari bundle's and the accessibility test included), and **web** builds the web sender and runs the
+  `*web*` tests. **publish** (ext's) puts the two zips on the release, and **pages** (web's) deploys the web sender to
+  GitHub Pages (see [`../web/README.md`](../web/README.md)). `dist/safari` is the `send-to-daylight-safari`
+  artifact, and the accessibility screenshots are `rx-extension-a11y-screenshots`.
+- **Lab release gate** (LAB-PLAN 6.2): the extension's and the web sender's Lab builds reach the release and Pages
+  only after the iPhone and Mac builds of the same wave. `lab-wave.json` here (and `../web/lab-wave.json`) names the
+  Lab wave of the folder's code: `null` until X0 (B0 for the web sender) sets `"w0"`, then `"w1"` from X1 (B1).
+  While [`../lab-release-gate.json`](../lab-release-gate.json) has that wave `false`, the build and its tests still
+  run, but its zip isn't uploaded and the run shows a notice saying so. A change to the gate file starts the workflow,
+  so opening a wave publishes the held builds.
 
 ## Limits
 

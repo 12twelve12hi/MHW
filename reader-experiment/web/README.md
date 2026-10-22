@@ -78,8 +78,12 @@ node build.mjs --serve 8080    # builds dist/site and dist/send-to-daylight-web.
 ```
 
 Tests live with the extension's (`../extension/test/unit/web-logic.test.mjs`, `../extension/test/e2e/web.e2e.mjs`,
-and the accessibility checks in `../extension/test/e2e/a11y.e2e.mjs`: axe-core, nothing clipped at 360 px with
-Comfort on, status text at 200%); see [the extension README](../extension/README.md#build-and-test).
+the accessibility checks in `../extension/test/e2e/a11y.e2e.mjs`: axe-core, nothing clipped at 360 px with Comfort
+on, status text at 200%; and the Lab-off parity test `../extension/test/e2e/web-lab-off-parity.e2e.mjs` with its
+baselines `../extension/test/e2e/lab-off-baseline/web-*.yml`); see
+[the extension README](../extension/README.md#build-and-test). `lab-wave.json` names the Lab wave of this folder's
+code for the release gate (`null` until B0); a web Lab build waits for the iPhone and Mac builds of its wave before it
+reaches the release or Pages.
 
 ## GitHub Pages
 

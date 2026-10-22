@@ -1,0 +1,34 @@
+- main:
+  - heading "Send to Daylight" [level=1]
+  - button "Settings"
+  - paragraph:
+    - text: Sending to
+    - strong: Parity Daylight
+  - text: A page to send 127.0.0.1
+  - button "Send this page"
+  - button "Send link only"
+  - status
+  - heading "Recent" [level=2]
+  - list "Recent":
+    - listitem:
+      - text: Page A page on its way Sent · waiting for your Daylight · 1 min ago
+      - 'button "Remove: A page on its way"': Remove
+    - listitem:
+      - text: Link A link that waits Waiting to send · 2 h ago
+      - 'button "Retry now: A link that waits"': Retry now
+      - 'button "Remove: A link that waits"': Remove
+      - paragraph: Couldn’t send right now. It will try again by itself.
+    - listitem:
+      - text: PDF Paper Delivered ✓ · 5 h ago
+      - 'button "Remove: Paper"': Remove
+      - paragraph: Saved on your Daylight.
+    - listitem:
+      - text: Link example.org/never/picked/up Not delivered · 8 days ago
+      - 'button "Try again: example.org/never/picked/up"': Try again
+      - 'button "Remove: example.org/never/picked/up"': Remove
+      - paragraph: Your Daylight didn’t pick this up within a week. Is it on and online?
+    - listitem:
+      - text: PDF Big scan Not delivered · yesterday
+      - 'button "Remove: Big scan"': Remove
+      - paragraph: Too big to send. Files can be up to 9 MB; this one is 14.2 MB.
+  - status

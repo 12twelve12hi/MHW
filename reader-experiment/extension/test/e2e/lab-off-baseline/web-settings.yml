@@ -1,0 +1,27 @@
+- main:
+  - heading "Send to Daylight" [level=1]
+  - button "‹ Back"
+  - heading "Settings" [level=2]
+  - text: Comfort
+  - switch "Comfort"
+  - paragraph: Larger text and buttons, more contrast, no motion.
+  - term: Daylight
+  - definition: Parity Daylight
+  - term: Relay
+  - definition: http://127.0.0.1:<port>
+  - text: Name for this device
+  - textbox "Name for this device":
+    - /placeholder: <default name>
+    - text: Parity web
+  - button "Save"
+  - status
+  - heading "iPhone Shortcut" [level=3]
+  - paragraph: To send from the iPhone share sheet, make a Shortcut that opens this link with the shared address added at the end. It includes your pairing, so it keeps working even if Safari clears this site’s data. Keep it private.
+  - code: http://127.0.0.1:<port>/#autosend=1&pair=daylightshare%3A%2F%2Fpair%3Fc%3DBMYFK6U7YTUQ4M2YPWRMP3ARG3GQ%26r%3Dhttp%253A%252F%252F127.0.0.1%253A<port>%26n%3DParity%2520Daylight&url=
+  - button "Copy"
+  - paragraph:
+    - link "Step-by-step Shortcut instructions":
+      - /url: https://github.com/12twelve12hi/MHW/blob/claude/sweet-goldberg-ej1nb0/reader-experiment/web/SHORTCUT.md
+  - button "Change pairing…"
+  - button "Unpair this device"
+  - paragraph: Everything you send is end-to-end encrypted with a key from the pairing code. The relay (127.0.0.1:<port>) only sees scrambled data.
