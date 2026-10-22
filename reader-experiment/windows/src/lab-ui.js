@@ -5,7 +5,7 @@
 // Text fields are one-line textareas that wrap (as the relay field is), so a pasted link or address is shown whole,
 // also at 225% text with Comfort (F27.4); Enter submits, and a pasted line break goes.
 
-import { LAB_TEXT } from './daylight-lab.js';
+import { LAB_TEXT, hostLineText } from './daylight-lab.js';
 
 let uid = 0;
 const nextId = (p) => `${p}-${++uid}`;
@@ -217,11 +217,17 @@ export function updateWhatsInLab(box, model) {
   return true;
 }
 
+/** A small heading of the server section (the Server code, the host line, the delivery mode, the steps), with an id. */
+function sectionHeading(text, prefix) {
+  const h = el('h3', 'lab-server-h', text);
+  h.id = nextId(prefix);
+  return h;
+}
+
 /** The Server code under its heading, with Copy (described by the heading) and the line that says it was copied. */
 function serverCodeBlock(code, copy) {
   const S = LAB_TEXT.serverSection;
-  const h = el('h3', 'lab-server-h', S.serverCode);
-  h.id = nextId('lab-code-h');
+  const h = sectionHeading(S.serverCode, 'lab-code-h');
   const text = el('p', 'lab-server-code', code ?? '');
   const b = button(S.copy, 'btn secondary small-btn lab-server-copy');
   b.setAttribute('aria-describedby', h.id);
@@ -321,10 +327,17 @@ function setupForm(on) {
 
 /**
  * The Daylight server section (2.6) into `box`. model: lab.serverView()'s {paired, state, message, host, fingerprint,
- * v1Notice, moved, serverCode, labInbox, aiToday, manualUrl, setupFirst, rerun}.
+ * delivery, v1Notice, moved, serverCode, labInbox, aiToday, manualUrl, setupFirst, rerun}. host: the server's origin or
+ * host; the line under its heading (hostLabel) is hostLineText(host, fingerprint). delivery: 'lab' | 'v1' | null (no server found:
+ * no Delivery line).
  * on: {copy(code) -> Promise<true | why>, move(yes) for "moved … Use it?", saveAddress(url) -> Promise<{error?}>,
- *      saveLabel, and setupForm's setupCheck, setup and setupSaid}. Set up with a link comes right after the state while
- * the state's message says to paste a setup link (model.setupFirst), else last.
+ *      and setupForm's setupCheck, setup and setupSaid}.
+ * Order (2.6, "The rest of the server section's copy"): the state; Set up with a link, right here while the state's
+ * message says to paste a setup link (model.setupFirst), else last; while the state is needs-server, stepsHeading with
+ * the five steps, numbered (how to get that link), and where every step is; the move question; hostLabel with the
+ * host and fingerprint; deliveryLabel (then the v1 notice under v1 delivery); the Server code with Copy; the Lab Inbox and AI
+ * lines; the Server address field with Save and its footer; the re-run help. Every word is LAB_TEXT.serverSection's, the
+ * server module's or the model's.
  */
 export function renderServerSection(box, model, on = {}) {
   const S = LAB_TEXT.serverSection;
@@ -342,6 +355,16 @@ export function renderServerSection(box, model, on = {}) {
   }
   const setup = on.setupCheck ? setupForm(on) : null;
   if (setup && model.setupFirst) box.append(setup);
+  if (model.state === 'needs-server') {
+    // The steps (2.6): only while the server is not set up; step 2 is the module's RERUN_HELP, word for word.
+    const steps = el('section', 'lab-server-steps');
+    const h = sectionHeading(S.stepsHeading, 'lab-steps-h');
+    steps.setAttribute('aria-labelledby', h.id);
+    const ol = el('ol', 'lab-server-steps-list');
+    for (const step of S.steps) ol.append(el('li', null, step));
+    steps.append(h, ol, el('p', 'hint small lab-server-steps-more', S.stepsMore));
+    box.append(steps);
+  }
   if (model.moved) {
     // "Your Daylight server moved to {host}. Use it?" (2.6): on.move(true) confirms the move and draws the section
     // again. Cancel closes the question and changes nothing (it asks again next time); the focus goes to Copy, next.
@@ -368,8 +391,12 @@ export function renderServerSection(box, model, on = {}) {
     moved.append(q, acts);
     box.append(moved);
   }
-  const where = [model.host, model.fingerprint].filter(Boolean).join(' · ');
-  if (where) box.append(el('p', 'lab-server-where', where));
+  const where = hostLineText(model.host, model.fingerprint);
+  if (where) box.append(sectionHeading(S.hostLabel, 'lab-host-h'), el('p', 'lab-server-where', where));
+  if (model.delivery === 'lab' || model.delivery === 'v1') {
+    box.append(sectionHeading(S.deliveryLabel, 'lab-delivery-h'),
+      el('p', 'lab-server-delivery', model.delivery === 'v1' ? S.deliveryV1 : S.deliveryLab));
+  }
   if (model.v1Notice) box.append(el('p', 'note lab-server-v1', model.v1Notice));
   box.append(...serverCodeBlock(model.serverCode, on.copy));
   if (model.labInbox) box.append(el('p', 'lab-server-inbox', model.labInbox));
@@ -377,12 +404,14 @@ export function renderServerSection(box, model, on = {}) {
 
   const form = el('form', 'lab-server-address');
   form.noValidate = true;
-  const { label, field } = oneLineField({ label: S.serverAddress, placeholder: 'https://', value: model.manualUrl ?? '' });
-  const save = el('button', 'btn secondary', on.saveLabel ?? 'Save');
+  const footer = el('p', 'hint small lab-server-address-footer', S.addressFooter);
+  footer.id = nextId('lab-address-footer');
+  const { label, field } = oneLineField({ label: S.serverAddress, placeholder: S.addressPlaceholder, value: model.manualUrl ?? '', describedBy: footer.id });
+  const save = el('button', 'btn secondary', S.addressSave);
   save.type = 'submit';
   const said = el('p', 'error lab-server-address-error');
   said.setAttribute('role', 'alert');
-  form.append(label, field, save, said);
+  form.append(label, field, footer, save, said);
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     said.textContent = '';

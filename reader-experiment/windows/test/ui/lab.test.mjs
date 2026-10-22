@@ -345,6 +345,23 @@ test('the Daylight server section: not set up, its long text and Set up with a l
     const order = await page.evaluate(() => [...document.querySelectorAll('#server > *')].map((e) => e.className));
     assert.ok(order.indexOf('lab-server-setup') < order.indexOf('lab-server-h'), order.join(', '));
     assert.equal(await page.textContent('.lab-server-rerun'), S.RERUN_HELP);
+    // "Turn it on" (2.6): the five steps, numbered, pinned element by element against LAB_TEXT's list (never split the
+    // joined text: four of the steps hold commas), after Set up with a link; step 2 is RERUN_HELP word for word.
+    const SS = LAB_TEXT.serverSection;
+    const steps = page.getByRole('region', { name: SS.stepsHeading, exact: true });
+    assert.deepEqual(await steps.locator('ol > li').allTextContents(), SS.steps);
+    assert.equal(SS.steps.length, 5);
+    assert.equal(SS.steps[1], S.RERUN_HELP);
+    assert.equal(await steps.locator('.lab-server-steps-more').textContent(), SS.stepsMore);
+    assert.ok(order.indexOf('lab-server-setup') < order.indexOf('lab-server-steps'), order.join(', '));
+    // No server yet: no "Your server" line beyond the fingerprint, and no Delivery line.
+    assert.equal(await page.locator('#server h3', { hasText: SS.deliveryLabel }).count(), 0);
+    // The Server address field: LAB_TEXT's placeholder, Save and footer (its description).
+    const address = page.getByLabel(SS.serverAddress, { exact: true });
+    assert.equal(await address.getAttribute('placeholder'), SS.addressPlaceholder);
+    assert.equal(await page.textContent('.lab-server-address-footer'), SS.addressFooter);
+    assert.equal(await address.evaluate((e) => document.getElementById(e.getAttribute('aria-describedby')).textContent), SS.addressFooter);
+    assert.equal(await page.getByRole('button', { name: SS.addressSave, exact: true }).count(), 1);
     const setup = page.getByLabel(LAB_TEXT.serverSection.setupRow, { exact: true });
     assert.equal(await setup.getAttribute('placeholder'), LAB_TEXT.serverSection.setupPlaceholder);
     assert.equal(await page.textContent('.lab-server-setup-footer'), LAB_TEXT.serverSection.setupFooter);
@@ -376,10 +393,17 @@ test('the Daylight server section: not set up, its long text and Set up with a l
     // The stand-in as the typed Server address: Ready, its host, the Lab Inbox line and AI today.
     worker.state.token = (await S.deriveServerValues(await S.deriveServerSeed(FIXED_SECRET))).authToken;
     await page.getByLabel(LAB_TEXT.serverSection.serverAddress, { exact: true }).fill(worker.url);
-    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await page.getByRole('button', { name: SS.addressSave, exact: true }).click();
     await page.waitForSelector('.lab-server-ready', { timeout: 10000 });
     assert.equal(await page.textContent('.lab-server-ready'), LAB_TEXT.ready);
-    assert.match(await page.textContent('.lab-server-where'), /^localhost:\d+ · [0-9a-f]{4}-[0-9a-f]{4}$/);
+    assert.equal(await page.getByRole('region', { name: SS.stepsHeading, exact: true }).count(), 0, 'the steps show only while not set up');
+    // "Your server" with hostLineText (the host keeps its port), then "Delivery" with the Lab line.
+    const where = await page.textContent('.lab-server-where');
+    assert.match(where, /^localhost:\d+ · [0-9a-f]{4}-[0-9a-f]{4}$/);
+    assert.equal(where, L.hostLineText(worker.url, where.split(' · ')[1]));
+    const heads = await page.locator('#server > h3').allTextContents();
+    assert.deepEqual(heads, [SS.hostLabel, SS.deliveryLabel, SS.serverCode]);
+    assert.equal(await page.textContent('.lab-server-delivery'), SS.deliveryLab);
     assert.equal(await page.textContent('.lab-server-inbox'), 'Lab Inbox last seen 5 min ago');
     assert.equal(await page.textContent('.lab-server-ai'), 'AI today: US$0.23 of US$3');
     assert.equal(await page.getByLabel(LAB_TEXT.serverSection.serverAddress, { exact: true }).inputValue(), worker.url);
@@ -484,7 +508,7 @@ for (const scale of [1, 2, 2.25]) {
       await shot(page, `lab-server-${pct.replace('%', '')}-comfort`);
       await page.getByRole('button', { name: LAB_TEXT.serverSection.setupConfirm, exact: true }).click();
       await page.waitForFunction(() => document.querySelector('.lab-server-setup-said').textContent.length > 20);
-      await page.getByRole('button', { name: 'Save', exact: true }).click();
+      await page.getByRole('button', { name: LAB_TEXT.serverSection.addressSave, exact: true }).click();
       await page.waitForFunction(() => document.querySelector('.lab-server-address-error').textContent !== '');
       await check('the Daylight server section: its errors');
       assert.deepEqual(page.errors.filter((e) => !/ERR_CONNECTION_REFUSED|ERR_NAME_NOT_RESOLVED|Failed to load resource/.test(e)), []);

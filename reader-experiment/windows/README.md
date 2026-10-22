@@ -137,9 +137,13 @@ While Lab is on, two rows under the switch open Lab's screens (**Back** or Esc r
   is no server yet) and **OK**; screen readers say it. A ready server answers "comes to this app in a later Lab update"
   until the feature is built here.
 - **Daylight server ›** (*Optional · Not set up*): where setup happens. It shows the server's state in full (with the
-  exact GitHub secret names), the server's address and fingerprint, the **Server code** with **Copy**, when the
-  Daylight last said hello to the server, today's AI spend, **Set up with a link**, the optional **Server address**
-  field and how to re-run the deploy. See [`../server/README.md`](../server/README.md) to turn the server on.
+  exact GitHub secret names); while the server isn't set up, **Turn it on** with the five steps, numbered, and where
+  every step is explained; **Your server** (its address and fingerprint, *daylight-….workers.dev · 3f9a-1c2e*);
+  **Delivery** (*Through Lab on your Daylight, end-to-end encrypted*, or *Through your pairing (v1 delivery)* with its
+  notice); the **Server code** with **Copy**; when the Daylight last said hello to the server; today's AI spend;
+  **Set up with a link**; the optional **Server address** field (**Save**; *Only needed when your Daylight server has
+  an address of its own…*) and how to re-run the deploy. Every line is in `LAB_TEXT`'s words (LAB-PLAN 2.6, "The rest
+  of the server section's copy"). See [`../server/README.md`](../server/README.md) to turn the server on.
   - **Set up with a link** takes the one-time setup link the deploy makes (`https://daylight-….workers.dev/setup#SETUP-…`;
     server DESIGN 3.5). It comes right after the state while that state says to paste one (not set up, the previous
     pairing, locked, or not recognised), else last. The link is read here first: anything else (the Server code, the
@@ -172,9 +176,9 @@ heard the next time one of these happens. The history still reads as before in t
 with the delivery timeline, in the next Lab build (Wave 1), which also reads the channel after delivery. The one-time
 "Lab is on" note waits for that build too.
 
-**Not there yet** (strings the shared copy, `LAB_TEXT`, doesn't have; reported to the share lane): the server setup
-steps in brief, and labels for the delivery mode and for the host and fingerprint line; the Server address field's
-**Save** button and `https://` placeholder are the window's own words until `LAB_TEXT` has them.
+Every word on Lab's screens is `LAB_TEXT`'s (`daylight-lab.js`) or the server module's: the server section's setup
+steps, host and fingerprint line, delivery mode and Server address field (its `https://` placeholder, **Save** and
+footer), which Wave 0 had to word itself, now come from `LAB_TEXT.serverSection` too. Nothing is missing from it.
 
 ## Uninstall
 

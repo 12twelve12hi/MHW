@@ -262,7 +262,7 @@ test('the server section: the vector pairing’s Server code and fingerprint (F0
     assert.equal(await s.lab.serverCode(), VEC.derived.serverCode, 'what Copy puts on the clipboard');
     assert.equal(v.fingerprint, S.showFingerprint(VEC.derived.fingerprint));
     assert.deepEqual([v.state, v.message], ['OFFLINE', S.STATE_MESSAGES.OFFLINE]);
-    assert.deepEqual([v.host, v.labInbox, v.aiToday, v.manualUrl, v.moved, v.v1Notice], ['', null, null, '', null, null]);
+    assert.deepEqual([v.host, v.delivery, v.labInbox, v.aiToday, v.manualUrl, v.moved, v.v1Notice], ['', null, null, null, '', null, null]);
 
     // A pairing on another relay shows the link form, with the same seed; the long text names the secrets.
     await s.repair(s.secret, 'Lab Daylight');
@@ -275,7 +275,7 @@ test('the server section: the vector pairing’s Server code and fingerprint (F0
     assert.equal((await s.useWorker()).manualUrl, s.worker.url);
     v = await s.lab.serverView();
     const port = new URL(s.worker.url).port;
-    assert.deepEqual([v.state, v.message, v.host, v.manualUrl, v.setupFirst], ['ready', 'Ready', `localhost:${port}`, s.worker.url, false]);
+    assert.deepEqual([v.state, v.message, v.host, v.delivery, v.manualUrl, v.setupFirst], ['ready', 'Ready', `localhost:${port}`, 'lab', s.worker.url, false]);
     assert.equal(v.labInbox, 'Lab Inbox last seen 5 min ago');
     assert.equal(v.aiToday, 'AI today: US$0.23 of US$3');
     assert.deepEqual(await s.lab.setServerAddress(''), { manualUrl: '' });
@@ -292,7 +292,7 @@ test('a server found on the relay: its host and the v1 notice; a move asks first
     s.flags.route = { [WORKER_ORIGIN]: s.worker.url };
     s.worker.state.token = values.authToken;
     let v = await s.lab.serverView();
-    assert.deepEqual([v.state, v.host, v.v1Notice, v.moved], ['ready', 'daylight-0123456789ab.example.workers.dev', S.noticeText('v1'), null]);
+    assert.deepEqual([v.state, v.host, v.delivery, v.v1Notice, v.moved], ['ready', 'daylight-0123456789ab.example.workers.dev', 'v1', S.noticeText('v1'), null]);
     assert.deepEqual(await s.get('server/pin'), { origin: WORKER_ORIGIN, fingerprint: values.fingerprint }, 'the module pinned it');
 
     // The same server announces another origin: the section asks, in LAB_TEXT's words; the pin stays until yes.
@@ -817,10 +817,20 @@ test('the window’s Lab words are LAB_TEXT’s, the switch comes first in Setti
   // The Lab screens take their words from LAB_TEXT: no Lab sentence is written out as a string in them.
   for (const f of ['lab-ui.js', 'lab.js', 'app.js']) {
     const js = fs.readFileSync(path.join(root, 'src', f), 'utf8');
-    for (const t of [L.LAB_TEXT.checking, L.LAB_TEXT.serverHeading, L.LAB_TEXT.serverSection.setupDone, L.LAB_TEXT.switchFooter, ...Object.values(L.LAB_TEXT.needs)]) {
+    const SS = L.LAB_TEXT.serverSection;
+    for (const t of [L.LAB_TEXT.checking, L.LAB_TEXT.serverHeading, SS.setupDone, L.LAB_TEXT.switchFooter, ...Object.values(L.LAB_TEXT.needs),
+      SS.stepsHeading, ...SS.steps, SS.stepsMore, SS.hostLabel, SS.deliveryLabel, SS.deliveryLab, SS.deliveryV1, SS.addressPlaceholder,
+      SS.addressSave, SS.addressFooter]) {
       for (const q of ["'", '"', '`']) assert.ok(!js.includes(`${q}${t}${q}`), `${f} writes out “${t}”`);
     }
   }
+  // The server section's lines are LAB_TEXT.serverSection's (2.6, "The rest of the server section's copy"), not the
+  // window's own: its setup steps, host line, delivery mode and the Server address field's placeholder, Save and footer.
+  const ui = fs.readFileSync(path.join(root, 'src', 'lab-ui.js'), 'utf8');
+  for (const key of ['stepsHeading', 'steps', 'stepsMore', 'hostLabel', 'deliveryLabel', 'deliveryLab', 'deliveryV1', 'addressPlaceholder', 'addressSave', 'addressFooter']) {
+    assert.match(ui, new RegExp(`\\bS\\.${key}\\b`), `lab-ui.js shows LAB_TEXT.serverSection.${key}`);
+  }
+  assert.match(ui, /\bhostLineText\(model\.host, model\.fingerprint\)/, 'the host line is hostLineText’s');
 });
 
 test('the window’s Lab code is Wave 0: none of daylight-lab.js’s W1 exports, F01’s rows or F07’s sends (the release gate)', async () => {

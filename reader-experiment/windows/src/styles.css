@@ -270,6 +270,11 @@ input.switch:checked::before { left: calc(100% - 1.23em); background: var(--btn-
 .lab-server-setup-said:empty { display: none; }
 .lab-server-setup-said.error { color: var(--bad); }
 .lab-server-rerun { margin-top: 14px; overflow-wrap: anywhere; }
+.lab-server-steps-list { margin: 0; padding-left: 1.5em; }
+.lab-server-steps-list li { margin: 0 0 4px; overflow-wrap: anywhere; }
+.lab-server-steps-more { margin: 4px 0 0; overflow-wrap: anywhere; }
+.lab-server-delivery { margin: 0 0 8px; overflow-wrap: anywhere; }
+.lab-server-address-footer { margin: 4px 0 0; overflow-wrap: anywhere; }
 .lab-repaired { margin: 0 0 12px; padding: 8px 12px 10px; border: 1px solid var(--rule-strong); border-radius: 10px; background: var(--card); }
 .lab-repaired-h { margin-top: 2px; }
 .lab-repaired-text { margin: 0; overflow-wrap: anywhere; }

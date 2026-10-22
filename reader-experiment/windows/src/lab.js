@@ -308,6 +308,8 @@ export function createLab({
    * The Daylight server section (2.6): where setup happens, so it carries the long texts.
    * -> {lab, paired, state, message, host, fingerprint, delivery, v1Notice, moved, serverCode, labInbox, aiToday,
    *     manualUrl, setupFirst, rerun}
+   * host: the server's host (and port) as LAB_TEXT's lines show it, '' before one is found; delivery: the config's
+   * 'lab' or 'v1', else null (lab-ui.js words both with LAB_TEXT.serverSection).
    * moved: "Your Daylight server moved to {host}. Use it?" while the server moved (2.6), also when the old address
    * failed or ran out of time (pendingMove); else null.
    */
