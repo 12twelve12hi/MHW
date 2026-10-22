@@ -7,7 +7,8 @@ built by the cards named in each section.*
 
 Every entry point runs **smart intake** on what it gets (`normaliseShare`, F16: the real article behind Google AMP,
 Facebook, Instagram, LinkedIn and Substack links, tracking parameters removed, headline + link shares kept as links)
-and sends the original URL along as `x-orig` when it changed. Text becomes an **excerpt** only from an explicit
+and sends the original URL along as `x-orig` when it changed (in the apps, unless the Clean links row's Use switch is
+off: then the URL goes as shared, LAB-PROTOCOL 2.9.6; the command line has no Use switches). Text becomes an **excerpt** only from an explicit
 selection (`classifyShare`, F11 and LAB-PLAN 6.5 Q1 = b). Files are at most 9 MB; an empty or unreadable file is
 refused with a sentence and never sent as 0 bytes.
 

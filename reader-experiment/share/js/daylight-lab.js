@@ -450,7 +450,7 @@ export const LAB_TEXT = {
     label: 'Use',
     a11y: 'Use {feature}',
     footers: {
-      F03: 'When it’s off, there’s no note when a share brings only the link.',
+      F03: 'When it’s off, there’s no note when a share brings only the link. Pages still go without scripts or form contents.',
       F04: 'When it’s off, Share › Daylight stays open until the item is sent, as before.',
       F08: 'When it’s off, your Daylight isn’t offered in the share sheet’s top row.',
       F10: 'When it’s off, pages go as you see them, without Send as or the thin-page check.',
@@ -1487,7 +1487,9 @@ function unquote(s) {
  * choice "Send as excerpt". Rules, in order:
  *   1. source is 'selection': an excerpt of the text (without its URL), or a note when there is no URL. When the URL
  *      carries a text fragment (#:~:text=; Chrome on Android shares a selection as "“quote”\nURL#:~:text=…"), one
- *      pair of quotes around the text is removed, and with no text left the fragment's own text is the excerpt;
+ *      pair of quotes around the text is removed, and with no text left the fragment's own text is the excerpt.
+ *      A selection given with its page's URL (a Safari selection, "Send as excerpt") is the user's own text: the URL
+ *      found in it is taken out only when it is that page URL, so a link inside the selection stays in the excerpt;
  *   3. there is no URL at all (Notes, Books, the Mac Services text type): a note;
  *   everything else is a link, with the text left over as its title: "headline + link" shares stay links, however
  *   long, and so does a URL with a text fragment (Google adds them to result links). Plan rules 2 (a text fragment
@@ -1499,8 +1501,10 @@ function unquote(s) {
 export function classifyShare({ text = '', url = '', title = '', source = '' } = {}) { // eslint-disable-line no-unused-vars
   const t = String(text ?? '');
   const found = findShareUrl(t);
-  const u = (url ? webUrl(url) : null) ?? found?.url ?? null;
-  const rest = (found ? t.slice(0, found.start) + t.slice(found.end) : t).trim();
+  const given = url ? webUrl(url) : null;
+  const u = given ?? found?.url ?? null;
+  const take = !!found && !(source === 'selection' && given && found.url !== given);
+  const rest = (take ? t.slice(0, found.start) + t.slice(found.end) : t).trim();
   if (source === 'selection') {
     const quote = u && hasTextFragment(u) ? unquote(rest) || textFragmentText(u) : rest;
     if (quote) return { kind: u ? 'excerpt' : 'note', url: u, text: quote };
@@ -1534,9 +1538,10 @@ export function shareTitle(text) {
 }
 
 /**
- * Smart intake (F16), for every entry point while Lab is on (and F16's Use switch, labUseOn).
- * {text, url, subject, source} -> {kind, url, title, excerpt, orig}:
- *   kind and the URL come from classifyShare; url is cleanShareUrl's result (null for a note);
+ * Smart intake (F16), for every entry point while Lab is on.
+ * {text, url, subject, source, clean} -> {kind, url, title, excerpt, orig}:
+ *   kind and the URL come from classifyShare; url is cleanShareUrl's result (null for a note), or the URL exactly as
+ *     found or given when clean is false (apps pass clean: labUseOn(settings, 'F16'), F16's Use switch; 2.9.6);
  *   title: for a link, `subject` when it is not empty, else the text without its URL (shareTitle); null when empty and
  *     for every excerpt and note (a headline is always a title, however long);
  *   excerpt: the excerpt's or note's text, else null;
@@ -1545,11 +1550,11 @@ export function shareTitle(text) {
  * Apple News links (apple.news) stay as they are here: iPhone and Mac resolve them with one fetch and
  * extractAppleNewsTarget, then run normaliseShare on the result.
  */
-export function normaliseShare({ text = '', url = '', subject = '', source = '' } = {}) {
+export function normaliseShare({ text = '', url = '', subject = '', source = '', clean = true } = {}) {
   const c = classifyShare({ text, url, title: subject, source });
   const out = { kind: c.kind, url: null, title: null, excerpt: null, orig: null };
   if (c.url) {
-    out.url = cleanShareUrl(c.url);
+    out.url = clean === false ? c.url : cleanShareUrl(c.url);
     if (out.url !== c.url && c.url.length <= X_ORIG_MAX) out.orig = c.url;
   }
   if (c.kind === 'excerpt' || c.kind === 'note') out.excerpt = c.text;

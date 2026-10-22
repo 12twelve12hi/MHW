@@ -3,7 +3,7 @@
   "generatedBy": "reader-experiment/share/vectors/generate-lab.mjs",
   "notes": [
     "Deterministic: CI regenerates this file and requires no diff.",
-    "cases: normaliseShare(input) must equal expect exactly. input: {text?, url?, subject?, source?} (absent = \"\"). expect: {kind (\"link\", \"excerpt\", \"note\" or \"none\"), url (cleaned, or null), title (links only, or null), excerpt (excerpts and notes, or null), orig (the URL as shared when the cleaned one differs and it is at most 1,024 characters, or null)}. Under LAB-PLAN 6.5 Q1 = (b), text is an excerpt only for an explicit selection (source \"selection\"; with a text-fragment URL one pair of quotes is removed, and with no text the fragment's own text is used); a note has no URL; every other share is a link, a text-fragment URL included, and a headline + link share keeps the headline (or the subject) as its title.",
+    "cases: normaliseShare(input) must equal expect exactly. input: {text?, url?, subject?, source?, clean?} (absent = \"\", and absent clean = true; clean false is F16's Use switch off: the URL is not cleaned and orig is null). expect: {kind (\"link\", \"excerpt\", \"note\" or \"none\"), url (cleaned, or null), title (links only, or null), excerpt (excerpts and notes, or null), orig (the URL as shared when the cleaned one differs and it is at most 1,024 characters, or null)}. Under LAB-PLAN 6.5 Q1 = (b), text is an excerpt only for an explicit selection (source \"selection\"; with a text-fragment URL one pair of quotes is removed, and with no text the fragment's own text is used; when url is given and passes the web URL rule, the URL found in the selection's text is taken out only when it equals url, so a link inside a selection stays in it); a note has no URL; every other share is a link, a text-fragment URL included, and a headline + link share keeps the headline (or the subject) as its title.",
     "xOrigFrames: build an item (id X, sent 2026-10-20T08:00:00.000Z; contentHex bytes or contentText UTF-8 for pages and files, no compression) with the Lab extras requested; part 0 must carry exactly expect.fields (its x- header fields), and be small (base64 at most 3,800 characters) when expect.small. x-orig is left out over 1,024 characters, when it fails the web URL rule, and when it alone would turn a small frame into a large one; an unknown x-cap is left out.",
     "appleNews: extractAppleNewsTarget(html) must equal expect (a URL or null)."
   ],
@@ -401,6 +401,81 @@
         "title": null,
         "excerpt": "the quiet year",
         "orig": null
+      }
+    },
+    {
+      "name": "Rule 1: a link inside a Safari selection stays in it",
+      "input": {
+        "text": "The full report is at https://example.org/report.pdf and it is long.",
+        "url": "https://news.example.com/story",
+        "subject": "Story",
+        "source": "selection"
+      },
+      "expect": {
+        "kind": "excerpt",
+        "url": "https://news.example.com/story",
+        "title": null,
+        "excerpt": "The full report is at https://example.org/report.pdf and it is long.",
+        "orig": null
+      }
+    },
+    {
+      "name": "Rule 1: a selection ending in a link keeps it",
+      "input": {
+        "text": "Visit https://a.example/x",
+        "url": "https://news.example.com/story",
+        "source": "selection"
+      },
+      "expect": {
+        "kind": "excerpt",
+        "url": "https://news.example.com/story",
+        "title": null,
+        "excerpt": "Visit https://a.example/x",
+        "orig": null
+      }
+    },
+    {
+      "name": "Rule 1: a selection that is only a link is an excerpt of that link",
+      "input": {
+        "text": "https://a.example/x",
+        "url": "https://news.example.com/story",
+        "source": "selection"
+      },
+      "expect": {
+        "kind": "excerpt",
+        "url": "https://news.example.com/story",
+        "title": null,
+        "excerpt": "https://a.example/x",
+        "orig": null
+      }
+    },
+    {
+      "name": "Rule 1: the page URL inside the selection is taken out",
+      "input": {
+        "text": "A passage worth keeping. https://news.example.com/story?utm_source=share",
+        "url": " https://news.example.com/story?utm_source=share ",
+        "source": "selection"
+      },
+      "expect": {
+        "kind": "excerpt",
+        "url": "https://news.example.com/story",
+        "title": null,
+        "excerpt": "A passage worth keeping.",
+        "orig": "https://news.example.com/story?utm_source=share"
+      }
+    },
+    {
+      "name": "Rule 1: without a page URL, the selection’s URL is the source",
+      "input": {
+        "text": "A passage. https://example.com/source?utm_medium=email",
+        "source": "selection"
+      },
+      "expect": {
+        "kind": "excerpt",
+        "url": "https://example.com/source",
+        "title": null,
+        "excerpt": "A passage.",
+        "orig": "https://example.com/source?utm_medium=email"
       }
     },
     {
@@ -1065,6 +1140,78 @@
         "title": null,
         "excerpt": null,
         "orig": null
+      }
+    },
+    {
+      "name": "Clean links off: tracking stays and there is no orig",
+      "input": {
+        "text": "The Morning: A Quiet Revolution in Batteries https://www.nytimes.com/2026/10/20/briefing/batteries.html?smid=nytcore-ios-share&referringSource=articleShare",
+        "clean": false
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.nytimes.com/2026/10/20/briefing/batteries.html?smid=nytcore-ios-share&referringSource=articleShare",
+        "title": "The Morning: A Quiet Revolution in Batteries",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Clean links off: a Google /url wrapper stays",
+      "input": {
+        "url": "https://www.google.com/url?q=https%3A%2F%2Fexample.com%2Fpage%3Fid%3D7&sa=D",
+        "clean": false
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://www.google.com/url?q=https%3A%2F%2Fexample.com%2Fpage%3Fid%3D7&sa=D",
+        "title": null,
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Clean links off: open.substack.com stays",
+      "input": {
+        "text": "Read “The Quiet Year” by Jane Doe on Substack: https://open.substack.com/pub/janedoe/p/the-quiet-year?r=2abc",
+        "clean": false
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://open.substack.com/pub/janedoe/p/the-quiet-year?r=2abc",
+        "title": "Read “The Quiet Year” by Jane Doe on Substack",
+        "excerpt": null,
+        "orig": null
+      }
+    },
+    {
+      "name": "Clean links off: a selection is still an excerpt",
+      "input": {
+        "text": "A passage worth keeping.",
+        "url": "https://example.com/a?utm_source=x",
+        "source": "selection",
+        "clean": false
+      },
+      "expect": {
+        "kind": "excerpt",
+        "url": "https://example.com/a?utm_source=x",
+        "title": null,
+        "excerpt": "A passage worth keeping.",
+        "orig": null
+      }
+    },
+    {
+      "name": "Clean links on (clean: true) is the default",
+      "input": {
+        "url": "https://example.com/a?utm_source=x",
+        "clean": true
+      },
+      "expect": {
+        "kind": "link",
+        "url": "https://example.com/a",
+        "title": null,
+        "excerpt": null,
+        "orig": "https://example.com/a?utm_source=x"
       }
     }
   ],

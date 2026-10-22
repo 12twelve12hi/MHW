@@ -41,6 +41,8 @@ const FIXTURE = `<!doctype html><html lang="en" onload="track()"><head>
 <a href="javascript:steal()">bad</a> <a href="  JaVa&#x0A;Script:steal()">bad2</a> <a href="https://example.com/ok" onmouseover="x()">ok</a>
 <iframe srcdoc="<p>SECRET-SRCDOC</p>" src="https://example.com/frame"></iframe>
 <img src="/pic.png" ONERROR="x()" alt="Kept picture">
+<template id="dialog"><form><input type=hidden name=authenticity_token value=SECRET-TEMPLATE-TOKEN><input type=password value=SECRET-TEMPLATE-PW></form><script>alert("SECRET-TEMPLATE-JS")</script><button onclick=steal()>SECRET-TEMPLATE-BUTTON</button><template><input type=hidden value=SECRET-NESTED-TEMPLATE></template></template>
+<svg><a href="javascript:steal()" xlink:href="javascript:steal()"><text>Kept SVG text</text></a><script>steal()</script></svg>
 </body></html>`;
 
 test('clean-html: scripts, handlers, form values, srcdoc, javascript: links and token metas go (F03.2)', needsDom, () => {
@@ -49,16 +51,51 @@ test('clean-html: scripts, handlers, form values, srcdoc, javascript: links and 
   const out = cleanHtml(doc.documentElement.cloneNode(true));
   assert.ok(out.startsWith('<!doctype html>\n<html'));
   for (const secret of ['SECRET-CSRF', 'SECRET-OG', 'SECRET-INLINE', 'SECRET-JS', 'SECRET-HIDDEN', 'SECRET-PASSWORD', 'SECRET-TYPED',
-    'SECRET-TEXTAREA', 'SECRET-SRCDOC', 'track()', 'init()', 'steal()', 'x()', 'app.js', 'selected', 'javascript:']) {
+    'SECRET-TEXTAREA', 'SECRET-SRCDOC', 'SECRET-TEMPLATE', 'SECRET-NESTED-TEMPLATE', 'track()', 'init()', 'steal()', 'x()', 'app.js',
+    'selected', 'javascript:', '<template']) {
     assert.ok(!out.toLowerCase().includes(secret.toLowerCase()), `${secret} is gone`);
   }
   assert.ok(!/<script(?![^>]*ld\+json)/i.test(out), 'only the JSON-LD script stays');
   assert.ok(!/\son[a-z]+=/i.test(out), 'no on* attribute');
   for (const kept of ['Kept JSON-LD', 'Kept description', 'Logged-in article', 'Only members see this paragraph.', 'Option A',
-    'https://example.com/ok', 'https://example.com/frame', 'Kept picture', 'name="q"', 'class="page"']) {
+    'https://example.com/ok', 'https://example.com/frame', 'Kept picture', 'name="q"', 'class="page"', 'Kept SVG text']) {
     assert.ok(out.includes(kept), `${kept} stays`);
   }
   assert.equal(doc.documentElement.outerHTML, before, 'the live document is untouched');
+});
+
+test('clean-html: a <template> goes with its content, which querySelectorAll never reaches (F03.2)', needsDom, () => {
+  const doc = dom('<!doctype html><html><body><p>Kept</p><template><form><input type=hidden value=SECRET-T>'
+    + '<input type=password value=SECRET-P></form><script>alert(1)</script><button onclick=x()>b</button></template></body></html>');
+  const clone = doc.documentElement.cloneNode(true);
+  assert.equal(clone.querySelectorAll('input').length, 0, 'the DOM hides the template\'s inputs from querySelectorAll');
+  const out = cleanHtml(clone);
+  assert.ok(out.includes('<p>Kept</p>'));
+  for (const s of ['SECRET-T', 'SECRET-P', 'alert', 'onclick', '<template']) assert.ok(!out.includes(s), s);
+});
+
+test('clean-html: a <noscript> holding markup as text (scripting on) is parsed inertly, cleaned and put back (F03.2)', needsDom, () => {
+  // linkedom parses <noscript> as a browser does with scripting off; with scripting on (every real page) its content is
+  // one text node, and outerHTML writes it out as it is. Build that shape by hand.
+  const doc = dom('<!doctype html><html><head><noscript></noscript></head><body><p>Kept</p><noscript></noscript></body></html>');
+  const [inHead, inBody] = doc.querySelectorAll('noscript');
+  inHead.textContent = '<link rel="stylesheet" href="/noscript.css"><meta name="csrf-token" content="SECRET-NS-META">';
+  inBody.textContent = '<form><input type=hidden name=csrf value=SECRET-NS-HIDDEN><input type=text value=SECRET-NS-TYPED>'
+    + '<textarea>SECRET-NS-AREA</textarea></form><img src="/lazy.jpg" onerror="x()" alt="Kept lazy picture">'
+    + '<template><input type=password value=SECRET-NS-TEMPLATE></template><script>alert("SECRET-NS-JS")</script>';
+  inBody.setAttribute('onclick', 'x()');
+  const clone = doc.documentElement.cloneNode(true);
+  cleanHtml(clone);
+  const [head, body] = clone.querySelectorAll('noscript');
+  assert.equal(head.textContent, '<link rel="stylesheet" href="/noscript.css">');
+  assert.equal(body.textContent, '<form><input type="text"><textarea></textarea></form><img src="/lazy.jpg" alt="Kept lazy picture">');
+  assert.ok(!body.hasAttribute('onclick'));
+  // The text alone: no markup, nothing to parse
+  const plain = dom('<!doctype html><html><body><noscript></noscript></body></html>');
+  plain.querySelector('noscript').textContent = 'Please turn on JavaScript & reload.';
+  const c2 = plain.documentElement.cloneNode(true);
+  cleanHtml(c2);
+  assert.equal(c2.querySelector('noscript').textContent, 'Please turn on JavaScript & reload.');
 });
 
 test('clean-html: given the live element, it works on a clone', needsDom, () => {

@@ -5565,7 +5565,7 @@
       "inboxLabNeeds": "{short} · checked in {rel}",
       "use.label": "Use",
       "use.a11y": "Use {feature}",
-      "use.footers.F03": "When it’s off, there’s no note when a share brings only the link.",
+      "use.footers.F03": "When it’s off, there’s no note when a share brings only the link. Pages still go without scripts or form contents.",
       "use.footers.F04": "When it’s off, Share › Daylight stays open until the item is sent, as before.",
       "use.footers.F08": "When it’s off, your Daylight isn’t offered in the share sheet’s top row.",
       "use.footers.F10": "When it’s off, pages go as you see them, without Send as or the thin-page check.",
@@ -6883,7 +6883,7 @@
     "useFeatures": [
       {
         "id": "F03",
-        "footer": "When it’s off, there’s no note when a share brings only the link.",
+        "footer": "When it’s off, there’s no note when a share brings only the link. Pages still go without scripts or form contents.",
         "a11y": "Use Pages as you see them"
       },
       {
@@ -7721,6 +7721,46 @@
           "kind": "excerpt",
           "url": "https://example.com/p#:~:text=start%20words,end%20words",
           "text": "start words … end words"
+        }
+      },
+      {
+        "name": "rule 1: a Safari selection holding another link keeps it",
+        "input": {
+          "text": "The full report is at https://example.org/report.pdf and it is long.",
+          "url": "https://news.example.com/story",
+          "title": "Story",
+          "source": "selection"
+        },
+        "expect": {
+          "kind": "excerpt",
+          "url": "https://news.example.com/story",
+          "text": "The full report is at https://example.org/report.pdf and it is long."
+        }
+      },
+      {
+        "name": "rule 1: a selection that is only a link, with its page",
+        "input": {
+          "text": "https://a.example/x",
+          "url": "https://news.example.com/story",
+          "source": "selection"
+        },
+        "expect": {
+          "kind": "excerpt",
+          "url": "https://news.example.com/story",
+          "text": "https://a.example/x"
+        }
+      },
+      {
+        "name": "rule 1: the page URL inside the selection is taken out",
+        "input": {
+          "text": "Quoted. https://news.example.com/story",
+          "url": "https://news.example.com/story",
+          "source": "selection"
+        },
+        "expect": {
+          "kind": "excerpt",
+          "url": "https://news.example.com/story",
+          "text": "Quoted."
         }
       },
       {

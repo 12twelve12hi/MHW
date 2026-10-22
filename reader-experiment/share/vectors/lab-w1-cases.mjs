@@ -53,6 +53,12 @@ export const NORMALISE_CASES = [
   ['Rule 1: quotes stay when the URL has no text fragment', { text: '“To be, or not to be.”', url: 'https://example.com/hamlet', source: 'selection' }],
   ['Rule 1: "Send as excerpt" on a text-fragment URL alone: the fragment’s text', { text: 'https://example.com/article#:~:text=The%20quick%20brown,lazy%20dog', source: 'selection' }],
   ['Rule 1: the fragment’s prefix and suffix are left out', { url: 'https://example.com/article#:~:text=see-,the%20quiet%20year,-ends', source: 'selection' }],
+  // A selection given with its page URL keeps the links it holds; only the page URL itself is taken out of it
+  ['Rule 1: a link inside a Safari selection stays in it', { text: 'The full report is at https://example.org/report.pdf and it is long.', url: 'https://news.example.com/story', subject: 'Story', source: 'selection' }],
+  ['Rule 1: a selection ending in a link keeps it', { text: 'Visit https://a.example/x', url: 'https://news.example.com/story', source: 'selection' }],
+  ['Rule 1: a selection that is only a link is an excerpt of that link', { text: 'https://a.example/x', url: 'https://news.example.com/story', source: 'selection' }],
+  ['Rule 1: the page URL inside the selection is taken out', { text: 'A passage worth keeping. https://news.example.com/story?utm_source=share', url: ' https://news.example.com/story?utm_source=share ', source: 'selection' }],
+  ['Rule 1: without a page URL, the selection’s URL is the source', { text: 'A passage. https://example.com/source?utm_medium=email', source: 'selection' }],
   ['Rule 3: text without a URL is a note', { text: 'Ideas for the weekend:\n- walk\n- read\n' }],
   ['Nothing to send', { text: '' }],
   ['Only whitespace', { text: ' \n\t ' }],
@@ -108,6 +114,12 @@ export const NORMALISE_CASES = [
   // x-orig (LAB-PROTOCOL 2.3): left out over 1,024 characters
   ['x-orig at 1,024 characters is kept', { url: longPath(1024 - '?utm_source=x'.length) + '?utm_source=x' }],
   ['x-orig over 1,024 characters is left out', { url: longPath(1025 - '?utm_source=x'.length) + '?utm_source=x' }],
+  // F16's Use switch off (clean: false, LAB-PROTOCOL 2.9.6): the URL goes as found or given, everything else as above
+  ['Clean links off: tracking stays and there is no orig', { text: 'The Morning: A Quiet Revolution in Batteries https://www.nytimes.com/2026/10/20/briefing/batteries.html?smid=nytcore-ios-share&referringSource=articleShare', clean: false }],
+  ['Clean links off: a Google /url wrapper stays', { url: 'https://www.google.com/url?q=https%3A%2F%2Fexample.com%2Fpage%3Fid%3D7&sa=D', clean: false }],
+  ['Clean links off: open.substack.com stays', { text: 'Read “The Quiet Year” by Jane Doe on Substack: https://open.substack.com/pub/janedoe/p/the-quiet-year?r=2abc', clean: false }],
+  ['Clean links off: a selection is still an excerpt', { text: 'A passage worth keeping.', url: 'https://example.com/a?utm_source=x', source: 'selection', clean: false }],
+  ['Clean links on (clean: true) is the default', { url: 'https://example.com/a?utm_source=x', clean: true }],
 ];
 
 // The x-orig small-frame rule (2.3): built with buildItemFrames, the fields part 0 carries
@@ -234,6 +246,9 @@ export const CLASSIFY_CASES = [
   ['rule 1: a selection without a URL: a note', { text: 'No link here.', source: 'selection' }, 'note'],
   ['rule 1: "Send as excerpt" on Chrome’s shared selection', { text: '"Quoted words here."\nhttps://example.com/p#:~:text=Quoted%20words%20here', source: 'selection' }, 'excerpt'],
   ['rule 1: "Send as excerpt" on a text fragment alone', { url: 'https://example.com/p#:~:text=start%20words,end%20words', source: 'selection' }, 'excerpt'],
+  ['rule 1: a Safari selection holding another link keeps it', { text: 'The full report is at https://example.org/report.pdf and it is long.', url: 'https://news.example.com/story', title: 'Story', source: 'selection' }, 'excerpt'],
+  ['rule 1: a selection that is only a link, with its page', { text: 'https://a.example/x', url: 'https://news.example.com/story', source: 'selection' }, 'excerpt'],
+  ['rule 1: the page URL inside the selection is taken out', { text: 'Quoted. https://news.example.com/story', url: 'https://news.example.com/story', source: 'selection' }, 'excerpt'],
   ['rule 3: no URL: a note', { text: 'Plain text from Notes.' }, 'note'],
   ['rule 2 is off: Chrome’s shared selection without "Send as excerpt" is a link', { text: '"Quoted words here."\nhttps://example.com/p#:~:text=Quoted%20words%20here' }, 'link'],
   ['rule 2 is off: a text fragment alone is a link', { url: 'https://example.com/p#:~:text=start%20words,end%20words' }, 'link'],
@@ -299,6 +314,19 @@ export async function buildW1() {
   assert.equal(byName('Rule 1: "Send as excerpt" on Chrome’s shared selection: the quote without its quotes').excerpt, 'Lorem ipsum dolor sit amet, consectetur adipiscing elit.');
   assert.equal(byName('Rule 1: "Send as excerpt" on a text-fragment URL alone: the fragment’s text').excerpt, 'The quick brown … lazy dog');
   assert.equal(byName('Rule 1: quotes stay when the URL has no text fragment').excerpt, '“To be, or not to be.”');
+  assert.equal(byName('Rule 1: a link inside a Safari selection stays in it').excerpt, 'The full report is at https://example.org/report.pdf and it is long.');
+  assert.equal(byName('Rule 1: a link inside a Safari selection stays in it').url, 'https://news.example.com/story');
+  assert.equal(byName('Rule 1: a selection ending in a link keeps it').excerpt, 'Visit https://a.example/x');
+  assert.deepEqual(byName('Rule 1: a selection that is only a link is an excerpt of that link'),
+    { kind: 'excerpt', url: 'https://news.example.com/story', title: null, excerpt: 'https://a.example/x', orig: null });
+  assert.equal(byName('Rule 1: the page URL inside the selection is taken out').excerpt, 'A passage worth keeping.');
+  assert.equal(byName('Rule 1: without a page URL, the selection’s URL is the source').excerpt, 'A passage.');
+  assert.equal(byName('Rule 1: without a page URL, the selection’s URL is the source').url, 'https://example.com/source');
+  assert.equal(byName('Clean links off: tracking stays and there is no orig').url, 'https://www.nytimes.com/2026/10/20/briefing/batteries.html?smid=nytcore-ios-share&referringSource=articleShare');
+  assert.equal(byName('Clean links off: tracking stays and there is no orig').orig, null);
+  assert.equal(byName('Clean links off: tracking stays and there is no orig').title, 'The Morning: A Quiet Revolution in Batteries');
+  assert.equal(byName('Clean links off: a selection is still an excerpt').kind, 'excerpt');
+  assert.equal(byName('Clean links on (clean: true) is the default').url, 'https://example.com/a');
   assert.equal(byName('Names compare exactly: UTM_source stays (byte-identical)').url, 'https://example.com/p?UTM_source=x&Fbclid=y');
   assert.equal(byName('Names compare exactly: UTM_source stays (byte-identical)').orig, null);
   assert.equal(byName('Only tracking: the ? goes').url, 'https://example.com/p');
@@ -334,7 +362,7 @@ export async function buildW1() {
     generatedBy: 'reader-experiment/share/vectors/generate-lab.mjs',
     notes: [
       'Deterministic: CI regenerates this file and requires no diff.',
-      'cases: normaliseShare(input) must equal expect exactly. input: {text?, url?, subject?, source?} (absent = ""). expect: {kind ("link", "excerpt", "note" or "none"), url (cleaned, or null), title (links only, or null), excerpt (excerpts and notes, or null), orig (the URL as shared when the cleaned one differs and it is at most 1,024 characters, or null)}. Under LAB-PLAN 6.5 Q1 = (b), text is an excerpt only for an explicit selection (source "selection"; with a text-fragment URL one pair of quotes is removed, and with no text the fragment\'s own text is used); a note has no URL; every other share is a link, a text-fragment URL included, and a headline + link share keeps the headline (or the subject) as its title.',
+      'cases: normaliseShare(input) must equal expect exactly. input: {text?, url?, subject?, source?, clean?} (absent = "", and absent clean = true; clean false is F16\'s Use switch off: the URL is not cleaned and orig is null). expect: {kind ("link", "excerpt", "note" or "none"), url (cleaned, or null), title (links only, or null), excerpt (excerpts and notes, or null), orig (the URL as shared when the cleaned one differs and it is at most 1,024 characters, or null)}. Under LAB-PLAN 6.5 Q1 = (b), text is an excerpt only for an explicit selection (source "selection"; with a text-fragment URL one pair of quotes is removed, and with no text the fragment\'s own text is used; when url is given and passes the web URL rule, the URL found in the selection\'s text is taken out only when it equals url, so a link inside a selection stays in it); a note has no URL; every other share is a link, a text-fragment URL included, and a headline + link share keeps the headline (or the subject) as its title.',
       'xOrigFrames: build an item (id X, sent 2026-10-20T08:00:00.000Z; contentHex bytes or contentText UTF-8 for pages and files, no compression) with the Lab extras requested; part 0 must carry exactly expect.fields (its x- header fields), and be small (base64 at most 3,800 characters) when expect.small. x-orig is left out over 1,024 characters, when it fails the web URL rule, and when it alone would turn a small frame into a large one; an unknown x-cap is left out.',
       'appleNews: extractAppleNewsTarget(html) must equal expect (a URL or null).',
     ],

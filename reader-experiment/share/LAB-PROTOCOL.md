@@ -610,14 +610,21 @@ U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF (Kotlin's and Swift's defaults
 **Characters** are Unicode code points. **Percent-decoding** is UTF-8 with `+` left as `+`; an invalid escape or
 invalid UTF-8 counts as a failure.*
 
-**2.9.1 Smart intake (F16).** `normaliseShare({text, url, subject, source})` → `{kind, url, title, excerpt, orig}`:
+**2.9.1 Smart intake (F16).** `normaliseShare({text, url, subject, source, clean})` → `{kind, url, title, excerpt,
+orig}` (`clean` is true unless it is `false`: F16's Use switch, 2.9.6):
 
 1. **Finding the URL** (`findShareUrl`). Each run of characters other than whitespace, `<`, `>` and `"` that starts
    with `http://` or `https://` (any case), in order: drop a trailing `. , ; : ! ? ' " » ” ’`, or a trailing `)` or
    `]` while the run holds fewer `(` than `)` (`[` than `]`), until neither applies; the first result that passes the
    web URL rule unchanged is the URL.
 2. **Link or excerpt** (`classifyShare`). The URL is `url` when it passes the web URL rule, else the one found in
-   `text`; `rest` is `text` without the found URL's characters, trimmed. Then, in order: `source` is `selection` →
+   `text`; `rest` is `text` without the found URL's characters, trimmed. **Except for a selection given with its page
+   URL** (`source` is `selection` and `url` passes the web URL rule: a Safari selection, "Send as excerpt"): the found
+   URL is taken out only when it equals that URL (`url` trimmed, character for character); otherwise `rest` is all of
+   `text`, trimmed, so a link inside the selection stays in the excerpt, and a selection that is only a link is an
+   excerpt of that link. (*Changed Oct 22 after review: the found URL was always taken out, so "Visit
+   https://a.example/x" with the page URL became "Visit".*) Chrome on Android's shared selection has no `url`, so its
+   URL is still taken out. Then, in order: `source` is `selection` →
    `excerpt` of `rest` (`note` without a URL; `link` when nothing is left, `none` when there is no URL either), where,
    when the URL's fragment holds `:~:text=` (Chrome on Android shares a selection as `"…"` + line feed + URL with a
    text fragment), `rest` first loses one pair of surrounding quotes (`"…"`, `“…”`, `'…'`, `‘…’`, `«…»`, `„…“`) and,
@@ -629,7 +636,8 @@ invalid UTF-8 counts as a failure.*
    URL`#:~:text=…` is an ordinary headline + link share, and keeps its title), and **there is no word-count rule**
    (plan rule 4, 40 words or 3 sentences, is off), so every headline + link share is a link. (*Changed Oct 22 after
    review: an earlier draft of this section made any text-fragment URL an excerpt.*)
-3. **Cleaning** (`cleanShareUrl`), for every kind with a URL: up to 5 unwrap steps, each result kept only when it
+3. **Cleaning** (`cleanShareUrl`), for every kind with a URL, unless `clean` is false (then the URL stays as found or
+   given, and `orig` is null): up to 5 unwrap steps, each result kept only when it
    passes the web URL rule (and differs), then tracking removal. Host comparisons are on the lowercased host
    (`authority` after the last `@`, without the port); "host is D" means equal to D or ending in `.D`.
    - `(www.)?google(.xx){1,2}` with a path starting `/amp/s/` → `https://` + the rest (path, query and fragment);
@@ -757,6 +765,20 @@ and port (lowercased, no user info), or null when `orig` fails the web URL rule.
 name}". `labUseOn(settings, feature)` is false when Lab is off, true for a feature without a switch, else true unless
 its switch is off; a missing key is on. Stores, next to `lab`: Apple `dls.labUse.<id>` (Bool), Android `labUse.<id>`,
 JS `settings.labUse[<id>]`. Turning a Use switch off keeps that feature's own settings, as turning Lab off does.
+
+Each switch gates exactly this, and nothing else; the rest of the feature follows the Lab switch alone (*added Oct 22
+after review*):
+
+| Row | `labUseOn(settings, id)` false means | Not gated (follows Lab alone) |
+|---|---|---|
+| F03 Pages as you see them | No "Only the link came through" line on the share card (F03.3: 6.5 Q5 names only "F03's hint"). Setup check still lists the line. | The capture: with Lab on, pages always go through `clean-html.js` with `x-cap: "seen"` (iPhone sends `lab.cleanHtml`, the extension calls `cleanHtml`), so turning the switch off never sends scripts or form contents. The footer says so. |
+| F04 Share in place | Share › Daylight waits until the item is sent before closing, as v1.1 does. | Options and "Always show Options before sending". |
+| F08 Your Daylight in the share sheet | Android publishes no `daylight` share shortcut, and removes the one it published (as Lab off does). | — |
+| F10 Send as | No Send as choice, Clean article (Readability), thin-page check or Review: a page goes as the F03 capture. | F11's explicit selections (context menu, Selection mode, a Safari selection) and F34's right-click items, which the user picks one by one. |
+| F16 Clean links | `normaliseShare({…, clean: false})` at every entry point: the URL goes as found or given (no unwrapping, no tracking removal, no `x-orig`), and iPhone and Mac do not fetch apple.news pages. | Finding the URL, link or excerpt (`classifyShare`), and titles. |
+| F33 Send copied link | No "Send copied link" chip (iPhone, Android) and no "Paste and send" button (Chrome, Safari, web). | The Mac and Windows clipboard command, which the user runs and which offers nothing: it keeps its Lab label and host preview. |
+
+The command line has no Use switches: it is always Lab (2.9.7).
 
 **2.9.7 The command line (F09).** `share/js/bin/daylight-send.mjs`, built into one file by `share/js/bin/build.mjs`;
 `../SEND-API.md` is its manual and the list of every entry point.

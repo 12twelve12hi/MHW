@@ -122,9 +122,13 @@ right-click menu).
   `#:~:text=` alone stays a link with its title (Google adds fragments to result links); with "Send as excerpt",
   Chrome on Android's shared selection (`"quote"` + URL with a fragment) loses its quotes, and a bare fragment URL
   gives the fragment's text. Text with no URL at all is a note (there is nothing else to send; plan rule 3, still to
-  be confirmed with the user under (b)). Everything else, however long, is a link with the text as its title.
+  be confirmed with the user under (b)). Everything else, however long, is a link with the text as its title. A
+  selection given with its page URL (a Safari selection, "Send as excerpt") keeps the links it holds: only the page
+  URL itself is taken out of its text (fixed after review: "Visit https://a.example/x" lost its link).
 - **6.5 Q5 = yes:** Use switches on F03 (the link-only hint), F04, F08, F10, F16 and F33. Footers start "When it’s off,
   …". Store keys next to `lab`: `dls.labUse.<id>`, `labUse.<id>`, `settings.labUse[<id>]`; a missing key is on.
+  LAB-PROTOCOL 2.9.6 lists what each switch gates: F03's only the hint (the capture stays clean, and its footer says
+  so), F16's the URL cleaning (`normaliseShare({…, clean: false})`).
 - `normaliseShare` also returns `kind` (`link`, `excerpt`, `note`, `none`), and `orig` is null over 1,024 characters
   (it would never be sent). Unwrapping runs at most 5 steps; LinkedIn's bare `linkedin.com` counts too. Titles lose the
   empty `()` `[]` `""` … a removed URL leaves, and a stray `. , ; ! ?` at their edges.
@@ -138,7 +142,10 @@ right-click menu).
   case-sensitively so state names such as `server-outdated` stay readable.
 - `clean-html.js` did not exist in `extension/src/` when L1 started, so it was written from F03's rules; it also
   clears `javascript:` from `<area>` and works on a clone when handed the live element. The extension removes its own
-  copy in X1.
+  copy in X1. After review it also removes `<template>` elements (their content is out of `querySelectorAll`'s reach
+  but `outerHTML` writes it out, so a dialog's CSRF input went along), cleans a `<noscript>`'s markup (one text node
+  with scripting on, which `outerHTML` writes as it is), and clears an SVG link's `javascript:` `xlink:href`; checked
+  in Chromium as well as linkedom.
 
 **Command line (F09).** `daylight-send` (manual: `SEND-API.md`). The outbox is a `FileStorage` (one JSON file per key,
 atomic rename) under a `FileLock` (`O_EXCL` lock file, touched every 10 s, stale after 60 s), one outbox per pairing.
