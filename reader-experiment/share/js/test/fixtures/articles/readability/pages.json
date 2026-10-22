@@ -1,0 +1,86 @@
+{
+  "source": "https://github.com/mozilla/readability, tag 0.6.0 (commit 04fd32f72b448c12b02ba6c40928b67e510bac49), test/test-pages/<page>/source.html and expected.html, unmodified",
+  "licence": "Apache-2.0 (LICENSE.md)",
+  "pages": {
+    "001": {
+      "source.html": "f6a1c98f318c67d423676a8cb0895c78198cf56f9c493e25beaf6f413f598799",
+      "expected.html": "7ea4c83a747011176e559c1cf9fcfec9fcb9f3d2e8f4fe27d743e3740ed87698"
+    },
+    "basic-tags-cleaning": {
+      "source.html": "427e98f1484606415c2f694c5038f0ad5695b875f4f5b261ce5bc9ce945f2790",
+      "expected.html": "ae92429809ad42b629586c53ec81cc23a319bb529a1c9f4125d8381f85f90c32"
+    },
+    "daringfireball-1": {
+      "source.html": "c21b617e6a320580ea71b47bb7751e3cd6e8985c7d21f91cfb9662ca31aa7d21",
+      "expected.html": "a963b13a07890499f8c1011a83157ac85691e5e7a5dbaf682b2512544744a9bc"
+    },
+    "ehow-1": {
+      "source.html": "8fde9b2cb6fa34601518425d1ab67fb8ab5a53513cd75067fd44a3ab1153aa87",
+      "expected.html": "2014333ee5a8797adf097a963fe3c336b60feef564ff8ea1f59132335f0740ed"
+    },
+    "hidden-nodes": {
+      "source.html": "12ba1e78b315acd726cb7b1aceb4c32aa2aba9ba133e824275147a9fe63ff67a",
+      "expected.html": "73c07e4ea656625077347a1fc063337fd5552c7ec2058d3c5019b07d7c301f68"
+    },
+    "ietf-1": {
+      "source.html": "8276ffcf6165ef788d89a5c0b2c6eb777c581b7f608e31a633989ed41e83dad0",
+      "expected.html": "67c4f4972510c35ff15761b962f6c3cd15a16b032e3705271001e6a7d1f4e962"
+    },
+    "keep-tabular-data": {
+      "source.html": "2a63f726ecc7c5f60314f0e3e8dff4a281fb2c93a8b611875701077ce1c6c794",
+      "expected.html": "dbf22df2c3675a1f2ac35d06fa4e2251c44132a4f51331ffb95f6f0a952d2a35"
+    },
+    "medium-2": {
+      "source.html": "52a381d960bf5a50949c18cfacec65ba0259d64d3dd1c28367824aca9893be96",
+      "expected.html": "75597dab8318c39bf1c0280b5a69b5ea4e40430e3d089b708e8a617ada8fc6f6"
+    },
+    "missing-paragraphs": {
+      "source.html": "41140e70d0ec95d1657a9a61b421e97625699ac3ab4f949206a663dacc511b68",
+      "expected.html": "8467a50920dca0d5536d23f839a45d443d775c6e8458b4bcf833737f04031740"
+    },
+    "mozilla-2": {
+      "source.html": "39059455717bccde554b8b22244a8cef6a8531d65ee89612776b5174d694fdf8",
+      "expected.html": "afbd5fdea06240a84fd8dcd00263a6568bcf606ccbe3bec04d572a25ceab0b48"
+    },
+    "ol": {
+      "source.html": "ac694e06b19eb99036ab3a5367819af3b34f098f1a6f54f5d22abe0a8a4940aa",
+      "expected.html": "0b34feeffbaf8758e6c2c5051adc2f97c7bbfa243ef84b4cd97ef9f4d722c2d5"
+    },
+    "remove-script-tags": {
+      "source.html": "18c4148f2a0c426b0446aff1c2538d41abd6a2ac16ed5ff727ced06d4a940d2c",
+      "expected.html": "ae92429809ad42b629586c53ec81cc23a319bb529a1c9f4125d8381f85f90c32"
+    },
+    "reordering-paragraphs": {
+      "source.html": "b20d3f15a30c981efe336bf931ef4c58327188d544bf98bca6104edbc7f8de88",
+      "expected.html": "acf27cbf8c973d7d1c4a908f84fcb8f552529afd1c15d5e20624b1f3f05186f4"
+    },
+    "replace-brs": {
+      "source.html": "c1aa787ae2d9db358ab1925dedf53c72479841a82113058f6ed09470d702a62b",
+      "expected.html": "03a0219ce68c2becf222df9e3b6d18abd03468475bc41e5a624ae7e5f66ba416"
+    },
+    "rtl-1": {
+      "source.html": "a919900db0ed468fabf5de717c959921c785fb8ac34a62178f65b17e72c6a78b",
+      "expected.html": "cf7edb5cb72991f32241fce1fd2ea0affe4c3b77f4967297de8610a2e7b2ec25"
+    },
+    "social-buttons": {
+      "source.html": "7fa8b3f17a32bba1ab3703b5d6cc06ad04d664d25e2a9ad964b90ab4d0474036",
+      "expected.html": "0973369906d73a4989f16aeed4f18fb56e530b46f78dae96835793bef11b5a26"
+    },
+    "svg-parsing": {
+      "source.html": "c90ec5542ef16081aee47f487883765b03c57ed0d072471d74c003992663e07c",
+      "expected.html": "efa30252354d6789d7284c2cb10e171ea0907cb2798047ada6d56dc17a7bc1e9"
+    },
+    "title-and-h1-discrepancy": {
+      "source.html": "1296c8c088b1e0a95809a78c831947484426629446a35f9de1bd5c221aeb31f1",
+      "expected.html": "c7ceb4f2a7c193dc06974c29d7fc355d39bf4b731a5458916f55674fc657582c"
+    },
+    "v8-blog": {
+      "source.html": "b630ea40054bb7263831e96be18e193d7054d7943ce522750115199940ab87d4",
+      "expected.html": "dbc387753373bbff8a8a754feb42bd1494099fb07204996d20de1badda9a2f30"
+    },
+    "visibility-hidden": {
+      "source.html": "c033dcb5b1d27bf2a8e918f03db913ad2f08d6246614d451ce749d30bc64bfc3",
+      "expected.html": "0d18eb47a0c1de94e25db09b7552392ffe37148dd4577a10fb736d8ca326f3d1"
+    }
+  }
+}
