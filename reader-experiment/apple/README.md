@@ -542,7 +542,15 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
       needs-inbox header line.
     - `LabAccessibilityAuditTests` (F27.2 with Lab on): Settings with its Lab section, What's in Lab, a needs-setup note
       and the server section, at the default size and with Comfort at the largest, without Dynamic Type (these screens
-      run past one screen; the truncation test measures each of their texts growing instead).
+      run past one screen; the truncation test measures each of their texts growing instead). Allowed, each printed
+      with its reason: contrast and clipping reports without an element while a text shows partly under the
+      navigation bar or past the screen's edge (as for history rows), and on the Lab screens a clipping report without
+      an element (What's in Lab's rows are Buttons whose words the audit cannot point at; the hosted truncation audit
+      measures every one of them and finds none cut). What the audit found and the kit now does (iPhone and Mac): the
+      needs-setup note and the server's state show their icon beside the text rather than in a `Label`, the note's
+      words are sized by the list row, and the note has an outline rather than a grey fill under its buttons. Rows are
+      tapped near the top of the part that shows (`LabUI.tapRow`): at Comfort's largest size a row's middle can sit in
+      the home indicator's strip.
   - `LabOffParityTests` (F00.2): an explicit walk of the accessibility tree (element type, label or title, and value,
     in order; never `debugDescription`) compared with `iOS/UITests/lab-off-baseline/*.json` and
     `macOS/UITests/lab-off-baseline/*.json`: Home with the sample history in three parts that each show whole at
