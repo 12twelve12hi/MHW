@@ -1,4 +1,4 @@
-/// The iPhone texts whose Dynamic Type reports the accessibility audit may allow, by screen (F27.2,
+/// The iPhone texts (and buttons, by their words) whose Dynamic Type reports the accessibility audit may allow, by screen (F27.2,
 /// `AccessibilityAuditTests`): at the largest size the audit loses them (they scroll off the screen) and reports that
 /// they do not scale. Nothing else is allowed. Each one must be a text that
 /// `TruncationAuditTests.testEveryTextGrowsWithTheTextSize` measures growing with the text size, which that test
@@ -12,7 +12,8 @@ enum DynamicTypeWaivers {
         // The last text on an empty Home, near the bottom at the default size. (Home with the sample history is
         // audited without Dynamic Type: AccessibilityAuditTests.withoutDynamicType says why.)
         "home-empty": ["Nothing sent yet."],
-        // The device name's footer, the last text Settings shows at the default size.
-        "settings": ["Shown on the Daylight as who sent each item."],
+        // Settings with its Lab section first (A1): texts and a button the audit loses at the largest size, further
+        // down (the device name's footer before; Unpair and the About header since). Section headers read in capitals.
+        "settings": ["Shown on the Daylight as who sent each item.", "Unpair", "ABOUT"],
     ]
 }

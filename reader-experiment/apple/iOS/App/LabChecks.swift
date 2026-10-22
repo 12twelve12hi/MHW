@@ -68,7 +68,11 @@ enum LabChecks {
         let lab = LabModel(store: store, noteEnabled: LabBuild.LAB_NOTE_ENABLED, arguments: [])
         let model = AppModel(store: store, lab: lab, arguments: [])
         _ = await waitUntil { lab.isLoaded && model.isLoaded }
-        await model.reloadNow()
+        // A read the model started for a change notification can land after ours: read until the history is there.
+        _ = await waitUntil {
+            await model.reloadNow()
+            return model.rows.count == before.2.count
+        }
         await lab.reloadNow()
         let after = await off { (store.labIsStored, LabSettings.isOn(store: store)) }
         return Upgrade(storedBefore: before.0, labOn: lab.isOn && after.1, storedAfter: after.0, noteShows: lab.shouldShowNote,
@@ -151,7 +155,11 @@ enum LabChecks {
         StubRelay.reset(online: true)
         sender.now = { Date().addingTimeInterval(10 * 60) } // past the first re-send's wait (2 minutes)
         _ = await sender.tick()
-        await model.reloadNow()
+        // A read the model started for a change notification can land after ours: read until the row is there.
+        _ = await waitUntil {
+            await model.reloadNow()
+            return model.rows.contains { $0.id == queued.id && $0.status == .sent }
+        }
         let snapshot = model.statusSnapshot()
         let pinKept = await off { FileServerStore(store: store).get(ServerKeys.pin) != nil }
         return Offline(labBefore: labBefore, queuedStatus: queued.status.rawValue, queuedError: queued.errorCode,

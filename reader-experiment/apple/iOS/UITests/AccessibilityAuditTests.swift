@@ -11,7 +11,7 @@ final class AccessibilityAuditTests: XCTestCase {
     static func allowed(on screen: String) -> (XCUIAccessibilityAuditIssue) -> String? {
         { issue in
             guard let element = issue.element, element.exists else { return nil }
-            if issue.auditType == .dynamicType, element.elementType == .staticText,
+            if issue.auditType == .dynamicType, element.elementType == .staticText || element.elementType == .button,
                DynamicTypeWaivers.texts[screen, default: []].contains(element.label) {
                 return "a text the audit loses at the largest size, where it scrolls off the screen (DynamicTypeWaivers); "
                     + "TruncationAuditTests.testEveryTextGrowsWithTheTextSize measures it growing with the size"

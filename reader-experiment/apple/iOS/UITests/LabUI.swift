@@ -88,13 +88,15 @@ enum LabUI {
         root.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", words)).firstMatch
     }
 
-    /// Home's Settings button, then Settings (its Comfort switch shows).
+    /// Home's Settings button, then Settings (its navigation bar: at the largest text sizes the Lab section pushes the
+    /// Comfort switch below the screen).
     @MainActor
     static func openSettings(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         let settings = app.buttons["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 30), "Home did not show", file: file, line: line)
         settings.tap()
-        XCTAssertTrue(app.switches["comfort"].waitForExistence(timeout: 10), "Settings did not open", file: file, line: line)
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), "Settings did not open", file: file, line: line)
+        _ = element(labSwitch, in: app).waitForExistence(timeout: 5)
     }
 
     /// From Settings: What's in Lab, once its server group shows `short` (e.g. "Not set up"; nil: do not wait).

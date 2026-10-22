@@ -43,7 +43,9 @@ final class TruncationAuditTests: XCTestCase {
         }
         for (screen, texts) in DynamicTypeWaivers.texts {
             for text in texts {
-                XCTAssertTrue(grown.contains(text), "the audit's allowance for “\(text)” (\(screen)) is not measured growing here")
+                // A section header reads in capitals ("ABOUT"); its text is "About".
+                let measured = grown.contains { $0 == text || $0.uppercased() == text }
+                XCTAssertTrue(measured, "the audit's allowance for “\(text)” (\(screen)) is not measured growing here")
             }
         }
     }
