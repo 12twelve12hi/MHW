@@ -357,6 +357,15 @@ function movedQuestion(model, on) {
   return ask;
 }
 
+/**
+ * Lines that hold long unbroken words (CLOUDFLARE_API_TOKEN, an address) wrap anywhere, whatever the page's stylesheet
+ * says (the web sender styles these class names with its own): set through the CSSOM, which no CSP refuses.
+ */
+function wraps(e) {
+  e.style.overflowWrap = 'anywhere';
+  return e;
+}
+
 /** A small heading of the server section ("Server code", "Your server", "Delivery"). -> the element (with an id). */
 function sectionHeading(text, prefix) {
   const h = el('h3', 'lab-server-h', text);
@@ -404,8 +413,8 @@ export function renderServerSection(box, model, on = {}) {
     const h = sectionHeading(S.stepsHeading, 'lab-steps-h');
     steps.setAttribute('aria-labelledby', h.id);
     const ol = el('ol', 'lab-server-steps-list');
-    for (const step of S.steps) ol.append(el('li', null, step));
-    steps.append(h, ol, el('p', 'hint small lab-server-steps-more', S.stepsMore));
+    for (const step of S.steps) ol.append(wraps(el('li', null, step)));
+    steps.append(h, ol, wraps(el('p', 'hint small lab-server-steps-more', S.stepsMore)));
     box.append(steps);
   }
   if (model.moved && on.move) box.append(movedQuestion(model, on));
@@ -413,7 +422,7 @@ export function renderServerSection(box, model, on = {}) {
   if (where) box.append(sectionHeading(S.hostLabel, 'lab-host-h'), el('p', 'lab-server-where', where));
   if (model.delivery === 'lab' || model.delivery === 'v1') {
     box.append(sectionHeading(S.deliveryLabel, 'lab-delivery-h'),
-      el('p', 'lab-server-delivery', model.delivery === 'v1' ? S.deliveryV1 : S.deliveryLab));
+      wraps(el('p', 'lab-server-delivery', model.delivery === 'v1' ? S.deliveryV1 : S.deliveryLab)));
   }
   if (model.v1Notice) box.append(el('p', 'note lab-server-v1', model.v1Notice));
 
@@ -441,7 +450,7 @@ export function renderServerSection(box, model, on = {}) {
   label.htmlFor = input.id;
   Object.assign(input, { type: 'url', value: model.manualUrl ?? '', autocomplete: 'off', spellcheck: false, placeholder: S.addressPlaceholder });
   input.setAttribute('inputmode', 'url');
-  const footer = el('p', 'hint small lab-server-address-footer', S.addressFooter);
+  const footer = wraps(el('p', 'hint small lab-server-address-footer', S.addressFooter));
   footer.id = nextId('lab-address-footer');
   input.setAttribute('aria-describedby', footer.id);
   const save = el('button', 'btn secondary', S.addressSave);
