@@ -111,6 +111,7 @@ jobs:
     defaults:
       run:
         working-directory: reader-experiment/server
+        shell: bash                  # bash --noprofile --norc -eo pipefail: a failing command in a pipe fails the step
     env:                             # no secrets at job level: each step gets only what it needs
       WRANGLER_SEND_METRICS: 'false'
       CF_API: https://api.cloudflare.com/client/v4
@@ -216,7 +217,7 @@ jobs:
           fi
           rules=$(npx wrangler r2 bucket lifecycle list daylight-server 2>/dev/null || true)
           add() {
-            echo "$rules" | grep -q "$1" && return 0
+            grep -q "$1" <<< "$rules" && return 0
             npx wrangler r2 bucket lifecycle add daylight-server "$1" "$2" --expire-days "$3" --force > /dev/null \
               || echo "::warning title=R2::Couldn't add the R2 lifecycle rule $1; the Worker still deletes what it stores."
           }
@@ -264,7 +265,7 @@ jobs:
           # Optional secrets removed from GitHub (and a used setup token) are removed from the Worker too.
           existing=$(npx wrangler secret list -c wrangler.deploy.toml --format json 2>/dev/null | jq -r '.[].name' || true)
           while read -r name; do
-            if [ -n "$name" ] && echo "$existing" | grep -qx "$name"; then
+            if [ -n "$name" ] && grep -qx "$name" <<< "$existing"; then
               npx wrangler secret delete "$name" -c wrangler.deploy.toml > /dev/null || true
             fi
           done < "$RUNNER_TEMP/delete.txt"
@@ -279,7 +280,7 @@ jobs:
         run: |
           scripts=$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$CF_API/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts" \
             | jq -r '.result[].id' || true)
-          echo "$scripts" | grep -E '^daylight-[0-9a-f]{12}$' | grep -vx "$WORKER_NAME" | while read -r old; do
+          grep -E '^daylight-[0-9a-f]{12}$' <<< "$scripts" | grep -vx "$WORKER_NAME" | while read -r old; do
             echo "::add-mask::$old"
             npx wrangler delete --name "$old" --force > /dev/null || echo "::warning::Couldn't remove an earlier Daylight Worker; it is locked or unused."
           done || true
@@ -316,7 +317,7 @@ jobs:
           fi
           body=$(jq -n --arg a "$addr" --arg w "$WORKER_NAME" '{name: "daylight-server", enabled: true, priority: 0,
             matchers: [{type: "literal", field: "to", value: $a}], actions: [{type: "worker", value: [$w]}]}')
-          rid=$(curl -fsS -H "$auth" "$CF_API/zones/$zone/email/routing/rules?per_page=50" | jq -r '.result[] | select(.name == "daylight-server") | .id' | head -1)
+          rid=$(curl -fsS -H "$auth" "$CF_API/zones/$zone/email/routing/rules?per_page=50" | jq -r 'first(.result[] | select(.name == "daylight-server") | .id) // empty')
           if [ -n "$rid" ]; then
             curl -fsS -X PUT -H "$auth" -H 'Content-Type: application/json' --data "$body" "$CF_API/zones/$zone/email/routing/rules/$rid" > /dev/null
           else
