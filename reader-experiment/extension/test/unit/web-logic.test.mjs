@@ -143,3 +143,45 @@ test('the page’s tick (logic.maintain): an expired copy goes after 14 days, a 
     await relay.close();
   }
 });
+
+test('localStorageAdapter reports a failed write, so a file whose re-send copy can’t be kept still goes once (note b)', async () => {
+  const { startMockRelay } = await import('../../../share/js/mock-relay.mjs');
+  const ds = await w.load('daylight-share.js');
+  const S = await w.load('web-storage.js');
+  // A localStorage that is full for big values, as Safari's 5 MB quota is for a PDF's base64 copy.
+  const m = new Map();
+  const quota = () => Object.assign(new Error('The quota has been exceeded.'), { name: 'QuotaExceededError' });
+  globalThis.localStorage = {
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => { if (String(v).length > 4096) throw quota(); m.set(k, String(v)); },
+    removeItem: (k) => { m.delete(k); },
+  };
+  let clock = Date.now();
+  const relay = await startMockRelay({ now: () => clock });
+  try {
+    const st = S.localStorageAdapter();
+    assert.equal(st.kind, 'localstorage');
+    await assert.rejects(st.set('outbox/abc', 'x'.repeat(5000)), /quota/, 'every failed write is reported');
+    await st.set('settings', { from: 'Test (web)' });
+    assert.deepEqual(await st.get('settings'), { from: 'Test (web)' });
+    assert.equal(await st.get('missing'), undefined);
+
+    const secret = ds.generateSecret();
+    const pairing = { secret, relay: relay.url, name: 'D' };
+    const sender = new ds.Sender({ pairing, storage: st, from: 'Test (web)', app: 'web/test', now: () => clock });
+    const row = await sender.send({ kind: 'file', name: 'big.txt', mime: 'text/plain', content: ds.utf8('y'.repeat(20000)) });
+    assert.equal(row.status, 'sent');
+    assert.equal(relay.state.published, 1, 'sent once');
+    assert.equal(await st.get(`outbox/${row.id}`), undefined, 'no copy kept');
+    clock += 12 * 3600000; // a re-send is due, with nothing stored to re-send
+    await sender.resendDue();
+    const [after] = await sender.list();
+    assert.deepEqual([after.status, after.errorCode], ['expired', 'gone']);
+    assert.equal(relay.state.published, 1, 'nothing more was published');
+    const L = await w.load('logic.js');
+    assert.equal(L.statusInfo(after).hint, 'This is no longer stored on this device. Share it again.');
+  } finally {
+    delete globalThis.localStorage;
+    await relay.close();
+  }
+});
