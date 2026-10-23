@@ -32,15 +32,17 @@
 #  13. F15, arrival notices: with Documents = Ask, no "Display over other apps" and the Reader in front, a link and a
 #      PDF each wait with one notice (Add to Reader, Keep for later). Add to Reader in the shade gives `reader` for the
 #      link and `handed` for the PDF; Keep for later and a swipe give `held`, the phone reads "Kept for later on your
-#      Daylight", opening the Inbox hands neither over, and Add to Reader then does (F15.4);
+#      Daylight", opening the Inbox hands neither over, their rows say "Kept for later", and each row's own Add to
+#      Reader then hands it over (F15.4). While the notices are listed, an action the shade did not offer fails the run;
 #  14. F11: an excerpt of a page already in the Reader (an explicit selection, x-cap "excerpt") and a note without a
 #      link arrive as new documents (send_file; the library grows by one each), `handed`;
 #  15. F15: a link saved by itself gets one "Saved to the Reader" notice; its Dismiss records no state;
 #  16. F26: Setup check's "Test the Reader hand-off" on the Inbox reaches the Reader ("✓ In your Reader"), no state;
 #  17. this emulator's Daylight Share as the phone on the same pairing (setup link role=sender): an NYT headline +
 #      link from the share sheet goes as a link (F11.5, Q1: classifyShare), exactly as the JS reference sends it; the
-#      share sheet's Direct Share shortcut is listed (F08) and a share through it goes; the relay answering 413 posts
-#      "Couldn’t send ‘…’ to {name}" from the send worker after the card closed (F04.6); Options › Send as excerpt
+#      share sheet's Direct Share shortcut is listed (F08) and a share through it goes; the relay answering 413 to a
+#      share in place makes the send worker post "Couldn’t send ‘…’ to {name}" (F04.6; around the card's close, which
+#      comes at the same countdown's end, so the order is not checked); Options › Send as excerpt
 #      goes as an excerpt (F11); back as the Inbox, the shortcut is gone and those items reach the Reader: the link
 #      through SAVE_PAGE (`reader` or `queued`), the excerpt as a new document (`handed`).
 #  And the Lab frames stay within the Inbox's daily cap, and everything published within ntfy.sh's daily messages.
@@ -264,6 +266,34 @@ scroll_find() {
     if ui_dump && node "$here/ui-find.mjs" node "$OUT/ui-last.xml" "$re" "$pkg" >/dev/null; then return 0; fi
     [ "$i" -lt "$tries" ] || break
     adb shell input swipe $((w / 2)) $((h * 7 / 10)) $((w / 2)) $((h * 3 / 10)) 400 >/dev/null 2>&1 || true
+    sleep 2
+  done
+  return 1
+}
+
+# Taps the node matching $2 nearest below the node matching $1 (a list row's own button under its title), both of
+# package $3, scrolling up to $4 times: a whole swipe while the row is not on screen, a short one while its button is
+# just below the screen. Returns 1 when it is not found.
+row_tap() {
+  local anchor="$1" target="$2" pkg="$3" tries="${4:-6}" i xy rc size w h
+  size="$(screen_size)"; w="${size%x*}"; h="${size#*x}"; w="${w:-320}"; h="${h:-640}"
+  for i in $(seq 0 "$tries"); do
+    rc=1
+    if ui_dump; then
+      if xy="$(node "$here/ui-find.mjs" below "$OUT/ui-last.xml" "$anchor" "$target" "$pkg")"; then
+        echo "tap '$target' under '$anchor' at $xy"
+        adb shell input tap $xy
+        return 0
+      else
+        rc=$?
+      fi
+    fi
+    [ "$i" -lt "$tries" ] || break
+    if [ "$rc" = 3 ]; then
+      adb shell input swipe $((w / 2)) $((h * 6 / 10)) $((w / 2)) $((h * 4 / 10)) 400 >/dev/null 2>&1 || true
+    else
+      adb shell input swipe $((w / 2)) $((h * 7 / 10)) $((w / 2)) $((h * 3 / 10)) 400 >/dev/null 2>&1 || true
+    fi
     sleep 2
   done
   return 1
@@ -790,18 +820,38 @@ rows="$(send lab-states "$f15keep" "$f15swipe" || true)"; echo "$rows"
 echo "$rows" | grep -qF "$f15keep url held: $heldWords" || failed "the phone does not say \"$heldWords\" for $f15keep"
 echo "$rows" | grep -qF "$f15swipe file held: $heldWords" || failed "the phone does not say \"$heldWords\" for $f15swipe"
 
-# Kept items wait for Add to Reader: opening the Inbox hands neither over (F15). Then Add to Reader does (F15.4; the
-# notices are gone, so the tap is the debug hook's): the link reaches the Reader, the PDF is handed over.
+# Kept items wait for Add to Reader: opening the Inbox hands neither over (F15), and their rows say "Kept for later"
+# (the list starts some screens down: up to 6 scrolls). Then each row's own Add to Reader hands it over (F15.4, the
+# way a user does it: it clears the mark and hands it over with the Inbox in front); the debug hook only when the row's
+# button cannot be found (said at the end). The link reaches the Reader, the PDF is handed over.
+row_hook=()
 adb shell "am start -n $SHARE_PKG/.ui.MainActivity" >/dev/null; sleep 10
 for id in "$f15keep" "$f15swipe"; do
   if inbox_log | grep "received $id .*handed to" >/dev/null; then failed "$id, kept for later, was handed over when the Inbox opened"; fi
 done
-if scroll_find "$(exactly "$(labtext arrivals.keptForLater)")" "$SHARE_PKG" 3; then echo "the Inbox lists them as \"$(labtext arrivals.keptForLater)\""; else echo "note: \"$(labtext arrivals.keptForLater)\" was not found on the Inbox screen"; fi
+KEPT_RE="$(exactly "$(labtext arrivals.keptForLater)")"
+ROW_ADD_RE='^Add to Reader$'
+if scroll_find "$KEPT_RE" "$SHARE_PKG" 6; then
+  echo "the Inbox lists them as \"$(labtext arrivals.keptForLater)\""
+else
+  failed "no row on the Inbox screen says \"$(labtext arrivals.keptForLater)\" after 6 scrolls (F15)"
+fi
 shot "$OUT/51-inbox-kept.png"
-root_tap "$f15keep"
-if line="$(wait_handoff "$f15keep" 120)"; then echo "$line"; echo "$line" | grep -q 'via save_page .* by=tap' || failed "$f15keep was handed over, but not through SAVE_PAGE by the tap"; else failed "no hand-off for the kept link $f15keep after Add to Reader"; fi
-root_tap "$f15swipe"
-if line="$(wait_handoff "$f15swipe" 120)"; then echo "$line"; else failed "no hand-off for the kept PDF $f15swipe after Add to Reader"; fi
+# kept_add <id> <its row's title, a JS regex> <hand-off pattern>: the row's Add to Reader, else the debug hook.
+kept_add() {
+  adb shell "am start -n $SHARE_PKG/.ui.MainActivity" >/dev/null; sleep 3
+  if ! row_tap "$2" "$ROW_ADD_RE" "$SHARE_PKG" 8; then
+    echo "note: the row's Add to Reader for $1 was not found"; row_hook+=("$1"); root_tap "$1"
+  fi
+  if line="$(wait_handoff "$1" 120)"; then
+    echo "$line"; echo "$line" | grep -Eq "$3" || failed "$1 was handed over, but not as Add to Reader does ($3)"
+  else
+    failed "no hand-off for the kept item $1 after Add to Reader"
+  fi
+}
+kept_add "$f15keep" "$(exactly 'F15 link to keep')" 'via save_page .* by=(front|tap)'
+kept_add "$f15swipe" 'Test PDF \(f15-swipe\)' 'via send_file .* by=(front|tap)'
+echo "kept items' Add to Reader through their rows: $(( 2 - ${#row_hook[@]} )) of 2; through the debug hook: ${row_hook[*]:-none}"
 send wait-lab 150 "$f15keep=reader|queued" "$f15swipe=handed" \
   || failed "after Keep for later, Add to Reader did not give reader (or queued) for $f15keep and handed for $f15swipe (F15.4)"
 rows="$(send lab-states "$f15keep" || true)"; echo "$rows"
@@ -810,6 +860,11 @@ if echo "$rows" | grep -q "^$f15keep url reader:"; then
 fi
 adb shell appops set "$SHARE_PKG" SYSTEM_ALERT_WINDOW allow
 echo "F15 actions through the shade: ${shade_ok[*]:-none}; through the debug hook: ${shade_hook[*]:-none}"
+# While `cmd notification list` showed the notices, every action must have gone through the real notice in the shade:
+# one that needed the debug hook means it was missing from SystemUI's notice, or its label drifted.
+if [ "$notices_listed" = 1 ] && [ "${#shade_hook[@]}" -gt 0 ]; then
+  failed "the notices were listed, yet these actions were not on them in the shade and needed the debug hook: ${shade_hook[*]}"
+fi
 
 # 14. F11: an excerpt (an explicit selection: x-cap "excerpt", HTML with its source link and a #:~:text= fragment) of
 #     a page already in the Reader, and a note without a link, each arrive as a new document (Documents = Open).
@@ -845,11 +900,15 @@ if [ "$notices_listed" = 1 ]; then
 fi
 send wait-lab 120 "$f15saved=reader|queued" || failed "the phone did not read $f15saved in the Reader"
 alone_in_shade "$f15saved"
+dismiss_hook=0
 if shade_action 'F15 link saved by itself' "$DISMISS_RE"; then shade_ok+=("Dismiss"); else
-  echo "note: the notice's Dismiss was not found in the shade"; shade_hook+=("Dismiss")
+  echo "note: the notice's Dismiss was not found in the shade"; shade_hook+=("Dismiss"); dismiss_hook=1
   root_broadcast .inbox.ArrivalActionReceiver com.daylight.share.action.ARRIVAL_DISMISS "$f15saved"
 fi
 wait_log "received $f15saved -> arrival notice dismissed" 30 || failed "Dismiss on the notice of $f15saved did nothing"
+if [ "$notices_listed" = 1 ] && [ "$dismiss_hook" = 1 ]; then
+  failed "the notices were listed, yet Dismiss was not on the \"Saved to the Reader\" notice in the shade and needed the debug hook"
+fi
 unsnooze_others
 sleep 2
 if [ "$notices_listed" = 1 ] && notice_up "$f15saved" 11; then failed "the notice of $f15saved stayed after Dismiss"; fi
@@ -948,8 +1007,10 @@ else
   direct=""; failed "the share through the Direct Share shortcut did not go (F08)"
 fi
 
-# F04.6: the relay answers 413 to a share in place after its card closed: the send worker posts "Couldn’t send
-# ‘{title}’ to {name}" / "Open to try again." in the channel "Send results".
+# F04.6: the relay answers 413 to a share in place: the send worker (not the card) posts "Couldn’t send ‘{title}’ to
+# {name}" / "Open to try again." in the channel "Send results". The worker's job is asked for as the card commits, at
+# the countdown's end, which is also when the card closes, so the 413 can come just before or just after the card is
+# gone: this checks the worker's notice and its words, not that order (whether a card was still open is reported).
 curl -s -X POST "$RELAY_LOCAL/__mock/fail-publish?count=1&status=413&topic=$INBOX_TOPIC" >/dev/null || failed "the mock relay did not take the 413"
 F04_TITLE="$(labtext shareInPlace.failedTitle 'title=F04 forced 413' "name=$PHONE_FROM")"
 F04_TEXT="$(labtext shareInPlace.failedText)"
@@ -962,7 +1023,7 @@ if line="$(wait_count 'lab: send result notice for [0-9a-f]* (failed' $((results
   grep -qF "$F04_TITLE" "$OUT/56-f04-notifications.txt" || failed "no notice titled \"$F04_TITLE\" (F04.6)"
   grep -qF "$F04_TEXT" "$OUT/56-f04-notifications.txt" || failed "the 413 notice does not say \"$F04_TEXT\""
   grep -q 'send-results' "$OUT/56-f04-notifications.txt" || echo "note: the channel send-results was not in the notification dump"
-  if adb shell dumpsys activity activities 2>/dev/null | grep -q 'sender.ShareActivity'; then echo "note: a share card was still open"; else echo "the share card had closed"; fi
+  if adb shell dumpsys activity activities 2>/dev/null | grep -q 'sender.ShareActivity'; then echo "note: a share card was still up when this was read (the order is not checked)"; else echo "the share card had closed"; fi
 else
   failed "the send worker posted no \"Send results\" notice after the relay answered 413 (F04.6)"
 fi

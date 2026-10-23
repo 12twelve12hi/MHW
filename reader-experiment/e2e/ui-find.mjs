@@ -7,6 +7,10 @@
 //   node ui-find.mjs near <uiautomator dump.xml> <anchor regex> <target regex> [package]
 //     -> "x y": the node matching <target regex> (its text, content-desc or resource-id) nearest to the first node
 //        matching <anchor regex>, within 200 px above or below it (a notification's expand button, next to its title)
+//   node ui-find.mjs below <uiautomator dump.xml> <anchor regex> <target regex> [package]
+//     -> "x y": the node matching <target regex> nearest below the first node matching <anchor regex> (its top at or
+//        under the anchor's bottom, within 1200 px): a list row's own button under its title. Exits 1 without the
+//        anchor, 3 when the anchor is there but nothing below it matches (it may be just off the screen)
 //   node ui-find.mjs card-add <dumpsys window windows.txt> <density dpi>
 //     -> "x y": inside the "Add to Reader" button of the Inbox's card over the Reader (WaitingCard: a window titled
 //        "Daylight Share"; the button sits at its bottom right, 18 dp from the right edge and 12 dp from the bottom,
@@ -54,6 +58,17 @@ if (mode === 'node' || mode === 'bounds') {
   if (!hits.length) process.exit(1);
   console.log(centre(hits[0]));
   process.exit(0);
+} else if (mode === 'below') {
+  const [, , , , anchorRe, targetRe, inPkg] = process.argv;
+  const all = nodes();
+  const a = all.find((x) => named(new RegExp(anchorRe), x) && (!inPkg || x.pkg === inPkg));
+  if (!a) process.exit(1);
+  const re = new RegExp(targetRe);
+  const hits = all.filter((x) => named(re, x) && (!inPkg || x.pkg === inPkg) && x.t >= a.b - 1 && x.t - a.b <= 1200)
+    .sort((x, y) => x.t - y.t);
+  if (!hits.length) process.exit(3);
+  console.log(centre(hits[0]));
+  process.exit(0);
 } else if (mode === 'card-add') {
   const d = (Number(arg) || 160) / 160;
   const lines = text.split('\n');
@@ -68,6 +83,6 @@ if (mode === 'node' || mode === 'bounds') {
   }
   process.exit(1);
 } else {
-  console.error('usage: ui-find.mjs node|bounds <dump.xml> <regex> [package] | near <dump.xml> <anchor> <target> [package] | card-add <dumpsys.txt> <dpi>');
+  console.error('usage: ui-find.mjs node|bounds <dump.xml> <regex> [package] | near|below <dump.xml> <anchor> <target> [package] | card-add <dumpsys.txt> <dpi>');
   process.exit(2);
 }
