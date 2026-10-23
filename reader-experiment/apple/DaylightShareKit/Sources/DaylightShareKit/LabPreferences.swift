@@ -31,6 +31,10 @@ public struct LabPreferences {
         static let excerptNoteShown = "dls.lab.excerptNoteShown"
         /// F04: a share in place went from the share extension (the app then asks for notification permission once).
         static let shareInPlaceUsed = "dls.lab.shareInPlaceUsed"
+        /// F26: the share item sent something with Lab on (Setup check's "Daylight in the share sheet").
+        static let shareSheetUsed = "dls.lab.shareSheetUsed"
+        /// F26: the id of the last test article, which Setup check follows.
+        static let testArticle = "dls.lab.testArticle"
         /// F04: the app has asked for notification permission.
         static let notificationsAsked = "dls.lab.notificationsAsked"
         /// F10: the Send as mode last used per site, newest first: [[host, mode]], at most 500.
@@ -39,7 +43,7 @@ public struct LabPreferences {
         /// Every key, for the move into the App Group (`SharedStore.deviceSettingKeys`).
         static var all: [String] {
             Lab.useFeatures.map(use) + [alwaysOptions, tellFails, tellReader, quickSends, reviewFirst, linkOnlyShown,
-                                        excerptNoteShown, shareInPlaceUsed, notificationsAsked, sendAs]
+                                        excerptNoteShown, shareInPlaceUsed, shareSheetUsed, testArticle, notificationsAsked, sendAs]
         }
     }
 
@@ -132,6 +136,26 @@ public struct LabPreferences {
     public var shareInPlaceUsed: Bool {
         get { bool(Key.shareInPlaceUsed, default: false) }
         nonmutating set { set(Key.shareInPlaceUsed, newValue) }
+    }
+
+    /// F26: the share item sent something with Lab on (iPhone Setup check: "Daylight in the share sheet", else the steps
+    /// to add it from More). Set by the share extension.
+    public var shareSheetUsed: Bool {
+        get { bool(Key.shareSheetUsed, default: false) }
+        nonmutating set { set(Key.shareSheetUsed, newValue) }
+    }
+
+    /// F26: the id of the last test article (Setup check follows it to Delivered and In your Reader), or nil.
+    public var testArticleID: String? {
+        get {
+            StorageAudit.note("lab settings read")
+            return defaults.string(forKey: Key.testArticle)
+        }
+        nonmutating set {
+            StorageAudit.note("lab settings write")
+            defaults.set(newValue, forKey: Key.testArticle)
+            SharedStore.postChange()
+        }
     }
 
     /// F04: the app asked for notification permission already.

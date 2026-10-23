@@ -841,21 +841,23 @@ public struct ServerSettingsView: View {
     }
 }
 
-// MARK: The timeline's row text (2.5; W0: label and sentence only)
+// MARK: The timeline (2.5, F01)
 
-/// A history row's label and sentence as the Lab timeline words them (2.5): "In your Reader ✓", "Saved in the Daylight
-/// Reader.", after a glyph for the state (words and a glyph, never colour alone). With Lab off, or a v1.1 Inbox, it is
-/// exactly `RowText`'s. W0 shows the label and the sentence only; the step line and the check-in header come with F01
-/// (W1, A3). Its accessibility label is `LabRowText.a11yLabel`.
+/// A history row's state as the Lab timeline words it (2.5): the label after a glyph for the state ("In your Reader ✓",
+/// words and a glyph, never colour alone), and, when `showsDetail`, the sentence and the step line ("Sent ✓ · On your
+/// Daylight ✓ · In the Reader …", in caption style). The step line is hidden from screen readers: the accessibility label
+/// is `LabRowText.a11yLabel` ("{label}. {sentence}"), whether the sentence shows or not, with no step count. With Lab
+/// off, or a v1.1 Inbox, the words are exactly `RowText`'s and there is no step line. (`HistoryRowView(row:lab:…)` is
+/// the whole history row with these words.)
 public struct TimelineRow: View {
     let row: OutboxRow
     let text: LabRowText
-    let showsSentence: Bool
+    let showsDetail: Bool
 
-    public init(row: OutboxRow, text: LabRowText, showsSentence: Bool = true) {
+    public init(row: OutboxRow, text: LabRowText, showsDetail: Bool = true) {
         self.row = row
         self.text = text
-        self.showsSentence = showsSentence
+        self.showsDetail = showsDetail
     }
 
     public var body: some View {
@@ -864,13 +866,21 @@ public struct TimelineRow: View {
                 Image(systemName: Self.glyph(row, text)).accessibilityHidden(true)
                 Text(text.label).dlsFont(.caption, weight: .medium).listRowText(text.label)
             }
-            if showsSentence, let sentence = text.sentence {
+            if showsDetail, let sentence = text.sentence {
                 Text(sentence).dlsFont(.caption2).listRowText(sentence)
+            }
+            if showsDetail, let steps = text.stepLine {
+                Text(steps).dlsFont(.caption2).dlsSecondary().listRowText(steps)
             }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(text.a11yLabel)
     }
+
+    /// What a row shows (2.5): its title and label always; its sentence and step line on the newest row, and on every
+    /// row that is not final (`reader`, `queued` and `handed` are final; rows in flight or failed never are). Elsewhere
+    /// they are in the row's details.
+    public static func showsDetail(_ text: LabRowText, isNewest: Bool) -> Bool { isNewest || !text.isFinal }
 
     /// The state's glyph: the row's status glyph (`StatusLabel`) until it is delivered; then the Reader's step: in the
     /// Reader (a check), handed to it (an arrow), waiting on the Daylight (a hand, a tray), or stopped (a warning).
@@ -885,6 +895,28 @@ public struct TimelineRow: View {
         case rows("failed"): return "exclamationmark.triangle"
         default: return "checkmark.circle"
         }
+    }
+}
+
+/// The check-in header above the history (2.5; Lab on and paired): "Your Daylight checked in 4 min ago.", or "Your
+/// Daylight hasn’t checked in since this device paired." It comes from the ledger (`LabLedger.checkedIn`), works with a
+/// v1.1 Inbox (from ack times) and never blocks sending. Show it only while `lab.isOn` and paired.
+public struct CheckInHeader: View {
+    @ObservedObject var lab: LabModel
+    let now: Date
+
+    /// `now`: the time to measure "{n} min ago" against (the view does not tick; it follows the ledger).
+    public init(lab: LabModel, now: Date = Date()) {
+        self.lab = lab
+        self.now = now
+    }
+
+    public static let id = "lab-check-in"
+
+    public var body: some View {
+        let text = lab.checkedInText(now: now)
+        Text(text).dlsFont(.footnote).dlsSecondary().listRowText(text)
+            .accessibilityIdentifier(Self.id)
     }
 }
 

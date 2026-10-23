@@ -297,13 +297,27 @@ public enum Announcer {
         post(text)
     }
 
+    /// The rows the Lab ledger has just confirmed in the Reader (F27's "In your Reader", F01): delivered rows whose
+    /// state is `reader` in `new` and was not in `old`, from a Lab Inbox. Say them as `readerAnnouncement`.
+    public nonisolated static func readerChanges(from old: LabLedger.Snapshot, to new: LabLedger.Snapshot,
+                                                 rows: [OutboxRow]) -> [OutboxRow] {
+        guard new.inboxLab else { return [] }
+        return rows.filter { row in
+            row.status == .delivered && new.state(row.id)?.s == "reader" && old.state(row.id)?.s != "reader"
+        }
+    }
+
+    /// "In your Reader ✓, An article" for each row, as one announcement.
+    public nonisolated static func readerAnnouncement(_ rows: [OutboxRow]) -> String {
+        rows.map { "\(LabText["rows.reader.label"]), \($0.displayTitle)" }.joined(separator: ". ")
+    }
+
     /// What to announce when the history changes: each row that has become delivered or not delivered since `old`
     /// (the row's label and its title, "Delivered ✓, An article"). Rows new to the history are announced by the
     /// banner that follows a share, not here.
     ///
-    /// F27's "In your Reader" is not here yet: a row learns it from the Lab timeline's reader state (F01, Wave 1),
-    /// which v1.1 rows do not have. The card that brings F01's `TimelineRow` to DaylightShareUI (A3) extends this to
-    /// announce a row that reaches the Reader ("In your Reader, <title>"), and A4 and A5 check it in the apps.
+    /// F27's "In your Reader" comes from the Lab ledger, which v1.1 rows do not have: `readerChanges` (A3), which
+    /// `AppModel` says when the ledger changes with Lab on ("In your Reader ✓, <title>"); A4 and A5 check it in the apps.
     public nonisolated static func changes(from old: [OutboxRow], to new: [OutboxRow], now: Date = Date()) -> [String] {
         let before = Dictionary(old.map { ($0.id, $0.status) }, uniquingKeysWith: { a, _ in a })
         return new.compactMap { row in

@@ -29,6 +29,10 @@ public final class LabModel: ObservableObject {
     /// this device re-paired while it knew a Daylight server, until OK (`dismissRepaired`) or a ready server; nil with
     /// Lab off.
     @Published public private(set) var repaired: LabCenter.Repaired?
+    /// The Use switches (6.5 Q5, LAB-PROTOCOL 2.9.6) as stored: a feature that is not here is on.
+    @Published public private(set) var uses: [String: Bool] = [:]
+    /// Each W1 feature's own settings (`LabPreferences`), as stored.
+    @Published public private(set) var settings = FeatureSettings()
     /// `LAB_NOTE_ENABLED` (1.2): the one-time note shows only in builds whose app has F01 or F04 (false in W0).
     public var noteEnabled: Bool
     /// `-DLSLab 0|1` (1.7): applied before the first render.
@@ -38,6 +42,8 @@ public final class LabModel: ObservableObject {
     private var readSeq = 0
     /// Switch writes on their way to storage: until they land, a read does not put the old value back.
     private var writes = 0
+    /// The same for the Use switches and the feature settings.
+    private var settingWrites = 0
 
     public var store: SharedStore { center.store }
 
@@ -68,6 +74,34 @@ public final class LabModel: ObservableObject {
         var noteShown: Bool
         var ledger: LabLedger.Snapshot
         var repaired: LabCenter.Repaired?
+        var uses: [String: Bool]
+        var settings: FeatureSettings
+    }
+
+    /// Lab W1's feature settings (F04, F09, F10), each with its default when never set.
+    public struct FeatureSettings: Equatable, Sendable {
+        /// F04: "Always show Options before sending" (off).
+        public var alwaysShowOptions = false
+        /// F04: "Tell me when a send fails" (on).
+        public var tellWhenSendFails = true
+        /// F04: "Tell me when it’s in my Reader" (off).
+        public var tellWhenInReader = false
+        /// F09: "Allow quick sends from other apps" (off).
+        public var allowQuickSends = false
+        /// F10: "Review before sending" (off).
+        public var reviewBeforeSending = false
+
+        public init() {}
+
+        static func read(_ p: LabPreferences) -> FeatureSettings {
+            var s = FeatureSettings()
+            s.alwaysShowOptions = p.alwaysShowOptions
+            s.tellWhenSendFails = p.tellWhenSendFails
+            s.tellWhenInReader = p.tellWhenInReader
+            s.allowQuickSends = p.allowQuickSends
+            s.reviewBeforeSending = p.reviewBeforeSending
+            return s
+        }
     }
 
     /// Reads the switch, the note and the ledger again (in the background) and publishes them.
@@ -91,12 +125,18 @@ public final class LabModel: ObservableObject {
         let read = await Self.off(center) { c -> Read in
             // The first start of a build with Lab writes lab = true when the key is missing (1.2); -DLSLab sets it.
             if let launch { LabSettings.setOn(launch, store: c.store) } else { LabSettings.ensureDefault(store: c.store) }
-            return Read(lab: c.isOn(), noteShown: c.store.labNoteShown, ledger: c.ledger().snapshot(), repaired: c.repaired())
+            let prefs = LabPreferences(store: c.store)
+            return Read(lab: c.isOn(), noteShown: c.store.labNoteShown, ledger: c.ledger().snapshot(), repaired: c.repaired(),
+                        uses: prefs.uses, settings: FeatureSettings.read(prefs))
         }
         guard seq == readSeq else { return }
         if writes == 0 && read.lab != isOn { isOn = read.lab }
         if read.noteShown != noteShown { noteShown = read.noteShown }
         if read.ledger != ledger { ledger = read.ledger }
+        if settingWrites == 0 {
+            if read.uses != uses { uses = read.uses }
+            if read.settings != settings { settings = read.settings }
+        }
         let follow = isOn ? read.repaired : nil
         if follow != repaired { repaired = follow }
         if !isLoaded { isLoaded = true }
@@ -211,6 +251,56 @@ public final class LabModel: ObservableObject {
     /// The Server code (for Copy Server code), or nil when not paired.
     public func serverCode() async -> String? {
         await Self.off(center) { c in c.server()?.serverCode() }
+    }
+
+    // MARK: Use switches and feature settings (W1)
+
+    /// Whether a feature is in use now: Lab on and its Use switch not off (the JS `labUseOn`).
+    public func inUse(_ feature: String) -> Bool { LabText.useOn(lab: isOn, uses: uses, feature: feature) }
+
+    /// A Use switch for What's in Lab (`WhatsInLabView(useSwitch:)`): a binding for the features of `Lab.useFeatures`
+    /// this app has (`features`), nil for the others. Turning one off keeps that feature's own settings (2.9.6).
+    public func useSwitch(features: Set<String>) -> (String) -> Binding<Bool>? {
+        { [weak self] id in
+            guard let self, Lab.useFeatures.contains(id), features.contains(id) else { return nil }
+            return Binding(get: { [weak self] in self?.uses[id] ?? true }, set: { [weak self] on in self?.setUse(id, on) })
+        }
+    }
+
+    /// Turns a Use switch on or off: the screens follow at once; it is saved off the main thread.
+    public func setUse(_ feature: String, _ on: Bool) {
+        uses[feature] = on
+        save { $0.setUse(feature, on) }
+    }
+
+    /// Changes a feature setting: the screens follow at once; it is saved off the main thread.
+    public func setSetting(_ change: (inout FeatureSettings) -> Void) {
+        var s = settings
+        change(&s)
+        settings = s
+        let saved = s
+        save { p in
+            p.alwaysShowOptions = saved.alwaysShowOptions
+            p.tellWhenSendFails = saved.tellWhenSendFails
+            p.tellWhenInReader = saved.tellWhenInReader
+            p.allowQuickSends = saved.allowQuickSends
+            p.reviewBeforeSending = saved.reviewBeforeSending
+        }
+    }
+
+    /// A binding to one feature setting, for a `Toggle`.
+    public func settingBinding(_ key: WritableKeyPath<FeatureSettings, Bool>) -> Binding<Bool> {
+        Binding(get: { [weak self] in self?.settings[keyPath: key] ?? false },
+                set: { [weak self] v in self?.setSetting { $0[keyPath: key] = v } })
+    }
+
+    private func save(_ body: @escaping @Sendable (LabPreferences) -> Void) {
+        settingWrites += 1
+        Task {
+            await Self.off(center) { c in body(LabPreferences(store: c.store)) }
+            settingWrites -= 1
+            await reloadNow()
+        }
     }
 
     // MARK: Rows and the check-in

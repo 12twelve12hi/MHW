@@ -7,9 +7,11 @@ import XCTest
 /// The share extensions' decisions: what to send for what the share sheet hands over.
 final class ShareUITests: XCTestCase {
     func testTextWithALinkIsTheLink() {
+        // The link and its title as v1.1 reads them; the text it came in is kept for Lab's smart intake (F16).
         XCTAssertEqual(SharePayloadReader.textPayload("Great read https://example.com/a?b=1", title: nil),
-                       .link(url: "https://example.com/a?b=1", title: "Great read"))
-        XCTAssertEqual(SharePayloadReader.textPayload("https://example.com/x", title: "T"), .link(url: "https://example.com/x", title: "T"))
+                       .link(url: "https://example.com/a?b=1", title: "Great read", text: "Great read https://example.com/a?b=1"))
+        XCTAssertEqual(SharePayloadReader.textPayload("https://example.com/x", title: "T"),
+                       .link(url: "https://example.com/x", title: "T", text: "https://example.com/x"))
         let essay = String(repeating: "A long note without much in it. ", count: 40) + "https://example.com"
         XCTAssertEqual(SharePayloadReader.textPayload(essay, title: nil), .text(essay.trimmingCharacters(in: .whitespacesAndNewlines)))
         XCTAssertNil(SharePayloadReader.textPayload("   ", title: nil))

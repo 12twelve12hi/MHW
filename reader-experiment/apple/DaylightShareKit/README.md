@@ -1,7 +1,8 @@
-# DaylightShareKit: Lab (W0)
+# DaylightShareKit: Lab (W0, W1)
 
-The kit's Lab layer (LAB-PLAN 1, 2, card A0). The apps' README (`../README.md`) covers the package as a whole; this
-page is what the iPhone and Mac lanes need to put Lab on screen. With `dls.lab` off nothing here shows but the switch.
+The kit's Lab layer (LAB-PLAN 1, 2; cards A0 and A3). The apps' README (`../README.md`) covers the package as a whole;
+this page is what the iPhone and Mac lanes need to put Lab on screen. With `dls.lab` off nothing here shows but the
+switch. Wave 1 (A3) is [below](#wave-1-a3).
 
 ## DaylightShareKit
 
@@ -71,6 +72,72 @@ is forgotten, nothing is locked). Nothing for the app lanes to call.
   given), so the Mac's `needs-pairing` walk sees the switch off. Anything the Mac lane wants under the card's switch
   while it is on goes in `ShareExtensionView(model:labRows:)` (an `AnyView`, nil by default).
 
+## Wave 1 (A3)
+
+The W1 logic is ported from the JS reference (`share/js/daylight-lab.js`, LAB-PROTOCOL 2.9) and pinned to its vectors;
+the screens are shared pieces the iPhone and Mac lanes (A4, A5) place. **Everything is opt-in:** with Lab off, and in
+a build that turns none of it on, every share, row and frame is v1.1's (the parity baselines and `ShareCardSample` are
+unchanged; A3 added no sample cases).
+
+### DaylightShareKit
+
+| File | What it is |
+| --- | --- |
+| `JSText.swift` | JS-exact text helpers the ports share: Unicode scalars (not Characters), JS `\s`, ASCII `\b` and case folding, code-point equality (`JSText.same`), `decodeURIComponent`, entities, attribute and tag scanners. No `NSRegularExpression`. |
+| `ShareNormaliser.swift` | Smart intake (F16, F11 rule 3): `normalise(text:url:subject:source:clean:)` (the JS `normaliseShare`), `classify` (Q1: only an explicit selection is an excerpt; text with no link is a note; a text-fragment link alone stays a link), `cleanShareURL`, `shareTitle`, `findShareURL`, `extractAppleNewsTarget`, and `normaliseFetchingAppleNews` (one ephemeral fetch: 3 s, no cookies, 2 MB; `x-orig` is the apple.news link). |
+| `Excerpt.swift` | F11's excerpt documents: `item(text:html:url:pageTitle:site:app:date:)` → HTML or Markdown note (`x-cap: "excerpt"`), with names, dates, text fragments and `sanitize`. |
+| `SetupCheck.swift` | F26: `testArticle(id:device:)` (`x-cap: "test"`, `https://daylight.invalid/test/<id>`), `redact` (`redactDiagnostics`), `ActivityEvent` (with `http`), `diagnosticsReport`. |
+| `ActivityLog.swift` | The activity log (`lab-activity.json` beside the outbox, last 200 events; removed with the pairing's files). |
+| `LabPreferences.swift` | The Use switches (`dls.labUse.<id>`, missing = on; `inUse(_:)` = Lab on and the switch on) and each W1 setting: Always show Options, Tell me when a send fails / it's in my Reader, quick sends, Review before sending, the once-only lines, Send as per site (500 hosts), `shareSheetUsed`, `testArticleID`. Moved into the App Group with the other device settings. |
+| `LabShare.swift` | How a Lab share becomes an item: `PageCapture` (GetPage.js's `lab` object), `LabShare.pageInput` (Page as you see it → `x-cap: "seen"`, Clean article → `"clean"`, Link only, Selection → excerpt), `linkInput` / `textInput` (F16 with `x-orig`), `excerptInput`, `copiedLink` (F33, with its host), `defaultMode`, `thinText`, `reviewStats`. |
+| `Sender.swift` (changes) | `send(_:compress:defer:)` (F07: stored as failed/network, "Waiting for connection"), `flushNetwork(maxFrames:maxAttachmentBytes:)` (30 frames, 18 MB, oldest first, a 413 stops the pass's attachments), `OutboxRow.http`, `liveBackgroundAttempts` (a row in a background upload is not stale). |
+| `OfflineQueue.swift` | F07: `OfflineQueue` (an actor) on a `NetworkPathSource` (`SystemPathSource` = `NWPathMonitor`): defers while offline, flushes on reconnect, passes ≥ 3 min apart. |
+| `FrameFileBuilder.swift` | F04: an item's frames written to files in two passes from a file read in 64 KiB pieces (never all of it in memory), equal byte for byte to `ItemBuilder`'s. |
+| `BackgroundPublisher.swift` | F04: `start(_:file:pairing:…)` builds the frames and starts background uploads (`com.daylight.share.bg`, task label `<id>:<part>:<attempt>`); `complete(description:status:error:)` reads each answer (parts may finish up to 170 min apart; stale answers are ignored); `BackgroundUploadSession` is the system session (`handleEvents` for the iPhone app delegate). |
+| `FailureNotices.swift` | F04's notices: "Couldn't send ‘{title}’ to {name}" (not for the network), the quiet "In your Reader ✓: {title}" (opt-in), `askIfNeeded()` (once, in the app, after a share in place), `localCheck()` → `needs-notifications`. |
+| `Frame.swift` (changes) | `ItemInput.extras` → header extras on part 0; `x-orig` is left out when it alone would make part 0 a large frame. |
+
+### DaylightShareUI
+
+- **The share sheet** (`ShareExtensionModel.labFeatures: LabShareFeatures`, all off by default). A lane turns on what
+  its build has: `smartIntake` (F03, F10, F11, F16 through `labInput(for:)`), `shareInPlace` (F04's card, when F04 is
+  in use), `backgroundPublishing` (hand the uploads to `BackgroundUploadSession` and close; needs the App Group) and
+  `linkOnlyHint` (F03.3, iPhone). Lab off ignores all of them.
+- **Share in place** (`ShareInPlace.swift`): `ShareInPlaceCardView` ("Sending to {name}", Options for 1.5 s, then it
+  sends), `OptionsSheet` (Send as with the thin check, Send as excerpt, Send the link instead), `ReviewView` (the page
+  with JavaScript off and in grey, words and size, an editable title). No countdown with Comfort, VoiceOver or Switch
+  Control, Always show Options or Review (`ShareInPlace.waitsForSend`; tests set `assistiveOverride`).
+- **The timeline** (F01, 2.5): `HistoryRowView(row:lab:showsDetail:onRetry:)` with `LabModel.rowText(_:)` and
+  `TimelineRow.showsDetail(_:isNewest:)` (sentence and step line on the newest row and rows that are not final; the step
+  line is hidden from VoiceOver), `CheckInHeader(lab:)`. `AppModel` announces "In your Reader ✓, {title}" when the
+  ledger confirms `reader` (`Announcer.readerChanges`) and passes them to `AppModel.notices` when set.
+- **The queue** (F07): `QueueSection(rows:onCancel:)` ("Waiting to send ({n})", Cancel). The app calls
+  `AppModel.startOfflineQueue(path: SystemPathSource())` once; with Lab on, `AppModel.send` defers while offline.
+- **Setup check** (F26): `SetupCheckView(app:lines:appName:version:)` with the app's `SetupCheckLine`s (each unmet one
+  with its button or Show steps), Send a test article (`AppModel.sendTestArticle()`; ticks Delivered and In your
+  Reader), `ActivityLogView`, Copy diagnostics (`AppModel.diagnostics`, redacted).
+- **The copied link** (F33): `PasteChip(app:)` (iPhone: `PasteButton`, then "Send {host} to {name}?") and
+  `CopiedLinkConfirm` / `AppModel.copiedLink(_:)` for the Mac's Send copied link button.
+- **Use switches** (6.5 Q5): `WhatsInLabView(lab:useSwitch: lab.useSwitch(features:))` and `LabModel.settingBinding`
+  for each feature's own settings.
+
+### For A4 and A5 (wiring)
+
+- iPhone app delegate: `application(_:handleEventsForBackgroundURLSession:completionHandler:)` →
+  `BackgroundUploadSession.handleEvents`; set its `onComplete` to `BackgroundPublisher.complete` (with
+  `FailureNotices(center: SystemNoticeCenter.shared, prefs:)`), and call `FailureNotices.askIfNeeded()` when the app
+  opens. On each tick, set `ShareSender.liveBackgroundAttempts` to `BackgroundPublisher.liveAttempts()`.
+- F04's local check for What's in Lab and the gate: `FailureNotices.localCheck()`.
+- Setup check's lines are the app's (iPhone: paired, `shareItem` from `LabPreferences.shareSheetUsed`, Safari
+  extension with steps only, notifications, background app refresh; Mac: Share menu, Safari extension, login item,
+  Print menu, notifications).
+
+### Not in the kit
+
+- iOS share extensions cannot open other apps: the link-only line has no Open in Safari button on the card (the plan
+  puts that action on the app's history row, A4).
+- `PasteButton` draws its own label; the chip shows "Send copied link" beside it.
+
 ## Tests
 
 `LabVectorTests` (every section of `share/vectors/lab-vectors.json`; the W1 sections are listed as A3's),
@@ -86,3 +153,12 @@ The skew suite drives `../scripts/e2e-receiver.mjs`, whose Lab options are:
 node e2e-receiver.mjs <relay> <code> [--peer v1.0|v1.1] [--lab [--state <s>] [--app <app>] [--caps a,b]
                                       [--hello <app> [--hello-caps a,b]] [--lab-off]]
 ```
+
+W1 (A3): `NormaliseVectorTests`, `ExcerptVectorTests` and `SetupCheckVectorTests` (the `normalise`, `labExcerpt` and
+`diagnostics` vectors, the rows' `http`), `LabShareTests`, `OfflineQueueTests` (an injected path monitor; 70 links in
+three passes; 9 MB files under 18 MB a pass; a 413), `FrameFileBuilderTests` (frames equal `ItemBuilder`'s;
+`testANineMegabyteFileStaysUnderFortyMegabytes` on macOS), `BackgroundCompletionTests` (parts hours apart, stale
+answers, 413, the notices), `ShareInPlaceTests` (the card, Options, no countdown for people who need more time, the
+thin check, Review, the once-only line, Lab off) and `GetPageScriptTests` (GetPage.js in WebKit: `html` is v1.1's and
+the page is untouched; the clean copy has no scripts, on* attributes or form contents; Clean article; the selection).
+CI also checks GetPage.js's copies of `share/js/capture/` with `sync.mjs --check`.

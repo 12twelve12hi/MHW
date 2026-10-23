@@ -261,6 +261,26 @@ takes its Apple items from this list (where they differ, this list wins), and th
 - F27.3: a VoiceOver run of pair → send → delivered announces each state change.
 - The Share menu card's own Lab switch (ad-hoc build): on by default, and turning it off leaves the card as v1.1's.
 
+**Wave 1, from the kit (A3).** The kit's W1 pieces are tested on macOS in CI (`DaylightShareKit/README.md`, Wave 1);
+these need a real device once A4 and A5 have wired them:
+
+- F04.1 and F04.2 (iPhone): share a 9 MB PDF and a large page with share in place; the card closes at once and the
+  item arrives with the app closed; the share extension stays under its memory limit (FrameFileBuilder's 40 MB budget
+  is measured on the Mac in CI, not in the iPhone's extension). A send that fails after the card closed posts
+  "Couldn’t send ‘{title}’ to {name}", and tapping it opens the row; the app asks for notifications once, the first
+  time it opens after a share in place.
+- F04's accessibility rule: with VoiceOver, Switch Control, Comfort or "Always show Options before sending" the card
+  has no countdown and waits for Send.
+- F03 and F10 in Safari on the iPhone: GetPage.js's clean copy, Clean article, the thin-page check and Review on real
+  paywalled and logged-in pages; F03.3's "Only the link came through …" shows once when another app shares only a link.
+- F16.2: an Apple News link shared from News resolves to the publisher's article (one ephemeral fetch).
+- F07 (iPhone and Mac): shares made in Airplane Mode read "Waiting for connection" and go when the network is back.
+- F33.1 (iPhone): copy a link in Safari and open the app: the chip appears with no paste alert; Paste shows the host,
+  and Send sends the cleaned link.
+- F01 and F27: with VoiceOver, a row that reaches the Reader announces "In your Reader ✓, {title}"; the step line is
+  not read out.
+- F26.1: Send a test article from Setup check reaches the Reader and ticks Delivered and In your Reader on Rooted 2.
+
 **Once the Daylight server is deployed** (LOOSE-ENDS: the Cloudflare secrets), on the iPhone or the Mac: paste the
 deploy's setup link in Lab settings › Daylight server › *Set up with a link*. The question names the link's own
 address; *Use it* says *Setting up…*, then the done line; the section reads *Ready* with the server's host and

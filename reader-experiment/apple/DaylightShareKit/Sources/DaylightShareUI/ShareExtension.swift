@@ -5,9 +5,11 @@ import UniformTypeIdentifiers
 
 /// One thing found in the share sheet's input.
 public enum SharePayload: Equatable {
-    /// A web page with its HTML (Safari's JavaScript preprocessing).
-    case page(html: String, url: String, title: String?)
-    case link(url: String, title: String?)
+    /// A web page with its HTML (Safari's JavaScript preprocessing): v1.1's `html`, and what GetPage.js captured for Lab
+    /// (`lab`: the clean copy, Clean article, the selection; used only with Lab on).
+    case page(html: String, url: String, title: String?, lab: PageCapture? = nil)
+    /// A link; `text` is the text it was shared in (Lab's smart intake reads that, F16), when it came as text.
+    case link(url: String, title: String?, text: String? = nil)
     /// A file copied to a temporary location.
     case file(url: URL, name: String)
     case text(String)
@@ -73,7 +75,7 @@ public enum SharePayloadReader {
             let url = ShareText.webURL(results["url"] as? String)
             let title = (results["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? itemTitle
             if let url, let html = results["html"] as? String, !html.isEmpty {
-                return .page(html: html, url: url, title: title)
+                return .page(html: html, url: url, title: title, lab: PageCapture.read(results["lab"]))
             }
             if let url { return .link(url: url, title: title) }
         }
@@ -121,7 +123,7 @@ public enum SharePayloadReader {
         if t.lowercased().hasPrefix("daylightshare:"), !t.contains(where: \.isWhitespace) { return .pairing(t) }
         if let url = ShareText.findURL(t), t.count <= url.count + 300 {
             let rest = t.replacingOccurrences(of: url, with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return .link(url: url, title: rest.isEmpty ? title : rest)
+            return .link(url: url, title: rest.isEmpty ? title : rest, text: s)
         }
         return .text(t)
     }
@@ -234,11 +236,13 @@ public final class ShareExtensionModel: ObservableObject {
         /// or why it was refused).
         case result(title: String, message: String)
         case nothing
+        /// Share in place (Lab, F04): the card "Sending to {name}" with Options; `card` holds what it shows.
+        case card
     }
 
     /// Each outcome is also said to VoiceOver (F27): the row's label and sentence, why it did not go, or the notice,
     /// followed the first time by `note` when there is one.
-    @Published public private(set) var phase: Phase = .reading {
+    @Published public internal(set) var phase: Phase = .reading {
         didSet {
             guard phase != oldValue else { return }
             let note = noteSaid ? nil : self.note
@@ -257,8 +261,8 @@ public final class ShareExtensionModel: ObservableObject {
     @Published public private(set) var lab = true
     /// A line about how something went, shown under the result: "The page is larger than 8 MB, so its link was
     /// sent." (CHANGES-v1.1 2.5) when a page went as its link.
-    @Published public private(set) var note: String?
-    @Published public private(set) var daylightName = "your Daylight"
+    @Published public internal(set) var note: String?
+    @Published public internal(set) var daylightName = "your Daylight"
     /// False when this extension keeps its own pairing (no App Group in this build: ad-hoc and unsigned Mac builds),
     /// so the pairing screen explains that the code is needed here once.
     @Published public private(set) var sharesPairingWithApp = true
@@ -271,7 +275,18 @@ public final class ShareExtensionModel: ObservableObject {
     /// How a pairing with another secret reaches the old pairing's Daylight server to lock it (`LabCenter.pair`); tests
     /// give a stub.
     var fetch: DaylightServer.Fetch = DaylightServer.urlSessionFetch
-    private var payloads: [SharePayload] = []
+    var payloads: [SharePayload] = []
+    /// Lab W1 (A3): the Lab paths this build's share sheet takes; the iPhone and Mac lanes turn them on (A4, A5). All off
+    /// by default: the card is W0's, and with Lab off it is v1.1's whatever this holds.
+    public var labFeatures = LabShareFeatures()
+    /// Share in place's card (F04) while it shows (`Phase.card`): what it says and what Options holds.
+    @Published public internal(set) var card: ShareInPlaceCard?
+    /// The countdown to sending (F04: 1.5 s with Options), when the card has one.
+    var countdown: Task<Void, Never>?
+    /// What fetches an Apple News page for smart intake (F16); tests give a stub.
+    var pageFetch: ShareNormaliser.PageFetch = ShareNormaliser.ephemeralFetch
+    /// The background session share in place hands its uploads to (an App Group build); tests give a fake.
+    var backgroundUploads: BackgroundUploads?
     private var started = false
     /// The pairing the confirmation is about, and whether the shared items are sent once it is applied.
     private var pending: (pairing: Pairing, thenSend: Bool)?
@@ -305,7 +320,7 @@ public final class ShareExtensionModel: ObservableObject {
         switch phase {
         case .needsPairing, .result, .paired, .nothing: return true
         case .sent: return note != nil
-        case .reading, .sending, .confirmPairing: return false
+        case .reading, .sending, .confirmPairing, .card: return false
         }
     }
 
@@ -373,7 +388,7 @@ public final class ShareExtensionModel: ObservableObject {
             } else if current == nil {
                 phase = .needsPairing
             } else {
-                await send()
+                await begin()
             }
         }
     }
@@ -423,13 +438,15 @@ public final class ShareExtensionModel: ObservableObject {
         _ = await AppModel.offMain { await center.pair(p) }
         daylightName = p.displayName
         if thenSend {
-            await send()
+            await begin()
         } else {
             phase = .paired(notice ?? "Paired with \(p.displayName).")
         }
     }
 
-    func send() async {
+    /// Sends the shared items in this extension and reports how it went (v1.1's card). `prepared`: the items share in
+    /// place's card chose (F04 without a background session: the ad-hoc Mac), in place of the payloads, with `preparedNote`.
+    func send(prepared: [Result<ItemInput, Error>]? = nil, preparedNote: String? = nil) async {
         let store = self.store
         await store.ready()
         guard let sender = await AppModel.onStorage({ try? DaylightShare.sender(store: store) }) else {
@@ -439,9 +456,22 @@ public final class ShareExtensionModel: ObservableObject {
         phase = .sending
         var problems: [(title: String, message: String)] = []
         var sent: [OutboxRow] = []
-        for payload in payloads {
+        let labPaths = lab && labFeatures.smartIntake
+        var labNotes: [String] = preparedNote.map { [$0] } ?? []
+        let work: [Result<ItemInput, Error>?] = prepared?.map { Optional($0) } ?? payloads.map { _ in nil }
+        for (k, item) in work.enumerated() {
             do {
-                let input = try await AppModel.onStorage { Result { try Self.input(for: payload) } }.get()
+                let input: ItemInput
+                if let item {
+                    input = try item.get()
+                } else if labPaths {
+                    let made = try await labInput(for: payloads[k])
+                    input = made.input
+                    if let n = made.note { labNotes.append(n) }
+                } else {
+                    let payload = payloads[k]
+                    input = try await AppModel.onStorage { Result { try Self.input(for: payload) } }.get()
+                }
                 let row = try await sender.send(input)
                 if row.status != .sent && row.status != .delivered {
                     let text = RowText(row: row)
@@ -454,7 +484,21 @@ public final class ShareExtensionModel: ObservableObject {
             }
         }
         cleanUpTemporaryFiles()
-        note = Self.note(for: payloads)
+        if lab && (labPaths || prepared != nil) && !sent.isEmpty {
+            // F26: Setup check's "Daylight in the share sheet", and the activity log.
+            let rows = sent
+            await AppModel.onStorage {
+                LabPreferences(store: store).shareSheetUsed = true
+                ActivityLog(store: store).add(type: "send", rows: rows)
+            }
+        }
+        if labPaths || prepared != nil {
+            var line = labNotes.first
+            if line == nil { line = await labOnceNote() }
+            note = line
+        } else {
+            note = Self.note(for: payloads)
+        }
         if problems.isEmpty, let first = sent.first {
             // The row's own words: it reached the relay and waits for the Daylight ("Sent · waiting for your
             // Daylight"), not that it arrived.
@@ -496,11 +540,11 @@ public final class ShareExtensionModel: ObservableObject {
     /// file over 9 MB.
     nonisolated static func input(for payload: SharePayload) throws -> ItemInput {
         switch payload {
-        case let .page(html, url, title):
+        case let .page(html, url, title, _):
             // Larger pages than the Reader takes go as a link (PROTOCOL 2.2).
             if html.utf8.count > DLS.maxPageHTML { return .link(url, title: title) }
             return .page(html: html, url: url, title: title)
-        case let .link(url, title):
+        case let .link(url, title, _):
             return .link(url, title: title)
         case let .file(url, name):
             if let link = AppModel.linkInShortcutFile(url) { return .link(link, title: (name as NSString).deletingPathExtension) }
@@ -529,7 +573,7 @@ public final class ShareExtensionModel: ObservableObject {
         case let .result(title, message): said = message.isEmpty ? title : "\(title). \(message)"
         case let .paired(notice): return notice
         case .nothing: return "There’s nothing here Send to Daylight can send."
-        case .reading, .needsPairing, .confirmPairing, .sending: return nil
+        case .reading, .needsPairing, .confirmPairing, .sending, .card: return nil
         }
         guard let note, !note.isEmpty else { return said }
         let ends = said.last.map { ".…✓!?".contains($0) } ?? false
@@ -540,7 +584,7 @@ public final class ShareExtensionModel: ObservableObject {
     /// its link, `input(for:)`), else nil.
     nonisolated static func note(for payloads: [SharePayload]) -> String? {
         let bigPage = payloads.contains { payload in
-            if case let .page(html, _, _) = payload { return html.utf8.count > DLS.maxPageHTML }
+            if case let .page(html, _, _, _) = payload { return html.utf8.count > DLS.maxPageHTML }
             return false
         }
         return bigPage ? ShareText.pageSentAsLinkMessage : nil
@@ -550,8 +594,8 @@ public final class ShareExtensionModel: ObservableObject {
         guard let first = payloads.first else { return "" }
         if payloads.count > 1 { return "\(payloads.count) files" }
         switch first {
-        case let .page(_, url, title): return title ?? url
-        case let .link(url, title): return title ?? url
+        case let .page(_, url, title, _): return title ?? url
+        case let .link(url, title, _): return title ?? url
         case let .file(_, name): return name
         case let .text(t): return String(t.prefix(80))
         case let .tooLarge(name, _): return name
@@ -637,6 +681,10 @@ public struct ShareExtensionView: View {
                 Text("There’s nothing here Send to Daylight can send.").multilineTextAlignment(.center)
                     .wrapping("There’s nothing here Send to Daylight can send.")
                 doneButton
+            case .card:
+                if let card = model.card {
+                    ShareInPlaceCardView(model: model, card: card)
+                }
             case .needsPairing:
                 Text("Pair with your Daylight").dlsFont(.headline).wrapping("Pair with your Daylight")
                 if !model.sharesPairingWithApp {

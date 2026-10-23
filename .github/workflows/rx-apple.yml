@@ -59,6 +59,10 @@ jobs:
       - name: Lab strings are LAB_TEXT's
         working-directory: reader-experiment/apple/DaylightShareKit
         run: node scripts/lab-strings.mjs --check
+      # GetPage.js carries copies of share/js/capture/ (clean-html.js, Readability.js) between its markers (LAB-PLAN
+      # 6.3, F03, F10): each must be its source byte for byte.
+      - name: GetPage.js's capture code is share/js/capture's
+        run: node ../share/js/capture/sync.mjs --check Shared/ShareExtension/GetPage.js
       - name: Swift package tests (vectors, relay, outbox, end-to-end with the JS reference, accessibility baseline, Lab)
         working-directory: reader-experiment/apple/DaylightShareKit
         run: |
@@ -77,13 +81,15 @@ jobs:
           # Lab W0 (A0): every section of the Lab vectors and the server vectors' W0 subset, the ledger, the server
           # client's flows, and the F17 skew suite against the JS reference as the Daylight.
           # Lab W1 (A3): smart intake (normalise.json), excerpts, Setup check's vectors (the rows' http included), the
-          # offline outbox (F07), share in place's frame files and background answers (F04).
+          # offline outbox (F07), share in place's frame files and background answers (F04), the Lab share paths and
+          # the share-in-place card (F03, F04, F10, F16), and GetPage.js in WebKit (F03.5).
           for t in OutboxLockTests DownloadRuleTests AppModelTests testTheShareSheetSaysWhatTheRowSays \
                    testAFileThatCannotBeCopiedIsReported testAnUnreadableFileURLFallsBackToTheItemsData \
                    testABigPageGoesAsItsLinkAndTheShareSheetSaysSo AccessibilityBaselineTests \
                    LabVectorTests ServerVectorTests LabLedgerTests DaylightServerTests LabSkewTests \
                    NormaliseVectorTests ExcerptVectorTests SetupCheckVectorTests OfflineQueueTests \
-                   FrameFileBuilderTests testANineMegabyteFileStaysUnderFortyMegabytes BackgroundCompletionTests; do
+                   FrameFileBuilderTests testANineMegabyteFileStaysUnderFortyMegabytes BackgroundCompletionTests \
+                   LabShareTests ShareInPlaceTests GetPageScriptTests; do
             grep -qE "Test (Case|case) .*$t.* passed" "$RUNNER_TEMP/swift-test.log" || { echo "::error::$t did not run and pass"; exit 1; }
           done
 

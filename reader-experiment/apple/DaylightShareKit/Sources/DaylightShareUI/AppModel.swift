@@ -1,3 +1,4 @@
+import Combine
 import DaylightShareKit
 import Foundation
 import SwiftUI
@@ -105,6 +106,14 @@ public final class AppModel: ObservableObject {
     public let lab: LabModel
     private var timer: Timer?
     private var observer: NSObjectProtocol?
+    /// Lab W1 (A3): the ledger's changes ("In your Reader", F01, F27), the offline queue (F07) and the notices (F04).
+    private var ledgerWatch: AnyCancellable?
+    private var lastLedger: LabLedger.Snapshot?
+    /// Share in place's notices (F04): set by the app (`FailureNotices(center: SystemNoticeCenter.shared, …)`) to post
+    /// "In your Reader ✓: {title}" while it runs, when that setting is on. nil posts none.
+    public var notices: FailureNotices?
+    /// The offline queue (F07), once the app starts it (`startOfflineQueue`); with Lab on a share made offline waits.
+    public private(set) var offlineQueue: OfflineQueue?
     private var bannerTask: Task<Void, Never>?
     private var reloadSeq = 0
     /// Comfort writes on their way to storage: until they land, a read does not put the old value back.
@@ -128,6 +137,95 @@ public final class AppModel: ObservableObject {
         #if canImport(ObjectiveC)
         SharedStore.observeOtherProcesses()
         #endif
+        ledgerWatch = self.lab.$ledger.sink { [weak self] new in
+            Task { @MainActor in self?.ledgerChanged(new) }
+        }
+    }
+
+    // MARK: Lab W1 (A3): the ledger, the offline queue, the activity log
+
+    /// The ledger changed (an ack check read Lab frames): rows it has just confirmed in the Reader are said
+    /// ("In your Reader ✓, <title>", F27) and, with "Tell me when it’s in my Reader" on, noticed (F04). Lab on only.
+    private func ledgerChanged(_ new: LabLedger.Snapshot) {
+        defer { lastLedger = new }
+        guard let old = lastLedger, isLoaded, lab.isOn else { return }
+        let reached = Announcer.readerChanges(from: old, to: new, rows: rows)
+        guard !reached.isEmpty else { return }
+        Announcer.announce(Announcer.readerAnnouncement(reached))
+        if let notices {
+            Task { _ = await Self.offMain { await notices.inReader(reached) } }
+        }
+    }
+
+    /// Starts the offline queue (F07; the app calls it once, with `SystemPathSource()`): while Lab is on, a share made
+    /// offline is stored and reads "Waiting for connection"; coming back online sends what waits, in passes at least 3
+    /// minutes apart. With Lab off the queue sends nothing: rows go on v1.1's back-off (1.3).
+    public func startOfflineQueue(path: NetworkPathSource) {
+        guard offlineQueue == nil else { return }
+        let store = self.store
+        let queue = OfflineQueue(sender: { [weak self] in
+            guard let self, await self.lab.isOn else { return nil }
+            await store.ready()
+            return await Self.onStorage { try? DaylightShare.sender(store: store) }
+        }, path: path, onPass: { [weak self] rows in
+            guard !rows.isEmpty else { return }
+            await Self.onStorage { ActivityLog(store: store).add(type: "flushNetwork", rows: rows) }
+            await self?.reloadNow()
+        })
+        offlineQueue = queue
+        Task { await queue.start() }
+    }
+
+    /// Whether this device reported offline (F07's "Waiting for connection"; nil when not known).
+    public func isOffline() async -> Bool { await offlineQueue?.shouldDefer ?? false }
+
+    // MARK: Setup check (F26) and the copied link (F33)
+
+    /// "Send a test article" (F26): the bundled page as `page`, `x-cap: "test"`, titled "Test article from {device}".
+    /// Returns its row; Setup check follows it to Delivered and In your Reader (`SetupCheckView`).
+    @discardableResult
+    public func sendTestArticle() async -> OutboxRow? {
+        guard let article = try? SetupCheck.testArticle(device: deviceName) else { return nil }
+        guard let row = await send(article.input) else { return nil }
+        let store = self.store
+        await Self.onStorage {
+            LabPreferences(store: store).testArticleID = row.id
+            ActivityLog(store: store).add(type: "test", row: row)
+        }
+        return row
+    }
+
+    /// "Copy diagnostics" (F26): the app, version and platform, Lab, the caps seen, the last check-in, the outbox's
+    /// counts, the relay ("ntfy.sh" or "custom relay") and the last 50 events, redacted (`SetupCheck.diagnosticsReport`).
+    public func diagnostics(app: String, version: String, platform: String, now: Date = Date()) async -> String {
+        let store = self.store
+        let ledger = lab.ledger
+        let on = lab.isOn
+        let statuses = rows.map(\.status)
+        let relay = pairing?.relay ?? DLS.defaultRelay
+        let log = await Self.onStorage { ActivityLog(store: store).events }
+        return SetupCheck.diagnosticsReport(app: app, version: version, platform: platform, lab: on, caps: ledger.caps,
+                                            checkedIn: ledger.checkedIn, rows: statuses, relay: relay, log: log,
+                                            now: Int64((now.timeIntervalSince1970 * 1000).rounded()))
+    }
+
+    /// Setup check's activity log (F26), newest last: "{time} {type} {id8} {kind} {status} {http}".
+    public func activityLines() async -> [String] {
+        let store = self.store
+        return await Self.onStorage { ActivityLog(store: store).lines }
+    }
+
+    /// F33: what a copied link sends, and its host (`LabShare.copiedLink`; cleaned while F16 is in use), or nil when
+    /// the clipboard holds no web link.
+    public func copiedLink(_ text: String) -> (input: ItemInput, host: String)? {
+        LabShare.copiedLink(text, clean: lab.inUse("F16"))
+    }
+
+    /// Appends rows to Setup check's activity log (F26), with Lab on, off the main thread.
+    private func log(_ type: String, _ rows: [OutboxRow]) async {
+        guard lab.isOn, !rows.isEmpty else { return }
+        let store = self.store
+        await Self.onStorage { ActivityLog(store: store).add(type: type, rows: rows) }
     }
 
     // MARK: Storage, off the main thread
@@ -374,7 +472,11 @@ public final class AppModel: ObservableObject {
         sendingCount += 1
         defer { sendingCount -= 1 }
         do {
-            let row = try await sender.send(input)
+            // F07: with Lab on, a share made offline waits for the connection instead of failing now.
+            var deferred = false
+            if lab.isOn { deferred = await isOffline() }
+            let row = try await sender.send(input, defer: deferred)
+            await log(deferred ? "defer" : "send", [row])
             await reloadNow()
             show(RowText(row: row).message, error: RowText.isTrouble(row.status))
             if row.status == .sent { followUp(sender) }
@@ -476,6 +578,7 @@ public final class AppModel: ObservableObject {
         sendingCount += 1
         defer { sendingCount -= 1 }
         let r = await sender.retry(row.id)
+        if let r { await log("retry", [r]) }
         await reloadNow()
         if let r {
             if RowText.isTrouble(r.status) { show(RowText(row: r).message, error: true) }
@@ -540,6 +643,7 @@ public final class AppModel: ObservableObject {
         // Checked once the sender is known: there is one only after the launch's pairing, which comes after
         // `holdsSampleHistory` is set.
         guard let sender = await sender(), !holdsSampleHistory else { return }
+        let before = Dictionary(rows.map { ($0.id, $0.status) }, uniquingKeysWith: { a, _ in a })
         _ = await sender.tick()
         // The ledger keeps the states of the items still in the outbox only (LAB-PROTOCOL 2.2.6).
         let store = self.store
@@ -548,7 +652,10 @@ public final class AppModel: ObservableObject {
             LabLedger(outbox: outbox).prune(keeping: Set(outbox.rows.map(\.id)))
         }
         await reloadNow()
+        await log("ack", rows.filter { $0.status == .delivered && before[$0.id] != nil && before[$0.id] != .delivered })
         await lab.reloadNow()
+        // F07: coming back to the app may find rows waiting for the network.
+        if lab.isOn, let queue = offlineQueue { _ = await queue.flushIfDue() }
     }
 
     /// Checks for the Daylight's ack again ~30 s after a send, while the app runs.

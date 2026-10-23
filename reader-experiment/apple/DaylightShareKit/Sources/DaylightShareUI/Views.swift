@@ -139,6 +139,11 @@ public struct StatusLabel: View {
 public struct HistoryRowView: View {
     let row: OutboxRow
     let onRetry: () -> Void
+    /// Lab's words for the row (F01, `LabRowText`), or nil for v1.1's (`RowText`): with nil the row is exactly v1.1's.
+    let lab: LabRowText?
+    /// Whether the sentence and the step line show (2.5: on the newest row and on every row that is not final); with
+    /// v1.1's words the sentence always shows.
+    let showsDetail: Bool
     @Environment(\.comfort) private var comfort
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -209,10 +214,46 @@ public struct HistoryRowView: View {
     public init(row: OutboxRow, onRetry: @escaping () -> Void) {
         self.row = row
         self.onRetry = onRetry
+        lab = nil
+        showsDetail = true
+    }
+
+    /// A row with Lab's timeline words (LAB-PLAN F01, 2.5; `LabModel.rowText`): its label (with the state's glyph), and,
+    /// when `showsDetail` (`TimelineRow.showsDetail`: the newest row, and rows that are not final), its sentence and its
+    /// step line ("Sent ✓ · On your Daylight ✓ · In the Reader …", hidden from VoiceOver, which hears "{label}.
+    /// {sentence}" whether the sentence shows or not). Rows the Lab rules leave as v1.1's read exactly as v1.1's.
+    public init(row: OutboxRow, lab: LabRowText, showsDetail: Bool, onRetry: @escaping () -> Void) {
+        self.row = row
+        self.onRetry = onRetry
+        self.lab = lab
+        self.showsDetail = showsDetail
+    }
+
+    /// What VoiceOver says for a row with Lab's words: its title, where it is from, and "{label}. {sentence}" (2.5).
+    public static func spokenLabel(_ row: OutboxRow, lab: LabRowText) -> String {
+        let source = Self.source(row)
+        let title = row.displayTitle
+        return [title, title.localizedCaseInsensitiveContains(source) ? "" : source, lab.a11yLabel]
+            .filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+
+    @ViewBuilder private var statusLabel: some View {
+        if let lab {
+            let label = lab.label
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Image(systemName: TimelineRow.glyph(row, lab))
+                    .foregroundColor(StatusLabel.color(row))
+                    .accessibilityHidden(true)
+                Text(label).listRowText(label)
+            }
+            .dlsFont(.caption, weight: .medium)
+        } else {
+            StatusLabel(row: row)
+        }
     }
 
     public var body: some View {
-        let text = RowText(row: row)
+        let text = lab.map { RowText(label: $0.label, sentence: $0.sentence, action: $0.action) } ?? RowText(row: row)
         let source = Self.source(row)
         let when = Self.when(row.created)
         // On the Mac, and at accessibility text sizes and in Comfort, the button goes under the text, which keeps the
@@ -240,18 +281,23 @@ public struct HistoryRowView: View {
                     // (never a word broken in two).
                     ViewThatFits(in: .horizontal) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            StatusLabel(row: row)
+                            statusLabel
                             time(when)
                         }
                         VStack(alignment: .leading, spacing: 2) {
-                            StatusLabel(row: row)
+                            statusLabel
                             time(when)
                         }
                     }
-                    if let sentence = text.sentence {
+                    if showsDetail, let sentence = text.sentence {
                         // In the primary colour: what to know or do about the row, in small text (the iPhone's
                         // contrast audit failed it now and then at 72%).
                         Text(sentence).dlsFont(.caption2).listRowText(sentence)
+                    }
+                    if showsDetail, let steps = lab?.stepLine {
+                        // The label says it (2.5): hidden from VoiceOver. Words and glyphs, never colour alone.
+                        Text(steps).dlsFont(.caption2).dlsSecondary().listRowText(steps)
+                            .accessibilityHidden(true)
                     }
                 }
                 #if os(iOS)
@@ -260,7 +306,7 @@ public struct HistoryRowView: View {
                 // to hit (F27.2's hit-region audit); as one element the row is also read in one go. The button stays an
                 // element of its own. On the Mac each text stays an element, as VoiceOver reads a table row's cells.
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Self.spokenLabel(row))
+                .accessibilityLabel(lab.map { Self.spokenLabel(row, lab: $0) } ?? Self.spokenLabel(row))
                 .accessibilityValue(when)
                 .accessibilityIdentifier(Self.rowID)
                 #endif
