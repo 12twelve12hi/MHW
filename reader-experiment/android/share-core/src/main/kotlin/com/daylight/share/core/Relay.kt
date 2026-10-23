@@ -197,6 +197,26 @@ class RelayClient(
 
     class Published(val id: String?, val time: Long?, val attachment: Boolean)
 
+    /** The relay's clock at one answer ([relayMs]) and this device's [clock] then ([localMs]). */
+    data class RelayClock(val relayMs: Long, val localMs: Long) {
+        /** Relay time minus this device's time: add it to a time of this device's clock to get relay time. */
+        val offsetMs: Long get() = relayMs - localMs
+    }
+
+    /**
+     * The relay's clock as its last answer told it: a publish's `time`, else the answer's Date header (polls,
+     * downloads), with this device's time then; null before the first. A device whose clock is off (a DC-1 running fast)
+     * turns its own times into relay times with it (the handover's resume, LAB-PLAN 5.3.4; K6 review).
+     */
+    @Volatile
+    var relayClock: RelayClock? = null
+        private set
+
+    private fun noteClock(res: Http.Response, publishedSeconds: Long? = null) {
+        val ms = publishedSeconds?.takeIf { it > 0 }?.let { it * 1000 } ?: res.header("Date")?.let(::httpDateMs) ?: return
+        relayClock = RelayClock(ms, clock())
+    }
+
     /** One attachment download's outcome (the download rule of PROTOCOL 3.2). */
     class Download(val outcome: Outcome, val frame: ByteArray? = null, val status: Int = 0)
 
@@ -234,7 +254,9 @@ class RelayClient(
             }
             if (res.ok) {
                 val j = Bytes.fromUtf8Strict(res.body)?.let { Json.parseObjectOrNull(it.trim()) }
-                return Published(j?.str("id"), j?.num("time")?.toLong(), !small)
+                val time = j?.num("time")?.toLong()
+                noteClock(res, time)
+                return Published(j?.str("id"), time, !small)
             }
             val st = res.status
             if (st == 429) throw RelayException(ErrorCode.NETWORK, "HTTP 429", st)
@@ -266,6 +288,7 @@ class RelayClient(
         }
         if (!res.ok) throw RelayException("relay", "The relay answered ${res.status}.", res.status)
         if (res.body.size > Limits.MAX_POLL_RESPONSE) throw RelayException("relay", "The relay’s answer is too long.", res.status)
+        noteClock(res)
         val out = ArrayList<RelayMessage>()
         var stopDownloads = false
         for (line in String(res.body, Charsets.UTF_8).split('\n')) {
@@ -410,3 +433,8 @@ class RelayClient(
         }
     }
 }
+
+/** An HTTP Date header (IMF-fixdate, "Thu, 23 Oct 2026 09:00:00 GMT") in ms, or null. */
+internal fun httpDateMs(value: String): Long? = runCatching {
+    java.time.ZonedDateTime.parse(value.trim(), java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
+}.getOrNull()
