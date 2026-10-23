@@ -36,6 +36,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -69,6 +71,7 @@ import com.daylight.share.inbox.ReaderApps
 import com.daylight.share.inbox.Routes
 import com.daylight.share.sender.ActivityLog
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.semantics.Role as A11yRole
@@ -97,25 +100,28 @@ internal class OpenedSetting {
 }
 
 /**
- * Takes the request in [asked] (and clears it): with [enabled], marks that setting, runs [first] (a list scrolls to
- * the item that holds it, so it is composed), then brings it into view and focuses it.
+ * Takes each request in [asked] (and clears it): with [enabled], marks that setting, runs [first] (a list scrolls to
+ * the item that holds it, so it is composed), then brings it into view and focuses it. The requests are collected in
+ * one effect, so clearing [asked] does not cancel the one being answered.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun rememberOpenedSetting(asked: MutableState<String?>, enabled: Boolean, first: suspend () -> Unit = {}): OpenedSetting {
     val s = remember { OpenedSetting() }
-    val key = asked.value
-    LaunchedEffect(key) {
-        if (key == null) return@LaunchedEffect
-        asked.value = null
-        if (!enabled) return@LaunchedEffect
-        s.opened = key
-        withFrameNanos { }
-        first()
-        // After the layout that placed it: into view, then focused.
-        withFrameNanos { }
-        runCatching { s.shows.bringIntoView() }
-        runCatching { s.focuses.requestFocus() }
+    val on by rememberUpdatedState(enabled)
+    val before by rememberUpdatedState(first)
+    LaunchedEffect(asked) {
+        snapshotFlow { asked.value }.filterNotNull().collect { key ->
+            asked.value = null
+            if (!on) return@collect
+            s.opened = key
+            withFrameNanos { }
+            before()
+            // After the layout that placed it: into view, then focused.
+            withFrameNanos { }
+            runCatching { s.shows.bringIntoView() }
+            runCatching { s.focuses.requestFocus() }
+        }
     }
     return s
 }

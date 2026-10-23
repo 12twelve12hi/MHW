@@ -74,12 +74,15 @@ class OpenSettingInViewTest {
         waitForText(LabText["setup.readerTest"])
     }
 
-    /** The "Open setting" right under the check line [check]. */
+    /** The "Open setting" right under the check line [check] (by unclipped positions: either may be off the screen). */
     private fun openSettingUnder(check: String) {
-        val lineBox = compose.onNode(hasText(check)).performScrollTo().fetchSemanticsNode().boundsInRoot
+        val line = compose.onNode(hasText(check)).fetchSemanticsNode()
+        val lineBottom = line.positionInRoot.y + line.size.height
         val buttons = compose.onAllNodes(hasText(LabText.button("needs-quick-sends")!!) and hasClickAction())
-        val i = buttons.fetchSemanticsNodes().withIndex().filter { it.value.boundsInRoot.top >= lineBox.bottom - 1 }.minBy { it.value.boundsInRoot.top }.index
-        buttons[i].performScrollTo().performClick()
+        val nodes = buttons.fetchSemanticsNodes()
+        val i = nodes.indices.filter { nodes[it].positionInRoot.y >= lineBottom - 1 }.minByOrNull { nodes[it].positionInRoot.y }
+        assertTrue("no Open setting under \"$check\" among ${nodes.size}", i != null)
+        buttons[i!!].performScrollTo().performClick()
         compose.waitForIdle()
     }
 
