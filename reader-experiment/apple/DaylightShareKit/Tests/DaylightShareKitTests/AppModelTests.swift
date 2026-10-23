@@ -201,6 +201,37 @@ final class AppModelTests: XCTestCase {
         XCTAssertNil(lab.repaired)
     }
 
+    /// F00.4's server pin (LAB-PLAN 1.3: nothing is deleted): Lab off, then on again, keeps the pairing and the pinned
+    /// Daylight server, and locks nothing; with Lab back on the server row is asked again.
+    @MainActor
+    func testLabOffAndOnAgainKeepsTheServerPin() async throws {
+        let (store, first, net, lab) = try await pinnedPairing(lab: true)
+        try await waitFor("the first read") { lab.isLoaded }
+        XCTAssertTrue(lab.isOn)
+        let pin = await stored { FileServerStore(store: store).get(ServerKeys.pin) }
+        XCTAssertNotNil(pin, "no pin to keep")
+
+        for on in [false, true] {
+            let word = on ? "on" : "off"
+            lab.setOn(on)
+            let deadline = Date().addingTimeInterval(5)
+            while await stored({ store.lab }) != on {
+                if Date() > deadline { return XCTFail("Lab \(word) was not saved") }
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            await lab.reloadNow()
+            if on { await lab.refreshServerRow() }
+            try await Task.sleep(nanoseconds: 300_000_000) // the switch's own task has run to its end
+            let pinNow = await stored { FileServerStore(store: store).get(ServerKeys.pin) }
+            let pairedNow = await stored { store.pairing?.code }
+            XCTAssertEqual(pinNow, pin, "Lab \(word) changed or removed the server pin")
+            XCTAssertEqual(pairedNow, first.code, "Lab \(word) changed the pairing")
+            XCTAssertEqual(lab.isOn, on)
+        }
+        XCTAssertNotNil(lab.serverRowState, "with Lab back on, the server row was not asked again")
+        XCTAssertTrue(Self.lockRequests(net).isEmpty, "turning Lab off or on locked a server")
+    }
+
     /// The Share extension's pairing link, confirmed with Switch, locks the old server first too.
     @MainActor
     func testTheShareExtensionLocksTheOldServerFirst() async throws {
