@@ -104,4 +104,43 @@ async function poll(t, since) {
   out('headers', { status: r.status, rateHeaders: h });
 }
 
+// 8. A multi-topic poll, /{a},{b}/json?poll=1&since=… (LAB-PLAN 4.1.1, L2): does one `since` time cursor answer for
+// both topics, in what order, and does each line say its topic? The return lane's devices read the shared return topic
+// and their own in one request only if it does. Messages: A1 on a, B1 on b, A2 on a, B2 (an attachment) on b, ~1.5 s
+// apart, so their times differ.
+{
+  const a = topic(), b = topic();
+  const name = (t) => (t === a ? 'a' : t === b ? 'b' : t);
+  const a1 = await post(a, 'A1'); await sleep(1500);
+  const b1 = await post(b, 'B1'); await sleep(1500);
+  const a2 = await post(a, 'A2'); await sleep(1500);
+  const b2 = await put(b, randomBytes(5000));
+  await sleep(1500);
+  const pollBoth = async (since) => {
+    const r = await fetch(`${relay}/${a},${b}/json?poll=1&since=${encodeURIComponent(since)}`);
+    const text = await r.text();
+    const msgs = text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .filter((m) => m?.event === 'message');
+    const label = (m) => (m.id === a1.id ? 'A1' : m.id === b1.id ? 'B1' : m.id === a2.id ? 'A2' : m.id === b2.id ? 'B2' : m.id);
+    return { status: r.status, order: msgs.map(label), topics: msgs.map((m) => name(m.topic)), times: msgs.map((m) => m.time),
+      attachmentUrl: msgs.filter((m) => m.attachment).map((m) => (m.attachment.url ?? '').startsWith('https://')) };
+  };
+  const times = { A1: a1.time, B1: b1.time, A2: a2.time, B2: b2.time };
+  const sinceAll = await pollBoth('all');
+  const sinceTimeB1 = await pollBoth(String(b1.time));
+  const sinceTimeA2 = await pollBoth(String(a2.time));
+  const sinceAfterB2 = await pollBoth(String(b2.time + 1));
+  const sinceIdB1 = await pollBoth(b1.id);
+  const sinceIdA1 = await pollBoth(a1.id);
+  // One time cursor works when `since=t` filters both topics by time (inclusive) and every line names its topic.
+  const want = (since) => Object.entries(times).filter(([, t]) => t >= since).map(([k]) => k).sort();
+  const oneTimeCursor = sinceAll.status === 200 && sinceAll.order.slice().sort().join() === 'A1,A2,B1,B2'
+    && sinceTimeB1.order.slice().sort().join() === want(b1.time).join()
+    && sinceTimeA2.order.slice().sort().join() === want(a2.time).join()
+    && sinceAfterB2.order.length === 0
+    && sinceAll.topics.every((t) => t === 'a' || t === 'b');
+  out('multi-topic-poll', { times, sinceAll, sinceTimeB1, sinceTimeA2, sinceAfterB2, sinceIdB1, sinceIdA1,
+    orderedByTime: sinceAll.times.every((t, i) => i === 0 || sinceAll.times[i - 1] <= t), oneTimeCursor });
+}
+
 console.log('SUMMARY ' + JSON.stringify(results));

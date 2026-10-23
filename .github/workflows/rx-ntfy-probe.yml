@@ -1,7 +1,8 @@
 name: Reader experiment - ntfy.sh behaviour probe
 
 # Measures the real ntfy.sh limits and semantics the Daylight Share protocol relies on (attachment size limit,
-# per-visitor total, time stamping, since= semantics, CORS). Informational; read the log.
+# per-visitor total, time stamping, since= semantics, CORS, and since L2 the multi-topic poll the return lane's devices
+# would use). Informational; read the log, and write the answers into reader-experiment/share/NTFY-FACTS.md.
 on:
   push:
     branches: [claude/sweet-goldberg-ej1nb0]
@@ -14,6 +15,7 @@ permissions:
   contents: read
 
 jobs:
+  # lane: share
   probe:
     runs-on: ubuntu-latest
     steps:
@@ -21,4 +23,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: node reader-experiment/tools/probe-ntfy.mjs https://ntfy.sh
+      - name: Probe ntfy.sh
+        run: node reader-experiment/tools/probe-ntfy.mjs https://ntfy.sh | tee /tmp/probe.log
+      - name: Multi-topic poll summary
+        if: always()
+        run: grep -h '"probe":"multi-topic-poll"' /tmp/probe.log >> "$GITHUB_STEP_SUMMARY" || true
