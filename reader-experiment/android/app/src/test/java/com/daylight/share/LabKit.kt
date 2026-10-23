@@ -3,7 +3,9 @@ package com.daylight.share
 import android.content.ClipboardManager
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isRoot
 import com.daylight.share.core.Bytes
 import com.daylight.share.core.Json
@@ -40,6 +42,22 @@ object LabKit {
         app.inbox.http = relay
         app.lab.http = relay
         app.labReporter.autoFlush = false
+    }
+
+    /**
+     * Waits up to [ms] of real time (10 s, as the tests' own waits) for [text] on screen. When it does not come, the
+     * failure says how long it waited, what was on screen and [more] (K4 review: a What's in Lab or Setup check wait
+     * that runs out should say why, not only that it did).
+     */
+    fun waitForText(compose: AppRule, text: String, ms: Long = 10_000, substring: Boolean = false, more: () -> String = { "" }) {
+        val start = System.nanoTime()
+        try {
+            compose.waitUntil(ms) { compose.onAllNodes(hasText(text, substring = substring)).fetchSemanticsNodes().isNotEmpty() }
+        } catch (e: ComposeTimeoutException) {
+            val waited = (System.nanoTime() - start) / 1_000_000
+            val screen = runCatching { texts(compose).joinToString(" | ") }.getOrElse { "(unreadable: $it)" }
+            throw AssertionError("\"$text\" not on screen after $waited ms (limit $ms ms). On screen: $screen ${more()}".trimEnd(), e)
+        }
     }
 
     /** Every text on screen (each Text on its own, the app's window and any dialog), field contents included. */

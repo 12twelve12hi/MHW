@@ -41,8 +41,7 @@ class OpenSettingInViewTest {
 
     private val instantFooter = "Keeps a connection open so items arrive within seconds (a small notification stays). Off: every 15 minutes, and whenever this screen is open."
 
-    private fun waitForText(text: String, ms: Long = 10_000) =
-        compose.waitUntil(ms) { compose.onAllNodes(hasText(text)).fetchSemanticsNodes().isNotEmpty() }
+    private fun waitForText(text: String, ms: Long = 10_000) = LabKit.waitForText(compose, text, ms)
 
     private fun line(check: String, ok: Boolean) = LabText.fill(LabText[if (ok) "setup.ok" else "setup.notOk"], mapOf("check" to LabText["setup.checks.$check"]))
 
@@ -87,7 +86,7 @@ class OpenSettingInViewTest {
     }
 
     private fun opened(): SemanticsNodeInteraction {
-        compose.waitUntil(5_000) { compose.onAllNodes(hasTestTag(LAB_OPENED_SETTING_TAG)).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag(LAB_OPENED_SETTING_TAG)).fetchSemanticsNodes().isNotEmpty() }
         compose.waitForIdle()
         return compose.onNode(hasTestTag(LAB_OPENED_SETTING_TAG))
     }

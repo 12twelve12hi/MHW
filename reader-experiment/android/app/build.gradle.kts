@@ -92,6 +92,11 @@ tasks.withType<Test>().configureEach {
     systemProperty("dls.screenshots", screenshots.absolutePath)
     outputs.dir(screenshots).withPropertyName("f27Screenshots")
     doFirst { screenshots.deleteRecursively() }
+    // The test JVM's heap and every collection, with the JVM's uptime, which the CI job sums up (K4 review: a wait
+    // that ran out with nothing slow around it is told apart from a JVM that stopped for seconds).
+    val gcLog = layout.buildDirectory.file("test-gc/$name.log").get().asFile
+    doFirst { gcLog.parentFile.mkdirs() }
+    jvmArgs("-Xlog:gc,gc+init:file=${gcLog.absolutePath}:uptime")
     testLogging {
         events("passed", "skipped", "failed")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL

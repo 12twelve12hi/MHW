@@ -114,6 +114,35 @@ jobs:
         if: ${{ !cancelled() }}
         run: ./gradlew --no-daemon :app:testDebugUnitTest
 
+      # K4 review: the test JVM's heap and its longest stops (its -Xlog:gc file), and the slowest tests, so a wait that
+      # runs out can be told apart from a JVM that stopped for seconds.
+      - name: Test JVM pauses and the slowest tests
+        if: ${{ !cancelled() }}
+        run: |
+          python3 - <<'EOF'
+          import glob, re, xml.etree.ElementTree as ET
+          for f in sorted(glob.glob('app/build/test-gc/*.log')):
+              lines = open(f, errors='replace').read().splitlines()
+              print(f"=== {f}")
+              for l in lines:
+                  if 'Heap' in l and 'Capacity' in l: print(l)
+              pauses = []
+              for l in lines:
+                  m = re.search(r'^\[([\d.]+)s\].*(Pause [A-Za-z]+).* ([\d.]+)ms$', l)
+                  if m: pauses.append((float(m.group(3)), float(m.group(1)), m.group(2)))
+              full = sum(1 for p in pauses if p[2] == 'Pause Full')
+              print(f"{len(pauses)} pauses, {full} full, {sum(p[0] for p in pauses) / 1000:.1f} s in all")
+              for ms, at, kind in sorted(pauses, reverse=True)[:8]:
+                  print(f"  {ms:9.1f} ms  {kind:<12} at {at:8.1f} s")
+          cases = []
+          for f in glob.glob('app/build/test-results/testDebugUnitTest/*.xml'):
+              for c in ET.parse(f).getroot().iter('testcase'):
+                  cases.append((float(c.get('time') or 0), f"{c.get('classname')}.{c.get('name')}"))
+          print("Slowest tests:")
+          for t, name in sorted(cases, reverse=True)[:12]:
+              print(f"  {t:7.2f} s  {name}")
+          EOF
+
       # LAB-PLAN 1.7: a missing or changed Lab-off baseline is written here; the log carries it (non-ASCII as \u
       # escapes), and so does the artifact, to review and copy into app/src/test/lab-off-baseline.
       - name: Lab-off trees recorded by this run

@@ -15,6 +15,7 @@ import androidx.compose.ui.test.performClick
 import com.daylight.share.core.Kind
 import com.daylight.share.core.ItemHeader
 import com.daylight.share.core.lab.LabText
+import com.daylight.share.sender.ActivityLog
 import com.daylight.share.sender.PhoneLab
 import com.daylight.share.sender.Shared
 import com.daylight.share.ui.LAB_NOTE_TAG
@@ -52,8 +53,8 @@ class WhatsInLabPhoneTest {
     @After
     fun tearDown() = PhoneKit.reset()
 
-    private fun waitForText(text: String, ms: Long = 10_000, substring: Boolean = false) =
-        compose.waitUntil(ms) { compose.onAllNodes(hasText(text, substring = substring)).fetchSemanticsNodes().isNotEmpty() }
+    private fun waitForText(text: String, ms: Long = 10_000, substring: Boolean = false, more: () -> String = { "" }) =
+        LabKit.waitForText(compose, text, ms, substring, more)
 
     private fun openWhatsInLab() {
         compose.onNodeWithText("Settings").performClick()
@@ -152,7 +153,7 @@ class WhatsInLabPhoneTest {
         compose.onNode(hasText(LabText.featureName("F04")) and hasClickAction()).performClick()
         val sentence = LabText.needsMessage("needs-notifications", platform = "android")!!
         assertEquals("Needs notifications for Daylight Share. Turn them on in Settings › Apps › Daylight Share › Notifications.", sentence)
-        waitForText(sentence, 6_000)
+        waitForText(sentence)
         // 1.5 (K4 review): directly under the tapped row, before its Use switch and F04's three settings.
         val rowBox = compose.onNode(hasText(LabText.featureName("F04")) and hasClickAction()).fetchSemanticsNode().boundsInRoot
         val noteBox = compose.onAllNodes(hasTestTag(LAB_NOTE_TAG)).fetchSemanticsNodes().single().boundsInRoot
@@ -185,7 +186,7 @@ class WhatsInLabPhoneTest {
         assertEquals(Kind.PAGE, row.kind)
         assertEquals("test", row.header.extras[ItemHeader.X_CAP])
         assertEquals("https://daylight.invalid/test/$id", row.url)
-        compose.waitUntil(5_000) { compose.onAllNodes(hasTestTag(LAB_TEST_TAG)).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag(LAB_TEST_TAG)).fetchSemanticsNodes().isNotEmpty() }
 
         // The Daylight acks it and its Reader saves it: both lines tick.
         PhoneKit.ack(relay, listOf(id))
@@ -204,7 +205,7 @@ class WhatsInLabPhoneTest {
         }
         // The activity log lists the test send, by type and id8 only.
         compose.onNode(hasText(LabText["setup.activity"]) and hasClickAction()).performClick()
-        waitForText(id.take(8), 5_000, substring = true)
+        waitForText(id.take(8), substring = true) { "The log file: " + ActivityLog.read(app).joinToString { "${it.type} ${it.id8}" } }
     }
 
     /** F03: once shown, the link-only hint stays listed in Setup check. */

@@ -77,8 +77,7 @@ class LabNoteTest {
         compose.waitForIdle()
     }
 
-    private fun waitForText(text: String, ms: Long = 10_000) =
-        compose.waitUntil(ms) { compose.onAllNodes(hasText(text)).fetchSemanticsNodes().isNotEmpty() }
+    private fun waitForText(text: String, ms: Long = 10_000) = LabKit.waitForText(compose, text, ms)
 
     private fun openWhatsInLab(short: String) {
         compose.onNodeWithText("${LabText.WHATS_IN_LAB} ›").performClick()
@@ -113,7 +112,7 @@ class LabNoteTest {
         // A tap: exactly the needs-server sentence, under the row, announced, with Copy Server code and OK.
         row("F37").performClick()
         val sentence = LabText.needsMessage("needs-server", app = androidName, platform = "android")!!
-        waitForText(sentence, 6_000)
+        waitForText(sentence)
         assertEquals(1, notes().size)
         assertEquals(LiveRegionMode.Polite, politeness(sentence))
         val rowBox = row("F37").fetchSemanticsNode().boundsInRoot
@@ -130,9 +129,9 @@ class LabNoteTest {
 
         // Another control closes a note: one note at a time, under the row tapped last.
         row("F02").performClick()
-        waitForText(sentence, 6_000)
+        waitForText(sentence)
         row("F36").performClick()
-        compose.waitUntil(6_000) { notes().size == 1 && notes().single().boundsInRoot.top >= row("F36").fetchSemanticsNode().boundsInRoot.bottom - 1 }
+        compose.waitUntil(10_000) { notes().size == 1 && notes().single().boundsInRoot.top >= row("F36").fetchSemanticsNode().boundsInRoot.bottom - 1 }
         // Leaving the screen closes it.
         compose.onNodeWithText("Done").performClick()
         compose.waitForIdle()
@@ -148,7 +147,7 @@ class LabNoteTest {
         openWhatsInLab(LabText.serverHeadingShort("OFFLINE"))
         val offline = ServerMessages.STATE_MESSAGES.getValue("OFFLINE")
         row("F37").performClick()
-        waitForText(offline, 6_000)
+        waitForText(offline)
 
         relay.offline = false
         relay.hangMs = 20_000
@@ -173,7 +172,7 @@ class LabNoteTest {
         assertTrue("no header line on the Daylight itself", compose.onAllNodes(hasText(LabText.short("needs-inbox")!!)).fetchSemanticsNodes().isEmpty())
         row("F36").performClick()
         val sentence = LabText.needsMessage("needs-server", platform = "inbox")!!
-        waitForText(sentence, 6_000)
+        waitForText(sentence)
         compose.onNodeWithText(LabText.button("needs-server")!!).performClick()
         val p = app.inbox.ensurePairing()
         assertEquals(ServerCode.format(ServerCode.deriveSeed(p.secret), Relay.normalize(p.relay)), LabKit.clipboard(app))
@@ -284,7 +283,7 @@ class LabNoteTest {
         compose.onNodeWithText("Done").performClick()
         compose.waitForIdle()
         // W1's timeline (F01, K4): a Daylight with Lab on and no state yet for the row reads "On your Daylight ✓".
-        compose.waitUntil(5_000) { compose.onAllNodes(hasText(LabText["rows.delivered.label"])).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(10_000) { compose.onAllNodes(hasText(LabText["rows.delivered.label"])).fetchSemanticsNodes().isNotEmpty() }
     }
 
     // ------------------------------------------------------------------------------------- the switch and its card

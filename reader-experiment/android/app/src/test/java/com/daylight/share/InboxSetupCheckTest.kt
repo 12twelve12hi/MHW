@@ -72,8 +72,7 @@ class InboxSetupCheckTest {
             }
     }
 
-    private fun waitForText(text: String, ms: Long = 10_000) =
-        compose.waitUntil(ms) { compose.onAllNodes(hasText(text)).fetchSemanticsNodes().isNotEmpty() }
+    private fun waitForText(text: String, ms: Long = 10_000) = LabKit.waitForText(compose, text, ms)
 
     private fun inbox() {
         LabKit.useRelay(app, relay)
@@ -114,7 +113,7 @@ class InboxSetupCheckTest {
         // Arrival notices need notifications: its short state, and a tap shows the sentence with Open Settings.
         waitForText(LabText.short("needs-notifications")!!)
         compose.onNode(hasText(LabText.featureName("F15")) and hasClickAction()).performClick()
-        waitForText(LabText.needsMessage("needs-notifications", platform = InboxLab.PLATFORM)!!, 6_000)
+        waitForText(LabText.needsMessage("needs-notifications", platform = InboxLab.PLATFORM)!!)
         compose.onNodeWithText(LabText.button("needs-notifications")!!).assertIsDisplayed()
         assertTrue(LabText.needsMessage("needs-notifications", platform = "inbox")!!.contains("Daylight Share"))
     }

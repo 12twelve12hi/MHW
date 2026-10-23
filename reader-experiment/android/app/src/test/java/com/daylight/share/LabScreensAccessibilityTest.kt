@@ -37,15 +37,14 @@ class LabScreensAccessibilityTest {
     private val app: App get() = compose.activity.application as App
     private val relay = FakeRelay()
 
-    private fun waitForText(text: String, ms: Long = 10_000) =
-        compose.waitUntil(ms) { compose.onAllNodes(hasText(text)).fetchSemanticsNodes().isNotEmpty() }
+    private fun waitForText(text: String, ms: Long = 10_000) = LabKit.waitForText(compose, text, ms)
 
     private fun openWhatsInLabWithANote() {
         compose.onNodeWithText("Settings").performClick()
         compose.onNodeWithText("${LabText.WHATS_IN_LAB} ›").performClick()
         waitForText(LabText.serverHeadingShort("needs-server"))
         compose.onNode(hasText(LabText.featureName("F37")) and hasClickAction()).performClick()
-        waitForText(LabText.button("needs-server")!!, 6_000)
+        waitForText(LabText.button("needs-server")!!)
     }
 
     private fun openServerSection() {
