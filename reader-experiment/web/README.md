@@ -139,7 +139,12 @@ the page says what the popup says):
   bookmarklet or Paste and send) goes through `normaliseShare`: redirect wrappers (Google AMP, Facebook, LinkedIn, …)
   unwrapped, tracking parameters (`utm_*`, `fbclid`, …) removed, a headline + link share kept as a link with the
   headline as its title; the link as shared goes along as `x-orig`. With its **Use** switch off, links go exactly as
-  shared.
+  shared. Shared text reaches `normaliseShare` whole: a share's text (`?text=`, the share sheet's), the Shortcut's or
+  the Link field's words around a link, so smart intake finds the link by its own rules (parentheses kept, quotes,
+  brackets and trailing punctuation left out) and never the plain page's reading first; only an address given on its
+  own (`typedUrl`: a web address, or `example.com/story`) is taken as it is. A share the page doesn't send at once
+  fills **Link** with the address as found and **Title** with its title, so **Send** sends what the share would have.
+  With Lab off the page reads shares as v1.1 does.
 - **Send copied link** (F33): **Paste and send** under **Send link** reads the clipboard only when clicked (the browser
   asks the first time), then asks *Send {host}?* (**Send**, **Cancel**), or says *No link on the clipboard.* Gone with
   its **Use** switch off.
@@ -153,8 +158,9 @@ the page says what the popup says):
   *Storage kept by the browser* (**Allow** asks the browser to keep this page's storage); **Send a test article** (a
   page of about 400 words at `https://daylight.invalid/test/…`, `x-cap: "test"`), followed until *✓ Delivered* and *✓
   In your Reader* (or *Waiting for a tap on your Daylight* meanwhile; the page reads the confirmation channel every
-  10 s while it waits); the **Activity log** (the last 200 events, without titles or addresses) and **Copy
-  diagnostics** (redacted: no address, title, code or topic).
+  10 s while it waits); the **Activity log** (the last 200 events, without titles or addresses; an event about a row
+  ends with the HTTP status of its last failed publish, such as 413 or 429, or `-`) and **Copy diagnostics**
+  (redacted: no address, title, code or topic).
 - **Files over 9 MB ›** (the F02 entry point): under *Too big to send. Files can be up to 9 MB; …*, it runs the
   big-files feature's gate: *Needs your Daylight server …* with **Copy Server code** until there is one, then *comes to
   this app in a later Lab update*.
@@ -203,7 +209,8 @@ Settings' Lab rows, What's in Lab, the server section and the follow-up with `la
 extension's `lab.html`. Every word is `LAB_TEXT`'s or the server module's. `LAB_FEATURES`, `LAB_SERVER_FEATURES` and
 `BUILT_FEATURES` in `web-lab.js` say what this page lists and runs; `LAB_NOTE_ENABLED` is `true` from this build, which
 has the delivery timeline (B1). Wave 1 (card B1) adds to `web-lab.js` the Use switches (`setUse`), the timeline's data
-(`timeline`, `page`), smart intake for every link (`labLinkItem`, `copiedLink`), the bookmarklet (`bookmarklet`), Setup
+(`timeline`, `page`), smart intake for every link (`labLinkItem`; a share from `web-logic.js`'s `shareFromParams` or
+`shareFromEntry` through `labShareItem`, and into the form with `labShareFields`; `copiedLink`), the bookmarklet (`bookmarklet`), Setup
 check (`checks`, the test article, the activity log and `diagnostics`); `web-flush.js` holds F07's rule
 (`WebSender.holdNetwork`: while Lab is on, a row waiting for a connection is never due in the plain re-send pass, which
 has no caps) and its capped pass (`flushPass`, `Sender.flushNetwork`). The pairing and the outbox live in this
@@ -241,13 +248,17 @@ the F02 entry point), `../extension/test/e2e/web-lab-a11y.e2e.mjs` (axe-core wit
 off, light and dark, Comfort off and on; nothing clipped at 360 px; notes at 200%; Wave 1's screens too; screenshots in
 `test-results/web-lab`) and the Lab-off parity test `../extension/test/e2e/web-lab-off-parity.e2e.mjs` with its
 baselines `../extension/test/e2e/lab-off-baseline/web-*.yml` (re-recorded only with a non-Lab change). Wave 1's are
-`../extension/test/unit/web-lab-w1.test.mjs` (node: smart intake against the `normalise.json` vectors, Paste and
+`../extension/test/unit/web-lab-w1.test.mjs` (node: smart intake against the `normalise.json` vectors, every
+text-only case through each of the page's entry points (`?text=`, `#text=`, the share target, the Link field, the
+Shortcut) as `app.js` reads them, the activity log's HTTP status, Paste and
 send's reading, the bookmarklet run and read back, the Use switches, the timeline's data, F07's passes against the mock
 relay with ntfy.sh's limits (70 links in three passes with no 429, 18 MB of attachments a pass), Background Sync's run
 and the bundled `sw-lab.js`, Setup check, the activity log and redacted diagnostics) and
 `../extension/test/e2e/web-lab-w1.e2e.mjs` (Chromium, with Lab Daylights from `daylight-lab.js`: the timeline's rows
 and announcements, offline and back online, Background Sync with the page closed (dispatched through DevTools), clean
-links, Paste and send, the bookmarklet run on another page, Setup check's test article, and Lab off). The plain page's
+links, every text-only `normalise.json` case shared with `?text=`, words around a link in the Link field, a share
+filled into the form, the share sheet's text, a 429 in the activity log, Paste and send, the bookmarklet run on
+another page, Setup check's test article, and Lab off). The plain page's
 flows (`web.e2e.mjs`) run with Lab off, and again with Lab on (`web-lab-on.e2e.mjs`).
 
 **Lab release gate** (LAB-PLAN 6.2): a web Lab build waits for the iPhone and Mac builds of its wave before it reaches
@@ -303,7 +314,9 @@ only once the gate opens W1 for it, so until then use `node build.mjs --serve` o
   bookmark whose address is edited to the copied `javascript:` text on the iPhone: on a news page it opens the web
   sender, which sends that page with its title, and a reload doesn't send it again.
 - [ ] **F16** Android's share sheet into the installed page with Chrome's "Title\nURL" share and a newsletter link
-  carrying `utm_*`: it arrives as a link with the headline as its title and the tracking gone.
+  carrying `utm_*`: it arrives as a link with the headline as its title and the tracking gone. Sharing text with a
+  Wikipedia link in parentheses, "See (https://en.wikipedia.org/wiki/Foo_(bar)).", from a notes app on Android and
+  through the iPhone Shortcut sends the whole address, with its closing parenthesis.
 - [ ] **F26.1** Setup check's test article reaches the Reader and ticks *✓ Delivered* and *✓ In your Reader*, in each
   condition of F01.1 (*Waiting for a tap on your Daylight* meanwhile where the Inbox asks).
 - [ ] **F26.3** Each unmet check's button does what it says: **Open setting** for *Installed as an app* opens the

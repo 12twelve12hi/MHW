@@ -38,6 +38,24 @@ function trailingUrl(fragment) {
 
 export const hasShareParams = (p) => !!(p.pair || p.url || p.text || p.title || p.share || p.autosend);
 
+/**
+ * A share as the page reads it: from its address (readParams: ?url=, ?text=, ?title=, the Shortcut's and the
+ * bookmarklet's fragment) or from the share target (sw.js's stored {url, text, title}). -> {url, title} (v1.1's reading,
+ * sharedLink: what the page sends with Lab off and fills the form with), text (the share's text) and raw ({url, title}
+ * exactly as they came): with Lab on, smart intake reads raw and text itself (web-lab.js labShareItem, F16), so it
+ * finds the URL in shared text by its own rules, never by sharedLink's.
+ */
+export function shareFromParams(params = {}) {
+  const link = sharedLink(params);
+  return { url: link.url ?? params.url ?? '', title: link.title, text: params.text ?? '', raw: { url: params.url ?? '', title: params.title ?? '' } };
+}
+
+/** The share target's share (sw.js keeps {url, text, title, files}), read as shareFromParams reads an address's. */
+export function shareFromEntry(e = {}) {
+  const link = sharedLink({ url: e.url, text: e.text, title: e.title });
+  return { url: link.url, title: link.title, text: e.text ?? '', raw: { url: e.url ?? '', title: e.title ?? '' } };
+}
+
 /** What a shared {url, text, title} means: the first web address in url or text, and a title. */
 export function sharedLink({ url = '', text = '', title = '' } = {}) {
   const u = webUrl(url) ?? findUrl(url) ?? findUrl(text);
@@ -50,14 +68,29 @@ export function sharedLink({ url = '', text = '', title = '' } = {}) {
   return { url: u, title: t };
 }
 
+/** A host with an optional port, path, query or fragment, and no scheme: "example.com/story". */
+const BARE_HOST = /^[\w-]+(\.[\w-]+)+(:\d+)?([/?#]\S*)?$/;
+
 /** A typed address: adds https:// to "example.com/story". */
 export function normalizeUserUrl(input) {
   const s = String(input ?? '').trim();
   if (!s) return null;
   const direct = webUrl(s) ?? findUrl(s);
   if (direct) return direct;
-  if (/^[\w-]+(\.[\w-]+)+(:\d+)?([/?#]\S*)?$/.test(s)) return webUrl(`https://${s}`);
+  if (BARE_HOST.test(s)) return webUrl(`https://${s}`);
   return null;
+}
+
+/**
+ * Lab (F16): an address typed or given on its own, and nothing else: the input when it passes the web URL rule, or
+ * https:// added to "example.com/story". Unlike normalizeUserUrl it never looks for a URL inside text: smart intake
+ * (normaliseShare) reads anything else as shared text, by its own rules (parentheses, quotes, trailing punctuation).
+ * -> a web URL, or null.
+ */
+export function typedUrl(input) {
+  const s = String(input ?? '').trim();
+  if (!s) return null;
+  return webUrl(s) ?? (BARE_HOST.test(s) ? webUrl(`https://${s}`) : null);
 }
 
 const MIME_BY_EXT = {

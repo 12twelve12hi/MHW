@@ -3,7 +3,9 @@
 // node has no IndexedDB), the mock relay (with ntfy.sh's limits where it matters) and Lab Daylights from
 // daylight-lab.js.
 //
-//   F16  every link through smart intake: the normalise.json vectors as the page sends them, x-orig, the Use switch
+//   F16  every link through smart intake: the normalise.json vectors as the page sends them, x-orig, the Use switch;
+//        every text-only case through each of the page's entry points (?text=, #text=, the share target, the Link
+//        field, the Shortcut), read as app.js reads them (web-logic.js shareFromParams, shareFromEntry)
 //   F33  Paste and send's reading of the clipboard; F09 the bookmarklet, read back by the page
 //   F01  the timeline's data; What's in Lab's rows with their states and Use switches (6.5 Q5)
 //   F07  rows waiting for a connection leave only in capped passes while Lab is on (WebSender, flushPass, flushDue):
@@ -112,6 +114,94 @@ test('F16: every link the page sends goes through normaliseShare, as the normali
   assert.deepEqual(WL.labLinkItem({ url: 'https://example.com/a?utm_source=x&fbclid=1' }, { labUse: { F16: false } }), { kind: 'url', url: 'https://example.com/a?utm_source=x&fbclid=1', title: '' });
   // An Android share: the headline stays the title, the link a link (6.5 Q1).
   assert.deepEqual(WL.labLinkItem({ text: 'Opinion | The Real Reason https://nyti.ms/3XyZabc', title: '' }), { kind: 'url', url: 'https://nyti.ms/3XyZabc', title: 'Opinion | The Real Reason' });
+});
+
+/**
+ * The text-only cases of normalise.json (no url of their own: shared text, with a subject or not) and what the web
+ * sender sends for each: the vector's URL and orig, and its title. The web sender has no selections (F11 is not one of
+ * its features), so a selection case goes as a plain share: its URL and orig are the vector's, and its title is the
+ * text's own.
+ */
+const TEXT_CASES = VECTORS.cases.filter((c) => c.input.url === undefined && c.input.text !== undefined);
+const webExpect = (c) => (c.expect.url ? {
+  kind: 'url', url: c.expect.url,
+  title: c.input.source ? null : (c.expect.title && c.expect.title !== c.expect.url ? c.expect.title : ''),
+  extras: c.expect.orig ? { 'x-orig': c.expect.orig } : {},
+} : null);
+const enc = encodeURIComponent;
+
+function checkItem(item, want, what) {
+  if (!want) { assert.equal(item, null, what); return; }
+  assert.ok(item, what);
+  assert.equal(item.kind, 'url', what);
+  assert.equal(item.url, want.url, what);
+  assert.deepEqual(item.extras ?? {}, want.extras, what);
+  if (want.title !== null) assert.equal(item.title, want.title, what);
+}
+
+test('F16: every text-only case of normalise.json, through each of the page’s entry points, reaches normaliseShare whole (B1)', () => {
+  assert.equal(TEXT_CASES.length, 39);
+  const pairing = 'daylightshare://pair?c=ABCDEFGHJKMNPQRSTVWXYZ234567&r=https%3A%2F%2Fntfy.sh';
+  for (const c of TEXT_CASES) {
+    const i = c.input;
+    const settings = i.clean === false ? { labUse: { F16: false } } : {};
+    const want = webExpect(c);
+    const subject = i.subject ? `&title=${enc(i.subject)}` : '';
+    // The page's address: ?text= (an installed app's share target with GET, a link) and #text=, as app.js reads it.
+    for (const [via, search, hash] of [
+      ['?text=', `?autosend=1&text=${enc(i.text)}${subject}`, ''],
+      ['#text=', '', `#autosend=1&text=${enc(i.text)}${subject}`],
+    ]) {
+      const params = WG.readParams(search, hash);
+      assert.equal(params.autosend, true);
+      checkItem(WL.labShareItem(WG.shareFromParams(params), settings), want, `${c.name} (${via})`);
+    }
+    // Android's share sheet: sw.js keeps the POSTed {title, text, url}; Chrome on Android shares a link as text.
+    checkItem(WL.labShareItem(WG.shareFromEntry({ title: i.subject ?? '', text: i.text, url: '' }), settings), want, `${c.name} (share target)`);
+    // The Link field, with the text typed or pasted into it (and a subject in Title).
+    checkItem(WL.labLinkItem({ url: i.text, title: i.subject ?? '' }, settings), want, `${c.name} (Link field)`);
+    // The Shortcut: its link ends in "&url=" and the shared text is appended, URL-encoded (SHORTCUT.md). It carries no
+    // subject, so with one the title is the text's own.
+    const prefix = WG.shortcutPrefix('https://h.example/send/', pairing);
+    const shortcut = WG.shareFromParams(WG.readParams('', prefix.slice(prefix.indexOf('#')) + enc(i.text)));
+    checkItem(WL.labShareItem(shortcut, settings), want && i.subject ? { ...want, title: null } : want, `${c.name} (Shortcut)`);
+  }
+  // B1's four, through ?text=: the parentheses, the curly quotes, single curly quotes and », and the brackets.
+  for (const [text, url] of [
+    ['See (https://en.wikipedia.org/wiki/Foo_(bar)).', 'https://en.wikipedia.org/wiki/Foo_(bar)'],
+    ['He said “https://example.com/q”', 'https://example.com/q'],
+    ['Link: ‘https://example.com/s’ and «https://example.com/t»', 'https://example.com/s'],
+    ['[https://example.com/x]', 'https://example.com/x'],
+  ]) {
+    const share = WG.shareFromParams(WG.readParams(`?autosend=1&text=${enc(text)}`, ''));
+    assert.equal(WL.labShareItem(share).url, url, text);
+    // Lab off is v1.1's reading, unchanged (sharedLink, which app.js sends with Lab off).
+    assert.equal(share.url, ds.findUrl(text), text);
+  }
+  assert.equal(WG.shareFromParams(WG.readParams(`?text=${enc('See (https://en.wikipedia.org/wiki/Foo_(bar)).')}`, '')).url, 'https://en.wikipedia.org/wiki/Foo_(bar', 'v1.1 with Lab off');
+  // A link on its own stays the link as given: the bookmarklet's address (and title), a typed "example.com/story".
+  assert.deepEqual(WL.labShareItem(WG.shareFromParams(WG.readParams('', `#autosend=1&url=${enc('https://example.com/a_(b)?utm_source=x')}&title=${enc('A (b)')}`))),
+    { kind: 'url', url: 'https://example.com/a_(b)', title: 'A (b)', extras: { 'x-orig': 'https://example.com/a_(b)?utm_source=x' } });
+  assert.deepEqual(WL.labShareItem(WG.shareFromParams(WG.readParams('?url=example.com/story', ''))), { kind: 'url', url: 'https://example.com/story', title: '' });
+  // typedUrl: an address on its own, never one found inside text.
+  assert.equal(WG.typedUrl(' https://a.org/x '), 'https://a.org/x');
+  assert.equal(WG.typedUrl('example.com/story'), 'https://example.com/story');
+  assert.equal(WG.typedUrl('see https://a.org/x for more'), null);
+  assert.equal(WG.typedUrl('“https://a.org/x”'), null);
+  assert.equal(WG.typedUrl('javascript:alert(1)'), null);
+});
+
+test('F16: a share the page doesn’t send at once fills the Link field with the URL as found and its title; sending the form sends what the share would have', () => {
+  for (const c of TEXT_CASES) {
+    const i = c.input;
+    const settings = i.clean === false ? { labUse: { F16: false } } : {};
+    const share = WG.shareFromParams(WG.readParams(`?text=${enc(i.text)}${i.subject ? `&title=${enc(i.subject)}` : ''}`, ''));
+    const fields = WL.labShareFields(share);
+    const direct = WL.labShareItem(share, settings);
+    if (!direct) { assert.deepEqual(fields, { url: '', title: '' }, c.name); continue; }
+    assert.equal(ds.webUrl(fields.url), fields.url, c.name);
+    assert.deepEqual(WL.labLinkItem({ url: fields.url, title: fields.title }, settings), direct, c.name);
+  }
 });
 
 test('F33: Paste and send reads a link in copied text, cleaned, with the host its question names; anything else is no link', () => {
@@ -367,6 +457,43 @@ test('F26: Setup check’s lines for the web, with a button only where this page
     // Lab off: no Setup check.
     await s.lab.setLab(false);
     assert.deepEqual(await s.lab.checks(), { lab: false });
+  } finally { await s.close(); }
+});
+
+test('F26: an event about a row carries the HTTP status of its last failed publish (http): the re-send pass and F07’s capped pass (Background Sync’s too)', async () => {
+  let fail = null; // the mock relay's answer to the next publishes (failPublish), or null to take them
+  const s = await setup({ relay: { failPublish: () => fail } });
+  try {
+    const line = (l) => l.split(' ').slice(1).join(' '); // the activity line without its time
+    // The re-send pass (maintain's resendDue, then logChanges): a sent row goes again after RESEND_MESSAGE_MS; the
+    // relay refuses it with 429.
+    const sent = await s.sender.send({ kind: 'url', url: 'https://example.com/again', title: 'Again' });
+    assert.deepEqual([sent.status, sent.http], ['sent', 0]);
+    s.advance(ds.RESEND_MESSAGE_MS + MIN);
+    fail = 429;
+    let before = await s.lab.rowStates();
+    await s.sender.resendDue();
+    await s.lab.logChanges(before);
+    // F07: a row kept offline goes in a capped pass (web-flush.js flushPass, which Background Sync runs too), with the
+    // row the 429 left waiting; the relay refuses both with 413.
+    const kept = await s.sender.send({ kind: 'url', url: 'https://example.com/kept', title: 'Kept' }, { defer: true });
+    fail = 413;
+    const pass = await WF.flushPass({ storage: s.storage, sender: s.sender, now: s.now });
+    assert.deepEqual(pass.attempted.map((r) => [r.id, r.status, r.http]), [[sent.id, 'failed', 413], [kept.id, 'failed', 413]]);
+    // Later passes that go: each row's event is back to "-" (http 0).
+    fail = null;
+    for (let i = 0; i < 20 && (await s.sender.list()).some((r) => r.status === 'failed'); i++) {
+      s.advance(10 * MIN);
+      before = await s.lab.rowStates();
+      await WF.flushPass({ storage: s.storage, sender: s.sender, now: s.now });
+      await s.sender.resendDue();
+      await s.lab.logChanges(before);
+    }
+    const lines = (await s.lab.activity()).lines.map(line);
+    const [a, k] = [sent.id.slice(0, 8), kept.id.slice(0, 8)];
+    assert.deepEqual(lines.slice(0, 3), [`failed ${a} url failed 429`, `flush ${a} url failed 413`, `flush ${k} url failed 413`]);
+    assert.deepEqual(lines.slice(3).sort(), [`sent ${a} url sent -`, `sent ${k} url sent -`].sort());
+    assert.match((await s.lab.diagnostics()).text, new RegExp(` flush ${k} url failed 413\n`));
   } finally { await s.close(); }
 });
 

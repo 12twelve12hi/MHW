@@ -9,9 +9,9 @@
 
 import * as ds from './daylight-share.js';
 import { statusInfo, rowMessage, kindLabel, displayTitle, relativeTime, titleFromName, maintain, relayForInput, wantsAcks } from './logic.js';
-import { readParams, hasShareParams, sharedLink, normalizeUserUrl, mimeFor, deviceName, shortcutPrefix, serial, APP } from './web-logic.js';
+import { readParams, hasShareParams, shareFromParams, shareFromEntry, normalizeUserUrl, mimeFor, deviceName, shortcutPrefix, serial, APP } from './web-logic.js';
 import { openStorage, takeShared, pruneShared } from './web-storage.js';
-import { createWebLab, labTestHook, withoutLabParam, labLinkItem, copiedLink, PLATFORM } from './web-lab.js';
+import { createWebLab, labTestHook, withoutLabParam, labLinkItem, labShareItem, labShareFields, copiedLink, PLATFORM } from './web-lab.js';
 import { needsMessage } from './daylight-lab.js';
 import { createLabPage, LAB_VIEWS } from './web-lab-page.js';
 import { WebSender, flushPass, flushDue, isWaitingRow, SYNC_TAG, OUTBOX_LOCK } from './web-flush.js';
@@ -273,7 +273,7 @@ async function sendItem(item) {
   const defer = labOn() && navigator.onLine === false;
   const row = await lock(() => sender.send(item, { defer }));
   if (labOn()) {
-    await lab.logEvent({ type: defer ? 'defer' : 'send', id: row.id, kind: row.kind, status: row.status });
+    await lab.logEvent({ type: defer ? 'defer' : 'send', id: row.id, kind: row.kind, status: row.status, http: row.http });
     if (defer || isWaitingRow(row)) requestSync();
   }
   if (!defer) afterSend();
@@ -282,13 +282,13 @@ async function sendItem(item) {
 }
 
 /**
- * A link: typed, from the address or the share sheet. With Lab on it goes through smart intake (F16, labLinkItem):
- * redirectors unwrapped, tracking dropped (unless F16's Use switch is off), the link as shared in x-orig. text: a
- * share's text, read for its address and title (Lab only; v1.1 read it before, sharedLink).
+ * A typed link (the Link field). With Lab on it goes through smart intake (F16, labLinkItem): an address on its own is
+ * the link; words around it make it shared text, whose URL normaliseShare finds itself; redirectors unwrapped, tracking
+ * dropped (unless F16's Use switch is off), the link as typed in x-orig.
  */
-async function sendLink(url, title, { text = '' } = {}) {
+async function sendLink(url, title) {
   if (labOn()) {
-    const item = labLinkItem({ url, text, title }, labPage.model.settings);
+    const item = labLinkItem({ url, title }, labPage.model.settings);
     if (!item) throw new ds.ShareError('url', 'That isn’t a web address. It should look like https://example.com/story.');
     return sendItem(item);
   }
@@ -372,13 +372,25 @@ async function sendFiles(list) {
   });
 }
 
-/** A share from a Shortcut, a link or the Android share sheet: {url, title, files}. */
+/**
+ * A share from a Shortcut, the bookmarklet, a link or the Android share sheet (web-logic.js shareFromParams and
+ * shareFromEntry): {url, title, text, raw, files}.
+ */
 async function sendShare(share) {
   if (share.files?.length) return sendFiles(share.files); // the files are the content; a link alongside is their source
+  // Lab reads the share as it came (F16, labShareItem): the address and the text as shared go to normaliseShare, which
+  // finds the URL in text by its own rules; the URL as shared goes as x-orig. v1.1 sends sharedLink's reading.
+  if (labOn() && share.raw) {
+    const item = labShareItem(share, labPage.model.settings);
+    return item ? withBusy('Sending…', async () => [await sendItem(item)]) : [];
+  }
   if (!share.url) return [];
-  // Lab reads the share as it came (F16: the URL as shared goes as x-orig); v1.1 sends sharedLink's reading.
-  if (labOn() && share.raw) return withBusy('Sending…', async () => [await sendLink(share.raw.url || share.url, share.raw.title, { text: share.text })]);
   return withBusy('Sending…', async () => [await sendLink(share.url, share.title)]);
+}
+
+/** The Link and Title fields for a share: smart intake's reading with Lab on (F16, labShareFields), else v1.1's. */
+function shareFields(share) {
+  return labOn() && share.raw ? labShareFields(share) : { url: share.url ?? '', title: share.title ?? '' };
 }
 
 /** F33's Paste and send: the link in copied text, through smart intake (F16); its question named the host already. */
@@ -403,7 +415,7 @@ async function retry(id, button) {
   button.textContent = 'Sending…';
   try {
     const row = await lock(() => sender.retry(id));
-    if (row && labOn()) await lab.logEvent({ type: 'retry', id: row.id, kind: row.kind, status: row.status });
+    if (row && labOn()) await lab.logEvent({ type: 'retry', id: row.id, kind: row.kind, status: row.status, http: row.http });
     if (row) {
       const m = describe([row]);
       setStatus(m.text, m.tone);
@@ -627,13 +639,11 @@ async function takeShareFromAddress() {
         if (f.blob) return new File([f.blob], f.name || 'document', { type: f.type || '' });
         return { name: f.name || 'document', type: f.type || '', size: Number(f.size) || 0, noSpace: !!f.noSpace };
       });
-      const link = sharedLink({ url: e.url, text: e.text, title: e.title });
-      // text: the share's own text, which Lab's smart intake reads for the address and the title (F16).
-      share = { url: link.url, title: link.title, text: e.text ?? '', raw: { url: e.url ?? '', title: e.title ?? '' }, files };
+      // raw and text: the share as it came, which Lab's smart intake reads for the address and the title (F16).
+      share = { ...shareFromEntry(e), files };
     }
   } else if (params.url || params.text || params.title) {
-    const link = sharedLink(params);
-    share = { url: link.url ?? params.url ?? '', title: link.title, text: params.text ?? '', raw: { url: params.url ?? '', title: params.title ?? '' }, files: [] };
+    share = { ...shareFromParams(params), files: [] };
   }
   return { params, share };
 }
@@ -642,15 +652,16 @@ async function handleAddress() {
   const { params, share } = await takeShareFromAddress();
   if (params.pair) await pairFromParam(params.pair);
   if (!share) return;
+  const fields = shareFields(share);
   if (!pairing) {
     if (params.autosend || params.share) pendingShare = share;
-    if (share.url) $('url').value = share.url;
+    if (fields.url) $('url').value = fields.url;
     renderPair();
     return;
   }
   await renderSend();
-  $('url').value = share.url || '';
-  $('title').value = share.title || '';
+  $('url').value = fields.url || '';
+  $('title').value = fields.title || '';
   if (params.autosend || params.share) {
     const sent = await sendShare(share);
     if (sent.length && sent.every((r) => r.status === 'sent' || r.status === 'delivered')) { $('url').value = ''; $('title').value = ''; }

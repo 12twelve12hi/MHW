@@ -79,7 +79,7 @@ export async function flushPass({ storage, sender, now = () => Date.now(), onlin
   if (wait > 0) return { attempted: [], again: wait };
   await storage.set(FLUSH_KEY, now());
   const attempted = await sender.flushNetwork();
-  if (log) await logActivity(storage, attempted.map((r) => ({ type: 'flush', id: r.id, kind: r.kind, status: r.status })), now());
+  if (log) await logActivity(storage, attempted.map((r) => ({ type: 'flush', id: r.id, kind: r.kind, status: r.status, http: r.http })), now());
   // A pass that reached nothing (every row failed for want of a network) put no request on the relay: the next one
   // needn't wait the 3 minutes. The head row's back-off still spaces the page's passes (flushDue).
   if (attempted.length && attempted.every(isWaitingRow)) await storage.set(FLUSH_KEY, last);

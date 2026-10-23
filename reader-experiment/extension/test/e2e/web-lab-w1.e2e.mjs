@@ -6,7 +6,9 @@
 //        whose label changes is announced, and screen readers get "{label}. {sentence}", never the step line
 //   F07  offline: "Waiting for connection" in "Waiting to send (1)" with Cancel; back online it goes by itself; with the
 //        page closed, the service worker's Background Sync sends it (dls-flush, dispatched through DevTools)
-//   F16  a typed link loses its tracking and carries the link as typed in x-orig; F16's Use switch off sends it as typed
+//   F16  a typed link loses its tracking and carries the link as typed in x-orig; F16's Use switch off sends it as typed;
+//        every text-only case of normalise.json shared with ?text= arrives as the vectors say, and so do words around a
+//        link in the Link field, a share the page fills the form with, and the share sheet's text (B1); Lab off is v1.1
 //   F33  Paste and send: "Send {host}?", Send and Cancel; "No link on the clipboard."; gone with its Use switch off
 //   F09  the bookmarklet, dragged or copied from Shortcuts and automation, sends the page it runs on
 //   F26  Setup check: the lines, the test article followed to "In your Reader", the activity log, Copy diagnostics; the
@@ -68,16 +70,16 @@ async function store(page, items) {
  * A fresh browser with the clipboard allowed, the page paired with a new Daylight (or not), Lab on and its one-time
  * note seen. -> {ctx, page, pairing, secret}
  */
-async function openPaired({ paired = true, settings = {}, width = 390, height = 900 } = {}) {
+async function openPaired({ paired = true, settings = {}, width = 390, height = 900, relayUrl = null } = {}) {
   const ctx = await browser.newContext({ viewport: { width, height } });
   await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: site.url });
   const page = await ctx.newPage();
   await page.goto(`${site.url}/`);
   await ready(page);
   const secret = ds.generateSecret();
-  const pairing = { secret, relay: relay.url, name: 'Lab Daylight' };
+  const pairing = { secret, relay: relayUrl ?? relay.url, name: 'Lab Daylight' };
   const items = { settings: { from: 'W1 web', lab: true, labNoteShown: true, ...settings } };
-  if (paired) items.pairing = { code: await ds.formatCode(secret), relay: relay.url, name: 'Lab Daylight' };
+  if (paired) items.pairing = { code: await ds.formatCode(secret), relay: pairing.relay, name: 'Lab Daylight' };
   await store(page, items);
   if (paired) await page.waitForSelector('#view-send:not([hidden])');
   return { ctx, page, pairing, secret };
@@ -311,6 +313,104 @@ test('F16: a typed link loses its tracking and carries the link as typed (x-orig
   } finally { await ctx.close(); }
 });
 
+test('F16: every text-only case of normalise.json shared with ?text= arrives as the vectors say; words around a link in the Link field, a share filled into the form, the share sheet’s text; Lab off is v1.1’s (B1)', { timeout: 300000 }, async () => {
+  const VECTORS = JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), '..', '..', '..', 'share', 'vectors', 'normalise.json'), 'utf8'));
+  const cases = VECTORS.cases.filter((c) => c.input.url === undefined && c.input.text !== undefined);
+  assert.equal(cases.length, 39);
+  const enc = encodeURIComponent;
+  const { ctx, page, pairing } = await openPaired();
+  // One Daylight for the whole test, so each poll brings only what the page sent since.
+  const day = new ds.Receiver({ pairing, storage: new ds.MemoryStorage() });
+  const next = async (what) => {
+    const until = Date.now() + 20000;
+    while (Date.now() < until) {
+      const { items } = await day.pollOnce();
+      if (items.length) { assert.equal(items.length, 1, `${what}: one item`); return items[0]; }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    throw new Error(`${what}: nothing arrived`);
+  };
+  const outbox = async () => ((await storageGet(page, 'outbox')) ?? []).length;
+  const done = () => page.waitForFunction(() => /^(?!Sending)./.test(document.querySelector('#status')?.textContent ?? ''), null, { timeout: 20000 });
+  try {
+    // ?text= with autosend, as an installed page's share or a link opens it; F16's Use switch off for clean: false.
+    let sent = 0;
+    let useOn = true;
+    const order = [...cases.filter((c) => c.input.clean !== false), ...cases.filter((c) => c.input.clean === false)];
+    for (const c of order) {
+      const i = c.input;
+      if ((i.clean !== false) !== useOn) {
+        useOn = i.clean !== false;
+        await store(page, { settings: { from: 'W1 web', lab: true, labNoteShown: true, labUse: { F16: useOn } } });
+      }
+      await page.goto(`${site.url}/?autosend=1&text=${enc(i.text)}${i.subject ? `&title=${enc(i.subject)}` : ''}`);
+      await ready(page);
+      if (!c.expect.url) {
+        // No web address (a note, or nothing): nothing goes, as with v1.1.
+        await page.waitForFunction(() => location.search === '');
+        await page.waitForTimeout(400);
+        assert.equal(await outbox(), sent, `${c.name}: nothing sent`);
+        continue;
+      }
+      await done();
+      sent += 1;
+      const item = await next(c.name);
+      assert.equal(item.header.url, c.expect.url, c.name);
+      assert.deepEqual(item.extras ?? {}, c.expect.orig ? { 'x-orig': c.expect.orig } : {}, c.name);
+      // The web sender has no selections (F11 isn't one of its features): a selection case is a plain share, whose
+      // URL and orig are the vector's.
+      if (!i.source) assert.equal(item.header.title ?? '', c.expect.title && c.expect.title !== c.expect.url ? c.expect.title : '', c.name);
+    }
+    assert.equal(await outbox(), sent);
+    assert.equal(sent, cases.filter((c) => c.expect.url).length);
+    await store(page, { settings: { from: 'W1 web', lab: true, labNoteShown: true } });
+
+    // The Link field with words around the link: normaliseShare finds it; the words are the title.
+    await sendLink(page, 'See (https://en.wikipedia.org/wiki/Foo_(bar)).');
+    let item = await next('Link field, parentheses');
+    assert.deepEqual([item.header.url, item.header.title], ['https://en.wikipedia.org/wiki/Foo_(bar)', 'See']);
+    await sendLink(page, 'He said “https://example.com/q?utm_source=x”');
+    item = await next('Link field, curly quotes');
+    assert.deepEqual([item.header.url, item.header.title, item.extras], ['https://example.com/q', 'He said', { 'x-orig': 'https://example.com/q?utm_source=x' }]);
+
+    // A share without autosend fills the form with the link as found and its title; Send sends what the share would.
+    await page.goto(`${site.url}/?text=${enc('Worth a read: “https://example.com/s?fbclid=1”.')}`);
+    await ready(page);
+    await page.waitForFunction(() => document.querySelector('#url').value !== '');
+    assert.equal(await page.inputValue('#url'), 'https://example.com/s?fbclid=1');
+    assert.equal(await page.inputValue('#title'), 'Worth a read');
+    await page.click('#send-url');
+    await done();
+    item = await next('the form, filled from a share');
+    assert.deepEqual([item.header.url, item.header.title, item.extras], ['https://example.com/s', 'Worth a read', { 'x-orig': 'https://example.com/s?fbclid=1' }]);
+
+    // Android's share sheet: Chrome posts the shared text to the share target, through the service worker.
+    await page.evaluate(() => navigator.serviceWorker.ready);
+    await page.reload();
+    await ready(page);
+    await page.evaluate(() => {
+      const form = Object.assign(document.createElement('form'), { method: 'POST', action: 'share-target', enctype: 'multipart/form-data' });
+      form.append(Object.assign(document.createElement('input'), { name: 'text', value: '[https://example.com/x]' }));
+      document.body.append(form);
+      form.submit();
+    });
+    await page.waitForURL((u) => u.pathname === '/' && u.search === '');
+    await ready(page);
+    item = await next('the share sheet');
+    assert.equal(item.header.url, 'https://example.com/x');
+
+    // Lab off: the page is v1.1's, which reads shared text with findUrl (so this link loses its closing parenthesis).
+    await store(page, { settings: { from: 'W1 web', lab: false, labNoteShown: true } });
+    await page.goto(`${site.url}/?autosend=1&text=${enc('See (https://en.wikipedia.org/wiki/Foo_(bar)).')}`);
+    await ready(page);
+    await done();
+    item = await next('Lab off');
+    assert.equal(item.header.url, ds.findUrl('See (https://en.wikipedia.org/wiki/Foo_(bar)).'));
+    assert.equal(item.header.url, 'https://en.wikipedia.org/wiki/Foo_(bar');
+    assert.deepEqual(item.extras ?? {}, {});
+  } finally { await ctx.close(); }
+});
+
 test('F33: Paste and send shows the host and sends on Send; no link says so; Cancel sends nothing; gone with its Use switch off (F33.3)', { timeout: 90000 }, async () => {
   const { ctx, page, pairing } = await openPaired();
   try {
@@ -385,6 +485,28 @@ test('F09: Shortcuts and automation gives the bookmarklet; run on a page, it sen
 });
 
 // --- F26 ----------------------------------------------------------------------------------------------------------------
+
+test('F26: a send the relay refuses shows its HTTP status in the activity log (429), and a send that goes shows none', { timeout: 90000 }, async () => {
+  let fail = 429; // the refusing relay's answer to each publish, or null to take it
+  const refusing = await startMockRelay({ failPublish: () => fail });
+  const { ctx, page } = await openPaired({ relayUrl: refusing.url });
+  try {
+    await sendLink(page, 'https://example.com/limited', 'Limited');
+    const [limited] = (await storageGet(page, 'outbox')) ?? [];
+    assert.deepEqual([limited.status, limited.http], ['failed', 429]);
+    fail = null;
+    await sendLink(page, 'https://example.com/fine', 'Fine');
+    const fine = ((await storageGet(page, 'outbox')) ?? []).find((r) => r.title === 'Fine');
+    await openWhats(page);
+    await page.locator('li[data-feature="F26"] .lab-row').click();
+    await page.waitForSelector('#view-setup:not([hidden])');
+    await page.locator('.lab-activity summary').click();
+    await page.waitForFunction(() => document.querySelector('.lab-activity-lines').textContent.includes(' send '));
+    const lines = (await page.textContent('.lab-activity-lines')).split('\n').map((l) => l.split(' ').slice(1).join(' '));
+    assert.ok(lines.includes(`send ${limited.id.slice(0, 8)} url failed 429`), lines.join(' | '));
+    assert.ok(lines.includes(`send ${fine.id.slice(0, 8)} url sent -`), lines.join(' | '));
+  } finally { await ctx.close(); await refusing.close(); }
+});
 
 test('F26: Setup check’s lines; the test article is followed to “In your Reader”; the activity log; Copy diagnostics is redacted (F26.1–3)', { timeout: 120000 }, async () => {
   const { ctx, page, pairing } = await openPaired();

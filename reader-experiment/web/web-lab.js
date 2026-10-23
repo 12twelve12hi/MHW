@@ -35,7 +35,7 @@ import {
   describeLabRow, checkedInText, fillText,
 } from './daylight-lab.js';
 import { ACTIVITY_KEY, logActivity } from './web-flush.js';
-import { normalizeUserUrl, VERSION } from './web-logic.js';
+import { typedUrl, VERSION } from './web-logic.js';
 import {
   DaylightServer, localMessage, stateFromStatus, showFingerprint, noticeText, parseSetupLink, RERUN_HELP,
   SERVER_API, SERVER_API_MIN, STATUS_REFRESH_MS,
@@ -108,23 +108,55 @@ export function withoutLabParam(href) {
 }
 
 /**
- * A link as Lab sends it (F16, every entry point while Lab is on): `url` (typed, from the address or the share sheet;
- * https:// added to "example.com/story" as the plain page does), `text` (a share's text) and `title` go through
- * normaliseShare, which unwraps redirectors and drops tracking unless F16's Use switch is off; the link as shared goes
+ * Smart intake's reading (F16) of a link from any entry point while Lab is on: the Link field, the page's address
+ * (?url=, ?text=, the Shortcut's and the bookmarklet's fragment) and the share target. `url` counts as an address only
+ * when it is one on its own (typedUrl: the web URL rule, or https:// added to "example.com/story" as the plain page
+ * does); anything else in it ("See (https://…).", “https://…”) is shared text, which goes to normaliseShare with
+ * `text` (a share's text), so normaliseShare finds the URL by its own rules (F16 step 1), never v1.1's findUrl.
+ * clean: false keeps the URL as found or given (F16's Use switch off, or the form's copy of a share). -> normaliseShare's
+ * {kind, url, title, excerpt, orig}
+ */
+function intake({ url = '', text = '', title = '' } = {}, clean = true) {
+  const typed = typedUrl(url);
+  return normaliseShare({
+    url: typed ?? '', text: typed ? String(text ?? '') : [String(url ?? '').trim(), String(text ?? '')].filter(Boolean).join(' '),
+    subject: String(title ?? ''), clean,
+  });
+}
+
+/**
+ * A link as Lab sends it (F16, every entry point while Lab is on): `url`, `text` and `title` go through normaliseShare
+ * (intake above), which unwraps redirectors and drops tracking unless F16's Use switch is off; the link as shared goes
  * as x-orig when it changed. Headline + link shares stay links, with the headline as the title. -> the url item for
  * Sender.send, or null when there is no web address (a note: the web sender sends no text, F11 is not one of its
  * features).
  */
 export function labLinkItem({ url = '', text = '', title = '' } = {}, settings = {}) {
-  const typed = normalizeUserUrl(url);
-  const n = normaliseShare({
-    url: typed ?? '', text: typed ? String(text ?? '') : [url, text].filter(Boolean).join(' '), subject: String(title ?? ''),
-    clean: labUseOn(settings, 'F16'),
-  });
+  const n = intake({ url, text, title }, labUseOn(settings, 'F16'));
   if (n.kind !== 'link' || !n.url) return null;
   const item = { kind: 'url', url: n.url, title: n.title && n.title !== n.url ? n.title : '' };
   if (n.orig) item.extras = { 'x-orig': n.orig };
   return item;
+}
+
+/**
+ * A share (web-logic.js shareFromParams or shareFromEntry: the page's address, the Shortcut, the bookmarklet, the share
+ * target) as Lab sends it (F16): its address and text exactly as they came, through labLinkItem. -> the url item, or
+ * null when it holds no web address.
+ */
+export function labShareItem(share, settings = {}) {
+  return labLinkItem({ url: share?.raw?.url ?? '', text: share?.text ?? '', title: share?.raw?.title ?? '' }, settings);
+}
+
+/**
+ * The Link and Title fields for a share the page doesn't send at once (no autosend), with Lab on: the URL as smart
+ * intake found it, before cleaning, and its title. Sending the form then cleans it and keeps x-orig, so it goes exactly
+ * as labShareItem would send it. -> {url, title} ('' when there is no web address)
+ */
+export function labShareFields(share) {
+  const n = intake({ url: share?.raw?.url ?? '', text: share?.text ?? '', title: share?.raw?.title ?? '' }, false);
+  if (n.kind !== 'link' || !n.url) return { url: '', title: '' };
+  return { url: n.url, title: n.title && n.title !== n.url ? n.title : '' };
 }
 
 /**
@@ -663,16 +695,20 @@ export function createWebLab({
     return p;
   }
 
-  /** Each row's status, last publish and Lab state, for logChanges. -> Map id -> {status, lastPublish, s, kind} */
+  /**
+   * Each row's status, last publish, Lab state and the HTTP status of its last failed publish, for logChanges.
+   * -> Map id -> {status, lastPublish, s, kind, http}
+   */
   async function rowStates() {
     const rows = (await storage.get('outbox')) ?? [];
     const states = (await ledger.snapshot()).states ?? {};
-    return new Map(rows.map((r) => [r.id, { status: r.status, lastPublish: r.lastPublish, s: states[r.id]?.s ?? null, kind: r.kind }]));
+    return new Map(rows.map((r) => [r.id, { status: r.status, lastPublish: r.lastPublish, s: states[r.id]?.s ?? null, kind: r.kind, http: Number(r.http) || 0 }]));
   }
 
   /**
    * After a check of the ack topic and a re-send pass (F26): each row whose status changed, that went again, or whose
-   * Lab state changed goes into the activity log. before: rowStates() from before them.
+   * Lab state changed goes into the activity log, with the HTTP status of the row's last failed publish (`http`: 413,
+   * 429, …; 0 when there was none, LAB-PROTOCOL 2.7.1). before: rowStates() from before them.
    */
   async function logChanges(before) {
     if (!before || !isLabOn(await settings())) return;
@@ -680,9 +716,9 @@ export function createWebLab({
     for (const [id, a] of after) {
       const b = before.get(id);
       if (!b) continue;
-      if (a.status !== b.status) await logEvent({ type: a.status, id, kind: a.kind, status: a.status });
-      else if (a.lastPublish !== b.lastPublish) await logEvent({ type: 'resend', id, kind: a.kind, status: a.status });
-      if (a.s && a.s !== b.s) await logEvent({ type: 'state', id, kind: a.kind, status: a.s });
+      if (a.status !== b.status) await logEvent({ type: a.status, id, kind: a.kind, status: a.status, http: a.http });
+      else if (a.lastPublish !== b.lastPublish) await logEvent({ type: 'resend', id, kind: a.kind, status: a.status, http: a.http });
+      if (a.s && a.s !== b.s) await logEvent({ type: 'state', id, kind: a.kind, status: a.s, http: a.http });
     }
   }
 
