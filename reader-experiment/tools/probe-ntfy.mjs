@@ -77,37 +77,10 @@ async function poll(t, since) {
     pollOrder: (await poll(t, 'all')).ids.map((id) => (id === s.id ? 'slow' : id === quick.id ? 'quick' : id)) });
 }
 
-// 5. The per-visitor attachment total: keep uploading 1.9 MB until the relay refuses (stop at 14 = 26.6 MB).
-{
-  const rows = [];
-  let total = 0;
-  for (let k = 0; k < 14; k++) {
-    const r = await put(topic(), randomBytes(1_900_000));
-    rows.push({ k, status: r.status, code: r.code, error: r.error });
-    if (r.status >= 300) break;
-    total += 1_900_000;
-  }
-  out('visitor-total', { acceptedBytesThisProbe: total, rows });
-}
-
-// 6. CORS preflight for a browser PUT with every header we send (and Authorization, for relay tokens).
-{
-  const r = await fetch(`${relay}/${topic()}`, { method: 'OPTIONS', headers: { Origin: 'https://example.github.io', 'Access-Control-Request-Method': 'PUT',
-    'Access-Control-Request-Headers': 'authorization,filename,message,firebase,cache,content-type' } });
-  out('cors', { status: r.status, allowOrigin: r.headers.get('access-control-allow-origin'), allowHeaders: r.headers.get('access-control-allow-headers'), allowMethods: r.headers.get('access-control-allow-methods') });
-}
-
-// 7. Rate-limit headers, if any, on a normal request.
-{
-  const r = await fetch(`${relay}/v1/health`);
-  const h = {}; for (const [k, v] of r.headers) if (/rate|limit|retry/i.test(k)) h[k] = v;
-  out('headers', { status: r.status, rateHeaders: h });
-}
-
-// 8. A multi-topic poll, /{a},{b}/json?poll=1&since=… (LAB-PLAN 4.1.1, L2): does one `since` time cursor answer for
+// 4b. A multi-topic poll, /{a},{b}/json?poll=1&since=… (LAB-PLAN 4.1.1, L2): does one `since` time cursor answer for
 // both topics, in what order, and does each line say its topic? The return lane's devices read the shared return topic
 // and their own in one request only if it does. Messages: A1 on a, B1 on b, A2 on a, B2 (an attachment) on b, ~1.5 s
-// apart, so their times differ.
+// apart, so their times differ. It runs before the visitor-total probe (5), which fills this runner's 20 MB.
 {
   const a = topic(), b = topic();
   const name = (t) => (t === a ? 'a' : t === b ? 'b' : t);
@@ -133,14 +106,41 @@ async function poll(t, since) {
   const sinceIdB1 = await pollBoth(b1.id);
   const sinceIdA1 = await pollBoth(a1.id);
   // One time cursor works when `since=t` filters both topics by time (inclusive) and every line names its topic.
-  const want = (since) => Object.entries(times).filter(([, t]) => t >= since).map(([k]) => k).sort();
-  const oneTimeCursor = sinceAll.status === 200 && sinceAll.order.slice().sort().join() === 'A1,A2,B1,B2'
+  const want = (since) => Object.entries(times).filter(([, t]) => t !== null && t >= since).map(([k]) => k).sort();
+  const oneTimeCursor = sinceAll.status === 200 && b2.status === 200 && sinceAll.order.slice().sort().join() === 'A1,A2,B1,B2'
     && sinceTimeB1.order.slice().sort().join() === want(b1.time).join()
     && sinceTimeA2.order.slice().sort().join() === want(a2.time).join()
     && sinceAfterB2.order.length === 0
     && sinceAll.topics.every((t) => t === 'a' || t === 'b');
-  out('multi-topic-poll', { times, sinceAll, sinceTimeB1, sinceTimeA2, sinceAfterB2, sinceIdB1, sinceIdA1,
+  out('multi-topic-poll', { b2Status: b2.status, times, sinceAll, sinceTimeB1, sinceTimeA2, sinceAfterB2, sinceIdB1, sinceIdA1,
     orderedByTime: sinceAll.times.every((t, i) => i === 0 || sinceAll.times[i - 1] <= t), oneTimeCursor });
+}
+
+// 5. The per-visitor attachment total: keep uploading 1.9 MB until the relay refuses (stop at 14 = 26.6 MB).
+{
+  const rows = [];
+  let total = 0;
+  for (let k = 0; k < 14; k++) {
+    const r = await put(topic(), randomBytes(1_900_000));
+    rows.push({ k, status: r.status, code: r.code, error: r.error });
+    if (r.status >= 300) break;
+    total += 1_900_000;
+  }
+  out('visitor-total', { acceptedBytesThisProbe: total, rows });
+}
+
+// 6. CORS preflight for a browser PUT with every header we send (and Authorization, for relay tokens).
+{
+  const r = await fetch(`${relay}/${topic()}`, { method: 'OPTIONS', headers: { Origin: 'https://example.github.io', 'Access-Control-Request-Method': 'PUT',
+    'Access-Control-Request-Headers': 'authorization,filename,message,firebase,cache,content-type' } });
+  out('cors', { status: r.status, allowOrigin: r.headers.get('access-control-allow-origin'), allowHeaders: r.headers.get('access-control-allow-headers'), allowMethods: r.headers.get('access-control-allow-methods') });
+}
+
+// 7. Rate-limit headers, if any, on a normal request.
+{
+  const r = await fetch(`${relay}/v1/health`);
+  const h = {}; for (const [k, v] of r.headers) if (/rate|limit|retry/i.test(k)) h[k] = v;
+  out('headers', { status: r.status, rateHeaders: h });
 }
 
 console.log('SUMMARY ' + JSON.stringify(results));
