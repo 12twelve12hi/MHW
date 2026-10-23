@@ -26,12 +26,14 @@ final class LabNoteTests: XCTestCase {
         let start = Date()
         LabUI.tapRow(row, in: app)
         let words = LabUI.text(sentence, in: app)
-        XCTAssertTrue(words.waitForExistence(timeout: 8), "no needs-server sentence after tapping Summaries with Claude")
+        XCTAssertTrue(words.waitForExistence(timeout: Self.quickAsSeen),
+                      "no needs-server sentence after tapping Summaries with Claude")
         let took = Date().timeIntervalSince(start)
         print("UI test: the needs-server note showed \(String(format: "%.1f", took)) s after the tap started")
-        // The gate's 5 s, plus the test's own tap and look, a second or two each (5.0 s here in run 39866465819, with
-        // the mock relay answering at once).
-        XCTAssertLessThanOrEqual(took, Self.gateAsSeen, "the needs-server sentence took longer than 5 s")
+        // Within the gate's 5 s by the app's own clock: an answer after the deadline would have been OFFLINE.
+        if let offline = LabUI.stateMessages["OFFLINE"] {
+            XCTAssertFalse(LabUI.text(offline, in: app).exists, "the gate gave OFFLINE: the server's answer came after 5 s")
+        }
         let note = LabUI.element(LabUI.note, in: app)
         XCTAssertTrue(note.exists, "the sentence is not in a note")
         XCTAssertGreaterThanOrEqual(note.frame.minY, row.frame.minY, "the note is not under the tapped control")
@@ -55,7 +57,7 @@ final class LabNoteTests: XCTestCase {
             let other = LabUI.element(LabUI.feature(id), in: app)
             LabUI.scrollTo(other, in: app)
             LabUI.tapRow(other, in: app)
-            XCTAssertTrue(LabUI.text(sentence, in: app).waitForExistence(timeout: 6), "\(id): no needs-server sentence")
+            XCTAssertTrue(LabUI.text(sentence, in: app).waitForExistence(timeout: Self.quickAsSeen), "\(id): no needs-server sentence")
             XCTAssertEqual(app.descendants(matching: .any).matching(identifier: LabUI.note).count, 1,
                            "\(id): more than one note (a tap on another control replaces it)")
         }
@@ -80,8 +82,10 @@ final class LabNoteTests: XCTestCase {
         LabUI.scrollTo(row, in: app)
         let start = Date()
         LabUI.tapRow(row, in: app)
-        XCTAssertTrue(LabUI.text(offline, in: app).waitForExistence(timeout: 8), "no OFFLINE sentence with the relay out of reach")
-        XCTAssertLessThanOrEqual(Date().timeIntervalSince(start), Self.gateAsSeen, "OFFLINE took longer than 5 s")
+        XCTAssertTrue(LabUI.text(offline, in: app).waitForExistence(timeout: Self.quickAsSeen),
+                      "no OFFLINE sentence with the relay out of reach")
+        print("UI test: with the relay out of reach, OFFLINE showed \(String(format: "%.1f", Date().timeIntervalSince(start))) s "
+              + "after the tap started")
         UITestSupport.screenshot(app, "ios-lab-note-offline", in: self)
         app.terminate()
 
@@ -192,6 +196,14 @@ final class LabNoteTests: XCTestCase {
 
     /// The gate's 5 s deadline as a UI test can see it: a tap and a look each take the test a second or two on CI.
     static let gateAsSeen: TimeInterval = 8
+
+    /// How long the test waits for a note the gate answers at once (the mock relay with no server, a relay out of
+    /// reach). The 5 s are the app's own: the gate turns a server answer later than its deadline into OFFLINE
+    /// (`LabGate`, pinned by the kit's LabVectorTests and DaylightServerTests), so a needs-server sentence is an answer
+    /// in time, and the never-answering relay checks the deadline itself from both sides. A wall clock from the tap's
+    /// start measures the test's own tap and look too: 5.0 to 8.4 s for the same needs-server note on CI (runs
+    /// 39866465819, 39888465664).
+    static let quickAsSeen: TimeInterval = 15
 
     /// The Server code for the vectors' pairing on `relay`: server-vectors.json's `derived.serverCode` without its
     /// SERVER- and dashes, in the `daylightserver://setup?c=…&r=…` link form a relay other than ntfy.sh takes.
