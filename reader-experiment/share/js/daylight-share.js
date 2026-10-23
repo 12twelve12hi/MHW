@@ -47,6 +47,45 @@ export const PURPOSE_LAB_RETURN = 'lab-return';
 export const PURPOSE_LAB_RETURN_ACK = 'lab-return-ack';
 export const PURPOSE_LAB_CONTROL = 'lab-control';
 export const PURPOSE_LAB_CONTROL_ACK = 'lab-control-ack';
+/** W2 (L2): a return item for one device, on its own topic (LAB-PROTOCOL 2.4.3). */
+export const PURPOSE_LAB_RETURN_DEV = 'lab-return-dev';
+
+// The return lane (LAB-PROTOCOL 2.4, W2). daylight-lab.js exports these again under the same names.
+/** The kinds of return item (`x-rk`); a W2 device takes `share` only and acks and drops the rest (2.4.5). */
+export const RETURN_KINDS = ['share', 'marks', 'queue', 'reading'];
+export const RETURN_KINDS_W2 = ['share'];
+export const RETURN_TARGETS_MAX = 8;
+export const RETURN_TARGET_STALE_MS = 14 * 86400000;
+export const RETURN_SAME_NAME_MS = 2 * 86400000;
+export const RETURN_DEVICES_KEPT = 32;
+export const RETURN_ACK_IDS = 60;
+export const RETURN_PENDING_ACKS_MAX = 500;
+export const RETURN_DEVICE_FRAMES_PER_DAY = 3;
+export const RETURN_ACK_GAP_MS = 30 * 60000;
+export const RETURN_IDLE_HELLO_MS = 24 * 3600000;
+/** How long a device reads every 30 s while in front after an x-want (F06; the apps' timer). */
+export const RETURN_WANT_READ_MS = 20 * 60000;
+export const RETURN_COPY_ATTACH_MS = 3 * 3600000;
+export const RETURN_COPY_MSG_MS = 12 * 3600000;
+export const RETURN_FOLLOW_UP_MS = 185 * 60000;
+export const RETURN_FRAMES_PER_DAY = 12;
+export const RETURN_RESENDS_PER_DEVICE = 6;
+export const RETURN_BYTES_PER_DAY = 60_000_000;
+export const RETURN_LIVE_BYTES_MAX = 10_000_000;
+export const RETURN_YIELD_MS = 3600000;
+export const RETURN_NO_DEVICE_MS = 24 * 3600000;
+export const RETURN_EXPIRY_MS = 7 * 86400000;
+/**
+ * Whether a device reads the shared return topic and its own in one request (/{a},{b}/json, one time cursor) or in
+ * two, each with its own cursor (LAB-PROTOCOL 2.4.1): one, because L2's probe found that ntfy.sh answers a multi-topic
+ * poll with one time cursor, attachments included (NTFY-FACTS.md, "Multi-topic poll").
+ */
+export const RETURN_POLL_COMBINED = true;
+/** The storage prefix of the return lane's keys in JS storage (a `lane-return/` folder in Kotlin and Swift). */
+export const RETURN_PREFIX = 'lane/return/';
+/** The return lane's keys (LAB-PROTOCOL 2.4.1), besides each row's `lane/return/outbox/<id>`. */
+export const RETURN_STORAGE_KEYS = ['outbox', 'ackSince', 'budget', 'devices', 'inboxSince', 'devSince', 'seenItems',
+  'seenMsgs', 'incomplete', 'device', 'devId'].map((k) => RETURN_PREFIX + k);
 
 /**
  * The Lab storage keys: the Sender ledger's (LAB-PROTOCOL 2.2.6) and the JS LabInbox's `lab/out`. A pairing with
@@ -62,6 +101,8 @@ export const X_ORIG_MAX = 1024;
 const LABEL_KEY = 'dlshare/v1/key';
 const LABEL_INBOX = 'dlshare/v1/inbox';
 const LABEL_ACK = 'dlshare/v1/ack';
+const DEV_RE = /^[0-9a-f]{16}$/;
+const ITEM_ID_RE = /^[0-9a-f]{32}$/;
 const PAIR_SCHEME = 'daylightshare:';
 const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const TEXT_MIMES = /^(text\/|application\/(xhtml\+xml|json|xml|javascript|x-markdown))/i;
@@ -359,6 +400,31 @@ export async function deriveKeys(secret) {
   return { key, keyBytes, inboxTopic, ackTopic };
 }
 
+/** A lane topic (LAB-PROTOCOL 2.4): "dls-" + the first 32 hex digits of SHA-256(label + 0x00 + secret + extra). */
+async function laneTopic(label, secret, extra = new Uint8Array(0)) {
+  return 'dls-' + toHex(await sha256(concat(utf8(`dlshare/v1/${label}\0`), secret, extra))).slice(0, 32);
+}
+
+/**
+ * The return lane's values (LAB-PROTOCOL 2.4): the pairing key and the shared return topics.
+ * -> {key, keyBytes, returnTopic, returnAckTopic}
+ */
+export async function deriveReturnKeys(secret) {
+  if (!(secret instanceof Uint8Array) || secret.length !== 16) throw new ShareError('secret', 'secret must be 16 bytes');
+  const { key, keyBytes } = await deriveKeys(secret);
+  return { key, keyBytes, returnTopic: await laneTopic('lab-return', secret), returnAckTopic: await laneTopic('lab-return-ack', secret) };
+}
+
+/**
+ * One device's return topic (LAB-PROTOCOL 2.4): "dls-" + hex(SHA-256("dlshare/v1/lab-return-dev\0" ‖ secret ‖ dev))[0:32],
+ * dev as its 16 ASCII hex digits. Throws ShareError('device') for anything but 16 lowercase hex digits.
+ */
+export async function returnDevTopic(secret, dev) {
+  if (!(secret instanceof Uint8Array) || secret.length !== 16) throw new ShareError('secret', 'secret must be 16 bytes');
+  if (typeof dev !== 'string' || !DEV_RE.test(dev)) throw new ShareError('device', 'a device id is 16 lowercase hex digits');
+  return laneTopic('lab-return-dev', secret, utf8(dev));
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Frames (PROTOCOL 2)
 
@@ -367,6 +433,7 @@ const AADS = {
   ack: LABEL_ACK,
   'lab-return': 'dlshare/v1/lab-return',
   'lab-return-ack': 'dlshare/v1/lab-return-ack',
+  'lab-return-dev': 'dlshare/v1/lab-return-dev',
   'lab-control': 'dlshare/v1/lab-control',
   'lab-control-ack': 'dlshare/v1/lab-control-ack',
 };
@@ -524,7 +591,9 @@ const shouldCompress = (mime) => TEXT_MIMES.test(mime || '');
  * Builds the frames for one item.
  * item: {kind: 'url'|'page'|'file', url?, title?, name?, mime?, content?: Uint8Array|string, from?, app?, id?, sent?,
  *        extras?: {'x-cap'?, 'x-orig'?}}
- * opts: {compress?: boolean (default: text types only), chunkSize? (tests), nonces?: Uint8Array[] (tests)}
+ * opts: {compress?: boolean (default: text types only), chunkSize? (tests), nonces?: Uint8Array[] (tests),
+ *        purpose? (the AAD: 'inbox' by default; the return lane's 'lab-return' or 'lab-return-dev'),
+ *        fields? (header fields written on every part after the v1 ones: the return lane's x-rk and x-to)}
  * -> {id, header (of part 0, without the Lab fields), frames: Uint8Array[], encodedLength, attachment: boolean,
  *     extras (the Lab fields part 0 carries: labHeaderFields)}
  * Lab senders pass `extras` only with Lab on (LAB-PROTOCOL 2.3); without it the frames are exactly v1.1's.
@@ -574,23 +643,25 @@ export async function buildItemFrames(keys, item, opts = {}) {
   const parts = Math.max(1, Math.ceil(encoded.length / chunkSize));
   if (parts > MAX_PARTS) throw new ShareError('too-large', 'That file is too large to send.');
   const extras = labHeaderFields(item.extras);
+  const purpose = opts.purpose ?? PURPOSE_INBOX;
+  const fields = opts.fields ?? {};
   const frames = [];
   let attachment = false;
   for (let i = 0; i < parts; i++) {
-    const h = parts > 1 ? { ...header, part: i, parts } : header;
+    const h = { ...(parts > 1 ? { ...header, part: i, parts } : header), ...fields };
     const chunk = encoded.subarray(i * chunkSize, Math.min(encoded.length, (i + 1) * chunkSize));
     let frame;
     if (i === 0 && (extras['x-cap'] || extras['x-orig'])) {
       // The Lab fields ride on part 0 only, where receivers read them. x-orig is left out when it alone would turn a
       // small frame into a large one (an attachment: kept 3 h, re-sent at 185 minutes).
-      frame = await encryptFrame(keys, PURPOSE_INBOX, { ...h, ...extras }, chunk, opts.nonces?.[i]);
+      frame = await encryptFrame(keys, purpose, { ...h, ...extras }, chunk, opts.nonces?.[i]);
       if (extras['x-orig'] && !isSmallFrame(frame)) {
         const { 'x-orig': _orig, ...rest } = extras;
-        const without = await encryptFrame(keys, PURPOSE_INBOX, { ...h, ...rest }, chunk, opts.nonces?.[i]);
+        const without = await encryptFrame(keys, purpose, { ...h, ...rest }, chunk, opts.nonces?.[i]);
         if (isSmallFrame(without)) { delete extras['x-orig']; frame = without; }
       }
     } else {
-      frame = await encryptFrame(keys, PURPOSE_INBOX, h, chunk, opts.nonces?.[i]);
+      frame = await encryptFrame(keys, purpose, h, chunk, opts.nonces?.[i]);
     }
     if (!isSmallFrame(frame)) attachment = true;
     frames.push(frame);
@@ -858,7 +929,9 @@ export class RelayClient {
   }
 
   /**
-   * Polls cached messages (PROTOCOL 3.2). since: 'all' | unix seconds. skip(msgId): true for handled messages.
+   * Polls cached messages (PROTOCOL 3.2). topic: one topic, or a list of topics read in one request (ntfy's
+   * multi-topic form /{a},{b}/json; LAB-PROTOCOL 2.4.1). since: 'all' | unix seconds. skip(msgId): true for handled
+   * messages. Each entry carries its `topic`: the line's own, else the one topic asked for (null when several were).
    * -> [{id, time, attachment, outcome, frame, status?}], one per message line, where outcome is
    *    'frame' (frame holds the bytes), 'skipped', 'expired' (404/410), 'junk' (not base64, a URL that is not https
    *    or the relay's origin, or over MAX_ATTACHMENT) or 'retry' (429, 5xx, any other status, network error,
@@ -867,9 +940,11 @@ export class RelayClient {
    * Throws ShareError: 'network' (no answer, status 0), 'relay' (an error status, or an answer over 64 MiB).
    */
   async poll(topic, since = 'all', { skip = () => false } = {}) {
+    const topics = Array.isArray(topic) ? topic : [topic];
+    const only = topics.length === 1 ? topics[0] : null;
     let res, body;
     try {
-      ({ res, body } = await this._request(`${this.relay}/${topic}/json?poll=1&since=${encodeURIComponent(since)}`,
+      ({ res, body } = await this._request(`${this.relay}/${topics.join(',')}/json?poll=1&since=${encodeURIComponent(since)}`,
         { method: 'GET' }, this.timeouts.short, async (r) => (r.ok ? readCapped(r, MAX_POLL_RESPONSE) : (discard(r), null))));
     } catch (e) {
       throw new ShareError('network', `Couldn’t reach the relay (${e?.message ?? e}).`, 'network', 0);
@@ -883,7 +958,8 @@ export class RelayClient {
       let m;
       try { m = JSON.parse(line); } catch { continue; }
       if (!m || m.event !== 'message' || typeof m.id !== 'string') continue;
-      const entry = { id: m.id, time: Number(m.time) || 0, attachment: !!m.attachment, outcome: 'junk', frame: null };
+      const entry = { id: m.id, time: Number(m.time) || 0, attachment: !!m.attachment, outcome: 'junk', frame: null,
+        topic: typeof m.topic === 'string' && topics.includes(m.topic) ? m.topic : only };
       out.push(entry);
       if (skip(m.id)) { entry.outcome = 'skipped'; continue; }
       if (m.attachment) {
@@ -900,6 +976,222 @@ export class RelayClient {
     }
     return out;
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The return lane's rules (LAB-PROTOCOL 2.4): pure functions, so the Kotlin and Swift ports and the vectors
+// (returnLane, returnParse) can pin them one by one. Sender and Receiver below call them with lane: 'return'.
+
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const utcDayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+/**
+ * The return lane's item fields (LAB-PROTOCOL 2.4.5; vectors > returnParse). Never throws.
+ * -> {rk: 'share' | 'marks' | 'queue' | 'reading' | 'unknown', to: null (every device) | a device id | 'invalid'}
+ */
+export function returnItemExtras(header) {
+  if (!isPlainObject(header)) return { rk: 'unknown', to: 'invalid' };
+  const rk = typeof header['x-rk'] === 'string' && RETURN_KINDS.includes(header['x-rk']) ? header['x-rk'] : 'unknown';
+  let to = null;
+  if (Object.hasOwn(header, 'x-to')) to = typeof header['x-to'] === 'string' && DEV_RE.test(header['x-to']) ? header['x-to'] : 'invalid';
+  return { rk, to };
+}
+
+/**
+ * A device frame on returnAckTopic (LAB-PROTOCOL 2.4.5). Never throws.
+ * -> null, or {ids (the first 60 elements' item ids, in order), dev (null: counts for no device), from, rx, want}
+ */
+export function returnAck(header) {
+  if (!isPlainObject(header) || header.kind !== 'ack' || !Array.isArray(header.ids)) return null;
+  const ids = header.ids.slice(0, RETURN_ACK_IDS).filter((id) => typeof id === 'string' && ITEM_ID_RE.test(id));
+  const dev = typeof header['x-dev'] === 'string' && DEV_RE.test(header['x-dev']) ? header['x-dev'] : null;
+  return { ids, dev, from: typeof header.from === 'string' ? cleanName(header.from) : '', rx: header['x-rx'] !== false, want: header['x-want'] === true };
+}
+
+/**
+ * A device frame (LAB-PROTOCOL 2.4.4): sealed with the pairing key and the AAD lab-return-ack, on returnAckTopic.
+ * ids: at most 60 item ids ([] is a hello). Throws ShareError('return') with reason 'too-many', 'device' or 'not-small'.
+ */
+export async function buildReturnAckFrame(keys, { ids = [], dev, from = '', sent = nowIso(), rx = true, want = false, nonce } = {}) {
+  if (ids.length > RETURN_ACK_IDS) throw new ShareError('return', `more than ${RETURN_ACK_IDS} ids`, 'too-many');
+  if (typeof dev !== 'string' || !DEV_RE.test(dev)) throw new ShareError('return', 'a device id is 16 lowercase hex digits', 'device');
+  const header = { v: PROTOCOL_VERSION, kind: 'ack', ids: [...ids], sent };
+  const f = cleanName(from);
+  if (f) header.from = f;
+  header['x-dev'] = dev;
+  if (rx === false) header['x-rx'] = false;
+  if (want === true) header['x-want'] = true;
+  const frame = await encryptFrame(keys, PURPOSE_LAB_RETURN_ACK, header, new Uint8Array(0), nonce);
+  if (!isSmallFrame(frame)) throw new ShareError('return', 'a device frame must be a small frame', 'not-small');
+  return frame;
+}
+
+/** Until when a copy can be read (LAB-PROTOCOL 2.4.3): its first frame's relay time (s), plus 3 h or 12 h, in ms. */
+export function copyUntil(time, attachment) {
+  return Math.round(Number(time) * 1000) + (attachment ? RETURN_COPY_ATTACH_MS : RETURN_COPY_MSG_MS);
+}
+
+/**
+ * Whether a sent return row is due to device D (LAB-PROTOCOL 2.4.8; vectors > returnLane > due).
+ * row: {to, got, copies, followUps}; heard: D's newest frame's relay time (ms) or null; now: the Daylight's clock (ms).
+ */
+export function returnDue(row, dev, heard, now) {
+  if (!row || !Array.isArray(row.to) || !row.to.includes(dev)) return false;
+  if (row.got && Object.hasOwn(row.got, dev)) return false;
+  const until = row.copies?.[dev];
+  if (!Number.isFinite(until)) return false;
+  const follow = row.followUps?.[dev];
+  return (Number.isFinite(heard) && heard > until) || (Number.isFinite(follow) && follow <= now);
+}
+
+/**
+ * Whether a return row is settled (LAB-PROTOCOL 2.4.7). settled(dev): the device said x-rx: false or was retired.
+ * -> null (unchanged), or {status: 'delivered' | 'expired', missing: [device ids]}
+ */
+export function settleReturnRow(row, now, settled = () => false) {
+  const to = Array.isArray(row?.to) ? row.to : [];
+  const got = row?.got ?? {};
+  if (!to.length && (row?.status === 'failed' && row?.errorCode === 'no-device')) return null;
+  const acked = to.some((d) => Object.hasOwn(got, d));
+  const open = to.filter((d) => !Object.hasOwn(got, d) && !settled(d));
+  const published = row?.status === 'sent' || row?.status === 'sending';
+  if (published && to.length && !open.length) return { status: acked ? 'delivered' : 'expired', missing: [] };
+  if (now - (row?.created ?? 0) > RETURN_EXPIRY_MS) return { status: acked ? 'delivered' : 'expired', missing: open };
+  return null;
+}
+
+/** An empty budget (LAB-PROTOCOL 2.4.9). */
+export function newReturnBudget() { return { day: '', frames: 0, bytes: 0, resends: {}, live: [], limitUntil: 0 }; }
+
+/** The budget as of `now`: a new UTC day starts with frames, bytes and resends at 0; live entries past `until` go. */
+export function rollReturnBudget(budget, now) {
+  const b = { ...newReturnBudget(), ...(isPlainObject(budget) ? budget : {}) };
+  b.resends = { ...(isPlainObject(b.resends) ? b.resends : {}) };
+  b.live = (Array.isArray(b.live) ? b.live : []).filter((e) => e && e.until > now).map((e) => ({ bytes: e.bytes, until: e.until }));
+  const day = utcDayOf(now);
+  if (b.day !== day) Object.assign(b, { day, frames: 0, bytes: 0, resends: {} });
+  return b;
+}
+
+/** The attachment bytes the Daylight can see on the relay (LAB-PROTOCOL 2.4.9). */
+export function returnLiveBytes(budget, now) {
+  return (Array.isArray(budget?.live) ? budget.live : []).reduce((n, e) => n + (e && e.until > now ? e.bytes : 0), 0);
+}
+
+/**
+ * Whether a row may go now (LAB-PROTOCOL 2.4.9; vectors > returnLane > budget). attempt: {frames, attachmentBytes,
+ * downloaders (every target on the shared topic, 1 on a device's own topic), resendFor (a device id, or null for a
+ * first publish)}. -> 'ok' | 'yield' | 'cap' | 'relay'
+ */
+export function returnBudgetCheck(budget, { frames = 0, attachmentBytes = 0, downloaders = 0, resendFor = null } = {}, now) {
+  const b = rollReturnBudget(budget, now);
+  if (now < b.limitUntil) return 'yield';
+  if (b.frames + frames > RETURN_FRAMES_PER_DAY) return 'cap';
+  if (resendFor && (b.resends[resendFor] ?? 0) + frames > RETURN_RESENDS_PER_DEVICE) return 'cap';
+  if (b.bytes + attachmentBytes * (1 + downloaders) > RETURN_BYTES_PER_DAY) return 'cap';
+  if (attachmentBytes > 0 && returnLiveBytes(b, now) + attachmentBytes > RETURN_LIVE_BYTES_MAX) return 'relay';
+  return 'ok';
+}
+
+/**
+ * Charges one published frame (LAB-PROTOCOL 2.4.9). frame: {attachment (its bytes when it went as an attachment,
+ * else 0), downloaders, resendFor}. -> the new budget.
+ */
+export function chargeReturnBudget(budget, { attachment = 0, downloaders = 0, resendFor = null } = {}, now) {
+  const b = rollReturnBudget(budget, now);
+  b.frames += 1;
+  if (resendFor) b.resends[resendFor] = (b.resends[resendFor] ?? 0) + 1;
+  if (attachment > 0) {
+    b.bytes += attachment * (1 + downloaders);
+    b.live.push({ bytes: attachment, until: now + RETURN_COPY_ATTACH_MS });
+  }
+  return b;
+}
+
+/** A 429 or 413 on any publish of the Daylight: the return lane gives way for an hour. -> the new budget. */
+export function limitReturnBudget(budget, status, now) {
+  const b = rollReturnBudget(budget, now);
+  if (status === 429 || status === 413) b.limitUntil = Math.max(b.limitUntil, now + RETURN_YIELD_MS);
+  return b;
+}
+
+/** Attachment bytes the Daylight downloaded (the pairing lane's files): on the relay for 3 h. -> the new budget. */
+export function noteReturnBudgetBytes(budget, bytes, now) {
+  const b = rollReturnBudget(budget, now);
+  if (bytes > 0) b.live.push({ bytes, until: now + RETURN_COPY_ATTACH_MS });
+  return b;
+}
+
+/** A device's frame state (LAB-PROTOCOL 2.4.4), as stored under lane/return/device. */
+export function newDeviceFrameState() {
+  return { day: '', count: 0, lastFrameAt: 0, firstHello: 0, pending: [], want: {}, storedAt: {}, helloDue: false, limitUntil: 0, off: false };
+}
+
+function normDeviceState(state) {
+  const st = { ...newDeviceFrameState(), ...(isPlainObject(state) ? state : {}) };
+  st.pending = Array.isArray(st.pending) ? st.pending.filter((id) => typeof id === 'string') : [];
+  st.want = isPlainObject(st.want) ? { ...st.want } : {};
+  st.storedAt = isPlainObject(st.storedAt) ? { ...st.storedAt } : {};
+  return st;
+}
+
+/** The newest relay time (s) of an expired attachment the device wants again, or 0 (LAB-PROTOCOL 2.4.4). */
+export function deviceWantAt(state) { return Math.max(0, ...Object.values(normDeviceState(state).want).filter(Number.isFinite)); }
+
+/**
+ * Whether a device publishes a frame after a read (LAB-PROTOCOL 2.4.4; vectors > returnLane > cadence).
+ * -> null, or the reason: 'want' (x-want, may use the third frame of the day), 'first', 'acks' or 'idle'.
+ */
+export function deviceFrameDue(state, now) {
+  const st = normDeviceState(state);
+  if (st.off) return null;
+  const count = st.day === utcDayOf(now) ? st.count : 0;
+  if (now < st.limitUntil) return null;
+  if (deviceWantAt(st) > 0 && count < RETURN_DEVICE_FRAMES_PER_DAY) return 'want';
+  const room = count < RETURN_DEVICE_FRAMES_PER_DAY - 1;
+  if (!room) return null;
+  if (st.helloDue) return 'first';
+  if (st.pending.length && (!st.lastFrameAt || now - st.lastFrameAt >= RETURN_ACK_GAP_MS)) return 'acks';
+  if (!st.lastFrameAt || now - st.lastFrameAt >= RETURN_IDLE_HELLO_MS) return 'idle';
+  return null;
+}
+
+/**
+ * The state after a device frame went (LAB-PROTOCOL 2.4.4): time is its relay time (s; the Daylight compares
+ * heard with copyUntil in relay time), ids the ids it carried. A frame past the cap (x-rx: false) counts too.
+ */
+export function deviceFramePublished(state, { now, time = null, ids = [], want = false, rx = true } = {}) {
+  const st = normDeviceState(state);
+  const day = utcDayOf(now);
+  if (st.day !== day) { st.day = day; st.count = 0; }
+  st.count += 1;
+  st.lastFrameAt = now;
+  if (!st.firstHello) st.firstHello = Number.isFinite(time) ? Math.round(time * 1000) : now;
+  const sent = new Set(ids);
+  st.pending = st.pending.filter((id) => !sent.has(id));
+  if (want) st.want = {};
+  st.helloDue = false;
+  if (rx === false) st.off = true;
+  return st;
+}
+
+/**
+ * What a device's read adds to its state (LAB-PROTOCOL 2.4.4): ids it stored or saw again join `pending` (at most
+ * 500, the oldest dropped); stored: {topicKey: newest relay time (s) of a message it stored an item from};
+ * expired: {topicKey: newest relay time (s) of an expired attachment}. A wanted copy is one newer than the device's
+ * first frame and than what it stored from that topic; a newer stored item clears the want. -> the new state.
+ */
+export function deviceAfterRead(state, { ids = [], stored = {}, expired = {} } = {}) {
+  const st = normDeviceState(state);
+  for (const id of ids) if (!st.pending.includes(id)) st.pending.push(id);
+  if (st.pending.length > RETURN_PENDING_ACKS_MAX) st.pending.splice(0, st.pending.length - RETURN_PENDING_ACKS_MAX);
+  for (const [k, t] of Object.entries(stored)) if (Number.isFinite(t)) st.storedAt[k] = Math.max(st.storedAt[k] ?? 0, t);
+  for (const [k, t] of Object.entries(expired)) {
+    if (!Number.isFinite(t) || !st.firstHello) continue;
+    if (t * 1000 > st.firstHello && t > (st.storedAt[k] ?? 0)) st.want[k] = Math.max(st.want[k] ?? 0, t);
+  }
+  for (const k of Object.keys(st.want)) if ((st.storedAt[k] ?? 0) > st.want[k]) delete st.want[k];
+  return st;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -939,11 +1231,12 @@ function locked(storage, role, fn) {
  * lock. current: the pairing in use (or null); next: the one being applied. The same secret (a new relay or name)
  * keeps the outbox: build a new Sender with `next` and pending rows go through the new relay. A different secret (or
  * no current pairing) deletes every row, their stored content, the ack cursor and the Lab ledger (every `lab/*` key:
- * LAB_STORAGE_KEYS, and any other `lab/` key when the storage can list its keys with `keys()`). -> true when it
- * deleted them.
+ * LAB_STORAGE_KEYS, and any other `lab/` key when the storage can list its keys with `keys()`), and the return lane's
+ * keys (LAB-PROTOCOL 2.4.12: RETURN_STORAGE_KEYS, the return rows' content, the device id, and any other `lane/` key
+ * when the storage lists its keys), under the return lane's locks too. -> true when it deleted them.
  */
-export function applyPairingChange(storage, current, next) {
-  return locked(storage, 'sender', async () => {
+export async function applyPairingChange(storage, current, next) {
+  const changed = await locked(storage, 'sender', async () => {
     if (current && samePairingSecret(current, next)) return false;
     const rows = (await storage.get('outbox')) ?? [];
     for (const r of rows) if (r?.id) await storage.remove(`outbox/${r.id}`);
@@ -956,6 +1249,17 @@ export function applyPairingChange(storage, current, next) {
     for (const k of lab) await storage.remove(k);
     return true;
   });
+  if (!changed) return false;
+  await locked(storage, 'sender:return', () => locked(storage, 'receiver:return', async () => {
+    const rows = (await storage.get(RETURN_PREFIX + 'outbox')) ?? [];
+    for (const r of Array.isArray(rows) ? rows : []) if (r?.id) await storage.remove(`${RETURN_PREFIX}outbox/${r.id}`);
+    const keys = new Set(RETURN_STORAGE_KEYS);
+    if (typeof storage.keys === 'function') {
+      try { for (const k of await storage.keys()) if (String(k).startsWith('lane/')) keys.add(k); } catch { /* the known keys only */ }
+    }
+    for (const k of keys) await storage.remove(k);
+  }));
+  return true;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1005,6 +1309,16 @@ function normRow(r) {
   };
 }
 
+/** A return row with every return-lane field (LAB-PROTOCOL 2.4.3). */
+function normReturnRow(r) {
+  const obj = (v) => (v !== null && typeof v === 'object' && !Array.isArray(v) ? v : {});
+  return {
+    ...r, rk: r.rk ?? 'share', to: Array.isArray(r.to) ? r.to : [], pick: !!r.pick, got: obj(r.got), copies: obj(r.copies),
+    followUps: obj(r.followUps), missing: Array.isArray(r.missing) ? r.missing : [], frames: r.frames ?? 0,
+    attachmentBytes: r.attachmentBytes ?? 0, wait: r.wait ?? '', resent: r.resent ?? 0,
+  };
+}
+
 /** The HTTP status a failed publish carries for the row's `http`: ShareError's `status`, 0 without an HTTP answer. */
 const httpOf = (error) => { const s = Number(error?.status); return Number.isInteger(s) && s >= 100 && s <= 599 ? s : 0; };
 
@@ -1025,31 +1339,52 @@ const httpOf = (error) => { const s = Number(error?.status); return Number.isInt
  * and Lab frames alike), in the order the poll returns them, before rows are updated (LAB-PROTOCOL 2.2.6). `time` is
  * the message's relay time in seconds. It may be async; its errors are caught and logged. daylight-lab.js's
  * labHook(ledger) is the Lab one.
+ *
+ * lane: 'pairing' (the default: exactly the keys and behaviour of v1.1) or 'return' (LAB-PROTOCOL 2.4: the Daylight's
+ * return outbox, under the keys lane/return/…). The return lane needs `devices`, a ReturnDevices of daylight-lab.js
+ * (or anything with record(ack, {time}) and snapshot(now) -> {targets, heard(dev), want(dev), settled(dev)}). Its rows
+ * also carry rk, to, pick, got, copies, followUps, missing, frames, attachmentBytes, wait and resent (2.4.3); see
+ * send(), checkAcks() and resendDue() for what differs.
  */
 export class Sender {
-  constructor({ pairing, storage, from = '', app = '', fetch: f, now = () => Date.now(), chunkSize, timeouts, retryDelaysMs, onAckHeader = null } = {}) {
+  constructor({ pairing, storage, from = '', app = '', fetch: f, now = () => Date.now(), chunkSize, timeouts, retryDelaysMs, onAckHeader = null, lane = 'pairing', devices = null } = {}) {
     if (!pairing?.secret) throw new ShareError('pairing', 'Not paired yet.');
+    if (lane !== 'pairing' && lane !== 'return') throw new ShareError('lane', `unknown lane ${lane}`);
+    if (lane === 'return' && (typeof devices?.record !== 'function' || typeof devices?.snapshot !== 'function')) {
+      throw new ShareError('lane', 'the return lane needs its devices (ReturnDevices)');
+    }
     this.pairing = pairing;
     this.storage = storage;
     this.from = from; this.app = app; this.now = now; this.chunkSize = chunkSize;
     this.onAckHeader = typeof onAckHeader === 'function' ? onAckHeader : null;
     this.relay = new RelayClient({ relay: pairing.relay, fetch: f, timeouts, retryDelaysMs });
+    this.lane = lane;
+    this.devices = devices;
+    this._prefix = lane === 'return' ? RETURN_PREFIX : '';
     this._keys = null;
   }
 
-  async keys() { return (this._keys ??= await deriveKeys(this.pairing.secret)); }
+  /** A storage key of this lane: today's key on the pairing lane, under lane/return/ on the return lane. */
+  _key(k) { return this._prefix + k; }
 
-  _lock(fn) { return locked(this.storage, 'sender', fn); }
+  async keys() {
+    return (this._keys ??= this.lane === 'return' ? await deriveReturnKeys(this.pairing.secret) : await deriveKeys(this.pairing.secret));
+  }
 
-  async list() { return ((await this.storage.get('outbox')) ?? []).map(normRow); }
+  _lock(fn) { return locked(this.storage, this.lane === 'return' ? 'sender:return' : 'sender', fn); }
+
+  async list() {
+    const rows = ((await this.storage.get(this._key('outbox'))) ?? []).map(normRow);
+    return this.lane === 'return' ? rows.map(normReturnRow) : rows;
+  }
 
   async _content(id) {
-    const b64 = await this.storage.get(`outbox/${id}`);
+    const b64 = await this.storage.get(this._key(`outbox/${id}`));
     if (typeof b64 !== 'string') return null;
     try { return fromBase64(b64); } catch { return null; }
   }
 
-  async _dropContent(id) { try { await this.storage.remove(`outbox/${id}`); } catch { /* nothing to drop */ } }
+  async _dropContent(id) { try { await this.storage.remove(this._key(`outbox/${id}`)); } catch { /* nothing to drop */ } }
 
   /** Writes the rows: every pending row, then the newest finished rows up to OUTBOX_MAX_ROWS; drops the rest's content. */
   async _writeRows(rows) {
@@ -1057,8 +1392,17 @@ export class Sender {
     const finished = rows.filter((r) => !PENDING.has(r.status));
     const room = Math.max(0, OUTBOX_MAX_ROWS - (rows.length - finished.length));
     const dropped = new Set(finished.slice(room));
-    await this.storage.set('outbox', rows.filter((r) => !dropped.has(r)));
+    await this.storage.set(this._key('outbox'), rows.filter((r) => !dropped.has(r)));
     for (const r of dropped) await this._dropContent(r.id);
+  }
+
+  /** `replaces` (LAB-PROTOCOL 2.4.11): removes every older row with this key that is not delivered, with its content. */
+  async _dropReplaced(key, keepId) {
+    const rows = await this.list();
+    const gone = rows.filter((r) => r.id !== keepId && r.replaces === key && r.status !== 'delivered');
+    if (!gone.length) return;
+    await this.storage.set(this._key('outbox'), rows.filter((r) => !gone.includes(r)));
+    for (const r of gone) await this._dropContent(r.id);
   }
 
   async _saveRow(row) {
@@ -1073,9 +1417,11 @@ export class Sender {
    * row. With `defer` (offline, F07) nothing is published: the row is stored as failed with code 'network',
    * `attempts` 0 and `lastPublish` now, and the content is kept as usual, for flushNetwork() or the next re-send pass.
    */
-  send(item, { defer = false } = {}) { return this._lock(() => this._send(item, { defer })); }
+  send(item, { defer = false, to = null, replaces = null } = {}) {
+    return this._lock(() => (this.lane === 'return' ? this._rSend(item, { to, replaces }) : this._send(item, { defer, replaces })));
+  }
 
-  async _send(item, { defer = false } = {}) {
+  async _send(item, { defer = false, replaces = null } = {}) {
     const keys = await this.keys();
     const built = await buildItemFrames(keys, { ...item, from: item.from ?? this.from, app: item.app ?? this.app },
       { chunkSize: this.chunkSize });
@@ -1089,11 +1435,12 @@ export class Sender {
     const extras = labHeaderFields(item.extras);
     if (extras['x-cap'] || extras['x-orig']) row.extras = extras; // re-sends carry the same Lab fields (LAB-PLAN 1.3)
     if (defer) Object.assign(row, { status: 'failed', errorCode: 'network', lastPublish: now, error: 'deferred while offline' });
+    if (replaces != null) { row.replaces = String(replaces); await this._dropReplaced(row.replaces, row.id); }
     await this._saveRow(row);
     if (row.kind !== 'url') {
       const content = typeof item.content === 'string' ? utf8(item.content) : item.content;
       try {
-        await this.storage.set(`outbox/${row.id}`, toBase64(content));
+        await this.storage.set(this._key(`outbox/${row.id}`), toBase64(content));
       } catch (e) {
         // A browser storage quota: publish once anyway; when a re-send comes due the row becomes expired / gone.
         globalThis.console?.warn?.('Send to Daylight: could not keep a copy for re-sending', e);
@@ -1134,7 +1481,7 @@ export class Sender {
    * Rebuilds a row's frames from its stored content. -> {built}, or {ended: true} after ending the row (no content:
    * expired/gone; over MAX_ITEM: expired/too-large).
    */
-  async _buildStored(row) {
+  async _buildStored(row, opts = {}) {
     const end = async (errorCode, dropContent) => {
       row.status = 'expired'; row.errorCode = errorCode;
       await this._saveRow(row);
@@ -1151,7 +1498,7 @@ export class Sender {
       const built = await buildItemFrames(await this.keys(), {
         id: row.id, kind: row.kind, url: row.url || undefined, title: row.title, name: row.name, mime: row.mime,
         content, sent: row.sent, from: this.from, app: this.app, extras: row.extras,
-      }, { chunkSize: this.chunkSize });
+      }, { chunkSize: this.chunkSize, ...opts });
       return { built, ended: false };
     } catch (e) {
       return e?.code === 'too-large' ? end('too-large', true) : end('gone', false);
@@ -1180,11 +1527,11 @@ export class Sender {
   }
 
   /** Reads the ack topic and marks delivered rows. -> number of rows newly delivered. Throws when the poll fails. */
-  checkAcks() { return this._lock(() => this._checkAcks()); }
+  checkAcks() { return this._lock(() => (this.lane === 'return' ? this._rCheckAcks() : this._checkAcks())); }
 
   async _checkAcks() {
     const keys = await this.keys();
-    const since = (await this.storage.get('ackSince')) ?? 'all';
+    const since = (await this.storage.get(this._key('ackSince'))) ?? 'all';
     const entries = await this.relay.poll(keys.ackTopic, since);
     const acked = new Set();
     let newest = 0, held = Infinity;
@@ -1204,7 +1551,7 @@ export class Sender {
       }
       if (Array.isArray(header.ids)) header.ids.forEach((id) => typeof id === 'string' && acked.add(id));
     }
-    if (entries.length) await this.storage.set('ackSince', nextCursor(since, newest, held));
+    if (entries.length) await this.storage.set(this._key('ackSince'), nextCursor(since, newest, held));
     const rows = await this.list();
     const now = this.now();
     const delivered = [];
@@ -1226,7 +1573,7 @@ export class Sender {
    * after 14 days, re-sends rows that are due; after a 429 it publishes nothing more and after a 413 no attachment.
    * -> the rows it attempted.
    */
-  resendDue() { return this._lock(() => this._resendDue()); }
+  resendDue() { return this._lock(() => (this.lane === 'return' ? this._rResendDue() : this._resendDue())); }
 
   async _resendDue() {
     const pass = { stopAll: false, stopAttachments: false };
@@ -1262,7 +1609,7 @@ export class Sender {
    * no more attachments. Rows past OUTBOX_EXPIRY_MS are left to resendDue, which expires them. Callers space passes at
    * least 3 minutes apart. -> the rows it attempted.
    */
-  flushNetwork(opts) { return this._lock(() => this._flushNetwork(opts)); }
+  flushNetwork(opts) { return this._lock(() => (this.lane === 'return' ? [] : this._flushNetwork(opts))); }
 
   async _flushNetwork({ maxFrames = 30, maxAttachmentBytes = 18_000_000 } = {}) {
     const pass = { stopAll: false, stopAttachments: false };
@@ -1294,7 +1641,7 @@ export class Sender {
    * "Retry now" (a failed row) and "Try again" (an expired row, with errorCode '', 'full' or 'refused'): publishes it
    * again with the same id and header. Any other row is left as it is. -> the row, or null when there is none.
    */
-  retry(id) { return this._lock(() => this._retry(id)); }
+  retry(id) { return this._lock(() => (this.lane === 'return' ? this._rRetry(id) : this._retry(id))); }
 
   async _retry(id) {
     const row = (await this.list()).find((r) => r.id === id);
@@ -1312,7 +1659,7 @@ export class Sender {
     return this._lock(async () => {
       const rows = await this.list();
       const left = rows.filter((r) => r.id !== id);
-      if (left.length !== rows.length) await this.storage.set('outbox', left);
+      if (left.length !== rows.length) await this.storage.set(this._key('outbox'), left);
       await this._dropContent(id);
       return left.length !== rows.length;
     });
@@ -1321,11 +1668,287 @@ export class Sender {
   /** One maintenance pass: acks (errors ignored), then re-sends. Call on start, after a share, and from timers. */
   tick() {
     return this._lock(async () => {
+      const ret = this.lane === 'return';
       let delivered = 0;
-      try { delivered = await this._checkAcks(); } catch { /* offline: re-send anyway */ }
-      const resent = await this._resendDue();
+      try { delivered = ret ? await this._rCheckAcks() : await this._checkAcks(); } catch { /* offline: re-send anyway */ }
+      const resent = ret ? await this._rResendDue() : await this._resendDue();
       return { delivered, resent: resent.length };
     });
+  }
+
+  // -------------------------------------------------------------------------------------------------------------
+  // The return lane (LAB-PROTOCOL 2.4): the Daylight's return outbox.
+
+  async _budget() { return (await this.storage.get(this._key('budget'))) ?? newReturnBudget(); }
+
+  async _saveBudget(b) { await this.storage.set(this._key('budget'), b); }
+
+  /** The day's budget as of now (LAB-PROTOCOL 2.4.9): {day, frames, bytes, resends, live, limitUntil}. */
+  budget() { return this._lock(async () => rollReturnBudget(await this._budget(), this.now())); }
+
+  /**
+   * A 429 or 413 on any publish of the Daylight (its acks, Lab frames, the return lane's own): the return lane
+   * publishes nothing for an hour (LAB-PROTOCOL 2.4.9). Return lane only.
+   */
+  noteRelayLimit(status) {
+    if (this.lane !== 'return' || (status !== 429 && status !== 413)) return Promise.resolve();
+    return this._lock(async () => this._saveBudget(limitReturnBudget(await this._budget(), status, this.now())));
+  }
+
+  /** Attachment bytes the Daylight downloaded on the pairing lane (Receiver.pollOnce's `downloads`): 2.4.9. */
+  noteRelayBytes(bytes) {
+    if (this.lane !== 'return' || !(bytes > 0)) return Promise.resolve();
+    return this._lock(async () => this._saveBudget(noteReturnBudgetBytes(await this._budget(), bytes, this.now())));
+  }
+
+  /** The topic and frame options of a copy: the shared topic for every target, or one device's own (x-to). */
+  async _rRoute(row, dev) {
+    const keys = await this.keys();
+    const fields = { 'x-rk': row.rk || 'share' };
+    if (dev) {
+      fields['x-to'] = dev;
+      return { topic: await returnDevTopic(this.pairing.secret, dev), opts: { purpose: PURPOSE_LAB_RETURN_DEV, fields }, downloaders: 1 };
+    }
+    return { topic: keys.returnTopic, opts: { purpose: PURPOSE_LAB_RETURN, fields }, downloaders: row.to.length };
+  }
+
+  /**
+   * Shares one item back (LAB-PROTOCOL 2.4.3): to every target (devices.targets), or to `to` alone (its own topic,
+   * x-to). item.rk: 'share' (default), 'marks', 'queue' or 'reading'. With no target yet the row waits (failed,
+   * 'no-device') for 24 hours. -> the row.
+   */
+  async _rSend(item, { to = null, replaces = null } = {}) {
+    const rk = item.rk ?? 'share';
+    if (!RETURN_KINDS.includes(rk)) throw new ShareError('rk', `unknown return kind ${rk}`);
+    if (to !== null && (typeof to !== 'string' || !DEV_RE.test(to))) throw new ShareError('device', 'a device id is 16 lowercase hex digits');
+    const now = this.now();
+    const pick = to !== null;
+    const targets = pick ? [to] : (await this.devices.snapshot(now)).targets.slice(0, RETURN_TARGETS_MAX);
+    const keys = await this.keys();
+    const fields = { 'x-rk': rk, ...(pick ? { 'x-to': to } : {}) };
+    const built = await buildItemFrames(keys, { ...item, from: item.from ?? this.from, app: item.app ?? this.app },
+      { chunkSize: this.chunkSize, purpose: pick ? PURPOSE_LAB_RETURN_DEV : PURPOSE_LAB_RETURN, fields });
+    const row = {
+      id: built.id, kind: item.kind, title: built.header.title ?? '', url: built.header.url ?? '',
+      name: built.header.name ?? '', mime: built.header.mime ?? '', size: built.header.size ?? 0,
+      sent: built.header.sent, created: now, status: 'sending', errorCode: '', attempts: 0, slowFails: 0,
+      lastPublish: 0, attemptStarted: now, attachment: built.attachment, error: '', delivered: 0, http: 0,
+      rk, to: targets, pick, got: {}, copies: {}, followUps: {}, missing: [], frames: built.frames.length,
+      attachmentBytes: built.frames.reduce((n, f) => n + (isSmallFrame(f) ? 0 : f.length), 0), wait: '', resent: 0,
+    };
+    if (!targets.length) Object.assign(row, { status: 'failed', errorCode: 'no-device', wait: 'no-device', lastPublish: now });
+    if (replaces != null) { row.replaces = String(replaces); await this._dropReplaced(row.replaces, row.id); }
+    await this._saveRow(row);
+    if (row.kind !== 'url') {
+      const content = typeof item.content === 'string' ? utf8(item.content) : item.content;
+      try { await this.storage.set(this._key(`outbox/${row.id}`), toBase64(content)); } catch (e) {
+        globalThis.console?.warn?.('Daylight Share: could not keep a copy for re-sending', e);
+      }
+    }
+    if (!targets.length) return row;
+    return (await this._rPublish(row, null, built)).row;
+  }
+
+  /**
+   * Publishes one copy of a row, whole or not at all (LAB-PROTOCOL 2.4.8, 2.4.9): its first publish (dev null) or a
+   * re-send to dev. Checks the budget first; charges each frame that goes. -> {row, error, attempted, wait}
+   */
+  async _rPublish(row, dev, built = null) {
+    const now = this.now();
+    const first = !dev;
+    const route = await this._rRoute(row, first && row.pick ? row.to[0] : dev);
+    if (!built && row.frames) {
+      // A copy is never smaller than the row's first build (a device's copy adds x-to), so when even that size does
+      // not fit, the row waits without building its frames again.
+      const verdict = returnBudgetCheck(await this._budget(), { frames: row.frames, attachmentBytes: row.attachmentBytes, downloaders: route.downloaders, resendFor: dev }, now);
+      if (verdict !== 'ok') {
+        row.wait = verdict;
+        if (first) Object.assign(row, { status: 'failed', errorCode: verdict });
+        await this._saveRow(row);
+        return { row, error: null, attempted: false, wait: verdict };
+      }
+    }
+    if (!built || dev) {
+      const r = await this._buildStored(row, route.opts);
+      if (!r.built) return { row, error: null, attempted: false, wait: '' };
+      built = r.built;
+    }
+    const attachmentBytes = built.frames.reduce((n, f) => n + (isSmallFrame(f) ? 0 : f.length), 0);
+    let budget = await this._budget();
+    const verdict = returnBudgetCheck(budget, { frames: built.frames.length, attachmentBytes, downloaders: route.downloaders, resendFor: dev }, now);
+    if (verdict !== 'ok') {
+      row.wait = verdict;
+      if (first) Object.assign(row, { status: 'failed', errorCode: verdict });
+      await this._saveRow(row);
+      return { row, error: null, attempted: false, wait: verdict };
+    }
+    if (first) { row.status = 'sending'; row.attemptStarted = now; row.wait = ''; await this._saveRow(row); }
+    let error = null, time = null;
+    try {
+      for (const frame of built.frames) {
+        const r = await this.relay.publish(route.topic, frame);
+        if (time === null) time = Number.isFinite(r?.time) ? r.time : Math.floor(this.now() / 1000);
+        budget = chargeReturnBudget(budget, { attachment: isSmallFrame(frame) ? 0 : frame.length, downloaders: route.downloaders, resendFor: dev }, this.now());
+        await this._saveBudget(budget);
+        if (first) { row.attemptStarted = this.now(); await this._saveRow(row); }
+      }
+    } catch (e) { error = e; }
+    if (error && (error.status === 429 || error.status === 413)) await this._saveBudget(limitReturnBudget(budget, error.status, this.now()));
+    const end = this.now();
+    row.lastPublish = end;
+    if (!error) {
+      const until = copyUntil(time, built.attachment);
+      row.wait = '';
+      if (first) {
+        Object.assign(row, { status: 'sent', errorCode: '', attempts: 0, slowFails: 0, error: '', http: 0, attachment: built.attachment });
+        for (const d of row.to) row.copies[d] = until;
+      } else {
+        row.copies[dev] = until;
+        row.resent = (row.resent ?? 0) + 1;
+        Object.assign(row, { error: '', http: 0 });
+      }
+    } else if (first) {
+      const code = ['network', 'full', 'refused'].includes(error.code) ? error.code : 'network';
+      row.status = 'failed'; row.errorCode = code; row.attempts += 1;
+      row.slowFails = SLOW_CODES.has(code) ? row.slowFails + 1 : 0;
+      if (row.slowFails >= SLOW_FAIL_LIMIT) row.status = 'expired';
+      row.error = String(error?.message ?? error);
+      row.http = httpOf(error);
+    } else {
+      row.error = String(error?.message ?? error);
+      row.http = httpOf(error);
+    }
+    await this._saveRow(row);
+    return { row, error, attempted: true, wait: '' };
+  }
+
+  /**
+   * Reads returnAckTopic (LAB-PROTOCOL 2.4.7): each device frame updates `devices`, then its acks mark the rows'
+   * `got`; rows whose every target acked (or opted out) are delivered. -> number of rows newly delivered.
+   */
+  async _rCheckAcks() {
+    const keys = await this.keys();
+    const since = (await this.storage.get(this._key('ackSince'))) ?? 'all';
+    const entries = await this.relay.poll(keys.returnAckTopic, since);
+    const acks = [];
+    let newest = 0, held = Infinity;
+    for (const m of entries) {
+      newest = Math.max(newest, m.time);
+      if (m.outcome === 'retry') held = Math.min(held, m.time);
+      if (m.outcome !== 'frame') continue;
+      let header;
+      try { ({ header } = await decryptFrame(keys, PURPOSE_LAB_RETURN_ACK, m.frame)); } catch { continue; /* junk */ }
+      const ack = returnAck(header);
+      if (!ack) continue;
+      await this.devices.record(ack, { time: m.time });
+      if (ack.dev) for (const id of ack.ids) acks.push([id, ack.dev]);
+    }
+    if (entries.length) await this.storage.set(this._key('ackSince'), nextCursor(since, newest, held));
+    const now = this.now();
+    const snap = await this.devices.snapshot(now);
+    const rows = await this.list();
+    let changed = false;
+    for (const [id, dev] of acks) {
+      const row = rows.find((r) => r.id === id);
+      if (!row || row.status === 'delivered' || !row.to.includes(dev) || Object.hasOwn(row.got, dev)) continue;
+      row.got[dev] = now;
+      delete row.followUps[dev];
+      changed = true;
+    }
+    const delivered = [];
+    for (const row of rows) {
+      if (row.status !== 'sent' && row.status !== 'sending') continue;
+      const s = settleReturnRow(row, now, (d) => snap.settled(d));
+      if (!s) continue;
+      Object.assign(row, { status: s.status, missing: s.missing, wait: '' });
+      if (s.status === 'delivered') { row.delivered = now; row.errorCode = ''; row.http = 0; delivered.push(row.id); }
+      changed = true;
+    }
+    if (changed) await this._writeRows(rows);
+    for (const id of delivered) await this._dropContent(id);
+    return delivered.length;
+  }
+
+  /**
+   * One pass of the return outbox, oldest row first (LAB-PROTOCOL 2.4.7-2.4.9): settles rows at 7 days, removes
+   * rows that found no device within 24 hours, gives rows that waited for a device their targets, retries first
+   * publishes (v1.1's back-off for network/full/refused; at once for cap, relay and yield), and re-sends to each
+   * target that is due (returnDue) on its own topic, with the follow-up. -> the rows it published.
+   */
+  async _rResendDue() {
+    const out = [];
+    const rows = (await this.list()).reverse().sort((a, b) => a.created - b.created);
+    for (const row of rows) {
+      const now = this.now();
+      if (row.status === 'delivered') continue;
+      if (row.status === 'expired') {
+        if (now - row.created > CONTENT_KEEP_MS) await this._dropContent(row.id);
+        continue;
+      }
+      const snap = await this.devices.snapshot(now);
+      if (row.status === 'failed' && row.errorCode === 'no-device') {
+        if (now - row.created > RETURN_NO_DEVICE_MS) {
+          const left = (await this.list()).filter((r) => r.id !== row.id);
+          await this.storage.set(this._key('outbox'), left);
+          await this._dropContent(row.id);
+          continue;
+        }
+        if (!snap.targets.length) continue;
+        Object.assign(row, { to: snap.targets.slice(0, RETURN_TARGETS_MAX), errorCode: '', wait: '' });
+        const r = await this._rPublish(row, null);
+        if (r.attempted) out.push(r.row);
+        continue;
+      }
+      const settled = settleReturnRow(row, now, (d) => snap.settled(d));
+      if (settled && (now - row.created > RETURN_EXPIRY_MS || row.status === 'sent' || row.status === 'sending')) {
+        Object.assign(row, { status: settled.status, missing: settled.missing, wait: '' });
+        if (settled.status === 'delivered') { row.delivered = now; row.errorCode = ''; row.http = 0; }
+        await this._saveRow(row);
+        if (settled.status === 'delivered') await this._dropContent(row.id);
+        continue;
+      }
+      if (row.status === 'failed' || row.status === 'sending') {
+        const waiting = ['cap', 'relay', 'yield'].includes(row.errorCode);
+        if (!waiting && !this._due(row, now)) continue;
+        const r = await this._rPublish(row, null);
+        if (r.attempted) out.push(r.row);
+        continue;
+      }
+      // sent: re-sends follow presence (returnDue), each on the device's own topic.
+      let blocked = '';
+      for (const dev of row.to) {
+        if (snap.settled(dev)) continue;
+        const heard = snap.heard(dev);
+        if (!returnDue(row, dev, heard, now)) continue;
+        const byPresence = Number.isFinite(heard) && heard > row.copies[dev];
+        const r = await this._rPublish(row, dev);
+        if (!r.attempted) {
+          // Held back by the budget: the copy waits for D to be heard again, not for the budget. Re-sent later on
+          // stale presence (at UTC midnight, say), it would reach a device that is not reading, use that device's
+          // re-sends for the day, and be gone before it reads (LAB-PROTOCOL 2.4.9).
+          blocked ||= r.wait;
+          if (r.wait && Number.isFinite(heard)) row.copies[dev] = Math.max(row.copies[dev], heard);
+          delete row.followUps[dev];
+          await this._saveRow(row);
+          continue;
+        }
+        if (r.error) continue;
+        if (byPresence && snap.want(dev) > 0 && snap.want(dev) === heard) row.followUps[dev] = this.now() + RETURN_FOLLOW_UP_MS;
+        else delete row.followUps[dev];
+        await this._saveRow(row);
+        if (!out.includes(row)) out.push(row);
+      }
+      if (row.wait !== blocked) { row.wait = blocked; await this._saveRow(row); }
+    }
+    return out;
+  }
+
+  /** "Retry now" on a return row that has not gone yet: publishes it now, budget allowing. -> the row, or null. */
+  async _rRetry(id) {
+    const row = (await this.list()).find((r) => r.id === id);
+    if (!row) return null;
+    if (row.status === 'failed' && row.errorCode !== 'no-device') return (await this._rPublish(row, null)).row;
+    return row;
   }
 }
 
@@ -1339,24 +1962,52 @@ export class Receiver {
    * acked. `extras` holds the item's Lab header fields (checkItemHeader).
    * When it throws, the item's messages are handled but its id is not remembered and it is not acked: it comes back
    * with the sender's next re-send, and pollOnce returns `storeError`.
+   *
+   * lane: 'pairing' (the default: the Inbox, exactly as v1.1) or 'return' (LAB-PROTOCOL 2.4: a phone or computer
+   * reading what its Daylight sends back, under the keys lane/return/…). The return lane needs `device: {dev, from}`
+   * (dev: the device's id, daylight-lab.js's returnDeviceId), reads the shared return topic and the device's own,
+   * skips frames for other devices, and acks with device frames (2.4.4) instead of v1.1's acks. `kinds`: the x-rk
+   * values passed to accept (default: share); other items are acked and dropped. `extras` then also has rk and to.
+   * `combined`: read both topics in one request (default RETURN_POLL_COMBINED).
    */
-  constructor({ pairing, storage, fetch: f, from = 'Daylight', now = () => Date.now(), accept = async () => {}, timeouts, retryDelaysMs }) {
+  constructor({ pairing, storage, fetch: f, from = 'Daylight', now = () => Date.now(), accept = async () => {}, timeouts, retryDelaysMs, lane = 'pairing', device = null, kinds = RETURN_KINDS_W2, combined = RETURN_POLL_COMBINED }) {
+    if (lane !== 'pairing' && lane !== 'return') throw new ShareError('lane', `unknown lane ${lane}`);
+    if (lane === 'return' && (typeof device?.dev !== 'string' || !DEV_RE.test(device.dev))) {
+      throw new ShareError('device', 'the return lane needs this device\'s id (16 lowercase hex digits)');
+    }
     this.pairing = pairing; this.storage = storage; this.from = from; this.now = now; this.accept = accept;
     this.relay = new RelayClient({ relay: pairing.relay, fetch: f, timeouts, retryDelaysMs });
     this.reassembler = new Reassembler({ now });
+    this.lane = lane;
+    this.device = lane === 'return' ? { dev: device.dev, from: cleanName(device.from ?? from) } : null;
+    this.kinds = kinds;
+    this.combined = !!combined;
+    this._prefix = lane === 'return' ? RETURN_PREFIX : '';
+    this._rk = new Map(); // return lane: x-rk of each pending item, from its part 0
     this._keys = null;
   }
 
-  async keys() { return (this._keys ??= await deriveKeys(this.pairing.secret)); }
+  _key(k) { return this._prefix + k; }
+
+  _lock(fn) { return locked(this.storage, this.lane === 'return' ? 'receiver:return' : 'receiver', fn); }
+
+  async keys() {
+    if (this._keys) return this._keys;
+    if (this.lane !== 'return') return (this._keys = await deriveKeys(this.pairing.secret));
+    const k = await deriveReturnKeys(this.pairing.secret);
+    return (this._keys = { ...k, devTopic: await returnDevTopic(this.pairing.secret, this.device.dev) });
+  }
 
   /**
    * Polls once. -> {items: [{header, content, extras}] (new items, stored), acked: [ids whose ack was published],
    * ackError: string|null, storeError: string|null, limited: 429 or 413 when the relay refused this poll's ack
    * publish for its limits, else 429 when it answered an attachment download with 429 (that item waits for a later
-   * poll), else 0}. A Lab Inbox gives way for an hour after any of them (LAB-PROTOCOL 2.2.4). Throws only when the
-   * poll itself fails (a 429 on the poll is the error's `status`); acks never throw.
+   * poll), else 0, downloads: [{bytes, time}] the attachments it downloaded (for the Daylight's return lane budget,
+   * LAB-PROTOCOL 2.4.9)}. A Lab Inbox gives way for an hour after any of them (LAB-PROTOCOL 2.2.4). Throws only when
+   * the poll itself fails (a 429 on the poll is the error's `status`); acks never throw.
+   * On the return lane: see _rPollOnce.
    */
-  pollOnce() { return locked(this.storage, 'receiver', () => this._pollOnce()); }
+  pollOnce() { return this._lock(() => (this.lane === 'return' ? this._rPollOnce() : this._pollOnce())); }
 
   async _pollOnce() {
     const keys = await this.keys();
@@ -1378,9 +2029,11 @@ export class Receiver {
     const ack = new Set();
     const handled = (ids) => { for (const id of ids) seenMsgs[id] = now; };
     let newest = 0, held = Infinity, storeError = null, downloadLimited = 0;
+    const downloads = [];
     for (const m of entries) {
       newest = Math.max(newest, m.time);
       if (m.status === 429) downloadLimited = 429;
+      if (m.outcome === 'frame' && m.attachment && m.frame) downloads.push({ bytes: m.frame.length, time: m.time });
       if (m.outcome === 'skipped') continue;
       if (m.outcome === 'retry') { held = Math.min(held, m.time); continue; }
       if (m.outcome !== 'frame') { handled([m.id]); continue; }
@@ -1429,6 +2082,176 @@ export class Receiver {
         break;
       }
     }
-    return { items, acked, ackError, storeError, limited };
+    return { items, acked, ackError, storeError, limited, downloads };
+  }
+
+  // -------------------------------------------------------------------------------------------------------------
+  // The return lane (LAB-PROTOCOL 2.4): a device.
+
+  async _frameState() { return (await this.storage.get(this._key('device'))) ?? newDeviceFrameState(); }
+
+  /** The device's frame state (LAB-PROTOCOL 2.4.4): {day, count, lastFrameAt, firstHello, pending, want, …}. */
+  frameState() { return this._lock(() => this._frameState()); }
+
+  /** A 429 or 413 on any publish of this device: its frames give way for an hour (2.4.4). Return lane only. */
+  noteRelayLimit(status) {
+    if (this.lane !== 'return' || (status !== 429 && status !== 413)) return Promise.resolve();
+    return this._lock(async () => {
+      const st = await this._frameState();
+      st.limitUntil = Math.max(st.limitUntil ?? 0, this.now() + RETURN_YIELD_MS);
+      await this.storage.set(this._key('device'), st);
+    });
+  }
+
+  /**
+   * The first hello (rx true: Lab or F06 turned on, after pairing, Chrome's list first opened): a read, then a
+   * frame. rx false (Lab or F06 turned off): one frame with x-rx: false, at once, past the cap, only if this device
+   * ever published one; then nothing until the next hello(). -> pollOnce's result, or {published, frame}.
+   */
+  hello({ rx = true } = {}) {
+    if (this.lane !== 'return') return Promise.reject(new ShareError('lane', 'hello() is the return lane\'s'));
+    return this._lock(async () => {
+      const st = await this._frameState();
+      if (rx !== false) {
+        Object.assign(st, { off: false, helloDue: true });
+        await this.storage.set(this._key('device'), st);
+        return this._rPollOnce();
+      }
+      if (st.off) return { published: false, frame: null };
+      st.off = true;
+      if (!st.firstHello) { await this.storage.set(this._key('device'), st); return { published: false, frame: null }; }
+      const keys = await this.keys();
+      const ids = st.pending.slice(0, RETURN_ACK_IDS);
+      const now = this.now();
+      let published = false, error = null;
+      try {
+        const frame = await buildReturnAckFrame(keys, { ids, dev: this.device.dev, from: this.device.from, sent: nowIso(now), rx: false });
+        const r = await this.relay.publish(keys.returnAckTopic, frame);
+        Object.assign(st, deviceFramePublished(st, { now, time: r?.time, ids, rx: false }));
+        published = true;
+      } catch (e) { error = e; }
+      await this.storage.set(this._key('device'), st);
+      return { published, frame: { reason: 'off', ids, want: false, rx: false, published, error: error ? String(error?.message ?? error) : null } };
+    });
+  }
+
+  /**
+   * One read of both return topics, then at most one device frame (LAB-PROTOCOL 2.4.4). A frame whose x-to names
+   * another device is handled at once, before dedupe (2.4.5). -> {items: [{header, content, extras}], acked (the ids
+   * the device frame carried), frame: {reason, ids, want, published, error} | null, want (a wanted copy is pending),
+   * ackError, storeError, limited, downloads, off}. Throws when a read fails (then nothing is published).
+   */
+  async _rPollOnce() {
+    let st = await this._frameState();
+    const none = { items: [], acked: [], frame: null, want: false, ackError: null, storeError: null, limited: 0, downloads: [], off: true };
+    if (st.off) return none;
+    const keys = await this.keys();
+    const now = this.now();
+    const get = async (k) => (await this.storage.get(this._key(k))) ?? {};
+    const seen = await get('seenItems');
+    const seenMsgs = await get('seenMsgs');
+    const incomplete = await get('incomplete');
+    for (const [k, t] of Object.entries(seen)) if (now - t > SEEN_TTL_MS) delete seen[k];
+    for (const [k, t] of Object.entries(seenMsgs)) if (now - t > SEEN_MSG_TTL_MS) delete seenMsgs[k];
+    for (const [k, t] of Object.entries(incomplete)) {
+      if (now - t * 1000 > INCOMPLETE_TTL_MS) { delete incomplete[k]; this.reassembler.drop(k); this._rk.delete(k); }
+    }
+    for (const k of this.reassembler.prune(INCOMPLETE_TTL_MS)) { delete incomplete[k]; this._rk.delete(k); }
+
+    // Read: one request for both topics (one cursor), or one per topic (two cursors). Either read failing throws.
+    const skip = (id) => Object.hasOwn(seenMsgs, id);
+    const groups = [];
+    if (this.combined) {
+      const since = (await this.storage.get(this._key('inboxSince'))) ?? 'all';
+      groups.push({ key: 'inboxSince', since, entries: await this.relay.poll([keys.returnTopic, keys.devTopic], since, { skip }) });
+    } else {
+      const s1 = (await this.storage.get(this._key('inboxSince'))) ?? 'all';
+      const e1 = await this.relay.poll(keys.returnTopic, s1, { skip });
+      const s2 = (await this.storage.get(this._key('devSince'))) ?? 'all';
+      const e2 = await this.relay.poll(keys.devTopic, s2, { skip });
+      groups.push({ key: 'inboxSince', since: s1, entries: e1 }, { key: 'devSince', since: s2, entries: e2 });
+    }
+    const topicKey = (t) => (t === keys.devTopic ? 'dev' : 'shared');
+    const purposes = (t) => (t === keys.devTopic ? [PURPOSE_LAB_RETURN_DEV] : t === keys.returnTopic ? [PURPOSE_LAB_RETURN] : [PURPOSE_LAB_RETURN, PURPOSE_LAB_RETURN_DEV]);
+    const items = [], ackIds = [], downloads = [];
+    const stored = {}, expired = {};
+    const handled = (ids) => { for (const id of ids) seenMsgs[id] = now; };
+    let storeError = null, downloadLimited = 0;
+    for (const g of groups) {
+      let newest = 0, held = Infinity;
+      for (const m of g.entries) {
+        newest = Math.max(newest, m.time);
+        if (m.status === 429) downloadLimited = 429;
+        if (m.outcome === 'frame' && m.attachment && m.frame) downloads.push({ bytes: m.frame.length, time: m.time });
+        if (m.outcome === 'skipped') continue;
+        if (m.outcome === 'retry') { held = Math.min(held, m.time); continue; }
+        if (m.outcome === 'expired') { const k = topicKey(m.topic); expired[k] = Math.max(expired[k] ?? 0, m.time); }
+        if (m.outcome !== 'frame') { handled([m.id]); continue; }
+        let frame = null;
+        for (const purpose of purposes(m.topic)) {
+          try { frame = await decryptFrame(keys, purpose, m.frame); break; } catch { /* the other AAD, or junk */ }
+        }
+        if (!frame) { handled([m.id]); continue; }
+        const ex = returnItemExtras(frame.header);
+        if (ex.to !== null && ex.to !== this.device.dev) { handled([m.id]); continue; } // another device's: before dedupe
+        const rawId = typeof frame.header.id === 'string' ? frame.header.id : null;
+        if (rawId !== null && Object.hasOwn(seen, rawId)) { seen[rawId] = now; handled([m.id]); ackIds.push(rawId); continue; }
+        if (rawId !== null && (frame.header.part ?? 0) === 0) this._rk.set(rawId, ex.rk);
+        let done;
+        try {
+          done = await this.reassembler.add(frame.header, frame.body, { time: m.time, msgId: m.id });
+        } catch (e) {
+          handled([m.id, ...(e?.msgIds ?? []), ...(rawId !== null ? this.reassembler.drop(rawId) : [])]);
+          if (rawId !== null) { delete incomplete[rawId]; this._rk.delete(rawId); }
+          continue;
+        }
+        if (!done) { incomplete[rawId] = Math.min(incomplete[rawId] ?? m.time, m.time); continue; }
+        handled([m.id, ...done.msgIds]);
+        const id = done.header.id;
+        delete incomplete[id];
+        const rk = this._rk.get(id) ?? ex.rk;
+        this._rk.delete(id);
+        const extras = { ...done.extras, rk, to: ex.to };
+        if (this.kinds.includes(rk)) {
+          try {
+            await this.accept({ header: done.header, content: done.content, extras });
+          } catch (e) {
+            storeError = String(e?.message ?? e);
+            continue;
+          }
+          items.push({ header: done.header, content: done.content, extras });
+          const k = topicKey(m.topic);
+          stored[k] = Math.max(stored[k] ?? 0, m.time);
+        }
+        seen[id] = now;
+        ackIds.push(id);
+      }
+      for (const t of Object.values(incomplete)) held = Math.min(held, t);
+      if (g.entries.length) await this.storage.set(this._key(g.key), nextCursor(g.since, newest, held));
+    }
+    await this.storage.set(this._key('seenItems'), seen);
+    await this.storage.set(this._key('seenMsgs'), seenMsgs);
+    await this.storage.set(this._key('incomplete'), incomplete);
+
+    st = deviceAfterRead(st, { ids: ackIds, stored, expired });
+    const reason = deviceFrameDue(st, now);
+    let frameInfo = null, acked = [], ackError = null, limited = downloadLimited;
+    if (reason) {
+      const ids = st.pending.slice(0, RETURN_ACK_IDS);
+      const want = reason === 'want';
+      try {
+        const frame = await buildReturnAckFrame(keys, { ids, dev: this.device.dev, from: this.device.from, sent: nowIso(now), want });
+        const r = await this.relay.publish(keys.returnAckTopic, frame);
+        st = deviceFramePublished(st, { now, time: r?.time, ids, want });
+        acked = ids;
+        frameInfo = { reason, ids, want, published: true, error: null };
+      } catch (e) {
+        ackError = String(e?.message ?? e);
+        if (e?.status === 429 || e?.status === 413) { limited = e.status; st.limitUntil = Math.max(st.limitUntil ?? 0, now + RETURN_YIELD_MS); }
+        frameInfo = { reason, ids, want, published: false, error: ackError };
+      }
+    }
+    await this.storage.set(this._key('device'), st);
+    return { items, acked, frame: frameInfo, want: deviceWantAt(st) > 0, ackError, storeError, limited, downloads, off: false };
   }
 }

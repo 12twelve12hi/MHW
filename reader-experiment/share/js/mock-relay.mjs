@@ -21,7 +21,9 @@
 // --control         enables the test hooks below
 //
 // Endpoints: POST|PUT /<topic> (publish), GET /<topic>/json (poll=1 or stream), GET /<topic>/sse,
-// GET /file/<id>.bin (attachments), GET /v1/health. CORS is open, as on ntfy.sh.
+// GET /file/<id>.bin (attachments), GET /v1/health. CORS is open, as on ntfy.sh. A GET may name several topics,
+// /<a>,<b>/json, as ntfy allows: one `since` filters every topic, the lines come in time order (stable), and each says
+// its topic.
 //
 // Test hooks (with --control / control: true; JS tests can also pass the functions to startMockRelay):
 //   POST /__mock/fail-downloads?count=N&status=S   the next N attachment downloads answer S (a status, or "reset" to
@@ -36,11 +38,14 @@
 //   failPublish(topic, n, isAttachment) -> status | null   n = publishes to that topic so far
 //
 // Rate limits (off by default; startMockRelay({...NTFY_SH_LIMITS}) or --ntfy-limits turns on ntfy.sh's, NTFY-FACTS.md):
-// per visitor, on the mock's clock, token buckets as ntfy implements them, each answering 429 {"code":42901} when
-// empty: requests (every publish, poll and download; a burst of 60, then one every 5 s), messages (250 a day: a burst
-// of 250 refilled evenly over 24 h) and attachment bandwidth (uploads and downloads, 200 MB a day, likewise).
-// state.publishLog lists every accepted publish ({time, topic, visitor, attachment, bytes}) and state.limited every
-// 429 the limits answered ({time, visitor, limit: 'requests' | 'messages' | 'bandwidth', path}).
+// per visitor, on the mock's clock, token buckets as ntfy implements them: requests (every publish, poll and
+// download; a burst of 60, then one every 5 s) and messages (250 a day: a burst of 250 refilled evenly over 24 h),
+// each answering 429 {"code":42901} when empty; and attachment bandwidth (uploads and downloads, 200 MB a day,
+// likewise), where an upload over it answers 413 {"code":41301} as ntfy.sh does (NTFY-FACTS.md: the same answer as for
+// a full attachment store) and a download over it 429 (ntfy's code; not measured).
+// state.publishLog lists every accepted publish ({time, topic, visitor, attachment, bytes, id}), state.downloadLog every
+// attachment download served ({time, visitor, id, bytes}), and state.limited every refusal the limits answered
+// ({time, visitor, limit: 'requests' | 'messages' | 'bandwidth', status: 429 | 413, path}).
 
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
@@ -80,7 +85,7 @@ export function startMockRelay({
   const publishCounts = new Map(); // topic -> publishes so far
   const queued = { downloads: [], publishes: [] }; // control: [{status, topic}]
   let offsetMs = 0;
-  const state = { topics, files, visitors, published: 0, downloads: 0, downloadsById: {}, requests: [], publishLog: [], limited: [] };
+  const state = { topics, files, visitors, published: 0, downloads: 0, downloadsById: {}, requests: [], publishLog: [], downloadLog: [], limited: [] };
   const buckets = new Map(); // `${limit}/${visitor}` -> {tokens, at}
   let base = '';
 
@@ -115,9 +120,9 @@ export function startMockRelay({
   const allowRequest = (v) => take('requests', v, visitorRequestBurst, visitorRequestRefillMs);
   const allowMessage = (v) => take('messages', v, visitorMessagesPerDay, DAY_MS / (visitorMessagesPerDay || 1));
   const allowBytes = (v, n) => take('bandwidth', v, visitorBandwidthPerDay, DAY_MS / (visitorBandwidthPerDay || 1), n);
-  function limited(req, res, v, limit, path) {
-    state.limited.push({ time: nowSec(), visitor: v, limit, path });
-    return drainThenError(req, res, 429);
+  function limited(req, res, v, limit, path, status = 429) {
+    state.limited.push({ time: nowSec(), visitor: v, limit, status, path });
+    return drainThenError(req, res, status);
   }
 
   // Attachment URLs as the asking client can reach them: publicUrl if set, else that request's Host header.
@@ -210,6 +215,7 @@ export function startMockRelay({
     if (forced) return send(res, forced, errorBody(forced));
     if (!f) return send(res, 404, { code: 40401, http: 404, error: 'page not found' });
     state.downloads++;
+    state.downloadLog.push({ time: nowSec(), visitor: v, id: fid, bytes: f.bytes.length });
     cors(res);
     res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': f.bytes.length });
     return res.end(f.bytes);
@@ -230,7 +236,8 @@ export function startMockRelay({
     if (forced) return drainThenError(req, res, forced);
     if (likelyAttachment && !attachments) return drainThenError(req, res, 400, NO_ATTACHMENTS);
     if (!allowMessage(visitor)) return limited(req, res, visitor, 'messages', `/${topic}`);
-    if (likelyAttachment && Number.isFinite(declared) && !allowBytes(visitor, declared)) return limited(req, res, visitor, 'bandwidth', `/${topic}`);
+    // An upload over the daily bandwidth: 413 41301 on ntfy.sh (NTFY-FACTS.md), not 429.
+    if (likelyAttachment && Number.isFinite(declared) && !allowBytes(visitor, declared)) return limited(req, res, visitor, 'bandwidth', `/${topic}`, 413);
     if (likelyAttachment && Number.isFinite(declared)
         && (declared > attachmentMaxBytes || visitorUsed(visitor) + declared > visitorAttachmentTotalBytes)) {
       if (early413) {
@@ -270,7 +277,7 @@ export function startMockRelay({
     list.push(msg);
     topics.set(topic, list);
     state.published++;
-    state.publishLog.push({ time: t, topic, visitor, attachment: !!msg.attachment, bytes: size });
+    state.publishLog.push({ time: t, topic, visitor, attachment: !!msg.attachment, bytes: size, id: msg.id });
     for (const fn of listeners.get(topic) ?? []) fn(msg);
     return send(res, 200, withBase(msg, req));
   }
@@ -300,9 +307,14 @@ export function startMockRelay({
       return handlePublish(req, res, parts[0]);
     }
 
-    if (req.method === 'GET' && parts.length === 2 && TOPIC_RE.test(parts[0]) && (parts[1] === 'json' || parts[1] === 'sse')) {
+    const asked = parts.length === 2 ? parts[0].split(',') : [];
+    if (req.method === 'GET' && asked.length && asked.every((t) => TOPIC_RE.test(t)) && (parts[1] === 'json' || parts[1] === 'sse')) {
       const topic = parts[0];
-      const list = parseSince(url.searchParams.get('since') ?? (url.searchParams.has('poll') ? 'all' : 'none'), topics.get(topic) ?? []);
+      const sinceParam = url.searchParams.get('since') ?? (url.searchParams.has('poll') ? 'all' : 'none');
+      // Several topics: each filtered by the one `since`, then the lines in time order (a stable sort keeps each
+      // topic's stored order within a second).
+      const list = asked.length === 1 ? parseSince(sinceParam, topics.get(topic) ?? [])
+        : asked.flatMap((t) => parseSince(sinceParam, topics.get(t) ?? [])).sort((a, b) => a.time - b.time);
       const sse = parts[1] === 'sse';
       const line = (m0) => { const m = withBase(m0, req); return sse ? `id: ${m.id}\nevent: ${m.event}\ndata: ${JSON.stringify(m)}\n\n` : JSON.stringify(m) + '\n'; };
       cors(res);
@@ -314,11 +326,9 @@ export function startMockRelay({
       res.write(line({ id: newId(), time: nowSec(), event: 'open', topic }));
       for (const m of list) res.write(line(m));
       const fn = (m) => res.write(line(m));
-      const set = listeners.get(topic) ?? new Set();
-      set.add(fn);
-      listeners.set(topic, set);
+      const sets = asked.map((t) => { const set = listeners.get(t) ?? new Set(); set.add(fn); listeners.set(t, set); return set; });
       const ka = setInterval(() => res.write(line({ id: newId(), time: nowSec(), event: 'keepalive', topic })), keepaliveSec * 1000);
-      req.on('close', () => { clearInterval(ka); set.delete(fn); });
+      req.on('close', () => { clearInterval(ka); for (const set of sets) set.delete(fn); });
       return;
     }
 

@@ -12,7 +12,16 @@
 import {
   ShareError, PROTOCOL_VERSION, PURPOSE_ACK, utf8, toHex, sha256, concat, cleanName, nowIso, encryptFrame,
   isSmallFrame, describeRow, webUrl, cleanTitle, safeFileName, formatMB, MAX_URL, X_CAP_VALUES, X_ORIG_MAX,
-  newItemId, normalizeRelay, DEFAULT_RELAY,
+  newItemId, normalizeRelay, DEFAULT_RELAY, randomBytes,
+  returnDevTopic as shareReturnDevTopic, RETURN_KINDS as SHARE_RETURN_KINDS, RETURN_TARGETS_MAX as SHARE_RETURN_TARGETS_MAX,
+  RETURN_TARGET_STALE_MS as SHARE_RETURN_TARGET_STALE_MS, RETURN_SAME_NAME_MS as SHARE_RETURN_SAME_NAME_MS,
+  RETURN_DEVICES_KEPT as SHARE_RETURN_DEVICES_KEPT, RETURN_ACK_IDS as SHARE_RETURN_ACK_IDS,
+  RETURN_DEVICE_FRAMES_PER_DAY as SHARE_RETURN_DEVICE_FRAMES_PER_DAY, RETURN_ACK_GAP_MS as SHARE_RETURN_ACK_GAP_MS,
+  RETURN_IDLE_HELLO_MS as SHARE_RETURN_IDLE_HELLO_MS, RETURN_WANT_READ_MS as SHARE_RETURN_WANT_READ_MS,
+  RETURN_COPY_ATTACH_MS as SHARE_RETURN_COPY_ATTACH_MS, RETURN_COPY_MSG_MS as SHARE_RETURN_COPY_MSG_MS,
+  RETURN_FOLLOW_UP_MS as SHARE_RETURN_FOLLOW_UP_MS, RETURN_FRAMES_PER_DAY as SHARE_RETURN_FRAMES_PER_DAY,
+  RETURN_RESENDS_PER_DEVICE as SHARE_RETURN_RESENDS_PER_DEVICE, RETURN_BYTES_PER_DAY as SHARE_RETURN_BYTES_PER_DAY,
+  RETURN_LIVE_BYTES_MAX as SHARE_RETURN_LIVE_BYTES_MAX, RETURN_PREFIX,
 } from './daylight-share.js';
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1042,15 +1051,23 @@ const sameList = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === 
  * notePolled() last recorded; from: the Inbox's name; autoFlushMs: the delay of the flush after record() (2 s), or
  * null for no timers (tests call flush() themselves); log: (line) => void; buildFrame: buildLabFrame (tests replace it).
  * Rules: frames carry at most 24 states, oldest first, at most one every 30 s; nothing goes while the last poll's acks
- * failed or within an hour of a 429 or 413; at most 30 hellos and state frames a UTC day (digest frames and the
- * lab: 0 frames are outside the cap); a batch that is not small is halved down to one entry, and an entry that still
- * does not fit is dropped; at most 500 pending entries (the oldest go first).
+ * failed or within an hour of a 429 or 413; at most `framesPerDay` hellos and state frames a UTC day (30; the Inbox
+ * passes 18, LAB_FRAMES_PER_DAY_RETURN, while its caps hold `return`: a number, or a function read at each flush;
+ * digest frames and the lab: 0 frames are outside the cap); a batch that is not small is halved down to one entry, and
+ * an entry that still does not fit is dropped; at most 500 pending entries (the oldest go first).
  */
 export class LabInbox {
-  constructor({ storage, relay, keys, info, from = '', now = () => Date.now(), autoFlushMs = LAB_FLUSH_DELAY_MS, log = null, buildFrame = buildLabFrame } = {}) {
+  constructor({ storage, relay, keys, info, from = '', now = () => Date.now(), autoFlushMs = LAB_FLUSH_DELAY_MS, log = null, buildFrame = buildLabFrame, framesPerDay = LAB_FRAMES_PER_DAY } = {}) {
     this.storage = storage; this.relay = relay; this.keys = keys; this.info = info; this.from = from; this.now = now;
     this.autoFlushMs = autoFlushMs; this.log = log ?? (() => {}); this.buildFrame = buildFrame;
+    this.framesPerDay = framesPerDay;
     this._timer = null;
+  }
+
+  /** The day's cap on hellos and state frames (2.2.4): framesPerDay, or what it answers now. */
+  _cap() {
+    const n = typeof this.framesPerDay === 'function' ? this.framesPerDay() : this.framesPerDay;
+    return Number.isFinite(n) && n >= 0 ? n : LAB_FRAMES_PER_DAY;
   }
 
   _lock(fn) { return locked(this.storage, 'lab-inbox', fn); }
@@ -1216,7 +1233,7 @@ export class LabInbox {
       this._schedule(waitMs);
       return none('spacing', { waitMs });
     }
-    if ((kind === 'states' || kind === 'hello') && st.dayCount >= LAB_FRAMES_PER_DAY) { await this._save(st); return none('cap'); }
+    if ((kind === 'states' || kind === 'hello') && st.dayCount >= this._cap()) { await this._save(st); return none('cap'); }
 
     const hello = kind === 'off' ? { ...info, lab: 0, caps: [] } : info;
     let frame = null;
@@ -1266,7 +1283,7 @@ export class LabInbox {
     if (kind === 'hello') this.log(`lab: hello caps=${st.lastInfo.caps.join(',')}${hello.lab === 0 ? ' lab=0' : ''}`);
     else if (kind === 'off') this.log('lab: hello lab=0');
     else this.log(`lab: states n=${batch.length} published`);
-    if (st.on && (st.digest.length || (st.pending.length && st.dayCount < LAB_FRAMES_PER_DAY))) this._schedule(LAB_FRAME_GAP_MS);
+    if (st.on && (st.digest.length || (st.pending.length && st.dayCount < this._cap()))) this._schedule(LAB_FRAME_GAP_MS);
     return { published: 1, kind, states: batch.length, reason: 'sent' };
   }
 
@@ -2005,4 +2022,142 @@ export function diagnosticsReport({ app = '', version = '', platform = '', lab =
     ...(events.length ? events : [D.noEvents]),
   ];
   return redactDiagnostics(lines.join('\n') + '\n');
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// W2 (L2): the return lane (LAB-PROTOCOL 2.4). The lane itself is in daylight-share.js (Sender and Receiver with
+// lane: 'return', and its rules as pure functions); here are the Daylight's devices (2.4.6), the device id (2.4.2),
+// and the lane's names again, so an app can take the return lane's API from this module.
+
+/** Hellos and state frames a day while the return lane runs (the Inbox's hello carries `return`; 2.2.4, 2.2.7). */
+export const LAB_FRAMES_PER_DAY_RETURN = 18;
+export const returnDevTopic = shareReturnDevTopic;
+export const RETURN_KINDS = SHARE_RETURN_KINDS;
+export const RETURN_TARGETS_MAX = SHARE_RETURN_TARGETS_MAX;
+export const RETURN_TARGET_STALE_MS = SHARE_RETURN_TARGET_STALE_MS;
+export const RETURN_SAME_NAME_MS = SHARE_RETURN_SAME_NAME_MS;
+export const RETURN_DEVICES_KEPT = SHARE_RETURN_DEVICES_KEPT;
+export const RETURN_ACK_IDS = SHARE_RETURN_ACK_IDS;
+export const RETURN_DEVICE_FRAMES_PER_DAY = SHARE_RETURN_DEVICE_FRAMES_PER_DAY;
+export const RETURN_ACK_GAP_MS = SHARE_RETURN_ACK_GAP_MS;
+export const RETURN_IDLE_HELLO_MS = SHARE_RETURN_IDLE_HELLO_MS;
+export const RETURN_WANT_READ_MS = SHARE_RETURN_WANT_READ_MS;
+export const RETURN_COPY_ATTACH_MS = SHARE_RETURN_COPY_ATTACH_MS;
+export const RETURN_COPY_MSG_MS = SHARE_RETURN_COPY_MSG_MS;
+export const RETURN_FOLLOW_UP_MS = SHARE_RETURN_FOLLOW_UP_MS;
+export const RETURN_FRAMES_PER_DAY = SHARE_RETURN_FRAMES_PER_DAY;
+export const RETURN_RESENDS_PER_DEVICE = SHARE_RETURN_RESENDS_PER_DEVICE;
+export const RETURN_BYTES_PER_DAY = SHARE_RETURN_BYTES_PER_DAY;
+export const RETURN_LIVE_BYTES_MAX = SHARE_RETURN_LIVE_BYTES_MAX;
+
+const DEVICE_ID_RE = /^[0-9a-f]{16}$/;
+
+/** A new device id (2.4.2): 16 random lowercase hex digits. */
+export function newDeviceId() { return toHex(randomBytes(8)); }
+
+/**
+ * This install's device id (2.4.2), kept under lane/return/devId: read, or made and stored when it is missing or
+ * not 16 lowercase hex digits. applyPairingChange removes it with the rest of the return lane, so a new pairing
+ * secret makes a new one. -> the id.
+ */
+export function returnDeviceId(storage) {
+  return locked(storage, 'return-device-id', async () => {
+    let id;
+    try { id = await storage.get(RETURN_PREFIX + 'devId'); } catch { id = undefined; }
+    if (typeof id === 'string' && DEVICE_ID_RE.test(id)) return id;
+    id = newDeviceId();
+    await storage.set(RETURN_PREFIX + 'devId', id);
+    return id;
+  });
+}
+
+/**
+ * The devices the Daylight hears on returnAckTopic (2.4.6), under lane/return/devices: {dev: {from, first, heard,
+ * rx, want}}, relay times in ms. The return Sender records every device frame here (record) and reads targets,
+ * heard, want and settled from snapshot(now). `now` is the Daylight's clock: its windows are days.
+ */
+export class ReturnDevices {
+  constructor({ storage, now = () => Date.now() } = {}) { this.storage = storage; this.now = now; }
+
+  _lock(fn) { return locked(this.storage, 'return-devices', fn); }
+
+  async _all() {
+    let all;
+    try { all = await this.storage.get(RETURN_PREFIX + 'devices'); } catch { all = null; }
+    return isObject(all) ? all : {};
+  }
+
+  /**
+   * Records one device frame: ack is returnAck(header) (daylight-share.js), time its relay time in seconds. A frame
+   * without a device id counts for no device. -> the device's entry, or null.
+   */
+  record(ack, { time } = {}) {
+    return this._lock(async () => {
+      if (!ack || typeof ack.dev !== 'string' || !DEVICE_ID_RE.test(ack.dev)) return null;
+      const at = Number.isFinite(time) ? Math.round(time * 1000) : this.now();
+      const all = await this._all();
+      const e = isObject(all[ack.dev]) ? { ...all[ack.dev] } : { from: '', first: at, heard: 0, rx: true, want: 0 };
+      e.first = Math.min(e.first, at);
+      if (at >= e.heard) {
+        e.heard = at;
+        e.rx = ack.rx !== false;
+        const from = typeof ack.from === 'string' ? cleanName(ack.from) : '';
+        if (from) e.from = from;
+      }
+      if (ack.want === true) e.want = Math.max(e.want ?? 0, at);
+      all[ack.dev] = e;
+      const devs = Object.keys(all);
+      if (devs.length > RETURN_DEVICES_KEPT) {
+        devs.sort((a, b) => all[a].heard - all[b].heard || (a < b ? -1 : 1));
+        for (const d of devs.slice(0, devs.length - RETURN_DEVICES_KEPT)) delete all[d];
+      }
+      await this.storage.set(RETURN_PREFIX + 'devices', all);
+      return { dev: ack.dev, ...e };
+    });
+  }
+
+  /**
+   * Everything in one read (2.4.6): {devices: [{dev, from, first, heard, rx, want, retired, current, n}] by first
+   * heard, names (the current devices with their n), targets, heard(dev), want(dev), settled(dev)}.
+   */
+  async snapshot(now = this.now()) { return returnDevicesView(await this._all(), now); }
+
+  /** The current devices with their n (the second with a name is n 2: "{name} ({n})", L3's sendBack.sameName). */
+  async list(now = this.now()) { return (await this.snapshot(now)).names; }
+
+  /** A new item's targets: the current devices that did not say x-rx: false, newest heard first, at most 8. */
+  async targets(now = this.now()) { return (await this.snapshot(now)).targets; }
+
+  async heard(dev) { return (await this.snapshot()).heard(dev); }
+
+  async settled(dev, now = this.now()) { return (await this.snapshot(now)).settled(dev); }
+}
+
+/** The 2.4.6 rules over a devices map, as of `now` (ReturnDevices.snapshot; vectors > returnLane > devices). */
+export function returnDevicesView(all, now) {
+  const entries = Object.entries(isObject(all) ? all : {}).filter(([d, e]) => DEVICE_ID_RE.test(d) && isObject(e))
+    .map(([dev, e]) => ({ dev, from: typeof e.from === 'string' ? e.from : '', first: Number(e.first) || 0, heard: Number(e.heard) || 0, rx: e.rx !== false, want: Number(e.want) || 0 }));
+  const retired = (a) => a.from !== '' && entries.some((b) => b.dev !== a.dev && b.from === a.from && b.first > a.heard && now - b.first > RETURN_SAME_NAME_MS);
+  const devices = entries.map((e) => {
+    const r = retired(e);
+    return { ...e, retired: r, current: now - e.heard <= RETURN_TARGET_STALE_MS && !r };
+  }).sort((a, b) => a.first - b.first || (a.dev < b.dev ? -1 : 1));
+  const counts = new Map();
+  const names = [];
+  for (const d of devices) {
+    if (!d.current) continue;
+    const n = (counts.get(d.from) ?? 0) + 1;
+    counts.set(d.from, n);
+    names.push({ dev: d.dev, from: d.from, n });
+  }
+  for (const d of devices) d.n = names.find((x) => x.dev === d.dev)?.n ?? 0;
+  const targets = devices.filter((d) => d.current && d.rx).sort((a, b) => b.heard - a.heard || (a.dev < b.dev ? -1 : 1))
+    .slice(0, RETURN_TARGETS_MAX).map((d) => d.dev);
+  const by = new Map(devices.map((d) => [d.dev, d]));
+  return {
+    devices, names, targets,
+    heard: (dev) => (by.has(dev) ? by.get(dev).heard : null),
+    want: (dev) => (by.has(dev) ? by.get(dev).want : 0),
+    settled: (dev) => (by.has(dev) ? !by.get(dev).rx || by.get(dev).retired : false),
+  };
 }
