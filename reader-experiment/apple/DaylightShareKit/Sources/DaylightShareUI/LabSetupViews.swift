@@ -12,30 +12,39 @@ import AppKit
 
 // MARK: The queue (F07)
 
-/// "Waiting to send ({n})" (F07, Lab on): the rows that wait for the network (shared while offline, or failed for the
-/// network), oldest first, each with Cancel, which removes it. Nothing shows while none waits.
+/// "Waiting to send ({n})" (F07, Lab on): the rows that wait for the network, oldest first, each with Cancel
+/// (`AppModel.delete`: the row goes, and a share in place's upload tasks for it are cancelled). Nothing shows while none
+/// waits.
 public struct QueueSection: View {
     let rows: [OutboxRow]
+    let online: Bool?
     let onCancel: (OutboxRow) -> Void
 
-    public init(rows: [OutboxRow], onCancel: @escaping (OutboxRow) -> Void) {
+    /// `online`: the path monitor's state (`AppModel.online`). While it says offline, rows still `sending` wait too: on
+    /// the iPhone a share in place made offline stays `sending` in its background session until the network is back
+    /// (2.5 rule 2 reads them "Waiting for connection").
+    public init(rows: [OutboxRow], online: Bool?, onCancel: @escaping (OutboxRow) -> Void) {
         self.rows = rows
+        self.online = online
         self.onCancel = onCancel
     }
 
     public static let id = "lab-queue"
     public static func cancelID(_ row: OutboxRow) -> String { "lab-queue-cancel-\(row.id)" }
 
-    /// The rows waiting for the network, oldest first (what the next pass sends first).
-    public static func waiting(_ rows: [OutboxRow]) -> [OutboxRow] {
-        rows.filter { $0.status == .failed && $0.errorCode == "network" }.sorted { $0.created < $1.created }
+    /// The rows waiting for the network, oldest first (what the next pass sends first): shared while offline or failed
+    /// for the network, and, while this device is offline, those still sending (2.5 rule 2's rows).
+    public static func waiting(_ rows: [OutboxRow], online: Bool?) -> [OutboxRow] {
+        rows.filter { r in
+            (r.status == .failed && r.errorCode == "network") || (online == false && r.status == .sending)
+        }.sorted { $0.created < $1.created }
     }
 
     /// "Waiting to send ({n})".
     public static func heading(_ count: Int) -> String { LabText.fill(LabText["queue.heading"], ["n": String(count)]) }
 
     public var body: some View {
-        let waiting = Self.waiting(rows)
+        let waiting = Self.waiting(rows, online: online)
         if !waiting.isEmpty {
             let heading = Self.heading(waiting.count)
             Section {
@@ -120,6 +129,11 @@ public struct SetupCheckView: View {
     @State private var log: [String] = []
     @State private var hints: [String] = []
     @State private var copied = false
+    /// The note under Send a test article when it cannot run (not paired, 1.5: the button is never greyed out).
+    @State private var testNote: String?
+    /// Counts taps on Send a test article: each tap's note is a new view (said again).
+    @State private var testTaps = 0
+    @State private var logShown = false
 
     public init(app: AppModel, lines: [SetupCheckLine], appName: String, version: String,
                 platform: String = LabText.platform) {
@@ -173,8 +187,11 @@ public struct SetupCheckView: View {
                 Button { Task { await sendTest() } } label: {
                     Text(LabText["setup.testSend"]).listRowText(LabText["setup.testSend"])
                 }
-                .disabled(!app.isPaired)
                 .accessibilityIdentifier(Self.testButtonID)
+                if let testNote {
+                    LabNote(testNote, onOK: { self.testNote = nil })
+                        .id(testTaps)
+                }
                 if let p = Self.progress(app.rows.first(where: { $0.id == testID }), lab: lab) {
                     Text(p.label).dlsFont(.footnote).dlsSecondary().listRowText(p.label)
                     ForEach(p.lines, id: \.self) { l in Text(l).listRowText(l) }
@@ -183,19 +200,32 @@ public struct SetupCheckView: View {
                 Text(LabText["setup.testFooter"]).dlsFont(.footnote).listRowText(LabText["setup.testFooter"])
             }
             Section {
-                DisclosureGroup {
+                DisclosureGroup(isExpanded: Binding(get: { logShown }, set: { shown in
+                    testNote = nil
+                    logShown = shown
+                })) {
                     ActivityLogView(lines: log)
                 } label: {
                     Text(LabText["setup.activity"]).listRowText(LabText["setup.activity"])
                 }
                 let copy = copied ? LabText["setup.copied"] : LabText["setup.copyDiagnostics"]
-                Button { Task { await copyDiagnostics() } } label: { Text(copy).listRowText(copy) }
+                Button {
+                    testNote = nil
+                    Task { await copyDiagnostics() }
+                } label: { Text(copy).listRowText(copy) }
                     .accessibilityIdentifier(Self.copyID)
             }
         }
         .navigationTitle(LabText["setup.title"])
         .task { await reload() }
         .onChange(of: app.rows) { _ in Task { await reloadLog() } }
+        .onDisappear { testNote = nil }
+    }
+
+    /// What a tap on Send a test article does when it cannot send (1.5): the one sentence to show under it, or nil to
+    /// send. Not paired: `needs-pairing`'s sentence.
+    public static func testArticleNote(paired: Bool, platform: String = LabText.platform) -> String? {
+        paired ? nil : LabText.needsMessage("needs-pairing", platform: platform)
     }
 
     @ViewBuilder private func lineView(_ line: SetupCheckLine) -> some View {
@@ -203,11 +233,15 @@ public struct SetupCheckView: View {
             Text(line.text).listRowText(line.text)
             if !line.ok {
                 if let button = line.button, let action = line.action {
-                    Button(action: action) { Text(button).wrapping(button).comfortTarget() }
+                    Button {
+                        testNote = nil
+                        action()
+                    } label: { Text(button).wrapping(button).comfortTarget() }
                         .buttonStyle(.bordered)
                         .comfortBorder()
                 } else if line.steps != nil {
                     Button {
+                        testNote = nil
                         if stepsShown.contains(line.id) { stepsShown.remove(line.id) } else { stepsShown.insert(line.id) }
                     } label: {
                         Text(LabText["setup.showSteps"]).wrapping(LabText["setup.showSteps"]).comfortTarget()
@@ -242,6 +276,13 @@ public struct SetupCheckView: View {
     }
 
     private func sendTest() async {
+        // A new note for each tap (said again); none when it can send.
+        testTaps += 1
+        testNote = nil
+        if let note = Self.testArticleNote(paired: app.isPaired, platform: platform) {
+            testNote = note
+            return
+        }
         if let row = await app.sendTestArticle() { testID = row.id }
         await reloadLog()
     }

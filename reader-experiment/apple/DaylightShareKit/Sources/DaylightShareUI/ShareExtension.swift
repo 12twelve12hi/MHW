@@ -302,6 +302,9 @@ public final class ShareExtensionModel: ObservableObject {
     var noticeCenter: NoticeCenter?
     /// Tests: the URL session what this card sends reaches the relay with (a stand-in's); nil: the default.
     var relaySession: URLSession?
+    /// Whether this device is online now (F07: false offline, nil not known), asked once before a Lab share that this
+    /// card sends itself; tests give their own. The system's: `SystemPathSource.current()`.
+    var pathCheck: () async -> Bool? = ShareExtensionModel.systemPath
     /// A file was refused as over 9 MB: with Lab on and `labFeatures.bigFilesEntry`, the result shows the F02 entry point
     /// under v1.1's too-big sentence (`showsBigFilesEntry`).
     @Published public internal(set) var refusedTooBig = false
@@ -466,8 +469,20 @@ public final class ShareExtensionModel: ObservableObject {
         }
     }
 
+    /// The system's answer for `pathCheck`.
+    nonisolated static func systemPath() async -> Bool? {
+        #if canImport(Network)
+        return await SystemPathSource.current()
+        #else
+        return nil
+        #endif
+    }
+
     /// Sends the shared items in this extension and reports how it went (v1.1's card). `prepared`: the items share in
-    /// place's card chose (F04 without a background session: the ad-hoc Mac), in place of the payloads, with `preparedNote`.
+    /// place's card chose (F04 without a background session: the ad-hoc Mac, or F04's Use switch off), in place of the
+    /// payloads, with `preparedNote`. With a Lab path (smart intake or the share-in-place card) and this device offline,
+    /// the items wait for the connection (F07: stored, not tried) and the card says "Waiting for connection" with its
+    /// sentence (2.5, F07.1), not v1.1's failure.
     func send(prepared: [Result<ItemInput, Error>]? = nil, preparedNote: String? = nil) async {
         let store = self.store
         let session = relaySession
@@ -480,8 +495,12 @@ public final class ShareExtensionModel: ObservableObject {
         var problems: [(title: String, message: String)] = []
         var tooBig = false
         var sent: [OutboxRow] = []
+        var waiting: [OutboxRow] = []
         let labPaths = lab && labFeatures.smartIntake
         var labNotes: [String] = preparedNote.map { [$0] } ?? []
+        // F07: with Lab's paths, a share made offline waits for the connection.
+        var offline = false
+        if lab && (labPaths || prepared != nil) { offline = await pathCheck() == false }
         let work: [Result<ItemInput, Error>?] = prepared?.map { Optional($0) } ?? payloads.map { _ in nil }
         for (k, item) in work.enumerated() {
             do {
@@ -496,10 +515,12 @@ public final class ShareExtensionModel: ObservableObject {
                     let payload = payloads[k]
                     input = try await AppModel.onStorage { Result { try Self.input(for: payload) } }.get()
                 }
-                let row = try await sender.send(input)
+                let row = try await sender.send(input, defer: offline)
                 if row.status != .sent && row.status != .delivered {
-                    let text = RowText(row: row)
+                    // Offline with Lab: 2.5 rule 2's "Waiting for connection" (the row reads so in the app too).
+                    let text = LabRowText(row: row, ctx: LabRowText.Context(lab: offline, online: offline ? false : nil))
                     problems.append((text.label, text.sentence ?? ""))
+                    if offline { waiting.append(row) }
                 } else {
                     sent.append(row)
                 }
@@ -510,12 +531,14 @@ public final class ShareExtensionModel: ObservableObject {
         }
         cleanUpTemporaryFiles()
         refusedTooBig = tooBig
-        if lab && (labPaths || prepared != nil) && !sent.isEmpty {
+        if lab && (labPaths || prepared != nil) && !(sent.isEmpty && waiting.isEmpty) {
             // F26: Setup check's "Daylight in the share sheet", and the activity log.
             let rows = sent
+            let deferred = waiting
             await AppModel.onStorage {
                 LabPreferences(store: store).shareSheetUsed = true
                 ActivityLog(store: store).add(type: "send", rows: rows)
+                ActivityLog(store: store).add(type: "defer", rows: deferred)
             }
         }
         if labPaths || prepared != nil {

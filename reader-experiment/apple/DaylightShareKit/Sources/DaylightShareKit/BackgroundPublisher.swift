@@ -30,11 +30,15 @@ public typealias BackgroundAnswer = @Sendable (_ description: String, _ status: 
 ///   `BackgroundUploadSession.connect` keeps one session object per identifier in a process.
 /// - **The extension hears its own answers** while it still runs (a link's POST is usually answered within a second of
 ///   the card closing): the row becomes `sent` or `failed`, the frame files go and the failure notice is posted there.
-/// - **The app hears the rest.** iPhone: the OS wakes it for a session whose extension has gone
-///   (`handleEventsForBackgroundURLSession`, `handleEvents(identifier:…)`), the only time it connects to one. Mac: the app
-///   is never woken for them, so it takes over a session once its share is `adoptAfter` (15 minutes) old, by which time
-///   the extension that started it has ended (`adoptable`, `AppModel.refresh`); until then the share extension's process
-///   hears the answers.
+/// - **The app hears the rest.** It takes over a session once its share is `adoptAfter` (15 minutes) old, by which time
+///   the extension that started it has ended (`adoptable`, `AppModel.refresh`, iPhone and Mac alike): its answers come to
+///   the app from then on, and its live tasks keep the row from going stale, so the app never re-sends what the OS is
+///   still uploading. The iPhone app is also woken for a session whose extension has gone
+///   (`handleEventsForBackgroundURLSession`, `handleEvents(identifier:…)`); the Mac app never is. Until then the share
+///   extension's process hears the answers.
+/// - **Rows that go take their uploads with them.** Remove, Unpair and a pairing with another secret cancel the tasks of
+///   the rows they remove (`cancelUploads`, connecting to the session when this process holds none) and delete their
+///   frame files (`OutboxStore`), so nothing of them reaches the Daylight afterwards.
 ///
 /// What an answer does:
 /// - All parts 2xx: the row is `sent`. ntfy.sh dates an attachment from its upload, and the parts can finish hours
@@ -44,7 +48,8 @@ public typealias BackgroundAnswer = @Sendable (_ description: String, _ status: 
 /// - Any other answer: the row is `failed` or `expired` exactly as v1.1's attempt would leave it (PROTOCOL 3.1:
 ///   429 `network`, 413 `full`, another 4xx `refused`, 408, 5xx or no answer `network`), the attempt's other tasks are
 ///   cancelled (in place of "later frames are not published"), and the failure notice is posted (`FailureNotices`).
-/// - An answer for an attempt the row no longer waits for (the app re-sent it, it was removed) is ignored.
+/// - An answer for an attempt the row no longer waits for (the app re-sent it, it was removed, it was delivered) changes
+///   no row; the attempt's other tasks for that item are cancelled and its frame files deleted.
 ///
 /// Re-sends run in the app as today (`ShareSender`), from the stored body. A `sending` row whose attempt has live tasks
 /// in a session this process holds is not stale (`liveAttempts(waiting:)`, once per tick); otherwise v1.1's 15 minutes
@@ -56,8 +61,8 @@ public final class BackgroundPublisher {
     public static let folder = "bg"
     /// A row whose last part came this long after its first is re-sent at once (part 0 may have expired: 180 min).
     public static let partsApartLimit: TimeInterval = 170 * 60
-    /// The Mac app takes over a share's session once the share is this old (v1.1's stale time): the extension process
-    /// that started it has ended by then, so no two processes use one session.
+    /// The app (iPhone and Mac) takes over a share's session once the share is this old (v1.1's stale time): the
+    /// extension process that started it has ended by then, so no two processes use one session.
     public static let adoptAfter: TimeInterval = DLS.sendingStale
 
     /// A new attempt id (a lowercased UUID): one per share in place, shared by its rows, and its session's name.
@@ -79,7 +84,7 @@ public final class BackgroundPublisher {
         Set(rows.compactMap { $0.status == .sending ? $0.bgAttempt : nil })
     }
 
-    /// The Mac app's take-overs (`adoptAfter`): the attempts of `sending` rows whose share is at least 15 minutes old.
+    /// The app's take-overs (`adoptAfter`): the attempts of `sending` rows whose share is at least 15 minutes old.
     public static func adoptable(_ rows: [OutboxRow], now: Date) -> Set<String> {
         Set(rows.compactMap { r in
             guard r.status == .sending, let a = r.bgAttempt, now.timeIntervalSince(r.created) >= adoptAfter else { return nil }
@@ -104,7 +109,7 @@ public final class BackgroundPublisher {
         self.daylightName = daylightName
     }
 
-    public var framesDirectory: URL { outbox.directory.appendingPathComponent(Self.folder, isDirectory: true) }
+    public var framesDirectory: URL { outbox.framesURL }
 
     // MARK: Starting (the share extension)
 
@@ -211,16 +216,24 @@ public final class BackgroundPublisher {
     }
 
     /// One upload task's answer: `status` is its HTTP status (nil when there was none), `error` the task's error. A
-    /// cancelled task (this publisher cancelled it) is ignored. Touches storage: off the main thread.
+    /// cancelled task (this publisher cancelled it) is ignored. An answer for an attempt the row no longer waits for
+    /// (removed, re-sent by the app, delivered) changes no row: the attempt's other tasks for the item are cancelled and
+    /// its frame files deleted. Touches storage: off the main thread.
     @discardableResult
     public func complete(description: String, status: Int?, error: Error?) async -> Outcome {
         guard let d = Self.parse(description) else { return .ignored }
         if let e = error as NSError?, e.domain == NSURLErrorDomain, e.code == NSURLErrorCancelled { return .ignored }
         let failure = Self.failure(status: status, error: error)
         let t = now()
+        // A row still sending for another background attempt keeps its frame files (only `start` gives a row an attempt,
+        // so this is a stray answer).
+        var framesInUse = false
         let outcome: Outcome = outbox.update { state -> Outcome in
             guard let i = state.rows.firstIndex(where: { $0.id == d.id }), state.rows[i].status == .sending,
-                  state.rows[i].bgAttempt == d.attempt else { return .ignored }
+                  state.rows[i].bgAttempt == d.attempt else {
+                if let r = state.rows.first(where: { $0.id == d.id }), r.status == .sending, r.bgAttempt != nil { framesInUse = true }
+                return .ignored
+            }
             var row = state.rows[i]
             if let failure {
                 let code = ["network", "full", "refused"].contains(failure.code) ? failure.code : "network"
@@ -260,7 +273,11 @@ public final class BackgroundPublisher {
             return .sent(row)
         }
         switch outcome {
-        case .ignored, .partSent:
+        case .ignored:
+            // Nothing waits for this attempt of the item any more: what is left of it would only publish again.
+            await uploads.cancel { desc in Self.parse(desc).map { $0.id == d.id && $0.attempt == d.attempt } ?? false }
+            if !framesInUse { removeFrames(d.id) }
+        case .partSent:
             break
         case .sent:
             removeFrames(d.id)
@@ -291,16 +308,72 @@ public final class BackgroundPublisher {
     }
 
     /// What a session does with each answer it hears: `complete` on `store`'s outbox once storage is settled, cancelling
-    /// through the session in `box` (the one that heard it), with `notices` for the failure notice.
+    /// through the session in `box` (the one that heard it), with `notices` for the failure notice. With Lab on, a row
+    /// the answer ends ("sent", "failed" or "expired", with its `http`) goes into Setup check's activity log (F26), as
+    /// the extension logs the status changes it sees.
     public static func answers(store: SharedStore, notices: FailureNotices?, daylightName: @escaping @Sendable () -> String?,
                                box: SessionBox) -> BackgroundAnswer {
         { description, status, error in
             await store.ready()
             guard let uploads = box.session else { return }
-            let publisher = BackgroundPublisher(outbox: OutboxStore(store: store), uploads: uploads, notices: notices,
-                                                daylightName: daylightName)
-            _ = await publisher.complete(description: description, status: status, error: error)
+            let outbox = OutboxStore(store: store)
+            let publisher = BackgroundPublisher(outbox: outbox, uploads: uploads, notices: notices, daylightName: daylightName)
+            let outcome = await publisher.complete(description: description, status: status, error: error)
+            switch outcome {
+            case let .sent(row), let .failed(row):
+                if LabSettings.isOn(store: store) { ActivityLog(outbox: outbox).add(type: row.status.rawValue, row: row) }
+            case .ignored, .partSent:
+                break
+            }
         }
+    }
+
+    /// Cancels the upload tasks of rows that went (Remove, Unpair, a pairing with another secret: LAB-PLAN F07's Cancel,
+    /// 2.6): `gone` maps each attempt to the item ids whose tasks go (nil: every task of the attempt), so nothing of them
+    /// reaches the Daylight afterwards. The apps' default goes through the system's sessions
+    /// (`BackgroundUploadSession.cancel`), connecting to one this process does not hold yet (the share extension that
+    /// started it is gone once the user is in the app; were it still running, the row it would answer for is gone too).
+    /// Tests swap it; nil (no background sessions on this platform) does nothing.
+    #if canImport(ObjectiveC)
+    public static var cancelUploads: CancelUploads? = { gone, store, notices in
+        await BackgroundUploadSession.cancel(gone, store: store, notices: notices)
+    }
+    #else
+    public static var cancelUploads: CancelUploads?
+    #endif
+
+    /// What cancels removed rows' uploads (`cancelUploads`).
+    public typealias CancelUploads = (_ gone: [String: Set<String>?], _ store: SharedStore, _ notices: FailureNotices?) async -> Void
+
+    /// What `cancelUploads` gets for removed rows: each background attempt with the ids of its removed rows (`all`: the
+    /// whole attempt, for a pairing change, which removes every row).
+    public static func gone(_ rows: [OutboxRow], all: Bool = false) -> [String: Set<String>?] {
+        var out: [String: Set<String>?] = [:]
+        for r in rows {
+            guard let a = r.bgAttempt else { continue }
+            if all {
+                out[a] = .some(nil)
+            } else {
+                var ids = (out[a] ?? nil) ?? []
+                ids.insert(r.id)
+                out[a] = .some(ids)
+            }
+        }
+        return out
+    }
+
+    /// Cancels the tasks of `gone` (`cancelUploads`); nothing when there are none.
+    public static func cancel(_ gone: [String: Set<String>?], store: SharedStore, notices: FailureNotices? = nil) async {
+        guard !gone.isEmpty, let run = cancelUploads else { return }
+        await run(gone, store, notices)
+    }
+
+    /// The app's take-overs (`adoptable`) in `registry`: makes a session (`make`) for each attempt this process does not
+    /// hold yet, and returns the attempts it made one for just now (their tasks are not known on this tick, so their rows
+    /// are not stale on it). One already held is left as it is: its own live tasks count from then on.
+    static func adopt<S: AnyObject>(_ attempts: Set<String>, in registry: BackgroundSessionRegistry<S>,
+                                    make: (String) -> S) -> Set<String> {
+        Set(attempts.filter { a in registry.session(sessionIdentifier(attempt: a)) { make(a) }.made })
     }
 
     /// The attempts with live tasks in the sessions of `registry` (this process's), for
@@ -405,6 +478,39 @@ public final class BackgroundUploadSession: NSObject, BackgroundUploads, URLSess
                         onAnswer: BackgroundPublisher.answers(store: store, notices: notices, daylightName: daylightName, box: box))
         box.session = s
         return s
+    }
+
+    /// The app's take-overs (iPhone and Mac, `BackgroundPublisher.adoptable`): connects to the session of each attempt
+    /// this process does not hold yet, so its answers come here and its live tasks count. Returns the attempts connected
+    /// just now (their rows are not stale on this tick: the session reports its tasks a moment later).
+    public static func adopt(_ attempts: Set<String>, store: SharedStore, notices: FailureNotices?,
+                             daylightName: @escaping @Sendable () -> String?) -> Set<String> {
+        BackgroundPublisher.adopt(attempts, in: registry) { attempt in
+            let box = BackgroundPublisher.SessionBox()
+            let s = BackgroundUploadSession(identifier: BackgroundPublisher.sessionIdentifier(attempt: attempt),
+                                            appGroup: store.appGroup, finish: nil,
+                                            onAnswer: BackgroundPublisher.answers(store: store, notices: notices,
+                                                                                  daylightName: daylightName, box: box))
+            box.session = s
+            return s
+        }
+    }
+
+    /// `BackgroundPublisher.cancelUploads` on the system's sessions: for each attempt, this process's session (connected
+    /// now when it holds none), whose tasks for the gone items are cancelled; a whole attempt's session is cancelled and
+    /// let go. The cancelled tasks' answers are ignored (`complete`).
+    public static func cancel(_ gone: [String: Set<String>?], store: SharedStore, notices: FailureNotices?) async {
+        for (attempt, ids) in gone {
+            let identifier = BackgroundPublisher.sessionIdentifier(attempt: attempt)
+            let session = connect(attempt: attempt, store: store, notices: notices,
+                                  daylightName: { store.pairing?.displayName })
+            if let ids {
+                await session.cancel { desc in BackgroundPublisher.parse(desc).map { ids.contains($0.id) } ?? false }
+            } else {
+                await session.cancel { _ in true }
+                if registry.remove(identifier, session) { session.release() }
+            }
+        }
     }
 
     /// The attempts with live tasks in the sessions this process holds; lets go of the sessions whose attempt the outbox

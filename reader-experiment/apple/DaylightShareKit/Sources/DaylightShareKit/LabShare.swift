@@ -164,6 +164,41 @@ public enum LabShare {
         }
     }
 
+    /// An address typed on its own (F16, the apps' link field): the text when it passes the web URL rule, or https://
+    /// added to "example.com/story" (a host with a dot, an optional port, then a path, query or fragment), as the web
+    /// sender's and the extension's `typedUrl`. It never looks for a URL inside text. nil otherwise.
+    public static func typedURL(_ text: String) -> String? {
+        let s = JSText.trim(text)
+        guard !s.isEmpty else { return nil }
+        if let u = ShareText.webURL(s) { return u }
+        guard s.range(of: #"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+(:[0-9]+)?([/?#]\S*)?$"#, options: .regularExpression) != nil
+        else { return nil }
+        return ShareText.webURL("https://" + s)
+    }
+
+    /// A link from the app's own entry points with Lab on (F16, "every app uses it at every entry point"): the iPhone's
+    /// and Mac's Send a link field, the Mac's Send copied link, its drops, a `.webloc` and a link the app was opened with.
+    /// - `given` (a drop, a shortcut file, a link the app was opened with): a URL handed over as one goes as given when it
+    ///   passes the web URL rule (normaliseShare's `url`), cleaned, as the share sheet sends a link given as one.
+    /// - Otherwise it is typed or pasted text, read as the extension's `typedLinkItem` reads the omnibox: an address on its
+    ///   own gets https:// first ("example.com/story" stays a link, `typedURL`), then the whole goes to normaliseShare as
+    ///   text, so trailing punctuation and an unbalanced ")" are not part of the URL and the words around it are the
+    ///   title.
+    /// Tracking parameters go and redirectors are unwrapped unless F16's Use switch is off (`clean`); `x-orig` when that
+    /// changed the URL; an Apple News link is resolved once (`fetch`). `title`: the title to send (it wins over the
+    /// text's words). nil when there is no web address: typed text without a link is not a note here (the app says
+    /// "That isn’t a web address.", as v1.1).
+    public static func typedLink(_ text: String, title: String? = nil, given: Bool = false, clean: Bool,
+                                 fetch: @escaping ShareNormaliser.PageFetch = ShareNormaliser.ephemeralFetch) async -> ItemInput? {
+        if given, let u = ShareText.webURL(JSText.trim(text)) {
+            return await linkInput(url: u, title: title, text: nil, clean: clean, fetch: fetch)
+        }
+        let typed = typedURL(text) ?? text
+        let r = ShareNormaliser.normalise(text: typed, subject: title ?? "", clean: clean)
+        guard r.kind == .link, let u = r.url else { return nil }
+        return await linkInput(url: u, title: r.title ?? title, text: nil, clean: clean, fetch: fetch).withOrig(r.orig)
+    }
+
     /// The copied link (F33) as it would be sent, with its host for "Send {host} to {name}?": read through
     /// `normaliseShare` (cleaned unless F16's Use switch is off, `x-orig` when that changed it). nil when the clipboard
     /// holds no web link, or text that is not just a link.

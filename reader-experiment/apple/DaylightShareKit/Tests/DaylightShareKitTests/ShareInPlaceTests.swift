@@ -60,6 +60,7 @@ final class ShareInPlaceTests: XCTestCase {
         center.authorized = true
         model.noticeCenter = center
         model.pageFetch = { _ in nil }
+        model.pathCheck = { true }
         return (model, store, uploads)
     }
 
@@ -393,6 +394,39 @@ final class ShareInPlaceTests: XCTestCase {
         let selected = SharePayload.page(html: "<html></html>", url: "https://example.com/p", title: "P", lab: PageCapture.read(lab))
         let excerpt = try await plain.labInput(for: selected)
         XCTAssertEqual(excerpt.input.extras["x-cap"], "excerpt", "a Safari selection is an excerpt")
+    }
+
+    /// F07.1 (review finding 5): a Lab share the card sends itself (F04's Use switch off here, as on the ad-hoc Mac)
+    /// waits for the connection while this device is offline: stored, not tried, and the card says "Waiting for
+    /// connection" with its sentence, not v1.1's failure. With Lab off the card is v1.1's.
+    @MainActor
+    func testOfflineTheCardSaysWaitingForConnection() async throws {
+        let (model, store, uploads) = try await makeModel(prefs: { p in p.setUse("F04", false) })
+        model.pathCheck = { false }
+        model.start(inputItems: [linkItem("https://example.com/offline")])
+        try await waitFor("the card") { model.phase == .card }
+        await model.sendFromCard()
+        guard case let .result(title, message) = model.phase else { return XCTFail("\(model.phase)") }
+        XCTAssertEqual(title, "Waiting for connection")
+        XCTAssertEqual(message, "It will send when this device is back online.")
+        XCTAssertTrue(uploads.started.isEmpty)
+        XCTAssertEqual(FakeRelay.with { $0.answeredPublishes }, 0, "nothing is tried while offline")
+        let stored = await rows(store)
+        XCTAssertEqual(stored.count, 1)
+        XCTAssertEqual(stored.first?.status, .failed)
+        XCTAssertEqual(stored.first?.errorCode, "network")
+        XCTAssertEqual(stored.first?.attempts, 0)
+        let logged = await AppModel.onStorage { ActivityLog(store: store).events.map(\.type) }
+        XCTAssertEqual(logged, ["defer"])
+
+        let (off, offStore, _) = try await makeModel(lab: false)
+        off.pathCheck = { false }
+        off.start(inputItems: [linkItem("https://example.com/lab-off")])
+        try await waitFor("v1.1's card") {
+            if case .sent = off.phase { return true } else { return false }
+        }
+        let offRows = await rows(offStore)
+        XCTAssertEqual(offRows.first?.status, .sent, "Lab off sends as v1.1 does")
     }
 
     /// Cancel stops the countdown: nothing goes after it, not even a late Send (review finding 10).

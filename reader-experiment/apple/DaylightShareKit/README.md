@@ -89,11 +89,11 @@ unchanged; A3 added no sample cases).
 | `SetupCheck.swift` | F26: `testArticle(id:device:)` (`x-cap: "test"`, `https://daylight.invalid/test/<id>`), `redact` (`redactDiagnostics`), `ActivityEvent` (with `http`), `diagnosticsReport`. |
 | `ActivityLog.swift` | The activity log (`lab-activity.json` beside the outbox, last 200 events; removed with the pairing's files). |
 | `LabPreferences.swift` | The Use switches (`dls.labUse.<id>`, missing = on; `inUse(_:)` = Lab on and the switch on) and each W1 setting: Always show Options, Tell me when a send fails / it's in my Reader, quick sends, Review before sending, the once-only lines, Send as per site (500 hosts), `shareSheetUsed`, `testArticleID`. Moved into the App Group with the other device settings. |
-| `LabShare.swift` | How a Lab share becomes an item: `PageCapture` (GetPage.js's `lab` object), `LabShare.pageInput` (Page as you see it → `x-cap: "seen"`, Clean article → `"clean"`, Link only, Selection → excerpt), `linkInput` / `textInput` (F16 with `x-orig`), `excerptInput`, `copiedLink` (F33, with its host), `defaultMode`, `thinText`, `reviewStats`. |
+| `LabShare.swift` | How a Lab share becomes an item: `PageCapture` (GetPage.js's `lab` object), `LabShare.pageInput` (Page as you see it → `x-cap: "seen"`, Clean article → `"clean"`, Link only, Selection → excerpt), `linkInput` / `textInput` (F16 with `x-orig`), `typedLink` (the apps' own entry points: typed text by the text rules, "example.com/story" still a link, a given URL as given; no note), `excerptInput`, `copiedLink` (F33, with its host), `defaultMode`, `thinText`, `reviewStats`. |
 | `Sender.swift` (changes) | `send(_:compress:defer:)` (F07: stored as failed/network, "Waiting for connection"), `flushNetwork(maxFrames:maxAttachmentBytes:)` (30 frames, 18 MB, oldest first, a 413 stops the pass's attachments), `OutboxRow.http`, `liveBackgroundAttempts` (a row in a background upload is not stale). |
-| `OfflineQueue.swift` | F07: `OfflineQueue` (an actor) on a `NetworkPathSource` (`SystemPathSource` = `NWPathMonitor`): defers while offline; a pass (≥ 3 min apart) when the device comes back online, when what waits was shared offline and never tried, or when v1.1's back-off says the oldest row is due, never on its own clock against that back-off (a 429 or 5xx keeps its 1–60 min); the next pass at once only after one that stopped at a cap with nothing failed. Reports the path to the app (`onPath`). |
+| `OfflineQueue.swift` | F07: `OfflineQueue` (an actor) on a `NetworkPathSource` (`SystemPathSource` = `NWPathMonitor`; `SystemPathSource.current()` for a share extension's one-off question): defers while offline; a pass (≥ 3 min apart) when the device comes back online, when what waits was shared offline and never tried, or when v1.1's back-off says the oldest row is due, never on its own clock against that back-off (a 429 or 5xx keeps its 1–60 min); the next pass at once only after one that stopped at a cap with nothing failed. Reports the path to the app (`onPath`). |
 | `FrameFileBuilder.swift` | F04: an item's frames written to files in two passes from a file read in 64 KiB pieces (never all of it in memory), equal byte for byte to `ItemBuilder`'s. |
-| `BackgroundPublisher.swift` | F04: `start(_:file:pairing:attempt:…)` builds the frames and starts background uploads (task label `<id>:<part>:<attempt>`); `complete(description:status:error:)` reads each answer (parts may finish up to 170 min apart; stale answers are ignored). **One session per share:** "com.daylight.share.bg.<attempt>" (Apple: one process per background session), one object per identifier in a process (`BackgroundUploadSession.connect`); whichever process holds it hears its answers (`answers`: the row, the frame files, the notice): the share extension while it runs, the iPhone app when the OS wakes it for the session (`handleEvents`), the Mac app once the share is 15 min old (`adoptable`). `BackgroundUploadSession.liveAttempts(waiting:)` keeps rows with live tasks from going stale and lets go of finished sessions. |
+| `BackgroundPublisher.swift` | F04: `start(_:file:pairing:attempt:…)` builds the frames and starts background uploads (task label `<id>:<part>:<attempt>`); `complete(description:status:error:)` reads each answer (parts may finish up to 170 min apart; stale answers are ignored). **One session per share:** "com.daylight.share.bg.<attempt>" (Apple: one process per background session), one object per identifier in a process (`BackgroundUploadSession.connect`); whichever process holds it hears its answers (`answers`: the row, the frame files, the notice, and with Lab on the activity log's "sent"/"failed" with its http): the share extension while it runs, the iPhone app when the OS wakes it for the session (`handleEvents`), and the app (iPhone and Mac) once the share is 15 min old (`adoptable`, `BackgroundUploadSession.adopt`, once per session). `BackgroundUploadSession.liveAttempts(waiting:)` keeps rows with live tasks from going stale (so nothing the OS still uploads is sent again) and lets go of finished sessions. An answer nothing waits for (removed, re-sent, delivered) cancels the rest of its item and deletes its frame files. **Rows that go take their uploads with them:** Remove (`AppModel.delete`), Unpair and a pairing with another secret (`SharedStore.pair`/`unpair`) cancel their tasks (`BackgroundPublisher.cancelUploads`, connecting to the session when this process holds none); `OutboxStore` deletes frame files with bodies (Remove, Clear, the 200-row trim; a pairing change empties `bg/`). |
 | `FailureNotices.swift` | F04's notices: "Couldn't send ‘{title}’ to {name}" (not for the network), the quiet "In your Reader ✓: {title}" (opt-in), `askIfNeeded()` (once, in the app, after a share in place), `localCheck()` → `needs-notifications`. |
 | `Frame.swift` (changes) | `ItemInput.extras` → header extras on part 0; `x-orig` is left out when it alone would make part 0 a large frame. |
 
@@ -108,7 +108,9 @@ unchanged; A3 added no sample cases).
   too-big sentence, `BigFilesEntry`, which runs the F02 gate). F11's "Excerpts wait for a tap on your Daylight for
   now." shows once, after the first excerpt or note, and keeps the card open until Done. F10's Use switch off keeps a
   Safari selection as an excerpt; a page sent without the card takes F10's default (selection, the site's mode).
-  Cancel stops the countdown. Lab off ignores all of them.
+  Cancel stops the countdown. A Lab share the card sends itself (the ad-hoc Mac, F04's Use switch off) waits while
+  this device is offline (`pathCheck`, F07) and the card says "Waiting for connection" with its sentence. Lab off
+  ignores all of them.
 - **Share in place** (`ShareInPlace.swift`): `ShareInPlaceCardView` ("Sending to {name}", Options for 1.5 s, then it
   sends), `OptionsSheet` (Send as with the thin check, Send as excerpt, Send the link instead), `ReviewView` (the page
   with JavaScript off and in grey, words and size, an editable title). No countdown with Comfort, VoiceOver or Switch
@@ -121,12 +123,24 @@ unchanged; A3 added no sample cases).
   `isVisible`, Lab is on and a row delivered in the last 10 minutes has no settled state, it reads the ack topic, so
   "In your Reader ✓" comes within one check (F01.1). `AppModel` announces "In your Reader ✓, {title}" when the ledger
   confirms `reader` (`Announcer.readerChanges`) and passes them to `AppModel.notices` when set.
-- **The queue** (F07): `QueueSection(rows:onCancel:)` ("Waiting to send ({n})", Cancel). The app calls
+- **The queue** (F07): `QueueSection(rows:online:onCancel:)` ("Waiting to send ({n})", Cancel = `AppModel.delete`,
+  which also cancels a share in place's uploads): rows that failed for the network, and while `online` is false the
+  rows still `sending` (the iPhone's share in place made offline). The app calls
   `AppModel.startOfflineQueue(path: SystemPathSource())` once, at launch; with Lab on, `AppModel.send` defers while
-  offline, and `AppModel.refresh()` (launch, foreground, background refresh) sends what was shared offline.
+  offline and its banner says "Waiting for connection. It will send when this device is back online." (the row's Lab
+  words, F07.1), and `AppModel.refresh()` (launch, foreground, background refresh) sends what was shared offline.
 - **Setup check** (F26): `SetupCheckView(app:lines:appName:version:)` with the app's `SetupCheckLine`s (each unmet one
   with its button or Show steps), Send a test article (`AppModel.sendTestArticle()`; ticks Delivered and In your
-  Reader), `ActivityLogView`, Copy diagnostics (`AppModel.diagnostics`, redacted).
+  Reader; never greyed out: not paired, a tap shows the needs-pairing sentence under it), `ActivityLogView` (sends,
+  deferrals, flushes, the background answers, and each status change or re-send a refresh or a faster check makes,
+  with its http), Copy diagnostics (`AppModel.diagnostics`, redacted).
+- **Smart intake at the app's own entry points** (F16): with Lab on, `AppModel.sendLink(_:title:given:)` (the link
+  field, the Mac's Send copied link and drops), `handleOpen` (web links) and a `.webloc`/`.url` file go through
+  `LabShare.typedLink`; with Lab off they are v1.1's. `given: true` for a URL handed over as one (a drop), so it goes
+  as given.
+- **The F02 entry point in the apps** (F02e): a file refused as over 9 MB (a picked, dropped or opened file) shows a
+  banner with `Banner.tooBig`; `BannerView(banner:lab:)` puts `BigFilesEntry` under the sentence with Lab on, and that
+  banner stays until tapped away or replaced (1.5: never an auto-dismissing toast).
 - **The copied link** (F33): `PasteChip(app:)` (iPhone: `PasteButton`, then "Send {host} to {name}?") and
   `CopiedLinkConfirm` / `AppModel.copiedLink(_:)` for the Mac's Send copied link button.
 - **Use switches** (6.5 Q5): `WhatsInLabView(lab:useSwitch: lab.useSwitch(features:))` and `LabModel.settingBinding`
@@ -138,8 +152,8 @@ unchanged; A3 added no sample cases).
   and call `FailureNotices.askIfNeeded()` when the app opens (F04: once, after a share in place).
 - iPhone app delegate (`UIApplicationDelegateAdaptor`): `application(_:handleEventsForBackgroundURLSession:completionHandler:)`
   → `if !AppModel.shared.handleBackgroundEvents(identifier:completion:) { completionHandler() }`. Nothing else: the
-  share extension hears its own answers, and `AppModel.refresh()` keeps rows with live tasks from going stale (and, on
-  the Mac, takes over the sessions of shares 15 minutes old).
+  share extension hears its own answers, and `AppModel.refresh()` takes over the sessions of shares 15 minutes old
+  (iPhone and Mac) and keeps rows with live tasks from going stale.
 - Call `AppModel.startOfflineQueue(path: SystemPathSource())` once at launch, and make the iPhone's background refresh
   (`.backgroundTask(.appRefresh)`) call `await AppModel.shared.refresh()` rather than a bare `tick()`, so it sends
   what was shared offline (F07) and follows the background sessions.
@@ -147,7 +161,11 @@ unchanged; A3 added no sample cases).
   visibility (the iPhone stops the timers in the background). History rows use `model.rowText(row)` (not
   `model.lab.rowText`), so they read "Waiting for connection" while offline.
 - The share card: turn on `LabShareFeatures(bigFilesEntry: true)` for F02e (the card shows the entry under a too-big
-  file's sentence); the app's own too-big message (a picked or dropped file over 9 MB) places `BigFilesEntry(lab:)`.
+  file's sentence). In the app: `BannerView(banner: banner, lab: model.lab)` in place of `BannerView(banner:)` (with
+  Lab off it is v1.1's banner).
+- History: `QueueSection(rows: model.rows, online: model.online) { model.delete($0) }` above the rows, with Lab on.
+- The Mac's drops of links: `model.sendLink(link, given: true)`; the link field and Send copied link keep
+  `model.sendLink(text)` (typed text). Both follow F16 with Lab on and are v1.1's with Lab off.
 - F04's local check for What's in Lab and the gate: `FailureNotices.localCheck()`.
 - Setup check's lines are the app's (iPhone: paired, `shareItem` from `LabPreferences.shareSheetUsed`, Safari
   extension with steps only, notifications, background app refresh; Mac: Share menu, Safari extension, login item,
@@ -180,11 +198,16 @@ W1 (A3): `NormaliseVectorTests`, `ExcerptVectorTests` and `SetupCheckVectorTests
 three passes; 9 MB files under 18 MB a pass; a 413; a 429 keeps v1.1's back-off for an hour of refreshes; a reconnect
 sends whatever the back-off), `FrameFileBuilderTests` (frames equal `ItemBuilder`'s;
 `testANineMegabyteFileStaysUnderFortyMegabytes` on macOS), `BackgroundCompletionTests` (parts hours apart, stale
-answers, 413, the notices; one session per share and per identifier; a session's answers reach the outbox; letting go;
-the Mac's take-overs), `ShareInPlaceTests` (the card, Options, no countdown for people who need more time, the
+answers, 413, the notices; one session per share and per identifier; a session's answers reach the outbox and the
+activity log; letting go; the app's take-overs, once each; rows whose uploads wait for the network are not sent again;
+an answer nothing waits for cancels the rest of its item; frame files go with their rows; pairing changes cancel the
+uploads), `ShareInPlaceTests` (the card, Options, no countdown for people who need more time, the
 thin check, Review, the once-only lines, Lab off; the share sheet hears its own answers; text with a link read as text;
-the Use switches; Cancel; the F02 entry point), `AppModelTests` (the faster checks bring "In your Reader ✓" and its
-announcement; "Waiting for connection" while offline) and `GetPageScriptTests` (GetPage.js in WebKit: `html` is v1.1's
+the Use switches; Cancel; the F02 entry point; "Waiting for connection" on the card while offline), `AppModelTests`
+(the faster checks bring "In your Reader ✓" and its announcement; "Waiting for connection" while offline, in the rows,
+the banner and the queue; smart intake at the app's own entry points; the too-big banner stays with Lab on; Remove
+cancels a share in place's uploads; the stored ledger is the baseline; Send a test article's note; the activity log of
+a refresh) and `GetPageScriptTests` (GetPage.js in WebKit: `html` is v1.1's
 and the page is untouched; the clean copy has no scripts, on* attributes or form contents; Clean article; the
 selection).
 CI also checks GetPage.js's copies of `share/js/capture/` with `sync.mjs --check`.

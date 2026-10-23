@@ -115,6 +115,74 @@ final class LabShareTests: XCTestCase {
         XCTAssertNil(none)
     }
 
+    /// Review finding (F16, "every app uses it at every entry point"): what is typed or pasted into the apps' own link
+    /// field goes through normaliseShare's text rules, as the extension's omnibox does; a bare "example.com/story" stays
+    /// a link; text with no link is no item (the app says "That isn’t a web address."), never a note.
+    func testTypedLinksGoThroughSmartIntake() async throws {
+        let nyt = "https://www.nytimes.com/2026/10/22/science/tides.html?smid=nytcore-ios-share&referringSource=articleShare"
+        let typed = try XCTUnwrap(await LabShare.typedLink(nyt, clean: true, fetch: { _ in nil }))
+        XCTAssertEqual(typed.kind, .url)
+        XCTAssertEqual(typed.url, "https://www.nytimes.com/2026/10/22/science/tides.html?referringSource=articleShare")
+        XCTAssertEqual(typed.extras["x-orig"], nyt)
+        XCTAssertNil(typed.title)
+        // F16's Use switch off: the text rules still apply, nothing is removed.
+        let asTyped = try XCTUnwrap(await LabShare.typedLink(nyt, clean: false, fetch: { _ in nil }))
+        XCTAssertEqual(asTyped.url, nyt)
+        XCTAssertTrue(asTyped.extras.isEmpty)
+        // A bare address is a link (https:// first), as v1.1 read it.
+        let bare = try XCTUnwrap(await LabShare.typedLink("  example.com/story ", clean: true, fetch: { _ in nil }))
+        XCTAssertEqual(bare.url, "https://example.com/story")
+        XCTAssertTrue(bare.extras.isEmpty)
+        XCTAssertEqual(LabShare.typedURL("example.com:8080/a?b=1#c"), "https://example.com:8080/a?b=1#c")
+        XCTAssertNil(LabShare.typedURL("not a link"))
+        XCTAssertNil(LabShare.typedURL("localhost/a"), "a host needs a dot")
+        // Typed text: trailing punctuation and an unbalanced ")" are not part of the URL; the words are the title.
+        let sentence = try XCTUnwrap(await LabShare.typedLink("Read this (https://example.com/a/b).", clean: true, fetch: { _ in nil }))
+        XCTAssertEqual(sentence.url, "https://example.com/a/b")
+        XCTAssertEqual(sentence.title, "Read this")
+        let stop = try XCTUnwrap(await LabShare.typedLink("https://example.com/a/b.", clean: true, fetch: { _ in nil }))
+        XCTAssertEqual(stop.url, "https://example.com/a/b")
+        // The title given wins over the text's words.
+        let titled = try XCTUnwrap(await LabShare.typedLink("Read this https://example.com/c", title: "Given", clean: true,
+                                                            fetch: { _ in nil }))
+        XCTAssertEqual(titled.title, "Given")
+        // No link: nothing (not a Markdown note).
+        let none = await LabShare.typedLink("remember the milk", clean: true, fetch: { _ in nil })
+        XCTAssertNil(none)
+        let empty = await LabShare.typedLink("   ", clean: true, fetch: { _ in nil })
+        XCTAssertNil(empty)
+    }
+
+    /// A URL given as one (a drop, a `.webloc`, a link the app was opened with) goes as given, cleaned: its full stop
+    /// stays. An Apple News link is resolved once.
+    func testGivenLinksGoAsGiven() async throws {
+        let dc = "https://en.wikipedia.org/wiki/Washington,_D.C."
+        let given = try XCTUnwrap(await LabShare.typedLink(dc, given: true, clean: true, fetch: { _ in nil }))
+        XCTAssertEqual(given.url, dc)
+        let typed = try XCTUnwrap(await LabShare.typedLink(dc, clean: true, fetch: { _ in nil }))
+        XCTAssertEqual(typed.url, "https://en.wikipedia.org/wiki/Washington,_D.C", "typed, the full stop ends the sentence")
+        let tracked = try XCTUnwrap(await LabShare.typedLink("https://example.com/x?utm_source=a", title: "X", given: true,
+                                                             clean: true, fetch: { _ in nil }))
+        XCTAssertEqual(tracked.url, "https://example.com/x")
+        XCTAssertEqual(tracked.extras["x-orig"], "https://example.com/x?utm_source=a")
+        XCTAssertEqual(tracked.title, "X")
+        let html = "<html><body><script>redirectToUrlAfterTimeout(\"https://www.theguardian.com/world/story\", 0)</script></body></html>"
+        let news = try XCTUnwrap(await LabShare.typedLink("https://apple.news/AbCdEf", given: true, clean: true,
+                                                          fetch: { _ in html }))
+        XCTAssertEqual(news.url, "https://www.theguardian.com/world/story")
+        XCTAssertEqual(news.extras["x-orig"], "https://apple.news/AbCdEf")
+    }
+
+    /// F07.1's words where a banner or a card says how a share went: the label, then the sentence.
+    func testTheLabRowMessage() {
+        let row = LabRowText.describe(status: .failed, errorCode: "network", kind: .url, size: 0, created: Date(), now: Date(),
+                                      ctx: LabRowText.Context(lab: true, online: false))
+        XCTAssertEqual(row.message, "Waiting for connection. It will send when this device is back online.")
+        let v11 = LabRowText.describe(status: .sent, errorCode: "", kind: .url, size: 0, created: Date(), now: Date(),
+                                      ctx: LabRowText.Context(lab: true, online: true))
+        XCTAssertEqual(v11.message, RowText(status: .sent, errorCode: "", size: 0, created: Date()).message)
+    }
+
     /// F33: the copied link with its host for "Send {host} to {name}?", cleaned; nothing for text that is not a link.
     func testTheCopiedLink() throws {
         let c = try XCTUnwrap(LabShare.copiedLink("https://www.example.org/x?fbclid=1", clean: true))

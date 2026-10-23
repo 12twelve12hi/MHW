@@ -439,19 +439,31 @@ extension View {
 }
 
 /// The transient banner at the bottom of the apps' windows.
+///
+/// `lab`: the app's Lab model, given by apps that build the F02 entry point (LAB-PLAN 3.1, F02e): with Lab on, a banner
+/// for a file refused as over 9 MB (`Banner.tooBig`) shows "Send files over 9 MB ›" under v1.1's too-big sentence, which
+/// runs the F02 gate and shows its note under it (`BigFilesEntry`); that banner stays until it is tapped away or replaced
+/// (`AppModel.show`). With Lab off, or without `lab`, the banner is v1.1's.
 public struct BannerView: View {
     let banner: AppModel.Banner
+    let lab: LabModel?
 
-    public init(banner: AppModel.Banner) {
+    public init(banner: AppModel.Banner, lab: LabModel? = nil) {
         self.banner = banner
+        self.lab = lab
     }
 
     public var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: banner.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                .foregroundColor(banner.isError ? .orange : .green)
-                .accessibilityHidden(true)
-            Text(banner.text).dlsFont(.callout).wrapping(banner.text)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: banner.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .foregroundColor(banner.isError ? .orange : .green)
+                    .accessibilityHidden(true)
+                Text(banner.text).dlsFont(.callout).wrapping(banner.text)
+            }
+            if let lab, banner.tooBig {
+                BannerBigFiles(lab: lab)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -459,6 +471,17 @@ public struct BannerView: View {
         .shadow(radius: 4)
         .padding()
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
+/// The F02 entry point under a too-big banner, with Lab on (`BannerView`).
+struct BannerBigFiles: View {
+    @ObservedObject var lab: LabModel
+
+    var body: some View {
+        if lab.isOn {
+            BigFilesEntry(lab: lab)
+        }
     }
 }
 

@@ -64,6 +64,10 @@ public struct LabRowText: Equatable, Sendable {
     /// The button's words: "Retry now", "Try again", or nil.
     public var buttonTitle: String? { RowText(label: label, sentence: sentence, action: action).buttonTitle }
 
+    /// The label, then the sentence when there is one, joined as v1.1's `RowText.message`: what a banner or a share card
+    /// says after a share ("Waiting for connection. It will send when this device is back online.", F07.1).
+    public var message: String { RowText(label: label, sentence: sentence, action: action).message }
+
     // MARK: The rules (2.5), in order
 
     static func step(_ name: String, _ mark: String?) -> String {

@@ -8,37 +8,43 @@ extension SharedStore {
     /// decision, made before this is called.
     ///
     /// Runs under the outbox lock (as the JS `applyPairingChange`), after any attempt in flight in this process, so an
-    /// item meant for one Daylight never comes back to be sealed for another. Touches storage: call it off the main
-    /// thread. The apps and extensions pair through `LabCenter.pair`, which locks the old pairing's Daylight server
-    /// first (LAB-PLAN 2.6) and then calls this.
+    /// item meant for one Daylight never comes back to be sealed for another. Share in place's uploads still on their way
+    /// for the old pairing are cancelled and their frame files deleted (`BackgroundPublisher.cancel`), so none of them
+    /// reaches the old Daylight afterwards. Touches storage: call it off the main thread. The apps and extensions pair
+    /// through `LabCenter.pair`, which locks the old pairing's Daylight server first (LAB-PLAN 2.6) and then calls this.
     @discardableResult
     public func pair(_ newPairing: Pairing) async -> Bool {
         await ready()
         let outbox = OutboxStore(store: self)
-        return await outbox.whileLocked {
+        let changed = await outbox.whileLocked { () -> (other: Bool, removed: [OutboxRow]) in
             var p = newPairing
             let old = pairing
             if let old, old.secret == p.secret, p.name.isEmpty { p.name = old.name }
-            let other = old?.secret != p.secret
-            if other {
-                outbox.removeAllUnlocked()
+            let anotherSecret = old?.secret != p.secret
+            var removed: [OutboxRow] = []
+            if anotherSecret {
+                removed = outbox.removeAllUnlocked()
                 if labRepairedAt != nil { labRepairedAt = nil }
             }
             pairing = p
-            return other
+            return (anotherSecret, removed)
         }
+        await BackgroundPublisher.cancel(BackgroundPublisher.gone(changed.removed, all: true), store: self)
+        return changed.other
     }
 
-    /// Forgets the pairing and the outbox (under the outbox lock, like `pair`). The apps unpair through
-    /// `LabCenter.unpair`, which forgets a typed Server address first.
+    /// Forgets the pairing and the outbox (under the outbox lock, like `pair`), and cancels share in place's uploads still
+    /// on their way. The apps unpair through `LabCenter.unpair`, which forgets a typed Server address first.
     public func unpair() async {
         await ready()
         let outbox = OutboxStore(store: self)
-        await outbox.whileLocked {
-            outbox.removeAllUnlocked()
+        let removed = await outbox.whileLocked { () -> [OutboxRow] in
+            let rows = outbox.removeAllUnlocked()
             if labRepairedAt != nil { labRepairedAt = nil }
             pairing = nil
+            return rows
         }
+        await BackgroundPublisher.cancel(BackgroundPublisher.gone(removed, all: true), store: self)
     }
 }
 

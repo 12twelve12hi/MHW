@@ -142,7 +142,8 @@ public struct OutboxRow: Codable, Identifiable, Equatable {
     }
 }
 
-/// The outbox file (`outbox.json`) and bodies (`outbox/<id>.bin`) in the shared directory. Every change is a
+/// The outbox file (`outbox.json`), bodies (`outbox/<id>.bin`) and share in place's frame files (`bg/<id>-<part>.body`,
+/// `BackgroundPublisher`) in the shared directory. A row that goes takes its body and frame files with it. Every change is a
 /// coordinated read-modify-write, so the app and its extensions can use it at the same time. Every method touches
 /// storage: call them off the main thread (the apps do; `StorageAudit` records any call made on it).
 public final class OutboxStore {
@@ -161,6 +162,8 @@ public final class OutboxStore {
     public let directory: URL
     let fileURL: URL
     let bodiesURL: URL
+    /// Share in place's frame files (F04: `BackgroundPublisher`, `FrameFileBuilder`).
+    public let framesURL: URL
     private let lock = NSLock()
 
     /// Creates nothing yet: the directories are made on the first write, so creating a store never touches storage.
@@ -168,6 +171,7 @@ public final class OutboxStore {
         self.directory = directory
         fileURL = directory.appendingPathComponent("outbox.json")
         bodiesURL = directory.appendingPathComponent("outbox", isDirectory: true)
+        framesURL = directory.appendingPathComponent(BackgroundPublisher.folder, isDirectory: true)
     }
 
     public convenience init(store: SharedStore = .shared) {
@@ -191,7 +195,7 @@ public final class OutboxStore {
 
     /// Read-modify-write under a file coordinator (across processes) and a lock (within this one). Every write keeps
     /// every `sending`, `sent` and `failed` row, fills the room up to 200 with the newest `delivered` and `expired`
-    /// rows, and drops the stored body of every row left out (CHANGES-v1.1 2.4, finding 16).
+    /// rows, and drops the stored body (and any frame files) of every row left out (CHANGES-v1.1 2.4, finding 16).
     @discardableResult
     public func update<T>(_ change: (inout State) -> T) -> T {
         StorageAudit.note("outbox write")
@@ -210,7 +214,7 @@ public final class OutboxStore {
                     kept.append(row)
                     room -= 1
                 } else {
-                    removeBodyFile(row.id)
+                    removeItemFiles(row.id)
                 }
             }
             state.rows = kept
@@ -236,9 +240,16 @@ public final class OutboxStore {
     // and `applyPairingChange()` do, so an attempt never writes a removed row back. An attempt in another process (the
     // share extension) cannot write it back either: `ShareSender` only updates rows the outbox still holds.
 
-    /// "Remove": the row and its stored body. Returns whether there was such a row.
+    /// "Remove": the row, its stored body and its frame files. Returns whether there was such a row. A row in a share
+    /// in place's background upload also needs its tasks cancelled: `removeRow` returns it for that
+    /// (`BackgroundPublisher.cancel`; the apps' `AppModel.delete` does both).
     @discardableResult
     public func remove(_ id: String) async -> Bool {
+        await removeRow(id) != nil
+    }
+
+    /// "Remove", returning the row that went (nil when there was none).
+    public func removeRow(_ id: String) async -> OutboxRow? {
         await whileLocked { removeUnlocked(id) }
     }
 
@@ -247,20 +258,22 @@ public final class OutboxStore {
         await whileLocked { clearFinishedUnlocked() }
     }
 
-    /// Every row, every stored body, the ack cursor and the Lab ledger (unpairing, or pairing with another secret:
-    /// LAB-PROTOCOL 2.2.6, the JS `applyPairingChange` removing every `lab/*` key).
-    public func removeAll() async {
+    /// Every row, every stored body and frame file, the ack cursor and the Lab ledger (unpairing, or pairing with another
+    /// secret: LAB-PROTOCOL 2.2.6, the JS `applyPairingChange` removing every `lab/*` key). Returns the rows that went
+    /// (their background uploads are cancelled by `SharedStore.pair` and `unpair`).
+    @discardableResult
+    public func removeAll() async -> [OutboxRow] {
         await whileLocked { removeAllUnlocked() }
     }
 
     @discardableResult
-    func removeUnlocked(_ id: String) -> Bool {
-        let found: Bool = update { state in
-            let had = state.rows.contains { $0.id == id }
+    func removeUnlocked(_ id: String) -> OutboxRow? {
+        let found: OutboxRow? = update { state in
+            let had = state.rows.first { $0.id == id }
             state.rows.removeAll { $0.id == id }
             return had
         }
-        removeBodyFile(id)
+        removeItemFiles(id)
         return found
     }
 
@@ -270,15 +283,24 @@ public final class OutboxStore {
             state.rows.removeAll { $0.status == .delivered || $0.status == .expired }
             return ids
         }
-        gone.forEach(removeBodyFile)
+        gone.forEach(removeItemFiles)
     }
 
-    func removeAllUnlocked() {
-        update { state in state = State() }
-        try? FileManager.default.removeItem(at: bodiesURL)
-        try? FileManager.default.createDirectory(at: bodiesURL, withIntermediateDirectories: true)
+    @discardableResult
+    func removeAllUnlocked() -> [OutboxRow] {
+        let gone: [OutboxRow] = update { state in
+            let rows = state.rows
+            state = State()
+            return rows
+        }
+        let fm = FileManager.default
+        try? fm.removeItem(at: bodiesURL)
+        try? fm.createDirectory(at: bodiesURL, withIntermediateDirectories: true)
+        // Share in place's frame files: the old pairing's sealed frames never go out from here again.
+        try? fm.removeItem(at: framesURL)
         LabLedger(outbox: self).clear()
         ActivityLog(outbox: self).clear()
+        return gone
     }
 
     /// Runs `body` under the lock every `ShareSender` on this outbox directory holds while it works (in this process):
@@ -315,6 +337,12 @@ public final class OutboxStore {
 
     public func removeBodyFile(_ id: String) {
         try? FileManager.default.removeItem(at: bodyURL(id))
+    }
+
+    /// A row that goes: its stored body and its frame files (share in place's `bg/<id>-<part>.body`).
+    func removeItemFiles(_ id: String) {
+        removeBodyFile(id)
+        for f in FrameFileBuilder.frameFiles(id: id, in: framesURL) { try? FileManager.default.removeItem(at: f) }
     }
 
     // MARK: Files

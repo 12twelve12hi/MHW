@@ -10,7 +10,9 @@ import XCTest
 /// than 3 hours apart make the row due for a re-send at once; a failure posts the notice through a fake notification
 /// center (F04.6), and none with "Tell me when a send fails" off or a network failure. Each share has its own session
 /// ("com.daylight.share.bg.<attempt>"), one object per identifier in a process; whichever process holds it hears its
-/// answers; the Mac app takes over the sessions of shares 15 minutes old.
+/// answers; the app (iPhone and Mac) takes over the sessions of shares 15 minutes old, once each. Rows that go (Remove,
+/// Unpair, another pairing) take their frame files and their upload tasks with them, and an answer nothing waits for
+/// cancels what is left of its item.
 final class BackgroundCompletionTests: XCTestCase {
     var dir: URL!
     var store: SharedStore!
@@ -288,6 +290,124 @@ final class BackgroundCompletionTests: XCTestCase {
         let ok = try p.start(.link("https://example.com/ok", title: "OK"), pairing: pairing)
         await answer(uploads.started[1].description, 200, nil)
         XCTAssertEqual(OutboxStore(store: store).row(ok.id)?.status, .sent)
+
+        // F26: with Lab on, what the answers did is in Setup check's activity log, the 413 with its http.
+        let events = ActivityLog(store: store).events
+        XCTAssertEqual(events.map(\.type), ["failed", "sent"])
+        XCTAssertEqual(events.first?.status, "failed/full")
+        XCTAssertEqual(events.first?.http, 413)
+        XCTAssertEqual(events.first?.id8, String(row.id.prefix(8)))
+        // With Lab off, nothing is logged.
+        LabSettings.setOn(false, store: store)
+        _ = try p.start(.link("https://example.com/off", title: "Off"), pairing: pairing)
+        await answer(uploads.started[2].description, 200, nil)
+        XCTAssertEqual(ActivityLog(store: store).events.count, 2)
+    }
+
+    /// Review finding (F04, F07.3): a share in place's row that is still uploading must not be sent again by the app.
+    /// Once the item is removed (or the app sent it itself, or it was delivered) an answer for its background attempt
+    /// changes no row, cancels the attempt's other tasks for the item and deletes its frame files.
+    func testAnAnswerNothingWaitsForCancelsTheRestAndDeletesTheFrames() async throws {
+        let p = publisher()
+        let content = Data((0..<5000).map { UInt8($0 % 251) })
+        let row = try p.start(.file(content, name: "big.pdf", mime: "application/pdf", title: "Big"), pairing: pairing, chunkSize: 2000)
+        let other = try p.start(.link("https://example.com/other", title: "Other"), pairing: pairing)
+        let d = uploads.started.filter { $0.description.hasPrefix(row.id) }.map(\.description)
+        XCTAssertEqual(d.count, 3)
+        XCTAssertEqual(FrameFileBuilder.frameFiles(id: row.id, in: p.framesDirectory).count, 3)
+        // A stray answer for another attempt of a row still sending: nothing changes, its frame files stay.
+        let stray = await p.complete(description: BackgroundPublisher.describe(id: row.id, part: 0, attempt: "not-this-one"),
+                                     status: 200, error: nil)
+        XCTAssertEqual(stray, .ignored)
+        XCTAssertEqual(FrameFileBuilder.frameFiles(id: row.id, in: p.framesDirectory).count, 3)
+        XCTAssertTrue(uploads.cancelled.isEmpty)
+        // Removed: its body and frame files go with it.
+        let removed = await outbox.removeRow(row.id)
+        XCTAssertEqual(removed?.bgAttempt, row.bgAttempt)
+        XCTAssertNil(outbox.readBody(row.id))
+        XCTAssertEqual(FrameFileBuilder.frameFiles(id: row.id, in: p.framesDirectory), [])
+        // Its first part's answer: ignored, and the item's other parts are cancelled (not the other item's).
+        let late = await p.complete(description: d[0], status: 200, error: nil)
+        XCTAssertEqual(late, .ignored)
+        XCTAssertEqual(Set(uploads.cancelled), Set(d))
+        XCTAssertNil(outbox.row(row.id), "a removed row never comes back")
+        XCTAssertEqual(outbox.row(other.id)?.status, .sending)
+        XCTAssertEqual(FrameFileBuilder.frameFiles(id: other.id, in: p.framesDirectory).count, 1)
+        // Delivered before its answer came: the answer deletes the frame file.
+        var delivered = try XCTUnwrap(outbox.row(other.id))
+        delivered.status = .delivered
+        outbox.save(delivered)
+        let after = await p.complete(description: BackgroundPublisher.describe(id: other.id, part: 0, attempt: other.bgAttempt!),
+                                     status: 200, error: nil)
+        XCTAssertEqual(after, .ignored)
+        XCTAssertEqual(outbox.row(other.id)?.status, .delivered)
+        XCTAssertEqual(FrameFileBuilder.frameFiles(id: other.id, in: p.framesDirectory), [])
+    }
+
+    /// Rows that go take their files with them: Clear (delivered and expired) and the 200-row trim drop frame files as
+    /// they drop bodies; a pairing change empties `bg/`.
+    func testFinishedAndRemovedRowsLeaveNoFrameFiles() async throws {
+        let p = publisher()
+        let a = try p.start(.file(Data(repeating: 7, count: 3000), name: "a.pdf", mime: "application/pdf"), pairing: pairing,
+                            chunkSize: 2000)
+        let b = try p.start(.link("https://example.com/b", title: "B"), pairing: pairing)
+        var ra = try XCTUnwrap(outbox.row(a.id))
+        ra.status = .expired
+        outbox.save(ra)
+        await outbox.clearFinished()
+        XCTAssertEqual(FrameFileBuilder.frameFiles(id: a.id, in: p.framesDirectory), [])
+        XCTAssertEqual(FrameFileBuilder.frameFiles(id: b.id, in: p.framesDirectory).count, 1)
+        let gone = await outbox.removeAll()
+        XCTAssertEqual(gone.map(\.id), [b.id])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: p.framesDirectory.path), "bg/ goes with the pairing")
+    }
+
+    /// Review finding (F07.2, 2.6): Unpair and a pairing with another secret cancel the background uploads of every row
+    /// they remove (the whole attempt), so the old pairing's sealed frames never reach the old Daylight afterwards; the
+    /// same secret (a new relay) keeps the rows and cancels nothing.
+    func testPairingChangesCancelTheBackgroundUploads() async throws {
+        var asked: [[String: Set<String>?]] = []
+        let saved = BackgroundPublisher.cancelUploads
+        BackgroundPublisher.cancelUploads = { gone, _, _ in asked.append(gone) }
+        defer { BackgroundPublisher.cancelUploads = saved }
+        await store.pair(pairing)
+        let p = BackgroundPublisher(outbox: OutboxStore(store: store), uploads: uploads)
+        let attempt = BackgroundPublisher.newAttempt()
+        _ = try p.start(.link("https://example.com/1", title: "1"), pairing: pairing, attempt: attempt)
+        _ = try p.start(.link("https://example.com/2", title: "2"), pairing: pairing, attempt: attempt)
+        // The same secret on another relay: nothing goes.
+        await store.pair(try Pairing(secret: pairing.secret, relay: "https://relay2.test"))
+        XCTAssertTrue(asked.isEmpty)
+        XCTAssertEqual(OutboxStore(store: store).rows.count, 2)
+        // Another Daylight: every row goes, and the attempt's tasks are cancelled, all of them.
+        await store.pair(try Pairing.generate(relay: "https://relay.test", name: "Other Daylight"))
+        XCTAssertEqual(asked.count, 1)
+        XCTAssertEqual(Array(asked[0].keys), [attempt])
+        XCTAssertEqual(asked[0][attempt], .some(nil), "every task of the attempt")
+        XCTAssertTrue(OutboxStore(store: store).rows.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: p.framesDirectory.path), "the old pairing's frames go")
+        // Unpair does the same.
+        let again = BackgroundPublisher.newAttempt()
+        _ = try p.start(.link("https://example.com/3", title: "3"), pairing: pairing, attempt: again)
+        await store.unpair()
+        XCTAssertEqual(asked.count, 2)
+        XCTAssertEqual(Array(asked[1].keys), [again])
+        // Rows with no background attempt cancel nothing.
+        await store.pair(pairing)
+        await store.unpair()
+        XCTAssertEqual(asked.count, 2)
+        // `gone` for Remove: the attempt and the ids that went.
+        var r1 = OutboxRow(id: String(repeating: "a", count: 32), kind: .url, header: ItemHeader(id: String(repeating: "a", count: 32), kind: .url, sent: ""),
+                           created: clock, status: .sending)
+        r1.bgAttempt = "x"
+        var r2 = r1
+        r2.id = String(repeating: "b", count: 32)
+        let r3 = OutboxRow(id: String(repeating: "c", count: 32), kind: .url, header: r1.header, created: clock, status: .failed)
+        let some: [String: Set<String>?] = ["x": Set([r1.id, r2.id])]
+        let all: [String: Set<String>?] = ["x": .some(nil)]
+        XCTAssertEqual(BackgroundPublisher.gone([r1, r2, r3]), some)
+        XCTAssertEqual(BackgroundPublisher.gone([r1, r3], all: true), all)
+        XCTAssertTrue(BackgroundPublisher.gone([r3]).isEmpty)
     }
 
     /// The sessions a process holds: their live tasks keep their rows from going stale; one with no task left whose
@@ -310,9 +430,10 @@ final class BackgroundCompletionTests: XCTestCase {
         XCTAssertTrue(registry.all.contains { $0.session === waiting })
     }
 
-    /// The Mac app is never woken for the share extension's sessions: it takes over those of shares 15 minutes old (by
-    /// then the extension that started them has ended), and only of rows still sending.
-    func testTheMacTakesOverTheSessionsOfOldShares() {
+    /// The app (iPhone and Mac: review finding, the iPhone app is woken only when a session's tasks have all ended)
+    /// takes over the sessions of shares 15 minutes old (by then the extension that started them has ended), and only of
+    /// rows still sending; each once, so a session it holds counts by its own live tasks from the next tick on.
+    func testTheAppTakesOverTheSessionsOfOldSharesOnce() {
         func row(_ n: Int, _ status: OutboxRow.Status, age: TimeInterval, attempt: String?) -> OutboxRow {
             let id = String(format: "%032x", n)
             var r = OutboxRow(id: id, kind: .url, url: "https://e.com/\(n)", header: ItemHeader(id: id, kind: .url, sent: ""),
@@ -325,6 +446,44 @@ final class BackgroundCompletionTests: XCTestCase {
                     row(5, .failed, age: 60 * 60, attempt: "gone")]
         XCTAssertEqual(BackgroundPublisher.adoptable(rows, now: clock), ["old"])
         XCTAssertEqual(BackgroundPublisher.waiting(rows), ["old", "new"])
+
+        let registry = BackgroundSessionRegistry<FakeUploads>()
+        var made: [String] = []
+        let first = BackgroundPublisher.adopt(["old", "older"], in: registry) { a in made.append(a); return FakeUploads() }
+        XCTAssertEqual(first, ["old", "older"], "taken over just now: not stale on this tick")
+        let second = BackgroundPublisher.adopt(["old", "older"], in: registry) { a in made.append(a); return FakeUploads() }
+        XCTAssertEqual(second, [], "already held: its own live tasks decide")
+        XCTAssertEqual(made.sorted(), ["old", "older"])
+    }
+
+    /// Review finding 1's case (F04, F07.3): two shares in place made in Airplane Mode wait in their sessions; the app
+    /// opens 20 minutes later. The rows stay `sending` while their tasks live (the OS uploads them when the network is
+    /// back), so no tick re-sends them and nothing is uploaded twice; with no task left, v1.1's 15 minutes apply.
+    func testRowsWhoseUploadsWaitForTheNetworkAreNotSentAgain() async throws {
+        FakeRelay.reset()
+        let p = publisher()
+        let attempt = BackgroundPublisher.newAttempt()
+        let a = try p.start(.file(Data(repeating: 1, count: 3000), name: "a.pdf", mime: "application/pdf"), pairing: pairing,
+                            attempt: attempt, chunkSize: 2000)
+        let b = try p.start(.file(Data(repeating: 2, count: 3000), name: "b.pdf", mime: "application/pdf"), pairing: pairing,
+                            attempt: attempt, chunkSize: 2000)
+        uploads.live = uploads.started.map(\.description)
+        let sender = try ShareSender(pairing: pairing, outbox: outbox, session: FakeRelay.session)
+        sender.relay.sleep = { _ in }
+        sender.now = { [unowned self] in self.clock.addingTimeInterval(20 * 60) }
+        let rows = outbox.rows
+        XCTAssertEqual(BackgroundPublisher.adoptable(rows, now: clock.addingTimeInterval(20 * 60)), [attempt])
+        sender.liveBackgroundAttempts = await p.liveAttempts()
+        let resent = await sender.resendDue()
+        XCTAssertEqual(resent, [], "nothing is sent again while the OS still holds the uploads")
+        XCTAssertEqual(FakeRelay.with { $0.answeredPublishes }, 0)
+        XCTAssertEqual(outbox.row(a.id)?.status, .sending)
+        XCTAssertEqual(outbox.row(b.id)?.status, .sending)
+        // The tasks are gone (the OS dropped them): the v1.1 rule re-sends from the stored body.
+        uploads.live = []
+        sender.liveBackgroundAttempts = await p.liveAttempts()
+        let again = await sender.resendDue()
+        XCTAssertEqual(again.map(\.status), [.sent, .sent])
     }
 
     func testTheAppAsksForNotificationsOnceAfterAShareInPlace() async {

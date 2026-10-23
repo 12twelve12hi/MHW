@@ -31,6 +31,26 @@ public final class SystemPathSource: NetworkPathSource {
         monitor?.cancel()
         monitor = nil
     }
+
+    /// This device's connection now, for a process without the offline queue (a share extension sending a Lab share
+    /// itself, F07): true online, false offline, nil when the monitor said nothing within `timeout` seconds.
+    public static func current(timeout: TimeInterval = 0.5) async -> Bool? {
+        await withCheckedContinuation { (cont: CheckedContinuation<Bool?, Never>) in
+            let monitor = NWPathMonitor()
+            let queue = DispatchQueue(label: "com.daylight.share.path.once", qos: .userInitiated)
+            var answered = false // read and written on `queue` only
+            func answer(_ value: Bool?) {
+                guard !answered else { return }
+                answered = true
+                monitor.pathUpdateHandler = nil
+                monitor.cancel()
+                cont.resume(returning: value)
+            }
+            monitor.pathUpdateHandler = { path in answer(path.status == .satisfied) }
+            monitor.start(queue: queue)
+            queue.asyncAfter(deadline: .now() + timeout) { answer(nil) }
+        }
+    }
 }
 #endif
 

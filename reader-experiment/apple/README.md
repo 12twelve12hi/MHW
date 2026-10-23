@@ -288,6 +288,14 @@ these need a real device once A4 and A5 have wired them:
   process): both items go, each on its own session; a 413 answered while the extension still runs posts the notice
   from the extension; with the extension gone, the OS wakes the app (`handleEventsForBackgroundURLSession`) and the
   row ends `sent` or `failed` without a duplicate publish.
+- F04 and F07.3 on the iPhone (review round 2, finding 1): in Airplane Mode share two 9 MB PDFs from Files with share
+  in place; open the app 20 minutes later. The app takes over both sessions (`BackgroundUploadSession.adopt`), their
+  tasks show as live (`getAllTasks` reconnects to the extension's tasks), and the rows stay "Waiting for connection"
+  without a re-send. With the network back, each PDF is uploaded once (the mock relay's log, or ntfy.sh's
+  attachments: no second copy), and the rows end `sent`.
+- F07.2 on the iPhone (finding 2): in Airplane Mode, a share in place's row is listed under "Waiting to send ({n})";
+  Cancel removes it and, with the network back, nothing of it is published (the app connects to its session and
+  cancels its tasks). The same after Unpair, and after pairing with another Daylight: nothing reaches the old one.
 - F04 on a team-signed Mac (6.5 Q6) with the menu-bar app running: Share › Daylight from Safari, Finder and Preview
   closes at once; the app never holds the extension's session while the extension runs; a share whose extension has
   gone is taken over by the app after 15 minutes (`BackgroundPublisher.adoptable`) and ends `sent` or `failed`; the

@@ -28,7 +28,9 @@ public final class AppModel: ObservableObject {
     /// Whether the history holds the UI tests' sample rows (`HistorySample`; `-DLSSampleHistory` in the apps' Debug
     /// builds): the model then reads no acks and re-sends nothing, so each row stays in its state.
     public private(set) var holdsSampleHistory = false
-    /// A short status line ("Sent · waiting for your Daylight", an error, …), cleared after a few seconds.
+    /// A short status line ("Sent · waiting for your Daylight", an error, …), cleared after a few seconds. A file
+    /// refused as over 9 MB with Lab on stays until it is tapped away or replaced (`Banner.tooBig`): it carries the F02
+    /// entry point and its note (1.5: never an auto-dismissing toast).
     @Published public var banner: Banner?
     /// A pairing that waits for the user's confirmation (PROTOCOL 1.3): a link from outside the app, or a code that
     /// would replace a Daylight with another secret. The views show `PairingConfirmationView` for it; setting it to
@@ -99,6 +101,10 @@ public final class AppModel: ObservableObject {
         public let id = UUID()
         public let text: String
         public let isError: Bool
+        /// The text is v1.1's too-big sentence (a file over 9 MB was refused): with Lab on, `BannerView(banner:lab:)` puts
+        /// the F02 entry point under it ("Send files over 9 MB ›", LAB-PLAN 3.1 F02e), and the banner stays until it is
+        /// tapped away or replaced.
+        public var tooBig = false
     }
 
     public struct PendingPairing: Equatable, Identifiable {
@@ -118,13 +124,16 @@ public final class AppModel: ObservableObject {
     private var observer: NSObjectProtocol?
     /// Lab W1 (A3): the ledger's changes ("In your Reader", F01, F27), the offline queue (F07) and the notices (F04).
     private var ledgerWatch: AnyCancellable?
-    private var lastLedger: LabLedger.Snapshot?
+    /// The ledger the next change is compared with (`LedgerBaseline`).
+    private var ledgerBaseline = LedgerBaseline()
     /// Share in place's notices (F04): set by the app (`FailureNotices(center: SystemNoticeCenter.shared, …)`) to post
     /// "In your Reader ✓: {title}" while it runs, when that setting is on, and "Couldn’t send …" for the background
     /// answers it hears. nil posts none.
     public var notices: FailureNotices?
     /// Tests: the URL session the senders reach the relay with (a stand-in's); nil: the default.
     var relaySession: URLSession?
+    /// What fetches an Apple News page for smart intake (F16, `sendLink`); tests give a stub.
+    var pageFetch: ShareNormaliser.PageFetch = ShareNormaliser.ephemeralFetch
     /// The offline queue (F07), once the app starts it (`startOfflineQueue`); with Lab on a share made offline waits.
     public private(set) var offlineQueue: OfflineQueue?
     private var bannerTask: Task<Void, Never>?
@@ -150,8 +159,9 @@ public final class AppModel: ObservableObject {
         #if canImport(ObjectiveC)
         SharedStore.observeOtherProcesses()
         #endif
-        ledgerWatch = self.lab.$ledger.sink { [weak self] new in
-            Task { @MainActor in self?.ledgerChanged(new) }
+        // The ledger, and the Lab model's first read (its stored ledger is the baseline, even when it is empty).
+        ledgerWatch = self.lab.$ledger.map { _ in () }.merge(with: self.lab.$isLoaded.map { _ in () }).sink { [weak self] _ in
+            Task { @MainActor in self?.ledgerChanged() }
         }
     }
 
@@ -159,9 +169,11 @@ public final class AppModel: ObservableObject {
 
     /// The ledger changed (an ack check read Lab frames): rows it has just confirmed in the Reader are said
     /// ("In your Reader ✓, <title>", F27) and, with "Tell me when it’s in my Reader" on, noticed (F04). Lab on only.
-    private func ledgerChanged(_ new: LabLedger.Snapshot) {
-        defer { lastLedger = new }
-        guard let old = lastLedger, isLoaded, lab.isOn else { return }
+    /// The ledger the Lab model first reads from storage is the baseline, whichever of it and the history loads first: a
+    /// row already in the Reader at launch is not news.
+    private func ledgerChanged() {
+        let new = lab.ledger
+        guard let old = ledgerBaseline.next(new, loaded: lab.isLoaded), isLoaded, lab.isOn else { return }
         let reached = Announcer.readerChanges(from: old, to: new, rows: rows)
         guard !reached.isEmpty else { return }
         Announcer.announce(Announcer.readerAnnouncement(reached))
@@ -254,6 +266,27 @@ public final class AppModel: ObservableObject {
         guard lab.isOn, !rows.isEmpty else { return }
         let store = self.store
         await Self.onStorage { ActivityLog(store: store).add(type: type, rows: rows) }
+    }
+
+    /// What a maintenance pass or an ack check did, for Setup check's activity log (F26, as the extension's
+    /// `logChanges`): each row whose status changed (its new status: "delivered", "failed", "expired", …) or that went
+    /// again ("resend"), with its `http` (the 413 or 429 behind a failure).
+    static func changes(from before: [OutboxRow], to after: [OutboxRow]) -> [(type: String, row: OutboxRow)] {
+        let was = Dictionary(before.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return after.compactMap { row -> (type: String, row: OutboxRow)? in
+            guard let old = was[row.id], old.status != row.status || old.lastPublish != row.lastPublish else { return nil }
+            return (type: old.status != row.status ? row.status.rawValue : "resend", row: row)
+        }
+    }
+
+    private func logChanges(from before: [OutboxRow], to after: [OutboxRow]) async {
+        let changed = Self.changes(from: before, to: after)
+        guard lab.isOn, !changed.isEmpty else { return }
+        let store = self.store
+        await Self.onStorage {
+            let log = ActivityLog(store: store)
+            for c in changed { log.add(type: c.type, row: c.row) }
+        }
     }
 
     // MARK: Storage, off the main thread
@@ -354,11 +387,20 @@ public final class AppModel: ObservableObject {
         await Task.detached(priority: .userInitiated) { await body() }.value
     }
 
-    /// Shows a banner (and says it to VoiceOver, F27).
-    public func show(_ text: String, error: Bool = false) {
-        banner = Banner(text: text, isError: error)
+    /// Whether the banner showing now goes by itself after 5 s (tests: a too-big banner with Lab on stays).
+    var bannerAutoDismisses: Bool { bannerTask != nil }
+
+    /// Shows a banner (and says it to VoiceOver, F27), cleared after 5 s. `tooBig`: the text is the too-big sentence of a
+    /// file refused as over 9 MB; with Lab on that banner carries the F02 entry point and stays until it is tapped away or
+    /// replaced (`Banner.tooBig`).
+    public func show(_ text: String, error: Bool = false, tooBig: Bool = false) {
+        var b = Banner(text: text, isError: error)
+        b.tooBig = tooBig
+        banner = b
         Announcer.announce(text)
         bannerTask?.cancel()
+        bannerTask = nil
+        if tooBig && lab.isOn { return }
         bannerTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             if !Task.isCancelled { self?.banner = nil }
@@ -507,19 +549,37 @@ public final class AppModel: ObservableObject {
             let row = try await sender.send(input, defer: deferred)
             await log(deferred ? "defer" : "send", [row])
             await reloadNow()
-            show(RowText(row: row).message, error: RowText.isTrouble(row.status))
+            // With Lab on, the row's own Lab words (2.5): "Waiting for connection. It will send when this device is back
+            // online." for a share made offline (F07.1); otherwise they are v1.1's.
+            let text = lab.isOn ? rowText(row).message : RowText(row: row).message
+            show(text, error: RowText.isTrouble(row.status))
             if row.status == .sent { followUp(sender) }
             return row
         } catch {
-            show((error as? ShareError)?.message ?? error.localizedDescription, error: true)
+            show((error as? ShareError)?.message ?? error.localizedDescription, error: true,
+                 tooBig: (error as? ShareError)?.code == "too-large")
             await reloadNow()
             return nil
         }
     }
 
-    /// "Send a link": a URL, text containing one, or a bare domain. Returns whether it was sent.
+    /// "Send a link" (the iPhone's and Mac's link field, the Mac's Send copied link and its drops): a URL, text
+    /// containing one, or a bare domain. Returns whether it was sent. With Lab on it goes through smart intake (F16, every
+    /// entry point; `LabShare.typedLink`): tracking removed and redirectors unwrapped while F16 is in use, `x-orig` when
+    /// that changed it, an Apple News link resolved; typed text follows normaliseShare's text rules ("example.com/story"
+    /// is still a link; text with no link is "That isn’t a web address.", never a note). `given`: a URL handed over as
+    /// one (a drop, a `.webloc`, a link the app was opened with), sent as given when it passes the web URL rule. With Lab
+    /// off it is v1.1's, exactly.
     @discardableResult
-    public func sendLink(_ text: String, title: String? = nil) async -> Bool {
+    public func sendLink(_ text: String, title: String? = nil, given: Bool = false) async -> Bool {
+        if lab.isOn {
+            let clean = lab.inUse("F16")
+            guard let input = await LabShare.typedLink(text, title: title, given: given, clean: clean, fetch: pageFetch) else {
+                show("That isn’t a web address.", error: true)
+                return false
+            }
+            return await send(input) != nil
+        }
         guard let url = DaylightShare.linkFromUserText(text) else {
             show("That isn’t a web address.", error: true)
             return false
@@ -538,6 +598,8 @@ public final class AppModel: ObservableObject {
         case link(String, title: String)
         case item(ItemInput)
         case refused(String)
+        /// Over 9 MB: v1.1's too-big sentence (with Lab on, the F02 entry point goes under it).
+        case tooBig(String)
     }
 
     nonisolated static func readFile(_ url: URL) -> FileInput {
@@ -548,9 +610,9 @@ public final class AppModel: ObservableObject {
         do {
             let values = try url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
             if values.isDirectory == true { return .refused("“\(name)” is a folder. Send a file instead.") }
-            if let size = values.fileSize, size > DLS.maxItem { return .refused(ShareText.tooBigMessage(size)) }
+            if let size = values.fileSize, size > DLS.maxItem { return .tooBig(ShareText.tooBigMessage(size)) }
             let data = try Data(contentsOf: url, options: .alwaysMapped)
-            if data.count > DLS.maxItem { return .refused(ShareText.tooBigMessage(data.count)) }
+            if data.count > DLS.maxItem { return .tooBig(ShareText.tooBigMessage(data.count)) }
             return .item(.file(data, name: name))
         } catch {
             return .refused("Couldn’t read “\(name)”: \(error.localizedDescription)")
@@ -560,11 +622,18 @@ public final class AppModel: ObservableObject {
     public func sendFile(_ url: URL) async {
         switch await Self.onStorage({ Self.readFile(url) }) {
         case let .link(link, title):
-            await send(.link(link, title: title))
+            // A shortcut's link is a link given as one: with Lab on, smart intake (F16) as at every entry point.
+            if lab.isOn {
+                await sendLink(link, title: title, given: true)
+            } else {
+                await send(.link(link, title: title))
+            }
         case let .item(input):
             await send(input)
         case let .refused(message):
             show(message, error: true)
+        case let .tooBig(message):
+            show(message, error: true, tooBig: true)
         }
     }
 
@@ -596,7 +665,12 @@ public final class AppModel: ObservableObject {
             } else if url.isFileURL {
                 await sendFile(url)
             } else if let link = ShareText.webURL(url.absoluteString) {
-                await send(.link(link))
+                // With Lab on, through smart intake (F16) as a link given as one; with Lab off, v1.1's.
+                if lab.isOn {
+                    await sendLink(link, given: true)
+                } else {
+                    await send(.link(link))
+                }
             }
         }
     }
@@ -615,10 +689,18 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    /// "Remove": waits for an attempt in flight, so the row does not come back.
+    /// "Remove" (and the queue's Cancel, F07.2): waits for an attempt in flight, so the row does not come back. The row's
+    /// stored body and frame files go, and a share in place's upload tasks for it are cancelled
+    /// (`BackgroundPublisher.cancel`), so it is not published when the connection returns.
     public func delete(_ row: OutboxRow) {
         let id = row.id
-        Task { await change { _ = await OutboxStore(store: $0).remove(id) } }
+        let notices = self.notices
+        Task {
+            await change { store in
+                guard let gone = await OutboxStore(store: store).removeRow(id) else { return }
+                await BackgroundPublisher.cancel(BackgroundPublisher.gone([gone]), store: store, notices: notices)
+            }
+        }
     }
 
     public func clearFinished() {
@@ -674,7 +756,7 @@ public final class AppModel: ObservableObject {
         // Checked once the sender is known: there is one only after the launch's pairing, which comes after
         // `holdsSampleHistory` is set.
         guard let sender = await sender(), !holdsSampleHistory else { return }
-        let before = Dictionary(rows.map { ($0.id, $0.status) }, uniquingKeysWith: { a, _ in a })
+        let before = rows
         await followBackgroundUploads(sender)
         _ = await sender.tick()
         // The ledger keeps the states of the items still in the outbox only (LAB-PROTOCOL 2.2.6).
@@ -684,7 +766,7 @@ public final class AppModel: ObservableObject {
             LabLedger(outbox: outbox).prune(keeping: Set(outbox.rows.map(\.id)))
         }
         await reloadNow()
-        await log("ack", rows.filter { $0.status == .delivered && before[$0.id] != nil && before[$0.id] != .delivered })
+        await logChanges(from: before, to: rows)
         await lab.reloadNow()
         // F07: coming back to the app may find rows waiting for the network.
         if lab.isOn, let queue = offlineQueue { _ = await queue.flushIfDue() }
@@ -693,27 +775,19 @@ public final class AppModel: ObservableObject {
     // MARK: Share in place's background sessions (F04)
 
     /// Before a tick: which share-in-place attempts still have live upload tasks in the sessions this app holds (a
-    /// `sending` row of one is not stale). The Mac app is never woken for the share extension's sessions, so it takes
-    /// over the session of a share that is 15 minutes old (`BackgroundPublisher.adoptable`): its answers come here from
-    /// then on, and its live tasks count. The iPhone app connects to a session only when the OS wakes it for one
-    /// (`handleBackgroundEvents`).
+    /// `sending` row of one is not stale, so the app never re-sends what the OS is still uploading, F07.3). The app takes
+    /// over the session of a share that is 15 minutes old (`BackgroundPublisher.adoptable`; iPhone and Mac alike: by then
+    /// the share extension that started it has ended): its answers come here from then on, and its live tasks count. The
+    /// iPhone app is also connected to a session when the OS wakes it for one (`handleBackgroundEvents`).
     private func followBackgroundUploads(_ sender: ShareSender) async {
         #if canImport(ObjectiveC)
         let store = self.store
         guard store.isShared else { return }
         let current = rows
-        #if os(macOS)
-        let notices = self.notices
-        let adopted = BackgroundPublisher.adoptable(current, now: Date())
-        for attempt in adopted {
-            BackgroundUploadSession.connect(attempt: attempt, store: store, notices: notices,
-                                            daylightName: { store.pairing?.displayName })
-        }
-        #else
-        let adopted = Set<String>()
-        #endif
+        let adopted = BackgroundUploadSession.adopt(BackgroundPublisher.adoptable(current, now: Date()), store: store,
+                                                    notices: notices, daylightName: { store.pairing?.displayName })
         let live = await BackgroundUploadSession.liveAttempts(waiting: BackgroundPublisher.waiting(current))
-        // A session taken over just now delivers what it kept a moment later: its rows are not stale on this tick.
+        // A session taken over just now reports its tasks a moment later: its rows are not stale on this tick.
         sender.liveBackgroundAttempts = live.union(adopted)
         #endif
     }
@@ -780,8 +854,10 @@ public final class AppModel: ObservableObject {
         fastChecking = true
         defer { fastChecking = false }
         guard let sender = await sender() else { return false }
+        let before = rows
         _ = try? await sender.checkAcks()
         await reloadNow()
+        await logChanges(from: before, to: rows)
         await lab.reloadNow()
         return true
     }
@@ -852,5 +928,21 @@ public final class AppModel: ObservableObject {
             try? FileManager.default.createDirectory(at: statusFile.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: statusFile, options: .atomic)
         }
+    }
+}
+
+/// Which ledger changes are news for F01's "In your Reader ✓" announcement and F04's quiet notice: the ledger the Lab
+/// model first reads from storage is the baseline, never its empty starting one, whichever of it and the history loads
+/// first, so a row already in the Reader at launch is not said again; after that, each change against the one before.
+struct LedgerBaseline {
+    private(set) var last: LabLedger.Snapshot?
+
+    /// The ledger the Lab model holds now (`loaded`: its first read from storage is done). Returns the ledger to compare
+    /// `ledger` with when it is news, else nil (not loaded yet, the baseline, or no change).
+    mutating func next(_ ledger: LabLedger.Snapshot, loaded: Bool) -> LabLedger.Snapshot? {
+        guard loaded else { return nil }
+        defer { last = ledger }
+        guard let old = last, old != ledger else { return nil }
+        return old
     }
 }
