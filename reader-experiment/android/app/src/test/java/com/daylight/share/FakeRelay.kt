@@ -9,11 +9,15 @@ import com.daylight.share.core.Purpose
 import java.io.IOException
 import java.net.URI
 import java.net.URLDecoder
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 
 /**
  * An ntfy relay in memory, for the Lab tests (and the Daylight server's discovery, which reads its config topic from
  * the relay): small publishes (POST, base64 text), polls (`/<topic>/json?poll=1&since=…`, by id order and relay time in
- * seconds) and the JSON stream the server client reads. Whatever the host in the URL, every request lands here.
+ * seconds), the JSON stream the server client reads and `/v1/health` (its Date header is the relay's clock). Whatever
+ * the host in the URL, every request lands here.
  * [offline] makes every request fail as a network error does; [hangMs] holds every request that long first (a relay
  * that never answers); [publishStatus] and [pollStatus] answer an error status instead.
  */
@@ -59,6 +63,11 @@ class FakeRelay(private val clock: () -> Long = System::currentTimeMillis) : Htt
             if (publishStatus != 200) return Http.Response(publishStatus, emptyMap(), ByteArray(0))
             val m = add(path, String(body ?: ByteArray(0), Charsets.UTF_8))
             return Http.Response(200, mapOf("Content-Type" to "application/json"), Bytes.utf8(Json.write(linkedMapOf("id" to m.id, "time" to m.time))))
+        }
+        // ntfy's health check, which the handover's resume reads the relay's clock from (its Date header).
+        if (method == "GET" && path == "v1/health") {
+            val date = DateTimeFormatter.RFC_1123_DATE_TIME.format(Instant.ofEpochMilli(clock()).atZone(ZoneOffset.UTC))
+            return Http.Response(200, mapOf("Content-Type" to "application/json", "Date" to date), Bytes.utf8("{\"healthy\":true}"))
         }
         if (method == "GET" && path.endsWith("/json")) {
             if (pollStatus != 200) return Http.Response(pollStatus, emptyMap(), ByteArray(0))

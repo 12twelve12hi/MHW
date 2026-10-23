@@ -473,8 +473,10 @@ class Prefs(private val context: Context) {
 
     /**
      * The relay's clock less this device's (ms), from the Inbox's last answer from its relay (a publish's time, a Date
-     * header; `RelayClient.relayClock`), or null before one. The handover's resume turns [labHandoverSeenAt], a time of
-     * this device's clock, into relay time with it (K6 review: a DC-1 whose clock runs fast must not skip items).
+     * header; `RelayClient.relayClock`), or null before one. The handover's resume reads the relay's clock again and
+     * turns [labHandoverSeenAt], a time of this device's clock, into relay time with it, and with this one only when the
+     * relay does not answer then (K6 review: a DC-1 whose clock runs fast, or was corrected meanwhile, must not skip
+     * items or take them twice).
      */
     var inboxRelayOffsetMs: Long?
         get() = if (sp.contains("inboxRelayOffsetMs")) sp.getLong("inboxRelayOffsetMs", 0L) else null

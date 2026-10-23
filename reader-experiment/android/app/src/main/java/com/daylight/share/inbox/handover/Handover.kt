@@ -45,7 +45,7 @@ import java.io.File
  *    Reader said false, and asks again before it resumes.
  *
  * On resuming, the receive cursor moves up to the last time the Lab Reader may have been receiving (in relay time, from
- * the relay's clock as the Inbox last heard it; less the protocol's 30-minute overlap), so the Inbox does not take again
+ * the relay's clock read as it resumes; less the protocol's 30-minute overlap), so the Inbox does not take again
  * what the Lab Reader took meanwhile; what nobody took is still
  * cached on the relay, or comes again with its sender's re-send. Then Instant delivery starts again when it is on, a
  * hello goes, and the poll runs. A new pairing on the Inbox (Reset pairing) ends a handover at once: nobody else has it.
@@ -320,14 +320,23 @@ class Handover(private val app: App) {
     /**
      * Moves the receive cursor of pairing [topic] up to [seenAt] less the protocol's overlap (never back), and forgets
      * the incomplete items that started before it (the Lab Reader's to take; the cursor would otherwise go back to them).
-     * [seenAt] is a time of this device's clock and the cursor a relay time: it is turned into relay time with the
-     * relay's clock as the Inbox last heard it (`Prefs.inboxRelayOffsetMs`), so a DC-1 whose clock runs fast does not
-     * skip what reached the relay after the Lab Reader stopped (K6 review). Without one yet, the device's clock it is.
+     * [seenAt] is a time of this device's clock (the Lab Reader's last "receiving" answer, at most one would-be poll
+     * ago) and the cursor a relay time: it is turned into relay time with the relay's clock read now
+     * (`InboxRepo.readRelayOffset`), so a DC-1 whose clock runs fast does not skip what reached the relay after the Lab
+     * Reader stopped, and one corrected meanwhile (NTP, days into a handover) is measured as it is now, not as it was
+     * before the handover (K6 review). When the relay does not answer: its clock as the Inbox last heard it
+     * (`Prefs.inboxRelayOffsetMs`); without one either, the device's clock. A correction between the last "receiving"
+     * answer and this resume still counts; the protocol's 30-minute overlap takes up a smaller one.
      */
     private fun skipCursor(topic: String, seenAt: Long) {
         if (seenAt <= 0L) return
-        val offset = app.prefs.inboxRelayOffsetMs
-        if (offset == null) logw("lab: handover: the relay's clock is not known yet; this device's clock stands in for it")
+        val fresh = app.inbox.readRelayOffset()
+        val offset = fresh ?: app.prefs.inboxRelayOffsetMs
+        when {
+            fresh != null -> logi("lab: handover: the relay's clock is ${fresh / 1000} s from this device's")
+            offset != null -> logw("lab: handover: the relay did not tell its clock; its clock as last heard stands in")
+            else -> logw("lab: handover: the relay's clock is not known yet; this device's clock stands in for it")
+        }
         val relaySeenAt = seenAt + (offset ?: 0L)
         runCatching {
             val store = receiverStore(topic)

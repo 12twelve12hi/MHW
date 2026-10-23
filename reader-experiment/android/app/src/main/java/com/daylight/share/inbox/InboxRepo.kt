@@ -324,6 +324,13 @@ class InboxRepo(private val app: App) {
         r.relay.relayClock?.let { app.prefs.inboxRelayOffsetMs = it.offsetMs }
     }
 
+    /**
+     * Asks the pairing's relay for its clock now (`RelayClient.readClock`, within [timeoutMs]) and keeps it. -> relay
+     * time minus this device's time, or null when the relay did not tell. Blocking: the handover's resume (K6 review).
+     */
+    fun readRelayOffset(timeoutMs: Int = 5_000): Long? =
+        runCatching { receiver().relay.readClock(timeoutMs) }.getOrNull()?.offsetMs?.also { app.prefs.inboxRelayOffsetMs = it }
+
     /** Polls once (catch-up). Returns the number of new items; errors land in [sync]. */
     suspend fun pollOnce(): Int = withContext(Dispatchers.IO) {
         // Lab: K6 (LAB-PLAN 5.3.4): while the Lab Reader receives for this pairing, no poll, unless it says it stopped.

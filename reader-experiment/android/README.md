@@ -481,10 +481,11 @@ library quietly. One app receives per pairing: two would both take every item. `
    (lab) right now." **Receive here again** shows only once the Reader said false, and asks once more first.
 
 On receiving here again, the receive cursor moves up to the last time the Lab Reader may have been receiving (the
-handover, then each answer but "not receiving"), turned into relay time with the relay's own clock as the Inbox last
-heard it (a publish's `time` or an answer's Date header, `RelayClient.relayClock`, kept in `Prefs.inboxRelayOffsetMs`:
-a DC-1 whose clock runs fast must not skip what reached the relay after the Reader stopped), less the protocol's
-30-minute overlap, so the Inbox does not take again
+handover, then each answer but "not receiving"), turned into relay time with the relay's own clock, read again as it
+resumes (the Date of `GET /v1/health`, `RelayClient.readClock`; when the relay does not answer, its clock as the Inbox
+last heard it, `RelayClient.relayClock` kept in `Prefs.inboxRelayOffsetMs`): a DC-1 whose clock runs fast must not
+skip what reached the relay after the Reader stopped, and one set right (NTP) during a handover must not take again
+what the Reader took. The cursor is that time less the protocol's 30-minute overlap, so the Inbox does not take again
 what the Lab Reader took (a few items from just before it stopped may arrive in both); anything nobody took is still on
 the relay or comes with its sender's re-send. Instant delivery starts again when it is on (from the background Android
 may refuse; then the health card offers Turn on), and a hello goes. A new pairing on the Inbox (Reset pairing) ends a

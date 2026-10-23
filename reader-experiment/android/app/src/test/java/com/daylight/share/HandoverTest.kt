@@ -597,6 +597,48 @@ class HandoverTest {
         assertTrue("the cursor $since is a relay time, not ahead of the item's", since <= relay.messages(keys.inboxTopic).last().time)
     }
 
+    /**
+     * K6 review, round 2: the resume reads the relay's clock again (`/v1/health`'s Date) before it moves the cursor. A
+     * DC-1 that ran 2 hours fast when it last heard the relay, and whose clock was set right (NTP) while the Lab Reader
+     * received, does not put the cursor 2 hours early, which would take again what the Lab Reader took.
+     */
+    @Test
+    fun aClockSetRightDuringTheHandoverIsMeasuredAgainAtTheResume() {
+        val fast = 2 * 3_600_000L
+        var skew = fast
+        handover.clock = { now + skew }
+        app.labReporter.clock = { now + skew }
+        app.inbox.clock = { now + skew }
+        val s = sender()
+        sendLink(s, "Before")
+        assertEquals(1, poll())
+        assertEquals(-fast, app.prefs.inboxRelayOffsetMs)
+
+        now += 3_600_000L
+        handOver()
+        readerInbox(receiving = true)
+        now += 3_600_000L
+        skew = 0L // NTP sets the DC-1's clock right
+        val tookByReader = sendLink(s, "Reader") // the Lab Reader took this one
+        now += 40 * 60_000L
+        assertEquals(0, poll()) // the Reader still receives: the last time it may have been, on the right clock
+        val lastSeen = now
+        now += 5 * 60_000L
+        FakeReaderInbox.receiving(false)
+        now += 5 * 60_000L
+        val after = sendLink(s, "After") // nobody took it
+        relay.requests.clear()
+        assertEquals(1, poll())
+
+        assertTrue("the resume asked the relay's clock: ${relay.requests}", "GET /v1/health" in relay.requests)
+        assertEquals(0L, app.prefs.inboxRelayOffsetMs)
+        val ids = app.inbox.items.value.map { it.id }.toSet()
+        assertTrue(after in ids)
+        assertFalse("the Inbox took again what the Lab Reader took", tookByReader in ids)
+        val since = FileReceiverStore(File(app.filesDir, "inbox/receiver-${keys.inboxTopic}.json")).load().since.toLong()
+        assertTrue("cursor $since from ${lastSeen / 1000 - Limits.CURSOR_OVERLAP_S}", since >= lastSeen / 1000 - Limits.CURSOR_OVERLAP_S)
+    }
+
     @Test
     fun handingOverPassesTheInboxsCursor() {
         val s = sender()
