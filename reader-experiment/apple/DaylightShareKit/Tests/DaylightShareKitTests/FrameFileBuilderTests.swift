@@ -153,15 +153,15 @@ final class FrameFileBuilderTests: XCTestCase {
     }
 
     /// Samples the resident size every millisecond on its own thread and keeps the largest.
+    /// The thread holds the sampler until it has seen `stop()`, so the sampler outlives its last sample.
     final class PeakSampler {
-        private var thread: Thread?
         private let lock = NSLock()
         private var top = 0
         private var running = true
 
         func start() {
             top = FrameFileBuilderTests.residentBytes()
-            let t = Thread { [unowned self] in
+            let t = Thread { [self] in
                 while true {
                     lock.lock()
                     let go = running
@@ -171,7 +171,6 @@ final class FrameFileBuilderTests: XCTestCase {
                     usleep(1000)
                 }
             }
-            thread = t
             t.start()
         }
 
