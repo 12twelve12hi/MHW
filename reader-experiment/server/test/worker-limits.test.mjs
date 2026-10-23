@@ -4,7 +4,7 @@
 // email and AI jobs.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { setup, SERVER, mime, CF_AUTH } from './helpers.mjs';
+import { setup, SERVER, mime, CF_AUTH, NOON, ticking, utcDay } from './helpers.mjs';
 
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
@@ -253,18 +253,18 @@ test('mail killed three times waits as waiting-paid on Free (raw kept) and is de
 });
 
 test('an AI job claimed three times without finishing fails SERVER_LIMIT and leaves no reservation behind', async () => {
-  const t = await setup();
+  const t = await setup({ clock: ticking(NOON) }); // reserved and released on one UTC day
   try {
     await t.lane.hello();
-    await t.cron(Date.now());
+    await t.cron();
     const j = await t.api('POST', '/v1/ai/jobs', { json: { op: 'explain', passage: 'E = mc^2' } });
     assert.equal(j.status, 202);
     await t.db.prepare("UPDATE jobs SET state = 'running', lease = 0, attempts = 3 WHERE id = ?").bind(j.json.job.id).run();
-    await t.cron(Date.now() + 60_000);
+    await t.cron(t.now() + 60_000);
     const [job] = await t.rows('SELECT state, error, reserved_micros FROM jobs WHERE id = ?', j.json.job.id);
     assert.deepEqual(job, { state: 'failed', error: 'SERVER_LIMIT', reserved_micros: 0 });
-    const [u] = await t.rows("SELECT reserved_micros FROM usage WHERE kind = 'ai'");
-    assert.equal(u.reserved_micros, 0);
+    const u = await t.rows("SELECT day, reserved_micros FROM usage WHERE kind = 'ai'");
+    assert.deepEqual(u, [{ day: utcDay(NOON), reserved_micros: 0 }]);
     assert.equal(t.claude.messageRequests().length, 0);
   } finally { await t.close(); }
 });

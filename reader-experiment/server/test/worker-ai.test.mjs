@@ -7,7 +7,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import http from 'node:http';
 import * as ds from '../../share/js/daylight-share.js';
 import * as srv from '../client/daylight-server.js';
-import { setup, SERVER } from './helpers.mjs';
+import { setup, SERVER, NOON, utcDay, ticking } from './helpers.mjs';
 import { apiError, messageBody } from './mock-claude.mjs';
 
 const ARTICLE = `<html><head><title>The Article &amp; More</title><script>var secret = 1;</script></head><body>
@@ -16,7 +16,9 @@ const ARTICLE = `<html><head><title>The Article &amp; More</title><script>var se
 const web = new Map([['news.example', () => new Response(ARTICLE, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })]]);
 
 let t;
-before(async () => { t = await setup({ web, knobs: { keepaliveMs: 40, aiQueue: 3 } }); });
+// The tests below share one Worker and read its AI usage for the day: its clock starts at noon UTC, so the file never
+// runs across midnight.
+before(async () => { t = await setup({ web, knobs: { keepaliveMs: 40, aiQueue: 3 }, clock: ticking(NOON) }); });
 after(async () => { await t?.close(); });
 
 const MIN = 60_000;
@@ -163,15 +165,15 @@ test('two concurrent requests near the daily cap: exactly one runs', async () =>
     assert.equal((await cap.api('PATCH', '/v1/settings', { json: { ai: { dailyUsd: 1.2 } } })).status, 200);
     cap.claude.next({ delayMs: 400 }).next({ delayMs: 400 });
     const [a, b] = await Promise.all([
-      cap.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'first' } } }),
-      cap.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'second' } } }),
+      cap.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'first' } }, now: NOON }),
+      cap.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'second' } }, now: NOON }),
     ]);
     const codes = [a, b].map((r) => r.json.error?.code ?? 'ok').sort();
     assert.deepEqual(codes, ['AI_DAILY_LIMIT', 'ok']);
     const limited = [a, b].find((r) => r.json.error).json.error;
     assert.equal(limited.limit, 1.2);
     assert.equal(limited.needUsd, undefined, 'it would fit on its own');
-    assert.ok(limited.resetAt.endsWith('T00:00:00.000Z'));
+    assert.equal(limited.resetAt, '2026-10-21T00:00:00.000Z', 'the next 00:00 UTC');
     assert.match(limited.message, /resets at 00:00 UTC/);
     assert.equal(cap.claude.messageRequests().length, 1);
   } finally { await cap.close(); }
@@ -197,10 +199,10 @@ test('deliver to the Daylight: NEEDS_LAB_INBOX before the hello, then a page ite
   assert.equal(early.status, 409);
   assert.equal(early.json.error.code, 'NEEDS_LAB_INBOX');
   await t.lane.hello();
-  await t.cron(Date.now());
+  await t.cron();
   const r = await ai({ op: 'summary', source: { text: 'deliver me', url: 'https://news.example/x' }, deliver: 'both', about: { id: 'a'.repeat(32) } });
   assert.match(r.json.delivered.id, /^[0-9a-f]{32}$/);
-  await t.cron(Date.now() + 1000);
+  await t.cron(t.now() + 1000);
   const items = await t.lane.poll();
   const page = items.find((i) => i.header.id === r.json.delivered.id);
   assert.equal(page.header.title, 'Summary · A Mock Title');
@@ -229,7 +231,7 @@ test('jobs reserve on enqueue, run on the Cron and deliver; a full queue answers
   t.claude.next(apiError(529, 'overloaded_error'));
   let st = (await t.api('GET', `/v1/ai/jobs/${j.json.job.id}`)).json.job;
   assert.equal(st.state, 'queued');
-  const now = Date.now();
+  const now = t.now();
   for (let i = 0; i < 4; i++) await t.cron(now + i * 60_000);
   st = (await t.api('GET', `/v1/ai/jobs/${j.json.job.id}`)).json.job;
   assert.equal(st.state, 'done', JSON.stringify(st));
@@ -294,7 +296,7 @@ test('a part that could break out of the JSON string is refused at upload and ne
 });
 
 test('the client module: state, notice, and a PDF summary that uploads its missing parts', async () => {
-  await t.cron(Date.now() + 7 * 3600_000);
+  await t.cron(t.now() + 7 * 3600_000);
   assert.deepEqual(await t.client.state('pdf'), { state: 'ready', message: null });
   assert.match(await t.client.notice('pdf'), /Not end-to-end encrypted/);
   await t.client.markNoticeShown('pdf');
@@ -368,23 +370,23 @@ test('a job retried after its run was cut short (after Claude answered) never re
   const k = await setup({ knobs: { kill: 'job-delivery' } });
   try {
     await k.lane.hello();
-    const T = Date.now();
+    const T = NOON; // every step below on one UTC day, whatever time the test runs
     await k.cron(T);
     const j = await k.api('POST', '/v1/ai/jobs', { json: { op: 'explain', passage: 'E = mc^2' }, now: T });
     assert.equal(j.status, 202);
     await k.cron(T + 60_000); // Claude answers; the run is cut short before the result is stored
     let [job] = await k.rows('SELECT state, reserved_micros FROM jobs WHERE id = ?', j.json.job.id);
     assert.deepEqual(job, { state: 'running', reserved_micros: 0 }, 'cleared together with the settlement');
-    let [u] = await k.rows("SELECT n, usd_micros, reserved_micros FROM usage WHERE kind = 'ai'");
-    assert.deepEqual(u, { n: 1, usd_micros: 8000, reserved_micros: 0 });
+    let u = await k.rows("SELECT day, n, usd_micros, reserved_micros FROM usage WHERE kind = 'ai'");
+    assert.deepEqual(u, [{ day: utcDay(T), n: 1, usd_micros: 8000, reserved_micros: 0 }]);
     // The cap is now used up: the retry must reserve anew, and that fails within the cap instead of calling Claude.
-    assert.equal((await k.api('PATCH', '/v1/settings', { json: { ai: { dailyUsd: 0.3 } } })).status, 200);
+    assert.equal((await k.api('PATCH', '/v1/settings', { json: { ai: { dailyUsd: 0.3 } }, now: T + 2 * 60_000 })).status, 200);
     await k.cron(T + 25 * 60_000);
     [job] = await k.rows('SELECT state, error, reserved_micros FROM jobs WHERE id = ?', j.json.job.id);
     assert.deepEqual(job, { state: 'failed', error: 'AI_DAILY_LIMIT', reserved_micros: 0 });
     assert.equal(k.claude.messageRequests().length, 1, 'Claude was called once');
-    [u] = await k.rows("SELECT usd_micros, reserved_micros FROM usage WHERE kind = 'ai'");
-    assert.deepEqual(u, { usd_micros: 8000, reserved_micros: 0 });
+    u = await k.rows("SELECT day, usd_micros, reserved_micros FROM usage WHERE kind = 'ai'");
+    assert.deepEqual(u, [{ day: utcDay(T), usd_micros: 8000, reserved_micros: 0 }]);
   } finally { await k.close(); }
 });
 
@@ -392,7 +394,7 @@ test('a job whose run was cut short before settling keeps that reservation as sp
   const k = await setup({ knobs: { kill: 'job-before-claude' } });
   try {
     await k.lane.hello();
-    const T = Date.now();
+    const T = NOON; // T + 25 minutes was the next UTC day on a run at 23:47 UTC, with the retry counted on a new row
     await k.cron(T);
     const j = await k.api('POST', '/v1/ai/jobs', { json: { op: 'explain', passage: 'E = mc^2' }, now: T });
     const [{ reserved_micros: R }] = await k.rows('SELECT reserved_micros FROM jobs WHERE id = ?', j.json.job.id);
@@ -401,17 +403,17 @@ test('a job whose run was cut short before settling keeps that reservation as sp
     await k.cron(T + 25 * 60_000);
     const [job] = await k.rows('SELECT state, reserved_micros, attempts FROM jobs WHERE id = ?', j.json.job.id);
     assert.deepEqual(job, { state: 'done', reserved_micros: 0, attempts: 2 });
-    const [u] = await k.rows("SELECT n, usd_micros, reserved_micros FROM usage WHERE kind = 'ai'");
-    assert.deepEqual(u, { n: 2, usd_micros: R + 8000, reserved_micros: 0 }, 'unknown outcome kept as spent, nothing left reserved');
+    const u = await k.rows("SELECT day, n, usd_micros, reserved_micros FROM usage WHERE kind = 'ai'");
+    assert.deepEqual(u, [{ day: utcDay(T), n: 2, usd_micros: R + 8000, reserved_micros: 0 }], 'unknown outcome kept as spent, nothing left reserved');
     assert.equal(k.claude.messageRequests().length, 1);
   } finally { await k.close(); }
 });
 
 test('a PDF part missing or changed after validation: NEED_SOURCE with the part, and the reservation released', async () => {
-  const p = await setup();
+  const p = await setup({ clock: ticking(NOON) });
   try {
     await p.lane.hello();
-    await p.cron(Date.now());
+    await p.cron();
     const pdf = new Uint8Array(randomBytes(srv.SOURCE_PART_BYTES + 5000));
     const b64 = Buffer.from(pdf).toString('base64');
     const sid = createHash('sha256').update(pdf).digest('hex').slice(0, 32);
@@ -428,11 +430,11 @@ test('a PDF part missing or changed after validation: NEED_SOURCE with the part,
     const j = await p.api('POST', '/v1/ai/jobs', { json: { op: 'summary', source: { sourceId: sid } } });
     assert.equal(j.status, 202, j.text);
     await p.env.FILES.put(`a/${sid}/1`, 'QUFB');
-    await p.cron(Date.now() + 60_000);
+    await p.cron(p.now() + 60_000);
     const [job] = await p.rows('SELECT state, error FROM jobs WHERE id = ?', j.json.job.id);
     assert.deepEqual(job, { state: 'failed', error: 'NEED_SOURCE' });
-    const [u] = await p.rows("SELECT usd_micros, reserved_micros FROM usage WHERE kind = 'ai'");
-    assert.deepEqual(u, { usd_micros: 0, reserved_micros: 0 }, 'released, not booked as spent');
+    const u = await p.rows("SELECT day, usd_micros, reserved_micros FROM usage WHERE kind = 'ai'");
+    assert.deepEqual(u, [{ day: utcDay(NOON), usd_micros: 0, reserved_micros: 0 }], 'released, not booked as spent');
     assert.equal(p.claude.messageRequests().length, 0);
   } finally { await p.close(); }
 });
@@ -485,23 +487,24 @@ test('a recorded AI_BILLING is tried again after 15 minutes: an app that only ta
 test('the per-day request ceiling says so and names DAYLIGHT_AI_MAX_REQ_DAY, not the dollar limit apps can raise (9.3)', async () => {
   const t2 = await setup({ web, vars: { AI_MAX_REQ_DAY: '1' } });
   try {
-    const first = await t2.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'One.' } } });
+    const T = NOON; // all on one UTC day
+    const first = await t2.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'One.' } }, now: T });
     assert.ok(first.json.result, first.text);
-    const second = await t2.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'Two.' } } });
+    const second = await t2.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'Two.' } }, now: T + 1000 });
     assert.equal(second.json.error.code, 'AI_DAILY_LIMIT');
     assert.equal(second.json.error.limitRequests, 1);
     assert.match(second.json.error.message, /today’s 1 AI request \(/);
     assert.match(second.json.error.message, /DAYLIGHT_AI_MAX_REQ_DAY/);
     assert.doesNotMatch(second.json.error.message, /Lab settings/, 'raising the dollar limit would not help');
-    assert.equal((await t2.api('PATCH', '/v1/settings', { json: { ai: { dailyUsd: 10 } } })).status, 200);
-    const third = await t2.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'Three.' } } });
+    assert.equal((await t2.api('PATCH', '/v1/settings', { json: { ai: { dailyUsd: 10 } }, now: T + 2000 })).status, 200);
+    const third = await t2.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'Three.' } }, now: T + 3000 });
     assert.equal(third.json.error.code, 'AI_DAILY_LIMIT');
     assert.equal(third.json.error.limitRequests, 1);
     // The dollar cap itself still says to raise it in Lab settings.
     const t3 = await setup({ web });
     try {
-      await t3.db.prepare("INSERT INTO usage (day, kind, n, usd_micros) VALUES (?, 'ai', 0, 2900000)").bind(new Date().toISOString().slice(0, 10)).run();
-      const capped = await t3.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'B.' } } });
+      await t3.db.prepare("INSERT INTO usage (day, kind, n, usd_micros) VALUES (?, 'ai', 0, 2900000)").bind(utcDay(T)).run();
+      const capped = await t3.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'B.' } }, now: T });
       assert.equal(capped.json.error.code, 'AI_DAILY_LIMIT');
       assert.equal(capped.json.error.limitRequests, undefined);
       assert.match(capped.json.error.message, /raise it in Lab settings/);
@@ -546,7 +549,7 @@ test('a client that goes away during POST /v1/ai: the call still finishes and is
 test('a POST /v1/ai cut short between reserving and settling: the next Cron run after the timeout keeps it as spent (9.3)', async () => {
   const t2 = await setup({ web, knobs: { kill: 'ai-after-reserve' } });
   try {
-    const T = Date.now();
+    const T = NOON; // the request at T + 22 minutes counts on the same UTC day, whatever time the test runs
     const r = await t2.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'Cut short.' } }, now: T });
     assert.ok(r.json.error, r.text);
     assert.equal(t2.claude.messageRequests().length, 0);
@@ -564,7 +567,8 @@ test('a POST /v1/ai cut short between reserving and settling: the next Cron run 
     // The next request settles normally.
     const ok = await t2.api('POST', '/v1/ai', { json: { op: 'summary', source: { text: 'Again.' } }, now: T + 22 * MIN });
     assert.ok(ok.json.result, ok.text);
-    assert.deepEqual((await t2.rows("SELECT n, usd_micros, reserved_micros FROM usage WHERE kind = 'ai'"))[0], { n: 2, usd_micros: held.reserved_micros + 8000, reserved_micros: 0 });
+    assert.deepEqual(await t2.rows("SELECT day, n, usd_micros, reserved_micros FROM usage WHERE kind = 'ai'"),
+      [{ day: utcDay(T), n: 2, usd_micros: held.reserved_micros + 8000, reserved_micros: 0 }]);
   } finally { await t2.close(); }
 });
 

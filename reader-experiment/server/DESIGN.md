@@ -2101,9 +2101,10 @@ are kept, extended only by the re-run step (GitHub does not deploy a new secret 
   - every error code has a message.
 - **Worker integration**: Miniflare from the wrangler bundle built with `__TESTING__`, in-memory D1 and R2, and
   `unsafeTriggerHandlers` for `/cdn-cgi/local/scheduled` and `/cdn-cgi/local/email`. Outbound fetch goes to
-  `test/relay.mjs` (share's mock relay plus `Attach:`), a mock Claude server and a mock feed server; `TEST_NOW` drives
-  the clock. **D1 and fetch are wrapped with counters that fail any invocation over 50 statements or 50 external
-  subrequests.**
+  `test/relay.mjs` (share's mock relay plus `Attach:`), a mock Claude server and a mock feed server; `X-DLS-Test-Now`
+  (requests) and the Cron's scheduled time drive the clock. A test that counts per UTC day and moves the clock on starts
+  from a fixed time (`NOON` in `test/helpers.mjs`), never `Date.now()`, so a run near 00:00 UTC passes too. **D1 and
+  fetch are wrapped with counters that fail any invocation over 50 statements or 50 external subrequests.**
   - **Auth**: a missing or wrong token; a **50 MB body with a bad token is rejected without being read** (the test
     stream records no pull); a missing `Content-Length` → 411; over the cap → 413; locked → 423.
   - **Large files**: upload parts in any order, resume, `n` mismatch, the storage cap and expiry. A 30 MB file end to

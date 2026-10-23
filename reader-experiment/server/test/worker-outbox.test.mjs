@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import * as ds from '../../share/js/daylight-share.js';
 import * as srv from '../client/daylight-server.js';
 import { buildInboxInfo } from '../../share/js/daylight-lab.js';
-import { setup, SERVER, RELAY_ORIGIN } from './helpers.mjs';
+import { setup, SERVER, RELAY_ORIGIN, NOON } from './helpers.mjs';
 
 const HOUR = 3600_000;
 const MINUTE = 60_000;
@@ -151,13 +151,14 @@ test('relay answers: 429 backs off and retries later; another 4xx rejects the it
 test('the daily ntfy budget holds frames in the outbox', async () => {
   const small = await setup({ knobs: { ntfyPerDay: 3 } });
   try {
-    await small.cron(T0); // the config frame uses one
-    for (let i = 0; i < 4; i++) await enqueue(small, { origin: `test:b${i}`, kind: 'url', url: `https://example.com/${i}` });
-    const r = await small.cron(T0 + 60_000);
+    const T = NOON; // one UTC day: from T0, T0 + 60 s could be the next day, with a fresh budget
+    await small.cron(T); // the config frame uses one
+    for (let i = 0; i < 4; i++) await enqueue(small, { origin: `test:b${i}`, kind: 'url', url: `https://example.com/${i}` }, T);
+    const r = await small.cron(T + 60_000);
     assert.equal(r.steps.outbox, '2');
-    assert.equal((await small.cron(T0 + 120_000)).steps.outbox, '0');
+    assert.equal((await small.cron(T + 120_000)).steps.outbox, '0');
     assert.equal((await small.rows("SELECT COUNT(*) AS n FROM outbox WHERE state = 'queued'"))[0].n, 2);
-    assert.equal((await small.api('GET', '/v1/status')).json.usage.ntfy.messages, 3);
+    assert.equal((await small.api('GET', '/v1/status', { now: T + 120_000 })).json.usage.ntfy.messages, 3);
   } finally { await small.close(); }
 });
 

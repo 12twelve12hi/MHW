@@ -48,14 +48,31 @@ export function migrationStatements() {
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * A fixed Worker time for tests that count something per UTC day: 12:00 UTC, an even hour, outside the default 07:00
+ * digest. Pass it, plus the test's offsets, as `now` and to `cron`, or give the whole Worker setup({ clock:
+ * ticking(NOON) }). The AI, ntfy and email counters reset at 00:00 UTC, so a test that starts from Date.now() fails
+ * whenever a later step lands on the next day (rx-server on 82f5f3c ran at 23:47 UTC: T + 25 minutes was the next day).
+ * Being in the past, it is never "ahead" for the client (checkConfig refuses a config frame from the future).
+ */
+export const NOON = Date.parse('2026-10-20T12:00:00Z');
+export const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+/** A clock that starts at `start` and runs at real speed, for setup({ clock }). */
+export function ticking(start) {
+  const t0 = Date.now();
+  return () => start + (Date.now() - t0);
+}
+
+/**
  * Starts a Worker. Options: delivery 'lab' | 'v1', r2, apiKey, emailDomain, plan, knobs (TEST_KNOBS), vars (extra
- * bindings), web (Map host -> handler for outbound fetches), secret (16 bytes).
+ * bindings), web (Map host -> handler for outbound fetches), secret (16 bytes), clock (a function -> ms: the Worker's
+ * time for every request that names none, the client's and the Receiver's included, and for cron() without one; by
+ * default the real time). The email() handler always takes the real time.
  */
 export async function setup(opts = {}) {
   ensureBundle();
   const {
     delivery = 'lab', r2 = true, apiKey = 'sk-ant-test-key', emailDomain = 'mail.test', plan = 'free', knobs = {}, vars = {},
-    secret = ds.generateSecret(), serverUrl = SERVER, relayOptions = {},
+    secret = ds.generateSecret(), serverUrl = SERVER, relayOptions = {}, clock = null,
   } = opts;
   const relay = await startRelay(relayOptions);
   const pairing = { secret, relay: RELAY_ORIGIN, name: 'Test Daylight' };
@@ -118,7 +135,13 @@ export async function setup(opts = {}) {
   let db = env.DB;
   await db.batch(migrationStatements().map((s) => db.prepare(s)));
 
-  const dispatch = (url, init = {}) => mf.dispatchFetch(url, init);
+  const dispatch = (url, init = {}) => {
+    if (!clock) return mf.dispatchFetch(url, init);
+    const headers = new Headers(init.headers);
+    if (!headers.has('X-DLS-Test-Now')) headers.set('X-DLS-Test-Now', String(clock()));
+    return mf.dispatchFetch(url, { ...init, headers });
+  };
+  const now = () => (clock ? clock() : Date.now());
 
   /** Node-side fetch: the Worker's origin through Miniflare, the relay through the mock. */
   const nodeFetch = async (input, init = {}) => {
@@ -152,7 +175,7 @@ export async function setup(opts = {}) {
     return { status: res.status, headers: res.headers, json: parsed, text };
   }
 
-  async function cron(t = Date.now()) {
+  async function cron(t = now()) {
     const r = await dispatch(`${serverUrl}/cdn-cgi/local/scheduled?time=${t}&cron=*+*+*+*+*&format=json`);
     await r.text();
     const last = await dispatch(`${serverUrl}/__test/last-cron`);
@@ -259,7 +282,7 @@ export async function setup(opts = {}) {
   return {
     raw,
     mf, get env() { return env; }, get db() { return db; }, relay, claude, web, values, keys, seed, secret, pairing, serverCode, pairingLink, outboundLog,
-    api, cron, email, lastEmail, restart, dispatch, nodeFetch, receiver, client, lane, serverUrl, dns, dnsLog, dbName,
+    api, cron, email, lastEmail, restart, dispatch, nodeFetch, receiver, client, lane, serverUrl, dns, dnsLog, dbName, now,
     emailAddress: `daylight-${values.emailToken}@${emailDomain}`,
     async close() { await mf.dispose(); await relay.close(); },
     async rows(sql, ...params) { return (await db.prepare(sql).bind(...params).all()).results; },
