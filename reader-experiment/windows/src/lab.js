@@ -655,8 +655,12 @@ export function createLab({
     return activityRun;
   }
 
-  /** The activity log, oldest first (F26). */
-  async function activity() { const a = await get(ACTIVITY_KEY); return Array.isArray(a) ? a : []; }
+  /** The activity log, oldest first (F26), with every event logged so far in it. */
+  async function activity() {
+    await activityRun;
+    const a = await get(ACTIVITY_KEY);
+    return Array.isArray(a) ? a : [];
+  }
 
   /**
    * "Copy diagnostics" (F26): diagnosticsReport over the app, Lab, what the Daylight said, the outbox's counts, the

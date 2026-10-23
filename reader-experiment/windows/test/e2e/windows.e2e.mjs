@@ -49,8 +49,9 @@
 //     restart (the window hidden), a link it puts in the Reader reads "In your Reader ✓" at the next ack read, and the
 //     toast "In your Reader: {title}" goes out while the window is hidden;
 //   - F09: a daylightshare://send link asks first (the status file's sendQuestion: "Send to {name}?", the title and host);
-//     --e2e-confirm sends it, cleaned, with x-orig; quick=1 asks too while quick sends are off, and Cancel sends
-//     nothing.
+//     --e2e-confirm sends it, cleaned, with x-orig; quick=1 asks too while quick sends are off, with the
+//     needs-quick-sends note and Open setting under the question (sendQuestion's note and noteButton, LAB-PLAN 1.6),
+//     and Cancel sends nothing.
 //
 //   node test/e2e/windows.e2e.mjs --installer out/Send-to-Daylight-windows-setup.exe
 //   node test/e2e/windows.e2e.mjs --exe src-tauri/target/release/send-to-daylight.exe     (no install, update, uninstall)
@@ -520,7 +521,7 @@ async function main() {
   check((readStatus()?.log ?? []).some((l) => l.includes(`notified: ${L.fillText(L.LAB_TEXT.readerToast, { title: readerRow?.title || 'example.com/e2e/for-the-reader' })} — ${L.LAB_TEXT.rows.reader.sentence}`)) || readStatus()?.hidden === false,
     'through Windows’ notifications');
 
-  step('F09: a daylightshare://send link asks first; --e2e-confirm sends it, cleaned; quick=1 asks too while quick sends are off, and Cancel sends nothing');
+  step('F09: a daylightshare://send link asks first; --e2e-confirm sends it, cleaned; quick=1 asks too while quick sends are off, says why, and Cancel sends nothing');
   const SEND_URL = 'https://example.com/e2e/send-link';
   const sendLink = `daylightshare://send?url=${encodeURIComponent(`${SEND_URL}?utm_campaign=e2e`)}&title=${encodeURIComponent('A send link')}`;
   launchAgain([sendLink], 'a send link');
@@ -535,6 +536,8 @@ async function main() {
   launchAgain([`${sendLink}&quick=1`], 'a quick send link (quick sends off)');
   const asking2 = await waitStatus('the question again', (s) => !!s.sendQuestion, { timeout: 30000 }).catch(() => readStatus() ?? {});
   check(!!asking2.sendQuestion, 'quick=1 asks too: quick sends are off by default');
+  check(asking2.sendQuestion?.note === L.LAB_TEXT.needs['needs-quick-sends'] && asking2.sendQuestion?.noteButton === L.LAB_TEXT.buttons['needs-quick-sends'],
+    'and says why under it, with Open setting (needs-quick-sends, as Android’s sheet)', JSON.stringify(asking2.sendQuestion));
   const before = received.length;
   launchAgain(['--e2e-cancel'], 'Cancel (test hook)');
   await waitStatus('the question to close', (s) => !s.sendQuestion, { timeout: 20000 }).catch(() => {});

@@ -22,6 +22,8 @@ on:
     paths:
       - 'reader-experiment/windows/**'
       - 'reader-experiment/share/js/**'
+      # The protocol's vectors, which the unit tests read (test-vectors.json; normalise.json's text-only cases, F16).
+      - 'reader-experiment/share/vectors/**'
       - '!reader-experiment/share/**/*.md'
       # The Daylight server's client module, which build.mjs copies into the window (Lab, LAB-PLAN 2.6), and its vectors,
       # which the Lab unit and UI tests read (F00.5: the vector pairing's Server code and fingerprint).

@@ -240,7 +240,7 @@ test('lab-wave.json names the Lab wave of the code here, and one the release gat
   assert.ok(wf.includes('reader-experiment/windows/lab-wave.json') && wf.includes('reader-experiment/lab-release-gate.json'));
   // A change to what the build copies or the tests read runs the workflow (the server lane's module and vectors too).
   const paths = wf.slice(wf.indexOf('    paths:'), wf.indexOf('  workflow_dispatch:'));
-  for (const p of ['reader-experiment/windows/**', 'reader-experiment/share/js/**', 'reader-experiment/server/client/**', 'reader-experiment/server/vectors/**', 'reader-experiment/lab-release-gate.json']) {
+  for (const p of ['reader-experiment/windows/**', 'reader-experiment/share/js/**', 'reader-experiment/share/vectors/**', 'reader-experiment/server/client/**', 'reader-experiment/server/vectors/**', 'reader-experiment/lab-release-gate.json']) {
     assert.ok(paths.includes(`- '${p}'`), `rx-windows runs on ${p}`);
   }
   // ...and holds the build for the code's own wave too (scripts/lab-wave.mjs, with what it reads checked out).

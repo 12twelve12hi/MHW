@@ -57,18 +57,23 @@ export function urlFromInternetShortcut(text) {
 
 export const isInternetShortcut = (name) => /\.url$/i.test(String(name ?? ''));
 
-/**
- * What a drop on the window carries, from its DataTransfer strings: the first web address in text/uri-list (lines
- * starting with # are comments), else in text/plain.
- */
-export function linkFromDrop({ uriList = '', text = '' } = {}) {
-  for (const line of String(uriList).split(/\r?\n/)) {
+/** The first web address in a drop's text/uri-list (lines starting with # are comments), or null. */
+export function linkFromUriList(uriList = '') {
+  for (const line of String(uriList ?? '').split(/\r?\n/)) {
     const s = line.trim();
     if (!s || s.startsWith('#')) continue;
     const u = webUrl(s);
     if (u) return u;
   }
-  return findUrl(text);
+  return null;
+}
+
+/**
+ * What a drop on the window carries as v1.1 reads it (Lab off), from its DataTransfer strings: the first web address
+ * in text/uri-list, else in text/plain. With Lab on, a dropped text goes to smart intake whole (core's prepareDrop).
+ */
+export function linkFromDrop({ uriList = '', text = '' } = {}) {
+  return linkFromUriList(uriList) ?? findUrl(text);
 }
 
 export function hostOf(url) {

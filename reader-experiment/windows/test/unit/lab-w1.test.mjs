@@ -9,14 +9,16 @@
 //   F08  "Sent to {name}" on the notifications;
 //   F09  daylightshare://send links: Lab off, not paired, not a web address, the question, quick sends and their limit;
 //   F16  smart intake at every entry point (the clipboard, a dropped text, a .url file, a send link), its Use switch,
-//        x-orig on the wire, and v1.1 exactly with Lab off;
-//   F26  the test article, the activity log, diagnostics (redacted) and the checks' lines;
+//        x-orig on the wire, and v1.1 exactly with Lab off; every text-only case of normalise.json through the
+//        clipboard, a dropped text and a send link's text=, whole (B1: v1.1's findUrl never runs first);
+//   F26  the test article, the activity log (with each row's HTTP status), diagnostics (redacted) and the checks' lines;
 //   F33  the copied link prepared without sending (the window's question), the hotkey's toast naming the host;
 //   6.5 Q5  the Use switches.
 //
 //   node --test test/unit/lab-w1.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { load } from '../helpers/built.mjs';
 import { startMockRelay, NTFY_SH_LIMITS } from '../../../share/js/mock-relay.mjs';
 
@@ -153,6 +155,77 @@ test('F16’s Use switch off: links go exactly as shared (no x-orig); Lab off: v
     const { items } = await s.receiver.pollOnce();
     assert.ok(items.every((i) => !i.extras?.['x-orig']), 'no x-orig with Lab off or F16 off');
     await assert.rejects(s.lab.setUse('F07', false), /no Use switch/);
+  } finally { s.app.stop(); }
+});
+
+/** share/vectors/normalise.json's text-only cases: shared text with no URL of its own (with a subject or not). */
+const NORMALISE = JSON.parse(fs.readFileSync(new URL('../../../share/vectors/normalise.json', import.meta.url), 'utf8'));
+const TEXT_CASES = NORMALISE.cases.filter((c) => c.input.url === undefined && c.input.text !== undefined);
+/** B1's four: what v1.1's findUrl cut short or left a quote on, and what F16 finds. */
+const B1_FOUR = [
+  ['See (https://en.wikipedia.org/wiki/Foo_(bar)).', 'https://en.wikipedia.org/wiki/Foo_(bar)'],
+  ['He said “https://example.com/q”', 'https://example.com/q'],
+  ['Link: ‘https://example.com/s’ and «https://example.com/t»', 'https://example.com/s'],
+  ['[https://example.com/x]', 'https://example.com/x'],
+];
+
+test('F16: every text-only case of normalise.json goes whole to smart intake through the clipboard, a dropped text and a send link’s text= (B1)', async () => {
+  // Windows has no selections (F11) and only a send link carries a subject (title=): for a case with either, the
+  // vector pins the URL and x-orig, and a send link's title is the subject's; elsewhere the title is the text's own.
+  assert.equal(TEXT_CASES.length, 39);
+  const s = await setup();
+  try {
+    const enc = encodeURIComponent;
+    let links = 0;
+    for (const c of TEXT_CASES) {
+      const i = c.input;
+      await s.lab.setUse('F16', i.clean !== false);
+      const clip = await s.app.prepareClipboard({ text: i.text });
+      const drop = await s.app.prepareDrop({ uriList: '', text: i.text });
+      const ask = await s.app.prepareSendLink(`daylightshare://send?text=${enc(i.text)}${i.subject ? `&title=${enc(i.subject)}` : ''}`);
+      if (!c.expect.url) {
+        assert.equal(clip.code, 'no-link', `${c.name} (clipboard)`);
+        assert.equal(drop, null, `${c.name} (drop)`);
+        assert.equal(ask.state, 'not-web', `${c.name} (send link)`);
+        continue;
+      }
+      assert.deepEqual([drop.url, drop.text], ['', i.text], `${c.name}: the dropped text goes whole, with no address of its own`);
+      const title = c.expect.title && c.expect.title !== c.expect.url ? c.expect.title : '';
+      for (const [via, row, subject] of [
+        ['clipboard', (await s.app.sendPrepared(clip.link))[0].row, false],
+        ['drop', await s.app.sendLink(drop.url, '', { text: drop.text }), false],
+        ['send link', (await s.app.sendPrepared(ask.link))[0].row, true],
+      ]) {
+        const what = `${c.name} (${via})`;
+        assert.equal(row.url, c.expect.url, what);
+        assert.deepEqual(row.extras ?? {}, c.expect.orig ? { 'x-orig': c.expect.orig } : {}, what);
+        if (!i.source && (!i.subject || subject)) assert.equal(row.title, title, what);
+        links++;
+      }
+    }
+    assert.equal(links, 3 * TEXT_CASES.filter((c) => c.expect.url).length);
+    await s.lab.setUse('F16', true);
+    // B1's four, dropped as text: the vectors' URLs on the wire, and the row named after the host F16 found.
+    const ids = new Map();
+    for (const [text, url] of B1_FOUR) {
+      assert.equal(TEXT_CASES.find((c) => c.input.text === text)?.expect.url, url, text);
+      const d = await s.app.prepareDrop({ text });
+      assert.equal(d.link, L.findShareUrl(text).url);
+      ids.set((await s.app.sendLink(d.url, '', { text: d.text })).id, url);
+    }
+    const { items } = await s.receiver.pollOnce();
+    for (const [id, url] of ids) assert.equal(items.find((it) => it.header.id === id)?.header.url, url);
+    // A text/uri-list link goes as it is, Lab on or off.
+    assert.deepEqual(await s.app.prepareDrop({ uriList: '# c\r\nhttps://example.com/a_(b)', text: 'See (https://example.com/other).' }), { url: 'https://example.com/a_(b)', text: '', link: 'https://example.com/a_(b)' });
+    // Lab off: v1.1 exactly, its findUrl on the dropped text (which cut B1's Wikipedia link short).
+    await s.lab.setLab(false);
+    for (const [text] of B1_FOUR) {
+      const u = ds.findUrl(text);
+      assert.deepEqual(await s.app.prepareDrop({ text }), { url: u, text: '', link: u }, text);
+    }
+    assert.equal((await s.app.prepareDrop({ text: B1_FOUR[0][0] })).url, 'https://en.wikipedia.org/wiki/Foo_(bar');
+    assert.deepEqual(await s.app.prepareDrop({ uriList: '# c\r\nhttps://example.com/a_(b)' }), { url: 'https://example.com/a_(b)', text: '', link: 'https://example.com/a_(b)' });
+    assert.equal(await s.app.prepareDrop({ text: 'no address here' }), null);
   } finally { s.app.stop(); }
 });
 
@@ -521,15 +594,18 @@ test('F09: parseSendLink reads daylightshare://send links and nothing else; it n
   }
 });
 
-test('F09: a send link asks "Send to {name}?" with the title and host; quick sends only when allowed, at most 10 a minute', async () => {
+test('F09: a send link asks "Send to {name}?" with the title and host (and why, when it asked for a quick send while quick sends are off); quick sends only when allowed, at most 10 a minute', async () => {
   let clock = Date.now();
   const s = await setup({ now: () => clock });
   try {
     const A = LAB_TEXT.automation;
     const link = 'daylightshare://send?url=https%3A%2F%2Fexample.com%2Fstory%3Futm_source%3Dx&title=A%20story&quick=1';
     let r = await s.app.prepareSendLink(link);
-    assert.deepEqual(r, { ask: true, link: { url: 'https://example.com/story', title: 'A story', orig: 'https://example.com/story?utm_source=x' }, title: 'Send to Desk Daylight?', lines: ['A story', 'example.com'] });
+    // quick=1 while "Allow quick sends from other apps" is off: the question, which says why (quickOff: the window shows
+    // needs-quick-sends with Open setting under it, LAB-PLAN 1.6; WIN1 review note 1).
+    assert.deepEqual(r, { ask: true, link: { url: 'https://example.com/story', title: 'A story', orig: 'https://example.com/story?utm_source=x' }, title: 'Send to Desk Daylight?', lines: ['A story', 'example.com'], quickOff: true });
     assert.equal(r.title, L.fillText(A.confirmTitle, { name: 'Desk Daylight' }));
+    assert.equal((await s.app.prepareSendLink(link.replace('&quick=1', ''))).quickOff, false, 'no quick=1: nothing to explain');
     // text= goes through smart intake; a link without a title shows its host only.
     r = await s.app.prepareSendLink('daylightshare://send?text=' + encodeURIComponent('Worth a read https://example.org/p?fbclid=1'));
     assert.deepEqual([r.ask, r.link.url, r.link.title, r.lines], [true, 'https://example.org/p', 'Worth a read', ['Worth a read', 'example.org']]);
@@ -542,7 +618,8 @@ test('F09: a send link asks "Send to {name}?" with the title and host; quick sen
     // Quick sends: off by default (the question shows); on, at most 10 a minute, then the question again.
     assert.equal(await s.lab.setQuickSends(true), true);
     for (let i = 0; i < 10; i++) assert.equal((await s.app.prepareSendLink(link)).ask, false, `quick send ${i + 1}`);
-    assert.equal((await s.app.prepareSendLink(link)).ask, true, 'the 11th within a minute asks');
+    const eleventh = await s.app.prepareSendLink(link);
+    assert.deepEqual([eleventh.ask, eleventh.quickOff], [true, false], 'the 11th within a minute asks; the setting is on, so no note');
     assert.equal((await s.app.prepareSendLink(link.replace('&quick=1', ''))).ask, true, 'without quick=1 it asks');
     clock += 61000;
     assert.equal((await s.app.prepareSendLink(link)).ask, false, 'a minute later, quick again');
@@ -604,6 +681,60 @@ test('F26: the test article goes as a page with x-cap "test" and is followed to 
     await s.lab.logEvent({ type: 'x' });
     assert.equal((await s.lab.activity()).length, 3);
   } finally { s.app.stop(); }
+});
+
+test('F26: the activity log carries the HTTP status of a row’s last failed publish: a send, Retry now, a re-send in a tick, a pass of the offline queue; 0 once it goes', async () => {
+  let fail = null; // the inbox topic's next publishes: status | null each
+  const rel = await startMockRelay({ failPublish: (topic) => fail?.(topic) ?? null });
+  let clock = Date.now();
+  const s = await setup({ rel, now: () => clock });
+  try {
+    const inbox = (await ds.deriveKeys(s.secret)).inboxTopic;
+    const answer = (...statuses) => { fail = (topic) => (topic === inbox && statuses.length ? statuses.shift() : null); };
+    const last = async (id) => (await s.lab.activity()).filter((e) => e.id8 === id.slice(0, 8)).at(-1);
+    const said = (e) => [e.type, e.status, e.http];
+
+    // Turned down (400): the send, failed/refused, with its 400.
+    answer(400);
+    const a = await s.app.sendLink('https://example.com/refused', 'Refused');
+    assert.deepEqual([a.status, a.errorCode, a.http], ['failed', 'refused', 400]);
+    assert.deepEqual(said(await last(a.id)), ['send', 'failed/refused', 400]);
+    assert.ok(L.activityLine(await last(a.id)).endsWith(` send ${a.id.slice(0, 8)} url failed/refused 400`));
+    // The tick once its back-off is over: re-sent and turned down again (403), so the status stays: 'resend'.
+    clock += 3.5 * 3600e3;
+    answer(403);
+    await s.app.tick();
+    assert.deepEqual(said(await last(a.id)), ['resend', 'failed/refused', 403]);
+    // The next one goes: 'status', sent, and 0.
+    clock += 3.5 * 3600e3;
+    answer();
+    await s.app.tick();
+    assert.deepEqual(said(await last(a.id)), ['status', 'sent', 0]);
+    assert.equal((await s.app.rows()).find((r) => r.id === a.id).http, 0);
+
+    // A 429 (a busy relay): the row waits as for a connection, and says 429; Retry now meets a 413.
+    answer(429);
+    const b = await s.app.sendLink('https://example.com/busy', 'Busy');
+    assert.deepEqual(said(await last(b.id)), ['send', 'failed/network', 429]);
+    answer(413);
+    await s.app.retry(b.id);
+    assert.deepEqual(said(await last(b.id)), ['retry', 'failed/full', 413]);
+
+    // A pass of the offline queue (F07) after another 429, then one that goes.
+    answer(429);
+    const c = await s.app.sendLink('https://example.com/later', 'Later');
+    clock += 4 * MIN;
+    answer(429);
+    assert.deepEqual((await s.app.flushOffline()).map((r) => [r.id, r.http]), [[c.id, 429]]);
+    assert.deepEqual(said(await last(c.id)), ['flush', 'failed/network', 429]);
+    clock += 4 * MIN;
+    answer();
+    assert.deepEqual((await s.app.flushOffline()).map((r) => [r.id, r.status, r.http]), [[c.id, 'sent', 0]]);
+    assert.deepEqual(said(await last(c.id)), ['flush', 'sent', 0]);
+    // The diagnostics' events carry it too (no address in them).
+    const text = await s.lab.diagnostics({ version: '1.2.0', rows: await s.app.rows() });
+    assert.match(text, new RegExp(` retry ${b.id.slice(0, 8)} url failed/full 413\n`));
+  } finally { s.app.stop(); await rel.close(); }
 });
 
 test('F26: Setup check’s lines on Windows, in LAB_TEXT’s words, each unmet one with its button', () => {

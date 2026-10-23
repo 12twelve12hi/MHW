@@ -40,10 +40,11 @@ export function noteBox() {
  * The needs-setup note (1.5) in `box`: exactly one sentence, at most one button that fixes it from here (Copy Server
  * code on Windows) and OK, which closes it. Never a toast, never a dialog: it stays until OK, a click on another
  * control (dismissNotesOnOtherControls) or leaving the screen.
- * ok: false for a note on its way to its answer (LAB_TEXT.checking) and for the server section’s state.
+ * ok: false for a note on its way to its answer (LAB_TEXT.checking) and for the server section’s state. onOk: where
+ * the focus goes after OK (by default, the row of the note's feature).
  * -> the note's element (data-state carries `state`, for tests).
  */
-export function labNote(box, message, { state = '', button: label = null, onButton = null, ok = true } = {}) {
+export function labNote(box, message, { state = '', button: label = null, onButton = null, ok = true, onOk = null } = {}) {
   box.textContent = '';
   const note = el('div', 'lab-note-body');
   if (state) note.dataset.state = state;
@@ -63,7 +64,7 @@ export function labNote(box, message, { state = '', button: label = null, onButt
         ev.stopPropagation();
         const row = box.closest('.lab-feature')?.querySelector('.lab-row');
         clearNote(box);
-        row?.focus();
+        if (onOk) onOk(); else row?.focus();
       });
       acts.append(b);
     }
@@ -566,9 +567,11 @@ export function renderLabRow(row, d, { v11, title, kind, when, newest = false, o
 
 /**
  * A question before something is sent (F09's send link, F33's copied link) in `box`: a title, lines, and Send and
- * Cancel. on: {send(), cancel()}. -> the group (role group, named by its title); Send has the focus.
+ * Cancel. on: {send(), cancel()}. note: {message, state, button, onButton, onOk} for a needs-setup note (1.5) under
+ * Send and Cancel, in its polite live region: F09's needs-quick-sends with Open setting, when the link asked to go
+ * without the question; its OK gives Send the focus. -> the group (role group, named by its title); Send has the focus.
  */
-export function renderQuestion(box, { title, lines = [] } = {}, on = {}) {
+export function renderQuestion(box, { title, lines = [], note = null } = {}, on = {}) {
   box.textContent = '';
   const ask = el('div', 'lab-note-body lab-question-body');
   const h = el('p', 'lab-question-title', title);
@@ -586,6 +589,19 @@ export function renderQuestion(box, { title, lines = [] } = {}, on = {}) {
   ask.append(acts);
   box.append(ask);
   box.hidden = false;
+  if (note) {
+    const notes = noteBox();
+    notes.classList.add('lab-question-note');
+    ask.append(notes);
+    const shown = labNote(notes, note.message, {
+      state: note.state ?? '', button: note.button ?? null, onButton: note.onButton ?? null,
+      onOk: () => { yes.focus(); note.onOk?.(); },
+    });
+    // The question's description too, so a screen reader says it with the question when the focus lands on Send.
+    const text = shown.querySelector('.lab-note-text');
+    text.id = nextId('lab-question-note');
+    ask.setAttribute('aria-describedby', text.id);
+  }
   yes.focus();
   return ask;
 }

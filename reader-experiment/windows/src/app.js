@@ -9,15 +9,15 @@
 import { bridge, appStorage } from './bridge.js';
 import { createApp, serial, MAX_FILE, tooBig } from './core.js';
 import { ShareError } from './daylight-share.js';
-import { LAB_TEXT, fillText } from './daylight-lab.js';
-import { LAB_NOTE_ENABLED, USE_SWITCHES, isQueued, labRowText, setupChecks } from './lab.js';
+import { LAB_TEXT, fillText, needsMessage } from './daylight-lab.js';
+import { LAB_NOTE_ENABLED, USE_SWITCHES, PLATFORM, isQueued, labRowText, setupChecks } from './lab.js';
 import {
   labNote, noteFollowUp, clearNote, noteBox, dismissNotesOnOtherControls, renderWhatsInLab, updateWhatsInLab,
   renderServerSection, renderRepaired, renderLabNote, renderLabRow, renderQuestion, renderBigFiles, renderSetupCheck,
   updateSetupCheck, useSwitch, featureSwitch,
 } from './lab-ui.js';
 import {
-  rowView, kindLabel, displayTitle, relativeTime, sendSummary, linkFromDrop, accelFromEvent, describeAccel,
+  rowView, kindLabel, displayTitle, relativeTime, sendSummary, accelFromEvent, describeAccel,
   hostOf, DEFAULT_HOTKEY,
 } from './logic.js';
 
@@ -311,12 +311,12 @@ function titleFromHtml(html, link) {
   } catch { return ''; }
 }
 
-async function sendLinkFromWindow(link, title, text = '') {
+/** A dropped link: prepareDrop's {url, text, link}. With Lab on, a dropped text goes whole to smart intake (F16). */
+async function sendLinkFromWindow({ url, text, link }, title) {
   setBusy(true);
   setStatus('Sending the link…');
   try {
-    // With Lab on, the dropped text goes along, so smart intake (F16) reads a headline with its link.
-    await showResults([await app.settle(hostOf(link) || link, () => app.sendLink(link, title, labIsOn ? { text } : {}))]);
+    await showResults([await app.settle(hostOf(link) || link, () => app.sendLink(url, title, { text }))]);
   } finally {
     setBusy(false);
   }
@@ -350,9 +350,12 @@ function onDrop(e) {
   const text = dt.getData('text/plain');
   const html = dt.getData('text/html');
   if (files.length) { sendFiles(files); return; }
-  const link = linkFromDrop({ uriList, text });
-  if (!link) { setStatus('Only files and web links (http and https) can be sent.', true); return; }
-  sendLinkFromWindow(link, titleFromHtml(html, link), uriList ? '' : text);
+  // A link from text/uri-list as it is; else the dropped text: v1.1's first address with Lab off, the whole text to
+  // smart intake with Lab on (core's prepareDrop).
+  app.prepareDrop({ uriList, text }).then((d) => {
+    if (!d) { setStatus('Only files and web links (http and https) can be sent.', true); return; }
+    return sendLinkFromWindow(d, titleFromHtml(html, d.link));
+  }).catch((err) => setStatus(err?.message ?? String(err), true));
 }
 
 /** F33 with Lab on: the clipboard command shows the host and Send first (its Use switch on). */
@@ -418,15 +421,41 @@ async function onSendLink(link) {
   renderSendQuestion();
 }
 
-/** The send link's question in the send view (F09): "Send to {name}?", the title and host, Send and Cancel. */
+/**
+ * Whether the send link's question says why it asked (F09, LAB-PLAN 1.6 needs-quick-sends): the link asked to go
+ * without it while "Allow quick sends from other apps" is off, the setting is still off, and OK hasn't closed the note.
+ */
+const quickNoteDue = () => !!pendingSend?.quickOff && !pendingSend.noteClosed && labSettings.labQuickSends !== true;
+
+/**
+ * The send link's question in the send view (F09): "Send to {name}?", the title and host, Send and Cancel; under them,
+ * when quickNoteDue, the needs-quick-sends note with Open setting (as Android's sheet), which opens What's in Lab at
+ * the switch and leaves the question here for when the send view shows again.
+ */
 function renderSendQuestion() {
   const box = $('lab-sendlink');
   if (!pendingSend || !labIsOn) { hideBox('lab-sendlink'); return; }
-  renderQuestion(box, { title: pendingSend.title, lines: pendingSend.lines }, {
+  const why = quickNoteDue() ? {
+    message: needsMessage('needs-quick-sends', { platform: PLATFORM }), state: 'needs-quick-sends',
+    button: LAB_TEXT.buttons['needs-quick-sends'], onButton: openQuickSendsSetting,
+    // OK closes it for this question: it doesn't come back when the send view is drawn again.
+    onOk: () => { if (pendingSend) pendingSend.noteClosed = true; writeStatusSoon(); },
+  } : null;
+  renderQuestion(box, { title: pendingSend.title, lines: pendingSend.lines, note: why }, {
     send: () => answerSend(true),
     cancel: () => answerSend(false),
   });
   writeStatusSoon();
+}
+
+/**
+ * "Open setting" (1.5) on the needs-quick-sends note: What's in Lab, at "Allow quick sends from other apps" (F09's
+ * row), in view with its footer and focused. It never changes the setting; Back returns to Settings, as from there.
+ */
+function openQuickSendsSetting() {
+  note('open setting: quick sends');
+  if (view === 'view-pair' || view === 'view-send') settingsFrom = view;
+  openWhats({ focus: 'F09' });
 }
 
 async function answerSend(yes) {
@@ -913,8 +942,9 @@ function useControls(model) {
 /**
  * What's in Lab (1.4): the cached states at once (the server's answer of the last 10 minutes, 1.5), else "Checking your
  * Daylight server…" on the heading; then the ack topic and the server, asked now, update the lines in place.
+ * focus: a feature whose switch gets the focus, in view with its footer ("Open setting", 1.5), else Back has it.
  */
-async function openWhats() {
+async function openWhats({ focus = null } = {}) {
   const seq = ++labSeq;
   show('view-whats');
   const box = $('whats');
@@ -926,10 +956,26 @@ async function openWhats() {
   if (seq !== labSeq || view !== 'view-whats') return;
   if (!model.lab) { renderSettings(); return; }
   renderWhatsInLab(box, model, { onTap: onFeature, checking: !model.fresh, use: useControls(model) });
+  if (focus) showFeatureSwitch(box, focus);
   try { model = await app.lab.overview({ refresh: true }); } catch { return; }
   if (seq !== labSeq || view !== 'view-whats' || !model.lab) return;
   updateWhats(box, model);
+  // The live answer's lines can move the switch (and a list drawn again loses the focus): the switch again, in view
+  // with its footer, unless the user has moved on.
+  const at = document.activeElement;
+  if (focus && (!at || at === document.body || at === switchOf(box, focus))) showFeatureSwitch(box, focus);
   writeStatusSoon();
+}
+
+/** A feature's switch on What's in Lab, or null. */
+const switchOf = (box, id) => box.querySelector(`li.lab-feature[data-feature="${id}"] .lab-use input.switch`);
+
+/** A feature's switch on What's in Lab ("Open setting", 1.5): focused, and scrolled into view with its footer. */
+function showFeatureSwitch(box, id) {
+  const input = switchOf(box, id);
+  if (!input) return;
+  input.focus({ preventScroll: true });
+  input.closest('.lab-use').scrollIntoView({ block: 'nearest' });
 }
 
 /** The Daylight server section (2.6). Drawn again after a setup, a move or a new address. */
@@ -1100,6 +1146,13 @@ function renderSend() {
   renderSendQuestion();
 }
 
+/** The send link question's note as the window shows it (F09's needs-quick-sends): {note, noteButton}, or none. */
+function sendQuestionNote() {
+  const n = $('lab-sendlink').querySelector('.lab-question-note .lab-note-body');
+  if (!n) return {};
+  return { note: n.querySelector('.lab-note-text')?.textContent ?? '', noteButton: n.querySelector('.lab-note-fix')?.textContent ?? '' };
+}
+
 /** The end-to-end test reads the outbox from a file (only with --e2e-status; Rust ignores this otherwise). */
 let statusTimer = null;
 function writeStatusSoon() {
@@ -1115,7 +1168,7 @@ function writeStatusSoon() {
         statusText: $('status').textContent, pairError: $('pair-error').textContent, log: log.slice(-50),
         // Lab, Wave 1: the send link's question (F09), the clipboard button's words (F33), the one-time note (1.2),
         // the check-in header (F01) and whether the window was hidden (F01's toast shows only then).
-        sendQuestion: pendingSend && labIsOn ? { title: pendingSend.title, lines: pendingSend.lines } : null,
+        sendQuestion: pendingSend && labIsOn ? { title: pendingSend.title, lines: pendingSend.lines, ...sendQuestionNote() } : null,
         clipButton: $('send-clip').textContent, noteShown: !$('lab-note').hidden, checkInShown: $('lab-checkin').hidden ? '' : $('lab-checkin').textContent,
         hidden: !seen(),
       });
@@ -1207,7 +1260,7 @@ async function init() {
   $('close-settings').addEventListener('click', closeSettings);
   $('comfort').addEventListener('change', onComfort);
   $('lab').addEventListener('change', onLab);
-  $('open-whats').addEventListener('click', openWhats);
+  $('open-whats').addEventListener('click', () => openWhats());
   $('open-server').addEventListener('click', openServer);
   $('whats-back').addEventListener('click', backToSettings);
   $('server-back').addEventListener('click', backToSettings);

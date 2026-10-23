@@ -215,17 +215,26 @@ there: the window is the plain app's.
   Desk Daylight* / *Paper: Sent · waiting for your Daylight.*
 - **Send links** (F09). `daylightshare://send?url=<address>&title=<title>[&text=<text>][&quick=1]` (from Shortcuts, a
   script, a web page) opens the window and asks *Send to {name}?* with the title and the site, **Send** and **Cancel**.
-  `quick=1` sends without asking only when **Allow quick sends from other apps** is on, at most 10 a minute. `text=` goes
-  through Clean links; a send link never takes a file. With Lab off: *Turn on Lab in Send to Daylight to use this.*
+  `quick=1` sends without asking only when **Allow quick sends from other apps** is on, at most 10 a minute. A link that
+  asks for a quick send while that is off still asks, and says why under **Send** and **Cancel**, as the Android sheet
+  does: *Quick sends from other apps are off. Turn on “Allow quick sends from other apps” in Lab settings.* with **Open
+  setting** (What's in Lab, at that switch, in view with its footer and focused; it never turns it on by itself; the
+  question waits in the send view meanwhile) and **OK**. `text=` goes through Clean links; a send link never takes a
+  file. With Lab off: *Turn on Lab in Send to Daylight to use this.*
 - **Clean links** (F16). Every link (dropped, copied, a `.url` file, a send link) loses its tracking (`utm_…`, `fbclid`,
   …), Google AMP and redirect wrappers come off, and a shared "headline + link" keeps the headline as its title. The link
-  as shared goes along for your Daylight (`x-orig`, *Cleaned from …*).
+  as shared goes along for your Daylight (`x-orig`, *Cleaned from …*). A dropped or copied text, and a send link's
+  `text=`, go to smart intake whole, which finds the link by its own rules: *See (https://en.wikipedia.org/wiki/Foo_(bar)).*
+  keeps its closing parenthesis, and quotes and brackets around a link stay off it (with Lab off, v1.1's first address,
+  as before). A link dragged from a browser's address bar or a page (`text/uri-list`) is taken exactly as given, then
+  cleaned.
 - **Setup check** (F26), from What's in Lab: *✓ Pairing*, *Send to shortcut*, *Open at login*, *Hotkey* and
   *Notifications* (as Windows reports them), each one not met with **Open setting** (this app's Settings) or **Open
   Settings** (Windows' notification settings); **Send a test article** (*It’s added to your Reader library; delete it
   there when you’re done.*), followed along the timeline to *✓ Delivered* and *✓ In your Reader*; the **Activity log**
-  (the last 200 sends, acks and states, without titles or addresses); **Copy diagnostics** (no address, title, code,
-  topic or Server code in it).
+  (the last 200 sends, re-sends, acks and states, without titles or addresses; a failed send, retry, re-send or pass of
+  the offline queue ends with the relay's HTTP status, such as `413` or `429`, from the protocol module's row `http`);
+  **Copy diagnostics** (no address, title, code, topic or Server code in it).
 - **Send copied link** (F33). The clipboard command reads *Send copied link* in the window and the tray menu. The
   window's button shows *Send {site} to {name}?* with **Send** and **Cancel** first; the tray entry and the hotkey send
   at once, and their notification names the site, as before.
@@ -306,9 +315,9 @@ uses an installed Microsoft Edge, the engine of WebView2). Icons come from the e
 ### CI and the end-to-end test
 
 [`.github/workflows/rx-windows.yml`](../../.github/workflows/rx-windows.yml) (the win lane's, LAB-PLAN 6.1: every job
-carries `# lane: win`) runs for every push that touches this folder, `share/js/`, `server/client/` (the Daylight server's
-client module, which the build copies in), `server/vectors/` (which the Lab tests read) or the Lab release gate. Its
-jobs:
+carries `# lane: win`) runs for every push that touches this folder, `share/js/`, `share/vectors/` (the protocol's
+vectors and `normalise.json`, which the unit tests read), `server/client/` (the Daylight server's client module, which
+the build copies in), `server/vectors/` (which the Lab tests read) or the Lab release gate. Its jobs:
 
 - **app** (`windows-latest`): unit tests (node, and Rust's `args.rs` and `atomic.rs`), `tauri build`, then
   `test/e2e/windows.e2e.mjs` against the mock relay;
@@ -354,7 +363,8 @@ and keeps it) work only in an app started in test mode; otherwise none of these 
     the Reader: at the next ack read the status file shows *In your Reader ✓* (F01.1) and the log the toast *In your
     Reader: {title}* (no toast if the window had to be opened to read the ack). A `daylightshare://send` link asks *Send to Desk Daylight?* with the title
     and site (`sendQuestion`), nothing goes before `--e2e-confirm`, which sends it cleaned with `x-orig`; with
-    `quick=1` it asks too (quick sends are off) and `--e2e-cancel` sends nothing (F09.3). Then it restarts with
+    `quick=1` it asks too (quick sends are off), with the needs-quick-sends sentence and **Open setting** under it
+    (`sendQuestion.note`, `noteButton`), and `--e2e-cancel` sends nothing (F09.3). Then it restarts with
     `--e2e-lab 0`: Lab is off and saved, the ledger is kept, the rows have no timeline words, and the status file
     equals the Lab-on one but for Lab's own fields (a Lab-off status snapshot);
 11. zero-fills `outbox.json` and deletes the Run entry, restarts (with `--e2e-lab 1`, which turns Lab back on): the
@@ -423,9 +433,13 @@ off v1.1 re-sends it (F07, F07.3); a Lab Daylight's states as the rows' words (*
 Reader*, *Waiting for a tap…*), v1.1's words for a v1.1 Daylight, the ack topic read after delivery only while a row
 waits for its state, also before any hello is heard (the Lab frame after the ack: the tick and the faster checks read
 on to *In your Reader ✓* and the toast), the faster checks only while the window shows, the toast's hook once (F01); "Sent to {name}" and the host (F08, F33); the copied link prepared without sending (F33);
-send links: what they read, Lab off, unpaired, not a web address (a file path among them), the question, quick sends
-and their limit (F09); F02's gate; the test article to the Reader, the activity log and redacted diagnostics, Setup
-check's lines (F26).
+send links: what they read, Lab off, unpaired, not a web address (a file path among them), the question (and why it
+asks when `quick=1` came while quick sends are off), quick sends and their limit (F09); every text-only case of
+`../share/vectors/normalise.json` (39) through the clipboard, a dropped text and a send link's `text=`, whole, with B1's
+four (parentheses, curly quotes, single quotes and », brackets) on the wire, and v1.1's `findUrl` on a dropped text only
+with Lab off (F16); F02's gate; the test article to the Reader, the activity log and redacted diagnostics, Setup
+check's lines (F26); the activity log's HTTP status against a mock relay that turns publishes down (400, 403, 413, 429:
+a send, Retry now, a re-send in a tick, a pass of the offline queue; 0 once it goes).
 
 `test/ui/lab.test.mjs` opens the window's page as the accessibility checks do: Lab first in Settings and on by default,
 with the one-time note once (F00.1, 1.2); a switch that can't be saved is put back; What's in Lab with short states
@@ -443,7 +457,10 @@ nothing is clipped at the narrowest window. `test/ui/lab-off-parity.test.mjs` (a
 `test/ui/lab-w1.test.mjs` does the same for Wave 1: the timeline's rows (labels everywhere, the sentence and step line
 on the newest row and the rows not settled, the details behind the title, "{label}. {sentence}" for screen readers and
 no step line, the check-in header, the queue with Cancel; F01.6), a Lab Daylight's *In your Reader ✓* after a tick, said
-politely (F01.1); a send link's question, Send and Cancel, Lab off and unpaired (F09.3); *Send copied link*'s question
+politely (F01.1); a send link's question, Send and Cancel, Lab off and unpaired (F09.3); with `quick=1` and quick sends
+off, the needs-quick-sends note under it (a polite live region, and the question's description), OK, and Open setting
+opening What's in Lab at the switch, in view with its footer in a 420 px window and unchanged, the question still there
+afterwards (without the note once the switch is on); B1's four as dropped text, and v1.1's reading with Lab off (F16); *Send copied link*'s question
 and its Use switch, with the tray's words following (F33.3); F02's entry point with its note, and none with Lab off
 (F02e.1); offline, *Waiting for connection* in *Waiting to send (1)*, sent once back online (F07.1, F07.2); What's in
 Lab's Use switches and quick sends with their footers; Setup check's lines and buttons, the test article to *✓ In your
@@ -515,8 +532,14 @@ the `Send-to-Daylight-windows-setup` artifact of the green rx-windows run).
 - [ ] **F08** The notifications read *Sent to {your Daylight’s name}* with the item's name (and the site for the
   hotkey).
 - [ ] **F09** A `daylightshare://send?url=…` link clicked in Edge and in Chrome opens the window with *Send to {name}?*;
-  **Send** sends it. A test page that opens `…&quick=1` by itself shows the question too (quick sends off); with **Allow
-  quick sends from other apps** on, it sends without asking, and the 11th in a minute asks again.
+  **Send** sends it. A test page that opens `…&quick=1` by itself shows the question too (quick sends off), with *Quick
+  sends from other apps are off. …* and **Open setting** under it; Narrator reads that sentence with the question when
+  the focus lands on **Send**; **Open setting** shows What's in Lab with *Allow quick sends from other apps* and its
+  footer on screen and focused (also at 225% text with Comfort). With the switch on, it sends without asking, and the
+  11th in a minute asks again (without the sentence).
+- [ ] **F16** Dragging a selected sentence with a link in it (*See (https://en.wikipedia.org/wiki/Foo_(bar)).*) from Edge,
+  Word and Notepad onto the window sends the whole Wikipedia address, with *See* as its title; a link dragged from Edge's
+  address bar is taken as given.
 - [ ] **F26.1** Setup check's test article reaches the Reader and ticks *✓ Delivered* and *✓ In your Reader*, in each
   condition of F01.1 (*Waiting for a tap on your Daylight* meanwhile where the Inbox asks).
 - [ ] **F26.3** Turning the app's notifications off in *Settings › System › Notifications* makes Setup check say *!

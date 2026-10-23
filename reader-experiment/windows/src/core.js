@@ -3,13 +3,13 @@
 // mock relay.
 
 import * as ds from './daylight-share.js';
-import { LAB_TEXT, normaliseShare, labUseOn, fillText, needsMessage, FAST_CHECK_MS } from './daylight-lab.js';
+import { LAB_TEXT, normaliseShare, findShareUrl, labUseOn, fillText, needsMessage, FAST_CHECK_MS } from './daylight-lab.js';
 import {
   createLab, isLabOn, labRowText, wantsStates, wantsFaster, parseSendLink, APP_NAME, PLATFORM, QUICK_SENDS_PER_MINUTE,
 } from './lab.js';
 import {
   fileNameFor, mimeFor, titleFromName, nameFromPath, isInternetShortcut, urlFromInternetShortcut, maintain,
-  sendSummary, hostOf, rowView,
+  sendSummary, hostOf, rowView, linkFromUriList,
 } from './logic.js';
 
 /** How items show as sent on the Daylight. */
@@ -263,7 +263,7 @@ export function createApp({
       defer = online() === false && isLabOn(await getSettings());
       return sender.send(it, defer ? { defer: true } : undefined);
     });
-    lab.logEvent({ type: defer ? 'queue' : 'send', id: row.id, kind: row.kind, status: statusOf(row) });
+    lab.logEvent({ type: defer ? 'queue' : 'send', id: row.id, kind: row.kind, status: statusOf(row), http: row.http });
     if (!defer) afterSend();
     return row;
   }
@@ -355,6 +355,25 @@ export function createApp({
     }
   }
 
+  /**
+   * A drop on the window that holds no files, from its DataTransfer strings -> what sendLink takes, {url, text}, and
+   * `link`, the address as found (for the row's name and the title the dropped HTML gives it); null when it holds no
+   * web address. The first web address in text/uri-list goes as it is. Else the dropped text: with Lab off, its first
+   * web address as v1.1 finds it (findUrl); with Lab on, the whole text goes to smart intake (F16), which finds the
+   * address by its own rules, so "See (https://en.wikipedia.org/wiki/Foo_(bar))." keeps its closing parenthesis and
+   * a curly quote after an address stays off it. v1.1's findUrl never runs first with Lab on (B1's review).
+   */
+  async function prepareDrop({ uriList = '', text = '' } = {}) {
+    const listed = linkFromUriList(uriList);
+    if (listed) return { url: listed, text: '', link: listed };
+    if (isLabOn(await getSettings())) {
+      const found = findShareUrl(text);
+      return found ? { url: '', text: String(text), link: found.url } : null;
+    }
+    const u = ds.findUrl(text);
+    return u ? { url: u, text: '', link: u } : null;
+  }
+
   /** The clipboard's text (hotkey, tray menu): sends the first web address in it. -> [{row} | {name, error}] */
   async function sendClipboard(clip = {}) {
     const p = await prepareClipboard(clip);
@@ -413,7 +432,9 @@ export function createApp({
    * A send link (F09): daylightshare://send?url=…&title=…[&text=…][&quick=1]. Nothing is sent here.
    * -> {error, state}: Lab off ("Turn on Lab in Send to Daylight to use this."), not paired (needs-pairing), or no web
    *    address in it (LAB_TEXT.automation.notWebAddress);
-   *    {ask: true, link, title: "Send to {name}?", lines: [the title, the host]}: show the question, Send and Cancel;
+   *    {ask: true, link, title: "Send to {name}?", lines: [the title, the host], quickOff}: show the question, Send and
+   *    Cancel; quickOff: the link asked for a quick send while "Allow quick sends from other apps" is off, so the
+   *    question also says so (needs-quick-sends, with Open setting; LAB-PLAN 1.6), as Android's sheet does;
    *    {ask: false, link}: a quick send (quick=1, "Allow quick sends from other apps" on, at most 10 a minute).
    */
   async function prepareSendLink(raw) {
@@ -434,7 +455,10 @@ export function createApp({
       return { ask: false, link };
     }
     const host = hostOf(link.url) || link.url;
-    return { ask: true, link, title: fillText(A.confirmTitle, { name: await daylightName() }), lines: [link.title, host].filter(Boolean) };
+    return {
+      ask: true, link, title: fillText(A.confirmTitle, { name: await daylightName() }), lines: [link.title, host].filter(Boolean),
+      quickOff: parsed.quick && s.labQuickSends !== true,
+    };
   }
 
   /** The notification after sends that came from outside the window (a quick send, F09): summary's words. */
@@ -450,7 +474,7 @@ export function createApp({
   /** "Retry now" (a failed row) and "Try again" (an expired one), as the library allows. -> the row */
   async function retry(id) {
     const row = await withSender((s) => requireSender(s).retry(id));
-    if (row) lab.logEvent({ type: 'retry', id: row.id, kind: row.kind, status: statusOf(row) });
+    if (row) lab.logEvent({ type: 'retry', id: row.id, kind: row.kind, status: statusOf(row), http: row.http });
     afterSend();
     return row;
   }
@@ -497,21 +521,26 @@ export function createApp({
   }
 
   /**
-   * Each row's status and what the timeline says of it, while Lab is on (null with Lab off): what afterAcks compares.
-   * -> Map id -> {status, s, label}
+   * Each row's status, its last publish and what the timeline says of it, while Lab is on (null with Lab off): what
+   * afterAcks compares. -> Map id -> {status, lastPublish, s, label}
    */
   async function rowStates() {
     try {
       const tl = await lab.timeline();
       if (!tl.lab) return null;
       const on = online() !== false;
-      return new Map((await rows()).map((row) => [row.id, { status: row.status, s: tl.states?.[row.id]?.s ?? null, label: labRowText(row, tl, { online: on, now: now() }).label }]));
+      return new Map((await rows()).map((row) => [row.id, {
+        status: row.status, lastPublish: row.lastPublish, s: tl.states?.[row.id]?.s ?? null,
+        label: labRowText(row, tl, { online: on, now: now() }).label,
+      }]));
     } catch { return null; }
   }
 
   /**
-   * After the ack topic was read, with Lab on: Setup check's activity log gets each row's new status and state (F26),
-   * and a row that is now in the Reader is told to onReader (F01's toast). Never throws.
+   * After a tick (its re-send pass and, when due, the ack topic), with Lab on: Setup check's activity log gets each
+   * row's new status, a re-send that left the status as it was ('resend'), each with the HTTP status of the row's last
+   * failed publish (`http`: 413, 429, …; 0 when there was none, LAB-PROTOCOL 2.7.1), and each new state (F26); a row
+   * that is now in the Reader is told to onReader (F01's toast). Never throws.
    */
   async function afterAcks(before) {
     if (!before) return;
@@ -522,7 +551,8 @@ export function createApp({
       const b = before.get(row.id);
       const a = after.get(row.id);
       if (!b || !a) continue;
-      if (a.status !== b.status) lab.logEvent({ type: 'status', id: row.id, kind: row.kind, status: statusOf(row) });
+      if (a.status !== b.status) lab.logEvent({ type: 'status', id: row.id, kind: row.kind, status: statusOf(row), http: row.http });
+      else if (a.lastPublish !== b.lastPublish) lab.logEvent({ type: 'resend', id: row.id, kind: row.kind, status: statusOf(row), http: row.http });
       if (a.s && a.s !== b.s) lab.logEvent({ type: 'state', id: row.id, kind: row.kind, status: a.s });
       if (a.label === reader && b.label !== reader && !toldReader.has(row.id)) {
         toldReader.add(row.id);
@@ -574,7 +604,7 @@ export function createApp({
     }
     lastFlush = now();
     const attempted = await withSender(async (s) => (s ? s.flushNetwork() : []));
-    for (const r of attempted) lab.logEvent({ type: 'flush', id: r.id, kind: r.kind, status: statusOf(r) });
+    for (const r of attempted) lab.logEvent({ type: 'flush', id: r.id, kind: r.kind, status: statusOf(r), http: r.http });
     if (attempted.length) afterSend();
     const left = (await rows()).some(isWaitingRow);
     if (left && attempted.length && attempted.every((r) => r.status !== 'failed' && r.status !== 'expired')) scheduleFlush(FLUSH_GAP_MS);
@@ -653,7 +683,7 @@ export function createApp({
   return {
     storage, lab, preparePairing, applyPairing, pair, unpair, state, rows, getSettings, setSettings, updateSettings,
     sendLink, sendFile, sendPaths, sendClipboard, handleAction, retry, remove, tick, tickIfStale, checkAcksNow, start,
-    stop, snapshot, settle, intake, prepareClipboard, prepareSendLink, sendPrepared, summary, daylightName, describer,
+    stop, snapshot, settle, intake, prepareClipboard, prepareDrop, prepareSendLink, sendPrepared, summary, daylightName, describer,
     flushOffline, onOnline, setVisible, sendTestArticle, notifyResults,
     onChange: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
   };

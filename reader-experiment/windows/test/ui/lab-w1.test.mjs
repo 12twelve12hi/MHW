@@ -8,7 +8,10 @@
 //   F02e  "Send files over 9 MB ›" under the too-big sentence, its needs-server note; none with Lab off (F02e.1);
 //   F07   offline: Waiting for connection in the queue, "Waiting to send ({n})" with Cancel; back online it goes (F07.1,
 //         F07.2);
-//   F09   a send link's question: Send sends, Cancel doesn't; Lab off and not paired say why (F09.3);
+//   F09   a send link's question: Send sends, Cancel doesn't; Lab off and not paired say why (F09.3); quick=1 with quick
+//         sends off: the needs-quick-sends note under it, whose Open setting opens What's in Lab at the switch, in view
+//         with its footer (1.5, 1.6);
+//   F16   a dropped text goes whole to smart intake: B1's four normalise.json cases; Lab off, v1.1's findUrl;
 //   F26   Setup check: its lines and buttons, the test article followed to the Reader, the activity log, Copy
 //         diagnostics (F26.1-3);
 //   F33   "Send copied link" shows the host and Send first; its Use switch off is v1.1's command; the tray's words
@@ -170,6 +173,8 @@ test('F09: a send link asks “Send to {name}?” with its title and host; Cance
   assert.deepEqual(await ask.locator('.lab-question-line').allTextContents(), ['A story', 'example.com']);
   assert.equal(await page.evaluate(() => document.activeElement?.textContent), LAB_TEXT.automation.send, 'Send has the focus');
   assert.ok(await page.evaluate(() => window.__fake.calls.includes('show_window')), 'the window opens to ask');
+  // quick=1 while quick sends are off (the default): the question says why under Send and Cancel.
+  assert.equal(await ask.locator('.lab-question-note .lab-note-text').textContent(), LAB_TEXT.needs['needs-quick-sends']);
   await axeBoth(page, 'a send link’s question');
   await shot(page, 'lab-send-link');
   await ask.getByRole('button', { name: LAB_TEXT.automation.cancel, exact: true }).click();
@@ -194,6 +199,110 @@ test('F09: a send link asks “Send to {name}?” with its title and host; Cance
   await unpaired.evaluate((l) => window.__fake.queue({ type: 'send', link: l }), link);
   await unpaired.waitForFunction((t) => document.querySelector('#pair-error').textContent === t, LAB_TEXT.needs['needs-pairing']);
   await unpaired.context().close();
+});
+
+test('F09: quick=1 while “Allow quick sends from other apps” is off: under the question, the needs-quick-sends note with Open setting, which opens What’s in Lab at the switch, in view with its footer, and never changes it', { timeout: 90000 }, async () => {
+  const page = await ui.open({ kv: await labStore(), now: NOW, height: 420 });
+  const link = 'daylightshare://send?url=' + encodeURIComponent('https://example.com/quick') + '&title=Quick&quick=1';
+  const why = LAB_TEXT.needs['needs-quick-sends'];
+  assert.equal(L.needsMessage('needs-quick-sends', { platform: 'windows' }), why);
+  await page.evaluate((l) => window.__fake.queue({ type: 'send', link: l }), link);
+  const ask = page.getByRole('group', { name: 'Send to Desk Daylight?', exact: true });
+  await ask.waitFor();
+  const box = ask.locator('.lab-question-note');
+  // One sentence and one button (1.5), with OK, in a polite live region under Send and Cancel; and the question's
+  // description, so a screen reader says it with the question as the focus lands on Send.
+  assert.equal(await box.getAttribute('aria-live'), 'polite');
+  assert.equal(await box.locator('.lab-note-body').getAttribute('data-state'), 'needs-quick-sends');
+  assert.equal(await box.locator('.lab-note-text').textContent(), why);
+  assert.deepEqual(await box.locator('button').allTextContents(), [LAB_TEXT.buttons['needs-quick-sends'], LAB_TEXT.noteButton]);
+  assert.equal(await ask.evaluate((e) => document.getElementById(e.getAttribute('aria-describedby'))?.textContent), why);
+  assert.ok(await ask.evaluate((e) => {
+    const send = e.querySelector('.lab-question-send');
+    return !!(send.compareDocumentPosition(e.querySelector('.lab-question-note')) & Node.DOCUMENT_POSITION_FOLLOWING);
+  }), 'the note comes after Send and Cancel');
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent), LAB_TEXT.automation.send, 'Send has the focus');
+  await axeBoth(page, 'a quick send link’s question with its note');
+  await shot(page, 'lab-send-link-quick-off');
+  // OK closes the note; the question stays, and Send has the focus.
+  await box.getByRole('button', { name: LAB_TEXT.noteButton, exact: true }).click();
+  assert.equal(await box.locator('.lab-note-body').count(), 0);
+  assert.equal(await ask.count(), 1);
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent), LAB_TEXT.automation.send);
+  // Closed for this question: Settings and back draw the question again, without it.
+  await openSettings(page);
+  await page.locator('#close-settings').click();
+  await ask.waitFor();
+  assert.equal(await box.locator('.lab-note-body').count(), 0);
+  // The link again, then Open setting: What's in Lab, its switch focused and in view with its footer, still off.
+  await page.evaluate((l) => window.__fake.queue({ type: 'send', link: l }), link);
+  await box.locator('.lab-note-text').waitFor();
+  await box.getByRole('button', { name: LAB_TEXT.buttons['needs-quick-sends'], exact: true }).click();
+  await page.waitForSelector('#view-whats:not([hidden])');
+  const quick = feature(page, 'F09').getByRole('switch', { name: LAB_TEXT.automation.quickSends, exact: true });
+  await page.waitForFunction(() => document.activeElement?.closest?.('[data-feature="F09"]') && document.activeElement.type === 'checkbox', null, { timeout: 15000 });
+  await page.waitForSelector('#whats[data-fresh="1"]', { timeout: 15000 });
+  assert.ok(await quick.evaluate((e) => e === document.activeElement), 'the switch has the focus, also after the live answer');
+  const inView = await page.evaluate(() => {
+    const slot = document.querySelector('li.lab-feature[data-feature="F09"] .lab-use');
+    const r = [slot.querySelector('input.switch'), slot.querySelector('.switch-footer')].map((x) => x.getBoundingClientRect());
+    return { ok: r.every((b) => b.top >= 0 && b.bottom <= window.innerHeight), scrolled: document.scrollingElement.scrollTop, r: r.map((b) => [b.top, b.bottom]), h: window.innerHeight, sh: document.scrollingElement.scrollHeight };
+  });
+  assert.ok(inView.ok, 'the switch and its footer are on screen ' + JSON.stringify(inView));
+  assert.ok(inView.scrolled > 0, 'scrolled to them (they start below the fold of a 420 px window)');
+  assert.equal(await quick.isChecked(), false, 'Open setting never changes it');
+  assert.notEqual((await stored(page, 'settings'))?.labQuickSends, true);
+  assert.equal(await quick.evaluate((e) => document.getElementById(e.getAttribute('aria-describedby')).textContent), LAB_TEXT.automation.quickSendsFooter);
+  await axeBoth(page, 'What’s in Lab opened at quick sends');
+  // Turned on here, Back to Settings, Back to the send view: the question is still there, now without the note; Send
+  // sends it.
+  await quick.click();
+  await page.waitForFunction(() => window.__fake.json('settings')?.labQuickSends === true);
+  await page.locator('#whats-back').click();
+  await page.waitForSelector('#view-settings:not([hidden])');
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'open-whats');
+  await page.locator('#close-settings').click();
+  await ask.waitFor();
+  assert.equal(await ask.locator('.lab-question-note').count(), 0);
+  await ask.getByRole('button', { name: LAB_TEXT.automation.send, exact: true }).click();
+  await page.waitForFunction(() => (window.__fake.json('outbox') ?? []).some((r) => r.url === 'https://example.com/quick'));
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+// --- F16 a dropped text -------------------------------------------------------------------------------------------------
+
+test('F16: a dropped text goes whole to smart intake (B1): B1’s four normalise.json cases send the vectors’ URLs; with Lab off, v1.1’s findUrl', { timeout: 90000 }, async () => {
+  const B1_FOUR = [
+    ['See (https://en.wikipedia.org/wiki/Foo_(bar)).', 'https://en.wikipedia.org/wiki/Foo_(bar)'],
+    ['He said “https://example.com/q”', 'https://example.com/q'],
+    ['Link: ‘https://example.com/s’ and «https://example.com/t»', 'https://example.com/s'],
+    ['[https://example.com/x]', 'https://example.com/x'],
+  ];
+  const drop = (page, text) => page.evaluate((t) => {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', t);
+    document.querySelector('#drop').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+  }, text);
+  const sent = (page, n) => page.waitForFunction((k) => (window.__fake.json('outbox') ?? []).length === k, n);
+  const page = await ui.open({ kv: (await fresh()).kv() });
+  let n = 0;
+  for (const [text] of B1_FOUR) { await drop(page, text); await sent(page, ++n); }
+  const rows = (await stored(page, 'outbox')).slice().reverse();
+  assert.deepEqual(rows.map((r) => r.url), B1_FOUR.map(([, url]) => url));
+  assert.equal(rows[0].title, 'See', 'the words around the link are its title');
+  // Lab off: v1.1 exactly, which cut the Wikipedia link short.
+  await page.evaluate(() => { window.__fake.kv.set('settings', JSON.stringify({ lab: false, labNoteShown: true })); });
+  await drop(page, B1_FOUR[0][0]);
+  await sent(page, ++n);
+  const [off] = await stored(page, 'outbox');
+  assert.deepEqual([off.url, off.title], [ds.findUrl(B1_FOUR[0][0]), '']);
+  assert.equal(off.url, 'https://en.wikipedia.org/wiki/Foo_(bar');
+  // No address in it: the drop's own sentence.
+  await drop(page, 'no address here');
+  await page.waitForFunction(() => document.querySelector('#status').textContent === 'Only files and web links (http and https) can be sent.');
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
 });
 
 // --- F33 the copied link --------------------------------------------------------------------------------------------------
@@ -399,8 +508,9 @@ for (const scale of [1, 2, 2.25]) {
     await check('the send view: the note, the timeline, the queue');
     await page.locator('#send-clip').click();
     await page.locator('#lab-clip .lab-question-body').waitFor();
-    await page.evaluate(() => window.__fake.queue({ type: 'send', link: 'daylightshare://send?url=https%3A%2F%2Fwww.example.org%2Fa-long-path&title=A%20title%20long%20enough%20to%20wrap%20at%20large%20text%20sizes' }));
-    await page.locator('#lab-sendlink .lab-question-body').waitFor();
+    // quick=1 with quick sends off: the question carries the needs-quick-sends note and Open setting.
+    await page.evaluate(() => window.__fake.queue({ type: 'send', link: 'daylightshare://send?url=https%3A%2F%2Fwww.example.org%2Fa-long-path&title=A%20title%20long%20enough%20to%20wrap%20at%20large%20text%20sizes&quick=1' }));
+    await page.locator('#lab-sendlink .lab-question-note .lab-note-body').waitFor();
     await page.evaluate(() => window.__fake.queue({ type: 'files', paths: ['C:\\big.pdf'] }));
     await page.locator('#lab-after .nav-row').waitFor();
     await page.locator('#lab-after .nav-row').click();
