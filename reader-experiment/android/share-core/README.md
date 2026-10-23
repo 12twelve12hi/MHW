@@ -102,6 +102,7 @@ exactly v1.1's, and every new parameter has a default, so v1.1 callers compile a
 | `OutgoingItem.extras` | The Lab item fields to write (2.3, 2.9.2), only with Lab on: `ItemBuilder.labHeaderFields` keeps `x-cap` when it is one of the four values and `x-orig` when it passes the web URL rule and is at most 1,024 characters; `prepare` leaves `x-orig` out when it alone would turn part 0 into a large frame. They go on part 0 only, and the row's stored header keeps them, so every re-send writes the same fields |
 | `Outbox.add`/`send(…, defer = true)` | Shared while offline (F07): the row is stored as failed / `network` with 0 attempts and `lastPublish` now ("Waiting for connection" in `LabRowText` when the app passes `online = false`); nothing is published, the content is kept |
 | `Outbox.flushNetwork(maxFrames = 30, maxAttachmentBytes = 18_000_000)` | Back online (F07): the `network` rows oldest first, whatever their back-off; a pass stops before a row that would take it over a cap (it always takes its first row), publishes nothing more after a 429 and no attachment after a 413, and leaves rows past the week to `resendDue`. Space passes `Outbox.FLUSH_SPACING_MS` (3 minutes) apart |
+| `OutboxRow.http` (Oct 22) | F26's activity log: the HTTP status of the row's last failed publish (413, 429, another 4xx, or 408 and 5xx after the in-call retries); 0 without an HTTP answer, after a publish that goes and on a delivered row; rows stored before it read as 0. `send`, `retry`, `resendDue`, `flushNetwork` and `tick().resentRows` return it on their rows; `SetupCheck.rowStatus(status, errorCode)` is the log's "failed/full". Pinned by `lab-vectors.json › diagnostics › rowHttp` |
 | `lab.LabRowText` | The step line and `final` (2.5) came with K0 and pass the W1 vectors unchanged |
 
 **Wiring it into the app (K4, K5).**
@@ -115,7 +116,8 @@ exactly v1.1's, and every new parameter has a default, so v1.1 callers compile a
   `outbox.flushNetwork()`, at most once every `Outbox.FLUSH_SPACING_MS`. `LabRowText.Context(…, online = false)` while
   the device is offline.
 - *Setup check (F26):* `SetupCheck.testArticle(device = name).toOutgoing()`; keep the activity log with `appendActivity`
-  (store `Event.toJson()`, read with `Event.fromJson`) and copy `diagnosticsReport(…)`, which is already redacted.
+  (store `Event.toJson()`, read with `Event.fromJson`) and copy `diagnosticsReport(…)`, which is already redacted. An
+  event about an outbox row takes `SetupCheck.rowStatus(row.status, row.errorCode)` and `http = row.http`.
 - *Inbox (K5):* `LabText.inboxKindLine(kind, header.extras, size, from)` and `LabText.cleanedFromText(header.xOrig)`.
 - *Server section:* `LabText.SERVER_STEPS` and `LabText.hostLineText(origin, ServerCode.showFingerprint(…))`.
 
@@ -136,9 +138,10 @@ both readings against the JS under node.
 | Test | Covers |
 |---|---|
 | `VectorsTest`, `RelayTest`, `LiveRelayTest` | Protocol 1.1: `share/vectors/test-vectors.json`, the mock relay with ntfy.sh's limits, JS interop both ways, a live round trip (informational); the ack publish's 429 and 413 in `limitStatus` and `sendAcks` (2.7.1) |
-| `lab.LabVectorsTest` | Every section of `share/vectors/lab-vectors.json`: W0 (constants, labTopics, labFrames, labParse, labLedger, labGate, labHeaderExtras, labRowText, labText, v1Safety) and W1 (labExcerpt, diagnostics, testArticle, the W1 labText cases, the setup steps as a list); a section no test knows fails `everySectionIsPorted` |
+| `lab.LabVectorsTest` | Every section of `share/vectors/lab-vectors.json`: W0 (constants, labTopics, labFrames, labParse, labLedger, labGate, labHeaderExtras, labRowText, labText, v1Safety) and W1 (labExcerpt, diagnostics with rowHttp, testArticle, the W1 labText cases, the setup steps as a list); a section no test knows fails `everySectionIsPorted` |
 | `lab.NormaliseVectorsTest` | `share/vectors/normalise.json` (every case, x-orig on part 0, Apple News pages); the headline + link shares (F11.5, F16.1); tracking removal that changes nothing else (F16.3); hostile HTML; hostile input that must stay linear and must not overflow the JVM's stack; the excerpt limits (F11.3, F11.4) |
 | `lab.W1DifferentialTest` | About 6,300 random inputs built from what makes platforms differ (JS whitespace, `\b`, case folding, lone surrogates, escapes, unclosed tags) through the JS reference (`src/test/js/w1-reference.mjs`) and the Kotlin port: every answer must be the same |
+| `lab.AsciiCaseTest` | The case-insensitive W1 patterns (URL finder, Apple News `<body>`, the excerpt's dropped elements, the redactions) compiled as Android's ICU engine reads them: "ſ" (U+017F) and "K" (U+212A) never match s and k, as in JS; no pattern uses `(?i)` |
 | `OfflineQueueTest` | F07 through the mock relay with ntfy.sh's limits: `defer`; 70 links in three passes with no 429; ten 9 MB files never over 18 MB a pass or 20 MB on the relay, the rest into the 3-hour wait (F07.3); the pass rules and both caps; a row whose content is gone; Lab fields on part 0 of every attempt |
 | `server.ServerVectorsTest` | `server/vectors/server-vectors.json` › derived, serverCodeParsing, frames (config), negative, serverState (with what `noteError` does to the cache); discovery, the pin and a move, the status cache, the gate's deadline; server addresses read as the JS reads them (`src/test/js/server-origins.mjs`) |
 | `lab.LabInboxTest` | 2.2.4 with a fake clock: the merge rule, 24 a frame, 30 s spacing, giving way, the daily cap, halving, hellos, `lab: 0` and its repeats, a new or cleared store with Lab off, the pending cap, the digest; `record`, the notes and `clear` during a publish in flight, and two flushes of one file; the ledger's file and pruning |
@@ -164,3 +167,17 @@ phone and the real ntfy.sh relay) run its code; the app cards (K4 phone, K5 Inbo
   the checklist ticks Delivered and In your Reader.
 - **F03.4 (Inbox):** every row's kind line ("Page as you saw it", "Excerpt", "Test article", …) shows, and TalkBack
   reads it.
+- **F01.1–F01.3 (Android phone → Rooted 2):** the step line, the final sentence and the check-in header come from
+  `LabRowText` and `LabLedger`: in each condition of F01.1 the row reaches "In your Reader ✓" within 45 s of
+  "On your Daylight ✓" (or waits on "Waiting for a tap on your Daylight" until the notice is tapped); a PDF with
+  Documents = Ask reads "Waiting for a tap…", then "Handed to the Reader" (F01.2); the header reads "Your Daylight
+  checked in N min ago", and with the Daylight off sends still go out (F01.3).
+- **F01.6 (TalkBack, Android phone):** each row reads "{label}. {sentence}" (`LabRowText`) with no step count, and the
+  step line shows only on the newest row and on rows that are not final.
+- **F11.1, F11.2, F11.4 (once K4's Send as excerpt path is on the phone):** a selected paragraph arrives as one
+  HTML document showing the quote, its source and the date (`Excerpt.item`); text with no URL arrives as a Markdown
+  note the Reader opens (`Excerpt.markdown`); an excerpt of a page already in the Reader is a new document, not
+  "already in your library" (`Excerpt.textFragment`'s url).
+- **Case on ICU (K3 review):** the redactions, the excerpt's dropped elements, the URL finder and the Apple News
+  `<body>` match ASCII letters only (`JsText.ci`). `AsciiCaseTest` compiles them as ICU does, so this needs no
+  device; on the phone, the diagnostics report still redacts `dls-…`, `www.…` and Server codes in any ASCII case.

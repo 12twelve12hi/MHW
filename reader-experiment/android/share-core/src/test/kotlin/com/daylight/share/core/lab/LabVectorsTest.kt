@@ -1,6 +1,10 @@
 package com.daylight.share.core.lab
 
 import com.daylight.share.core.AckHeader
+import com.daylight.share.core.Body
+import com.daylight.share.core.BytesBody
+import com.daylight.share.core.Http
+import com.daylight.share.core.OutboxRow
 import com.daylight.share.core.Bytes
 import com.daylight.share.core.FileOutboxStore
 import com.daylight.share.core.FrameCodec
@@ -26,6 +30,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import java.io.IOException
 import kotlin.io.path.createTempDirectory
 
 /**
@@ -349,7 +354,7 @@ class LabVectorsTest {
     }
 
     /**
-     * The setup steps are a list of five, pinned against the array labText › serverSection › steps: four of them hold a
+     * The setup steps are a list of five, pinned against the array labText › serverSection › steps: three of them hold a
      * comma, so the joined form in strings is never split. Every other list's items are comma-free, and step 2 is the
      * server module's RERUN_HELP word for word (2.6).
      */
@@ -483,6 +488,72 @@ class LabVectorsTest {
             )
             assertEquals(c["expect"], got)
         }
+    }
+
+    /**
+     * diagnostics › rowHttp (F26's activity log, LAB-PROTOCOL 2.7.1, added Oct 22): an [Outbox] against scripted relay
+     * answers (an HTTP status, or "network": no answer), with the in-call retries waiting 0 ms, pins each row's status,
+     * errorCode and `http` after every step, and the activity line of each row the step returned. A row stored without
+     * `http` (v1.0, v1.1) reads as 0.
+     */
+    @Test
+    fun rowHttp() {
+        val r = v["diagnostics"].obj()["rowHttp"].obj()
+        val items = r["items"].obj()
+        assertEquals(15, r["cases"].objs().size)
+        for (c in r["cases"].objs()) {
+            val name = c["name"] as String
+            val answers = ArrayDeque<Any?>()
+            var now = 0L
+            val http = object : Http {
+                override fun send(method: String, url: String, headers: Map<String, String>, body: ByteArray?, maxResponseBytes: Long, readTimeoutMs: Int): Http.Response {
+                    if (answers.isEmpty()) fail("$name: no answer left for $method $url")
+                    val a = answers.removeFirst()
+                    if (a == "network") throw IOException("fetch failed")
+                    val st = (a as Double).toInt()
+                    return Http.Response(st, emptyMap(), if (st in 200..299) Json.write(linkedMapOf("id" to "msg", "time" to now / 1000)).toByteArray() else ByteArray(0))
+                }
+
+                override fun stream(url: String, headers: Map<String, String>, readTimeoutMs: Int): Http.LineStream = throw IOException("no stream")
+            }
+            val relay = RelayClient(r["relay"] as String, http, retryDelaysMs = (r["retryDelaysMs"] as List<*>).map { (it as Double).toLong() }, clock = { now }, sleeper = {})
+            val dir = createTempDirectory("rowhttp").toFile()
+            val outbox = Outbox(Pairing(ByteArray(16) { it.toByte() }, r["relay"] as String), FileOutboxStore(dir), relay, "Vectors", "vectors/1", clock = { now })
+            fun keyOf(id: String) = items.entries.first { it.value.obj()["id"] == id }.key
+            fun item(key: String): Pair<OutgoingItem, Body?> {
+                val i = items[key].obj()
+                val bytes = i["bytes"].long()
+                val o = OutgoingItem(i["kind"] as String, id = i["id"] as String, url = i["url"] as String?, title = i["title"] as String?, name = i["name"] as String?, mime = i["mime"] as String?)
+                return o to bytes?.let { n -> BytesBody(ByteArray(n.toInt()) { b -> (b % 251).toByte() }) }
+            }
+            for ((n, step) in c["steps"].objs().withIndex()) {
+                val op = step["op"] as String
+                now = step["at"].long()!!
+                answers.addAll(step["answers"] as List<*>)
+                val returned: List<OutboxRow> = when (op) {
+                    "send", "defer" -> item(step["item"] as String).let { (o, b) -> listOf(outbox.send(o, b, defer = op == "defer")) }
+                    "retry" -> listOf(outbox.retry(items[step["item"] as String].obj()["id"] as String)!!)
+                    "resendDue" -> outbox.resendDue()
+                    "flushNetwork" -> outbox.flushNetwork()
+                    else -> throw AssertionError("unknown op $op")
+                }
+                val at = "$name, step ${n + 1} ($op)"
+                assertTrue("$at: every answer was asked for, ${answers.size} left", answers.isEmpty())
+                val rows = outbox.rows().sortedBy { keyOf(it.id) }.associate { keyOf(it.id) to linkedMapOf("status" to it.status, "errorCode" to it.errorCode, "http" to it.http) }
+                val lines = returned.map { SetupCheck.activityLine(SetupCheck.activityEvent(now, op, it.id, it.kind, SetupCheck.rowStatus(it.status, it.errorCode), it.http)) }
+                val got = linkedMapOf("returned" to returned.map { keyOf(it.id) }, "rows" to rows, "lines" to lines)
+                assertEquals(at, step["expect"], norm(got))
+            }
+            dir.deleteRecursively()
+        }
+        // A row stored by v1.0 or v1.1 has no http: it reads as 0 (the Kotlin row form of legacy.stored).
+        val legacy = r["legacy"].obj()
+        val stored = legacy["stored"].obj()
+        val header = linkedMapOf<String, Any?>("v" to 1.0, "kind" to stored["kind"], "id" to stored["id"], "part" to 0.0, "parts" to 1.0, "sent" to stored["sent"], "title" to stored["title"], "url" to stored["url"])
+        val row = OutboxRow.fromJson(stored.filterKeys { it !in setOf("id", "kind", "title", "url", "name", "mime", "size", "sent") } + ("header" to header))
+        assertEquals(stored["errorCode"], row!!.errorCode)
+        assertEquals(legacy["expect"].obj()["http"].long()!!.toInt(), row.http)
+        assertEquals(413, OutboxRow.fromJson(row.copy(http = 413).toJson().let { Json.parse(Json.write(it)).obj() })!!.http)
     }
 
     /** testArticle (F26): the item to send, exactly. */

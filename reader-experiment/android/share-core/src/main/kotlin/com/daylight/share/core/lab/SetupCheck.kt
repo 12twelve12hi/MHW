@@ -46,13 +46,13 @@ object SetupCheck {
     }
 
     private val WS = JsText.WS
-    private val REDACTIONS = listOf(
-        Regex("(?i)daylightserver://[^$WS\"'<>]*") to "[server code]",
+    internal val REDACTIONS = listOf(
+        Regex("${JsText.ci("daylightserver")}://[^$WS\"'<>]*") to "[server code]",
         Regex("${JsText.WORD_START}SERVER-[A-Za-z0-9-]+") to "[server code]",
         Regex("(?<![A-Za-z0-9+.-])[A-Za-z0-9+.-]*://[^$WS\"'<>]*") to "[url]",
-        Regex("(?i)${JsText.WORD_START}www\\.[^$WS\"'<>]+") to "[url]",
-        Regex("(?i)${JsText.WORD_START}dls-[0-9a-f]{32}${JsText.WORD_END}") to "[topic]",
-        Regex("(?i)${JsText.WORD_START}[A-Z2-7]{4}(?:-?[A-Z2-7]{4}){6}${JsText.WORD_END}") to "[code]",
+        Regex("${JsText.WORD_START}${JsText.ci("www")}\\.[^$WS\"'<>]+") to "[url]",
+        Regex("${JsText.WORD_START}${JsText.ci("dls")}-[0-9a-fA-F]{32}${JsText.WORD_END}") to "[topic]",
+        Regex("${JsText.WORD_START}[A-Za-z2-7]{4}(?:-?[A-Za-z2-7]{4}){6}${JsText.WORD_END}") to "[code]",
     )
 
     /**
@@ -80,6 +80,12 @@ object SetupCheck {
     /** An event for the log (the JS `activityEvent`): only these fields; titles, names, URLs and `from` never go in. */
     fun activityEvent(time: Long = System.currentTimeMillis(), type: String = "", id: String? = "", kind: String? = "", status: String? = "", http: Int = 0): Event =
         Event(time, type, (id ?: "").take(8), kind ?: "", status ?: "", http)
+
+    /**
+     * The log's status for an outbox row, as lab-vectors.json › diagnostics › rowHttp writes it: "{status}/{errorCode}"
+     * ("failed/full"), or the status alone. Its `http` goes in [activityEvent]'s own field (OutboxRow.http).
+     */
+    fun rowStatus(status: String, errorCode: String): String = if (errorCode.isEmpty()) status else "$status/$errorCode"
 
     /** Appends an event to a log, keeping the last [ACTIVITY_MAX] (200). Returns the new list. */
     fun appendActivity(log: List<Event>?, event: Event): List<Event> = ((log ?: emptyList()) + event).takeLast(ACTIVITY_MAX)

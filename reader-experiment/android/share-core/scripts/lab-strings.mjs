@@ -1,7 +1,7 @@
 // Writes ../src/main/kotlin/com/daylight/share/core/lab/LabStrings.kt from LAB_TEXT in share/js/daylight-lab.js (the
 // one source of every Lab string, LAB-PLAN 6.3): every string under its dotted id, arrays joined with ",", exactly as
 // share/vectors/lab-vectors.json › labText › strings lists them, and every array again as a real list (LISTS): an
-// item may hold a comma (four of the five serverSection.steps do), so a list is never read by splitting the joined
+// item may hold a comma (three of the five serverSection.steps do), so a list is never read by splitting the joined
 // form. Run it after the share lane changes LAB_TEXT:
 //   node scripts/lab-strings.mjs           (writes the file)
 //   node scripts/lab-strings.mjs --check   (exits 1 when the file is out of date)

@@ -55,6 +55,13 @@ data class OutboxRow(
     val error: String = "",
     val delivered: Long = 0,
     val deliveredBy: String = "",
+    /**
+     * Lab, F26's activity log (LAB-PROTOCOL 2.7.1, added Oct 22): the HTTP status of the row's last failed publish,
+     * 413, 429, another 4xx, or 408 and 5xx after the in-call retries; 0 when that failure had no HTTP answer, 0 again
+     * once a publish of the row goes, and 0 on a delivered row. Kept as it is when the row expires. A row stored
+     * without it (v1.0, v1.1) reads as 0.
+     */
+    val http: Int = 0,
 ) {
     val id: String get() = header.id
     val kind: String get() = header.kind
@@ -76,9 +83,13 @@ data class OutboxRow(
         "error" to error,
         "delivered" to delivered,
         "deliveredBy" to deliveredBy,
+        "http" to http,
     )
 
     companion object {
+        /** An HTTP status for [http]: 100 to 599, else 0 (no HTTP answer). */
+        internal fun httpOf(status: Long): Int = if (status in 100..599) status.toInt() else 0
+
         fun fromJson(m: Map<String, Any?>): OutboxRow? {
             @Suppress("UNCHECKED_CAST")
             val raw = m["header"] as? Map<String, Any?> ?: return null
@@ -99,6 +110,7 @@ data class OutboxRow(
                 error = m["error"] as? String ?: "",
                 delivered = l("delivered"),
                 deliveredBy = m["deliveredBy"] as? String ?: "",
+                http = httpOf(l("http")),
             )
         }
     }
@@ -263,13 +275,14 @@ class Outbox(
             error = ShareException(ErrorCode.NETWORK, "could not read the content: ${e.message}", cause = e)
         }
         row = if (error == null) {
-            row.copy(status = Status.SENT, errorCode = "", attempts = 0, slowFails = 0, error = "")
+            row.copy(status = Status.SENT, errorCode = "", attempts = 0, slowFails = 0, error = "", http = 0)
         } else {
             val code = if (error.code in SENDER_CODES) error.code else ErrorCode.NETWORK
             val slow = if (code in SLOW_CODES) row.slowFails + 1 else 0
             row.copy(
                 status = if (slow >= Limits.SLOW_FAIL_LIMIT) Status.EXPIRED else Status.FAILED,
                 errorCode = code, attempts = row.attempts + 1, slowFails = slow, error = error.message ?: code,
+                http = OutboxRow.httpOf(error.status.toLong()),
             )
         }
         row = row.copy(lastPublish = clock())
@@ -357,7 +370,7 @@ class Outbox(
         val updated = rows.map { r ->
             if (r.status != Status.DELIVERED && acked.containsKey(r.id)) {
                 delivered += r.id
-                r.copy(status = Status.DELIVERED, delivered = now, deliveredBy = acked[r.id] ?: "", errorCode = "")
+                r.copy(status = Status.DELIVERED, delivered = now, deliveredBy = acked[r.id] ?: "", errorCode = "", http = 0)
             } else r
         }
         writeRows(updated, nextSince)
@@ -457,7 +470,8 @@ class Outbox(
         left.size != rows.size
     }
 
-    class Tick(val delivered: Int, val resent: Int, val error: String?)
+    /** One [tick]: how many rows became delivered, how many were sent again ([resentRows], each with its `http`), the first error. */
+    class Tick(val delivered: Int, val resent: Int, val error: String?, val resentRows: List<OutboxRow> = emptyList())
 
     /** One maintenance pass: acks (errors ignored), then re-sends. Call on start, after a share, and from the worker. */
     fun tick(): Tick = synchronized(lock) {
@@ -470,7 +484,7 @@ class Outbox(
         }
         val resent = resendDue()
         if (error == null) error = resent.firstOrNull { it.status == Status.FAILED }?.error
-        Tick(delivered, resent.size, error)
+        Tick(delivered, resent.size, error, resent)
     }
 
     /** Whether anything still waits for a publish or an ack. */

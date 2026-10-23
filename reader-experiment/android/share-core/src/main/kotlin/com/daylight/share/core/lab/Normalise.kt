@@ -62,7 +62,7 @@ object Normalise {
 
     // ---- Finding the URL (step 1)
 
-    private val URL_RUN = Regex("(?i)https?://[^${JsText.WS}<>\"]+")
+    internal val URL_RUN = Regex("${JsText.ci("http")}${JsText.ci("s")}?://[^${JsText.WS}<>\"]+")
     private const val URL_TRAIL = ".,;:!?'\"»”’"
 
     /**
@@ -332,7 +332,7 @@ object Normalise {
 
     private const val REDIRECT = "redirectToUrlAfterTimeout("
     private val JS_ESCAPE = Regex("\\\\(u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|[\\s\\S])")
-    private val BODY = Regex("(?i)<body[${JsText.WS}>]")
+    internal val BODY = Regex("<${JsText.ci("body")}[${JsText.WS}>]")
 
     /**
      * The string argument of the first `redirectToUrlAfterTimeout(` + optional whitespace + a quoted string (`\\` escapes

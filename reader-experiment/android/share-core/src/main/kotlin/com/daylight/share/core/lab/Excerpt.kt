@@ -150,8 +150,8 @@ object Excerpt {
      * next >, and everything after it to the first `</name` + optional whitespace + `>` (or to the end), is removed. An
      * opening tag with no > after it stays (and so does everything after it).
      */
-    private val DROP_PATTERNS: Map<String, Pair<Regex, Regex>> by lazy {
-        DROP.associateWith { name -> Regex("(?i)<$name(?=[${JsText.WS}/>])") to Regex("(?i)</$name[${JsText.WS}]*>") }
+    internal val DROP_PATTERNS: Map<String, Pair<Regex, Regex>> by lazy {
+        DROP.associateWith { name -> Regex("<${JsText.ci(name)}(?=[${JsText.WS}/>])") to Regex("</${JsText.ci(name)}[${JsText.WS}]*>") }
     }
 
     private fun dropElement(s: String, name: String): String {

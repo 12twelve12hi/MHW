@@ -8,8 +8,10 @@ import java.util.Locale
  * them, so [Normalise], [Excerpt] and [SetupCheck] give the JS results character for character:
  *
  * - **Whitespace** is ECMAScript's `\s` ([WS]), never Java's `\s`; `\b` is spelled out with ASCII word characters.
- * - **Case-insensitive** patterns use the inline `(?i)` flag, which is ASCII-only in Java as `i` is in JS without `u`
- *   (Kotlin's `RegexOption.IGNORE_CASE` also adds Unicode case, so "ſ" would match "s").
+ * - **Case-insensitive** patterns spell each ASCII letter as a class ([ci]: "dls" is `[Dd][Ll][Ss]`), as JS's `i`
+ *   without `u` matches. Never `(?i)`: the JVM keeps it ASCII-only, but Android's java.util.regex runs on ICU, where
+ *   it folds Unicode case, so "ſ" (U+017F) would match "s" and "K" (U+212A, the Kelvin sign) "k" on a phone. Never
+ *   `RegexOption.IGNORE_CASE` either: it adds Unicode case everywhere.
  * - `$` is never used for "end of input": Java's `$` also matches before a final line break.
  * - Every pattern that the reference runs with a repeated group over a long run (tags, the Apple News redirect) is a
  *   hand-written linear scanner here: Java's regex engine recurses once per iteration of such a group, so a long
@@ -24,6 +26,17 @@ internal object JsText {
     const val WORD_END = "(?![A-Za-z0-9_])"
 
     private val WS_RUN = Regex("[$WS]+")
+
+    /**
+     * [word] (ASCII letters, digits and punctuation that needs no escaping) as a pattern that matches it in either
+     * ASCII case and nothing else: "Body" -> `[Bb][Oo][Dd][Yy]`. What JS's `i` flag does without `u`.
+     */
+    fun ci(word: String): String = buildString {
+        for (c in word) {
+            require(c.code < 0x80 && c != '\\') { "ci() takes plain ASCII words" }
+            if (c in 'a'..'z' || c in 'A'..'Z') append('[').append(c.uppercaseChar()).append(c.lowercaseChar()).append(']') else append(c)
+        }
+    }
 
     fun isWs(c: Char): Boolean = Text.isJsWhitespace(c)
 
