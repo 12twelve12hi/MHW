@@ -315,9 +315,9 @@ final class AppModelTests: XCTestCase {
         model.isVisible = true
 
         // The Lab Inbox says it is in the Reader.
-        let nowMs = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        let now = Int64(Date().timeIntervalSince1970) // a state's `t` is in Unix seconds
         let frame = try LabFrame.build(keys: pairing.keys, inbox: LabInboxInfo(lab: 1, app: "android/1.5.0", caps: ["st"]),
-                                       states: [LabState(i: id, s: "reader", t: nowMs)], from: "Test Daylight")
+                                       states: [LabState(i: id, s: "reader", t: now)], from: "Test Daylight")
         FakeRelay.inject(topic: pairing.keys.ackTopic, frame: frame, time: Int(Date().timeIntervalSince1970), attachment: false)
         let read = await model.fastCheck()
         XCTAssertTrue(read)
