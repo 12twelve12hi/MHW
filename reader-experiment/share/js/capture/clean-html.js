@@ -1,10 +1,11 @@
 // clean-html.js: cleans a captured page before it leaves the device (LAB-PLAN F03, "Pages as you see them"), and
 // readies a clone for Readability (F10, Clean article: prepareForReadability, at the end of this file).
 //
-// The one source. The extension's build copies this file, and apple/Shared/GetPage.js inlines it between the lines
-// "// BEGIN clean-html" and "// END clean-html"; `node share/js/capture/sync.mjs --check <copy>` keeps every copy
-// equal to it. It is a classic script (no import or export, and no globals but cleanHtml and prepareForReadability)
-// so both can take it as it is; CommonJS callers (the tests) get them from module.exports.
+// The one source. The extension's build copies this file; apple/Shared/ShareExtension/GetPage.js is to inline it
+// between the lines "// BEGIN clean-html" and "// END clean-html" (LAB-PLAN F03, F10: it has no copy yet).
+// `node share/js/capture/sync.mjs --check <copy>` keeps every copy equal to it. It is a classic script (no import or
+// export, and no globals but cleanHtml and prepareForReadability) so both can take it as it is; CommonJS callers (the
+// tests) get them from module.exports.
 //
 // Run it on a clone, never on the live page:
 //
@@ -115,9 +116,13 @@ function cleanHtml(root) {
 //     sign up, promo..., sponsor..., advert..., ad, ads, outbrain, taboola, share, sharing, social, comment(s),
 //     trending, popular, most read / viewed / popular / shared, nav..., menu, breadcrumb, toc, sidebar, widget,
 //     footer, masthead, paywall, cookie, banner, teaser, cta, partner, affiliate, shop... or deal;
+//   - an element in it, or the heading that names a bare list, is furniture by that tag, role or name (an
+//     "Advertisement" label with class="ad-label");
 //   - more than a quarter of its text is links, or half of the items of a list in it or more hold a link (headlines,
 //     a table of contents), or an item holds a heading or an <article> (teasers for other stories);
-//   - it holds a form control, an iframe, a video, audio, an embed or an object.
+//   - it holds a form control, an iframe, a video, audio, an embed or an object;
+//   - it is inside a named box turned down by these rules: a list in a newsletter box is not a bare list named by
+//     the box's heading.
 // The element that holds the article's paragraphs is found as Readability scores: each <p> of 25 characters or more in
 // the box's article, outside summary boxes and furniture, scores 1, plus 1 per comma-separated part, plus 1 per 100
 // characters (3 at most), and adds that to its parent, half of it to its grandparent and a sixth, a ninth and a twelfth
@@ -211,9 +216,23 @@ function prepareForReadability(doc) {
     return length ? linked / length : 0;
   };
 
+  // whether an element inside el is furniture by tag, role or name
+  var holdsFurniture = function (el) {
+    var inner = el.querySelectorAll('*');
+    for (var i = 0; i < inner.length; i++) if (furnitureOf(inner[i])) return true;
+    return false;
+  };
+
   var boxes = [];
   var inBox = function (el) {
     for (var i = 0; i < boxes.length; i++) if (boxes[i].el === el || boxes[i].el.contains(el)) return true;
+    return false;
+  };
+  // the named boxes turned down: nothing inside one is a box either (a newsletter's list is not a bare list once its
+  // box has been turned down for its form)
+  var rejected = [];
+  var inRejected = function (el) {
+    for (var i = 0; i < rejected.length; i++) if (rejected[i].contains(el)) return true;
     return false;
   };
   var all = doc.body.querySelectorAll('div, section, aside, ul, ol, dl');
@@ -226,11 +245,14 @@ function prepareForReadability(doc) {
     var lead = before && (own || titled(before)) ? before : null;
     var first = el.firstElementChild;
     var named = own || !!lead || (!bare && titled(heading(first) || (first && heading(first.firstElementChild))));
-    if (!named || inBox(el)) continue;
+    if (!named || inBox(el) || inRejected(el)) continue;
     var root = rootOf(el);
-    if (!root || inFurniture(el, root, true)) continue;
     var text = textOf(el);
-    if (text.length < 25 || !holdsList(el) || linkShare(el, text.length) > 0.25 || el.querySelector(NOT_IN_A_BOX)) continue;
+    if (!root || inFurniture(el, root, true) || holdsFurniture(el) || (lead && (furnitureOf(lead) || holdsFurniture(lead)))
+      || text.length < 25 || !holdsList(el) || linkShare(el, text.length) > 0.25 || el.querySelector(NOT_IN_A_BOX)) {
+      rejected.push(el);
+      continue;
+    }
     boxes.push({ el: el, lead: lead, root: root });
   }
   if (!boxes.length) return 0;

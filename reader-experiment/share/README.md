@@ -200,16 +200,22 @@ clone before Readability. It moves each summary box inside the article (key poin
 "at a glance" lists, named so by class, id, aria-label or heading, and holding a list) into the element that holds the
 article's paragraphs, at its start when the box comes before it and at its end when after, and makes an `<aside>`
 box a `<div>`. It leaves alone what is not the article: anything in or named as navigation, related links, a
-newsletter, an advertisement or other furniture, a box that is mostly links or whose items are links or teasers, and
-a box with a form, an iframe or media. Its comment in `clean-html.js` has every rule. With it, `storm-warning-live`
-keeps 100% (Key points first, as on the page). It moves nothing on the 20 Readability pages or the other nine news
-pages (their articles are byte for byte Readability's), nor on any of the 128 pages of Readability 0.6.0's test suite
-but that one, measured with linkedom while writing it. Three more fixtures (`fixtures/articles/decoys/`) hold boxes
-named or titled like summaries that are navigation, related links, a newsletter and an advertisement: each stays out,
-and the test shows each would be kept if it were a plain summary box.
+newsletter, an advertisement or other furniture, a box with such an element or name inside it (an "Advertisement"
+label), a box that is mostly links or whose items are links or teasers, a box with a form, an iframe or media, and
+anything inside a box it turned down (so the list in a newsletter box does not come in on its own, named by the box's
+heading). Its comment in `clean-html.js` has every rule. With it, `storm-warning-live` keeps 100% (Key points first,
+as on the page). It moves nothing on the 20 Readability pages or the other nine news pages (their articles are byte
+for byte Readability's), nor on any of the 128 pages of Readability 0.6.0's test suite (measured with linkedom, again
+after the review round below). Four more fixtures (`fixtures/articles/decoys/`) hold boxes named or titled like
+summaries that are navigation, related links, a newsletter, an advertisement, a weather box, other news and teasers
+for other stories: each stays out, the test shows each would be kept if it were a plain summary box, and variants of
+them with one marker left (the newsletter's form alone, an iframe in its place, the advertisement's label alone...)
+stay out too. Each rule that keeps a box out also has a small page with and without it, so no rule goes untested.
+Review round (Oct 23): a list in a box turned down for its form or its links was rescued as a bare list under the
+box's heading, and an "Advertisement" label inside a box was not looked at; both are fixed.
 
 **Clean article's call order (F10).** The extension's `captureArticle` (`extension/src/inject.js`) and
-`apple/Shared/ShareExtension/GetPage.js` run, in the page, on one clone:
+`apple/Shared/ShareExtension/GetPage.js` are to run, in the page, on one clone:
 
 ```js
 var clone = document.cloneNode(true);
@@ -221,10 +227,12 @@ var content = cleanHtml(doc.body);               // then drop its '<!doctype htm
 ```
 
 `prepareForReadability` must run on the clone Readability then parses, and before `new Readability(...)`; given the
-live `document` it returns 0 and changes nothing. It is in `clean-html.js`, which both callers already copy (the
-extension's `ARTICLE_FILES` inject it with Readability; `GetPage.js` inlines it between `// BEGIN clean-html` and
-`// END clean-html`), so `sync.mjs --check` fails on a copy from before it. Each consumer lane re-syncs its copy and
-adds the one call (6.3): until then its Clean article is Readability's alone, and a live page's Key points go.
+live `document` it returns 0 and changes nothing. It is in `clean-html.js`. The extension already copies that file
+(its build copies it from here, and `ARTICLE_FILES` injects it with Readability), so it has the function; its
+`captureArticle` does not call it yet. `GetPage.js` has no copy yet: today it returns v1.1's `html`, `title` and `url`
+only, and LAB-PLAN F03 and F10 have it inline `clean-html.js` between `// BEGIN clean-html` and `// END clean-html`
+(and Readability between its own markers), which `sync.mjs --check` then holds to this file. Each consumer lane adds
+the one call (6.3): until then its Clean article is Readability's alone, and a live page's Key points go.
 
 ### Still to check on a device
 

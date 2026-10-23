@@ -1,7 +1,8 @@
 // F10.1 (LAB-PLAN 3.3): Clean article keeps at least 90% of the body and drops navigation and footers, on a subset of
 // Mozilla Readability's own test pages and on ten news-style pages written for this test (fixtures/articles/, whose
-// README says where each comes from). Three more pages hold boxes named like summaries that are navigation, related
-// links, a newsletter and an advertisement, which the step before Readability must leave alone.
+// README says where each comes from). Four more pages hold boxes named like summaries that are navigation, related
+// links, a newsletter, an advertisement, a weather box, other news and teasers for other stories, which the step before
+// Readability must leave alone.
 //
 // Clean article is what the extension's captureArticle runs in the tab (extension/src/inject.js) and GetPage.js on an
 // iPhone, with the capture code of share/js/capture/, in the order share/README.md gives its callers: on a clone of the
@@ -249,10 +250,10 @@ test('F10.1 news page storm-warning-live: the Key points come first, before the 
 });
 
 // ---------------------------------------------------------------------------------------------------------------
-// Three pages with boxes named like summaries that are not the article's own text: decoys/<name>.html and its body,
+// Four pages with boxes named like summaries that are not the article's own text: decoys/<name>.html and its body,
 // decoys/<name>.txt. Each box sits in the article beside its text, as storm-warning-live's Key points do, and is named
-// or titled as a summary box ("At a glance", "Highlights", "Key points", "Takeaways") holding a list. What it is gives it
-// away, and prepareForReadability must leave it where it is, so Readability drops it as before.
+// or titled as a summary box ("At a glance", "Highlights", "In brief", "Key points", "Takeaways") holding a list. What it
+// is gives it away, and prepareForReadability must leave it where it is, so Readability drops it as before.
 
 const DECOY_PAGES = pagesIn(DECOYS);
 /** Per page: each decoy box, by selector, and what it is. */
@@ -262,26 +263,37 @@ const DECOY_BOXES = {
     '.story-highlights': 'related links: every item a link to another story',
   },
   'market-hall-newsletter': { '.key-points-signup': 'a newsletter: a sign-up name and a form' },
-  'river-festival-sponsored': { '.takeaways': 'an advertisement: an ad-slot class and an Advertisement label' },
+  'river-festival-sponsored': { '.takeaways': 'an advertisement: an ad-slot class, an Advertisement aria-label and an ad-label inside' },
+  'valley-night-buses': {
+    '.at-a-glance': 'a weather box: role="complementary" only',
+    '.in-brief': 'other news: two items of five are links, but links are nearly half of its text',
+    '.highlights': 'teasers for other stories: each item an <article> with a headline, and no link (cards a script opens)',
+  },
 };
 
+/** Each link in el replaced by its text. */
+const unlink = (el) => { for (const a of [...el.querySelectorAll('a')]) a.replaceWith(...a.childNodes); };
+
 /**
- * The page with each decoy box turned into a plain summary box: no role, aria-label or id, class="key-points", its links
- * replaced by their text and its forms removed. prepareForReadability must then move every one of them, which shows
- * that only what they are kept them out.
+ * The page with each decoy box turned into a plain summary box: no role, aria-label or id, class="key-points"; in it, no
+ * class, id, role or aria-label, its links replaced by their text, its forms, iframes and media removed, and its items'
+ * headings and <article>s replaced by what they hold. prepareForReadability must then move every one of them, which
+ * shows that only what they are kept them out.
  */
 function defused(html, selectors) {
   const { document } = parseHTML(html);
   for (const box of selectors.map((s) => document.querySelector(s))) {
     for (const a of ['role', 'aria-label', 'id']) box.removeAttribute(a);
     box.setAttribute('class', 'key-points');
-    for (const a of [...box.querySelectorAll('a')]) a.replaceWith(...a.childNodes);
-    for (const f of [...box.querySelectorAll('form')]) f.remove();
+    for (const el of box.querySelectorAll('*')) for (const a of ['class', 'id', 'role', 'aria-label']) el.removeAttribute(a);
+    unlink(box);
+    for (const f of [...box.querySelectorAll('form, iframe, video, audio, embed, object')]) f.remove();
+    for (const h of [...box.querySelectorAll('li h1, li h2, li h3, li h4, li h5, li h6, li article')]) h.replaceWith(...h.childNodes);
   }
   return `<!doctype html>\n${document.documentElement.outerHTML}`;
 }
 
-test('the decoy fixtures: three pages, each with its expected body and the boxes DECOY_BOXES names', () => {
+test('the decoy fixtures: four pages, each with its expected body and the boxes DECOY_BOXES names', () => {
   assert.deepEqual(DECOY_PAGES, Object.keys(DECOY_BOXES).sort());
   for (const name of DECOY_PAGES) {
     assert.ok(words(read(new URL(`${name}.txt`, DECOYS))).length >= 250, name);
@@ -298,7 +310,8 @@ for (const name of DECOY_PAGES) {
     assertDropsFurniture(m, name);
   });
 
-  test(`F10.1 decoy page ${name}: prepareForReadability leaves ${Object.values(DECOY_BOXES[name]).map((k) => k.split(':')[0]).join(' and ')} alone`, needsDom, () => {
+  const kinds = Object.values(DECOY_BOXES[name]).map((k) => k.split(':')[0]);
+  test(`F10.1 decoy page ${name}: prepareForReadability leaves ${[kinds.slice(0, -1).join(', '), kinds.at(-1)].filter(Boolean).join(' and ')} alone`, needsDom, () => {
     const m = measure(DECOYS, name);
     assert.equal(m.got.moved, 0);
     assert.equal(m.got.html, cleanArticle(m.html, { prepare: false }).html, `${name}: the same article as Readability's alone`);
@@ -312,6 +325,53 @@ for (const name of DECOY_PAGES) {
     assert.equal(got.moved, boxes.length, `${name}: defused, every box moves`);
     const text = flat(got.text);
     assert.deepEqual(linesIn(plain, '.key-points').filter((l) => !text.includes(l)), [], `${name}: defused, the boxes are kept`);
+  });
+}
+
+/**
+ * A decoy box with one of its markers left, which alone must keep it out: [page, box, the marker left, the change]. The
+ * newsletter's form is enough on its own, and so is an iframe in its place: the list in the box is not then a bare
+ * list named by the box's heading.
+ */
+const ONE_MARKER = [
+  ['harbour-bridge-repairs', '.at-a-glance', 'role="navigation"', (box) => { box.removeAttribute('aria-label'); unlink(box); }],
+  ['harbour-bridge-repairs', '.at-a-glance', 'its links', (box) => { box.removeAttribute('role'); box.removeAttribute('aria-label'); }],
+  ['market-hall-newsletter', '.key-points-signup', 'its sign-up name', (box) => box.querySelector('form').remove()],
+  ['market-hall-newsletter', '.key-points-signup', 'its form (class="key-points-box")', (box) => box.setAttribute('class', 'key-points-box')],
+  ['market-hall-newsletter', '.key-points-signup', 'its form (no class: its heading names it)', (box) => box.removeAttribute('class')],
+  ['market-hall-newsletter', '.key-points-signup', 'an iframe in place of its form (class="key-points-box")', (box) => {
+    box.setAttribute('class', 'key-points-box');
+    const iframe = box.ownerDocument.createElement('iframe');
+    iframe.setAttribute('src', 'https://newsletters.example.net/ashcombe/friday');
+    iframe.setAttribute('title', 'Sign up for the Friday email');
+    box.querySelector('form').replaceWith(iframe);
+  }],
+  ['river-festival-sponsored', '.takeaways', 'its ad-slot class', (box) => {
+    box.removeAttribute('aria-label');
+    box.querySelector('.ad-label').removeAttribute('class');
+  }],
+  ['river-festival-sponsored', '.takeaways', 'its aria-label', (box) => {
+    box.setAttribute('class', 'takeaways');
+    box.querySelector('.ad-label').removeAttribute('class');
+  }],
+  ['river-festival-sponsored', '.takeaways', 'its Advertisement label (class="ad-label")', (box) => {
+    box.setAttribute('class', 'takeaways');
+    box.removeAttribute('aria-label');
+  }],
+];
+
+for (const [name, selector, marker, change] of ONE_MARKER) {
+  test(`F10.1 decoy page ${name}: ${selector} with ${marker} only stays out`, needsDom, () => {
+    const html = read(new URL(`${name}.html`, DECOYS));
+    const lines = linesIn(html, selector);
+    const { document } = parseHTML(html);
+    change(document.querySelector(selector));
+    const variant = `<!doctype html>\n${document.documentElement.outerHTML}`;
+    assert.notEqual(variant, html);
+    const got = cleanArticle(variant);
+    assert.equal(got.moved, 0, `${name}: ${selector} with ${marker} only`);
+    const text = flat(got.text);
+    assert.deepEqual(lines.filter((l) => text.includes(l)), [], `${name}: ${selector} in the article`);
   });
 }
 
@@ -368,6 +428,43 @@ test('prepareForReadability: a bare list under a "Key takeaways" heading moves w
   assert.equal(two.moved, 2);
   assert.ok(where(two, 'Key points') < where(two, 'At a glance') && where(two, 'At a glance') < where(two, PARAGRAPHS[0]), 'the first box, the second, the text');
 });
+
+const LI = '<li>Fares rise by five per cent from January.</li><li>Children under twelve travel free all year.</li>';
+/** A box: <div attrs> holding a "Key points" heading, then the list's items, then more (the default: the two items). */
+const box = (attrs, items = LI, more = '') => `<div ${attrs}><h2>Key points</h2><ul>${items}</ul>${more}</div>`;
+const LINK = 'Read the operator\'s announcement and the new table of fares for every route';
+const H1 = '<h1>Ferry fares to rise in January</h1>';
+/**
+ * Each rule that keeps a box out, on its own: [the rule, the article with a box it turns down, the same box without
+ * that one thing]. The first must move nothing, the second its box.
+ */
+const RULES = [
+  ['a furniture role on the box', box('class="key-points" role="complementary"'), box('class="key-points"')],
+  ['a furniture tag around it: the article\'s <footer>', `${BODY}<footer>${BOX}</footer>`, `${BODY}<div>${BOX}</div>`],
+  ['a furniture name on the box', box('class="key-points newsletter"'), box('class="key-points"')],
+  ['a furniture name around it in the article', `<div class="promo"><p>From the Ferry Company</p>${BOX}</div>`, `<div class="extra"><p>From the Ferry Company</p>${BOX}</div>`],
+  ['a furniture name in it: an Advertisement label', box('class="key-points"', LI, '<p class="ad-label">Advertisement</p>'), box('class="key-points"', LI, '<p class="label">Advertisement</p>')],
+  ['a furniture name on the heading that names a bare list', `<h3 class="newsletter-title">Key takeaways</h3><ul>${LI}</ul>`, `<h3 class="title">Key takeaways</h3><ul>${LI}</ul>`],
+  ['fewer than 25 characters', '<div class="key-points"><ul><li>Yes.</li><li>No.</li></ul></div>', '<div class="key-points"><ul><li>Yes, from January.</li><li>No, not in summer.</li></ul></div>'],
+  ['no list', '<div class="summary"><h2>Summary</h2><p>Fares rise by five per cent from January, and children under twelve travel free.</p></div>', box('class="summary"')],
+  ['a list of one item', box('class="key-points"', '<li>Fares rise by five per cent from January, and children under twelve travel free.</li>'), box('class="key-points"')],
+  ['an item with a heading (a teaser)', box('class="key-points"', `<li><h3>Fares</h3> rise by five per cent from January.</li>${LI}`), box('class="key-points"', `<li><b>Fares</b> rise by five per cent from January.</li>${LI}`)],
+  ['an item with an <article> (a teaser)', box('class="key-points"', `<li><article>Fares rise by five per cent from January.</article></li>${LI}`), box('class="key-points"', `<li><div>Fares rise by five per cent from January.</div></li>${LI}`)],
+  ['half of the items hold a link', box('class="key-points"', '<li>Fares rise by five per cent (<a href="/fares">fares</a>).</li><li>Children under twelve travel free all year.</li>'), box('class="key-points"', '<li>Fares rise by five per cent (fares).</li><li>Children under twelve travel free all year.</li>')],
+  ['more than a quarter of its text is links, in fewer than half of its items', box('class="key-points"', `${LI}<li><a href="/fares">${LINK}</a></li>`), box('class="key-points"', `${LI}<li>${LINK}</li>`)],
+  ['an iframe in it', box('class="key-points"', LI, '<iframe src="https://video.example.net/embed/ferries" title="Watch: the new boats"></iframe>'), box('class="key-points"')],
+  ['a video in it', box('class="key-points"', LI, '<video src="https://video.example.net/ferries.mp4" controls></video>'), box('class="key-points"')],
+  ['a form in a box its heading names: not a bare list either', `<div class="key-points-box"><h2>Key points, every Friday</h2><ul>${LI}</ul><form action="/signup"><input type="email" name="email"></form></div>`, `<div class="key-points-box"><h2>Key points, every Friday</h2><ul>${LI}</ul></div>`],
+  ['links in a box its heading names: not a bare list either', box('class="key-points"', LI, `<p><a href="/fares">${LINK}</a></p>`), box('class="key-points"', LI, `<p>${LINK}</p>`)],
+];
+
+for (const [rule, out, plain] of RULES) {
+  test(`prepareForReadability keeps a box out for ${rule}, on its own`, needsDom, () => {
+    const at = (b) => (b.startsWith(BODY) ? `${H1}${b}` : `${H1}${b}${BODY}`);
+    assert.equal(prepareForReadability(parseHTML(pageWith(at(out))).document), 0, `${rule}: stays out`);
+    assert.equal(prepareForReadability(parseHTML(pageWith(at(plain))).document), 1, `${rule}: without it, the box moves`);
+  });
+}
 
 test('prepareForReadability: nothing moves outside an <article> or <main>, inside the text already, or on the page\'s own document', needsDom, () => {
   for (const [what, html] of [

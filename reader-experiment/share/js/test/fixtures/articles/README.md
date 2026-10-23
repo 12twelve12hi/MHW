@@ -2,7 +2,7 @@
 
 The pages `../../readability.test.mjs` runs Clean article on (LAB-PLAN F10.1: "On Readability's test pages plus ten news
 fixtures, Clean article keeps at least 90% of the expected body text and drops navigation and footers").
-`decoys/` holds three more pages, for the step Clean article runs before Readability.
+`decoys/` holds four more pages, for the step Clean article runs before Readability.
 
 ## `readability/`: Mozilla Readability's own test pages
 
@@ -49,7 +49,7 @@ Known results (Oct 23):
 - `lumen-leaf-ereader` has an advertisement inside the article's text. Readability keeps that advertisement's text.
   F10.1 asks only for navigation and footers to go, so the test does not count it.
 
-## `decoys/`: three pages whose summary-like boxes are not the article
+## `decoys/`: four pages whose summary-like boxes are not the article
 
 Written for this test in the same way and under the same convention as `news/` (made-up publications, places, people
 and events). Each article has its body, `<name>.txt`, and beside it, as `storm-warning-live`'s Key points are, boxes
@@ -60,8 +60,16 @@ each where it is, so Readability drops it:
   the page, and related links, a "Highlights" box whose items are links to other stories;
 - `market-hall-newsletter`: a newsletter, a "Key points, every Friday" box named `key-points-signup` with a sign-up
   form;
-- `river-festival-sponsored`: an advertisement, a "Takeaways" box named `takeaways ad-slot`, labelled Advertisement.
+- `river-festival-sponsored`: an advertisement, a "Takeaways" box named `takeaways ad-slot`, labelled Advertisement,
+  with an `ad-label` paragraph inside;
+- `valley-night-buses`: a weather box, "At a glance: the weekend's weather", marked only by `role="complementary"`;
+  other news, an "In brief" box where two items of five are links but links are nearly half of its text; and teasers,
+  a "Highlights" box whose items are `<article>` cards with a headline and no link (a script opens them).
 
 The test checks that Clean article keeps the body and none of each box's lines, and that the same boxes, once turned
-into plain summary boxes (no role, a `key-points` class, no links or forms), are moved and kept: so each page tests
-what keeps its boxes out, not its markup.
+into plain summary boxes (no role, a `key-points` class, nothing named inside, no links, forms, iframes or media, no
+headings or articles in the items), are moved and kept: so each page tests what keeps its boxes out, not its markup.
+It also checks variants with one marker left, each of which must keep its box out alone: the "At a glance" box with
+only its role or only its links, the newsletter with only its sign-up name, only its form (named `key-points-box`, or
+named by its heading alone) or an iframe in place of the form, and the advertisement with only its class, its
+aria-label or its `ad-label` paragraph.
