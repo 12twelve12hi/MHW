@@ -34,12 +34,9 @@ Before you add them:
 - **They also start TestFlight.** `APPLE_TEAM_ID` and the three `ASC_*` secrets also turn on the iPhone app's
   TestFlight upload on every build. That needs the key's Admin access and the iPhone app created in App Store Connect
   (Apps › + › New App, bundle id `com.daylight.share`). Without them the TestFlight job fails on every run.
-- **One change still has to land first.** Moving from the ad-hoc build to the signed one carries the pairing, this
-  Mac's name and the history into the App Group, but not Comfort, the Lab switch, the one-time Lab note, Lab's
-  delivery record (`lab.json`) or the Daylight server's pin and notices (`server.json`). The plan says updates keep
-  them (LAB-PLAN 1.2, 1.3). `SharedStore.migrate` in `apple/DaylightShareKit` must carry them too, and it needs a test.
-  Today it also moves nothing at all unless the ad-hoc build was paired; an unpaired Mac's settings and Lab state should
-  move as well. This is the kit lane's job; remove this item once it lands.
+- **What moves.** The signed app's first start moves what the ad-hoc build kept into the App Group: the pairing, this
+  Mac's name, the history, Comfort, the Lab switch and its one-time note, Lab's delivery record and the Daylight
+  server's pin and notices, paired or not (`SharedStore.migrate`, tested in the kit).
 
 Then push any change under `reader-experiment/apple/`, or choose Re-run all jobs on the latest "Reader experiment –
 Apple apps" run. If a secret is missing, the "Mac signing (secrets)" job's log names it. Keep the secrets once the

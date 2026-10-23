@@ -534,11 +534,37 @@ jobs:
           pattern: send-to-daylight-*
           merge-multiple: true
           path: out
+      # rx-publish.sh (shared by every rx workflow) gives up on a file after four failed uploads without failing, so
+      # this step then checks that the release holds this run's two files: each by name, uploaded during this step,
+      # with this file's size and, where GitHub gives one, its SHA-256 digest. A failed upload turns the run red.
       - name: Publish to the reader-experiment-latest release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: bash .github/scripts/rx-publish.sh out/Send-to-Daylight-unsigned.ipa out/Send-to-Daylight-mac.zip
+        run: |
+          set -euo pipefail
+          FILES=(out/Send-to-Daylight-unsigned.ipa out/Send-to-Daylight-mac.zip)
+          SINCE=$(date -u -d '-2 min' +%Y-%m-%dT%H:%M:%SZ)
+          bash .github/scripts/rx-publish.sh "${FILES[@]}"
+          TAG="${RX_RELEASE_TAG:-reader-experiment-latest}"
+          ASSETS=$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq '.assets[] | [.name, (.size | tostring), .updated_at, (.digest // "")] | @tsv')
+          bad=0
+          for f in "${FILES[@]}"; do
+            name=$(basename "$f")
+            size=$(stat -c %s "$f")
+            sum="sha256:$(sha256sum "$f" | cut -d' ' -f1)"
+            line=$(printf '%s\n' "$ASSETS" | awk -F'\t' -v n="$name" '$1 == n { print; exit }')
+            IFS=$'\t' read -r _ got_size got_at got_digest <<< "$line" || true
+            if [ -z "$line" ]; then
+              echo "::error::the release has no $name: its upload failed"; bad=1
+            elif [ "$got_size" != "$size" ] || [[ "$got_at" < "$SINCE" ]] || { [ -n "$got_digest" ] && [ "$got_digest" != "$sum" ]; }; then
+              echo "::error::the release's $name is not this run's (size $got_size, updated $got_at, ${got_digest:-no digest}; this run's: size $size, $sum, uploaded after $SINCE): its upload failed"
+              bad=1
+            else
+              echo "The release holds this run's $name ($size bytes, updated $got_at${got_digest:+, $got_digest})."
+            fi
+          done
+          exit "$bad"
 
   # lane: kit (shared)
   # TestFlight upload, only when the App Store Connect secrets exist (see reader-experiment/apple/README.md).
