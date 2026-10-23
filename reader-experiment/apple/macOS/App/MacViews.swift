@@ -46,6 +46,8 @@ struct MacRootView: View {
                 BannerView(banner: banner).onTapGesture { model.banner = nil }
             }
         }
+        // `-DLSShowAnnouncements` (Debug, the UI tests): what VoiceOver was told, listed at the foot of the window.
+        .announcementLog()
         .frame(minWidth: MacRootView.minWidth, minHeight: 480)
         // The window's content is one group for VoiceOver; it needs a name (F27.2), and so does the AppKit view that
         // hosts it.

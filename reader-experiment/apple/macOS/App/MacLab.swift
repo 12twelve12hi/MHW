@@ -36,12 +36,15 @@ struct MacSettingsStack: View {
     }
 }
 
-/// A page the Lab section opens (What's in Lab, Daylight server): its own Back button and title above it. A Mac sheet
-/// has no toolbar for a navigation stack's own back button and title, so the page shows them itself (the system's back
-/// button is hidden, so the Settings window does not show two).
+/// A page the Lab section opens (What's in Lab, Daylight server): its own Back button and title above it. Before macOS 15
+/// a Mac sheet has no toolbar for a navigation stack's own back button and title, so the page shows them itself. The
+/// system's back button is hidden, so the Settings window does not show two; and so is the system's title, which macOS
+/// 15 shows in a strip at the top of the sheet (the kit's pages set `.navigationTitle`): the title shows once.
 struct MacLabPage<Content: View>: View {
     /// The Back button's words (the app's own, like the JS apps' "‹ Back").
     static var back: String { "Back" }
+    /// The page title's identifier (the UI tests check that it is the only title, and that Back takes it away).
+    static var titleID: String { "lab-page-title" }
 
     let title: String
     let content: Content
@@ -68,6 +71,7 @@ struct MacLabPage<Content: View>: View {
                 .comfortBorder()
                 Text(title).dlsFont(.title3, weight: .semibold).wrapping(title)
                     .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier(Self.titleID)
             }
             .padding(.horizontal, 20)
             .padding(.top, 14)
@@ -76,12 +80,31 @@ struct MacLabPage<Content: View>: View {
             content
         }
         .navigationBarBackButtonHidden(true)
+        .modifier(SystemTitleHidden())
+    }
+}
+
+/// macOS 15 shows a navigation stack's title (the kit's `.navigationTitle`) in a toolbar strip at the top of a sheet,
+/// above the page's own title: it takes the title out of the toolbar and hides the strip. Earlier versions show neither.
+private struct SystemTitleHidden: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content
+                .toolbar(removing: .title)
+                .toolbar(.hidden, for: .windowToolbar)
+        } else {
+            content
+        }
     }
 }
 
 /// What's in Lab (1.4) on the Mac: the kit's list, ending with the ad-hoc line when this build has no App Group
 /// (`MacLab.whatsInLabFooter`). It follows storage as it settles.
 struct MacWhatsInLab: View {
+    /// The list's identifier: its name is the page's title, which the UI tests check shows once as words.
+    static var listID: String { "lab-whats-in-lab-list" }
+
     @EnvironmentObject var model: AppModel
 
     var body: some View {
@@ -89,6 +112,7 @@ struct MacWhatsInLab: View {
             .listStyle(.inset)
             // The list is a group for VoiceOver; it needs a name (F27.2), as the History list has one.
             .accessibilityLabel(LabText.whatsInLab)
+            .accessibilityIdentifier(Self.listID)
     }
 }
 

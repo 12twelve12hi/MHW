@@ -21,6 +21,10 @@ struct SendToDaylightMacApp: App {
 /// Opens files and links dropped on the Dock icon or sent with "Open With", and `daylightshare://` pairing links.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        // `-DLSShowAnnouncements` (the UI tests, F00.3): what VoiceOver is told is also listed in the main window.
+        AnnouncementLog.start()
+        #endif
         // LAB_NOTE_ENABLED (LAB-PLAN 1.2), before the first render: false in W0.
         AppModel.shared.lab.noteEnabled = MacLab.noteEnabled
         MainWindow.shared.show()

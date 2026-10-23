@@ -8,9 +8,11 @@ import XCTest
 // accessibility audit of every Lab screen (F27.2). The Lab-off parity walk (F00.2) is LabOffParityTests.
 //
 // The app runs on its own empty storage (`-DLSTestStorage`), which is a first start every launch. Words come from the
-// vectors in the source tree (LAB_TEXT: share/vectors/lab-vectors.json; the Server code: server/vectors), as the
-// apps take them from LAB_TEXT. Two tests need relays the CI job starts (rx-apple.yml, mac): a mock ntfy relay with no
-// Daylight server on it ($DLS_LAB_RELAY), and one that takes connections and never answers ($DLS_SILENT_RELAY).
+// vectors in the source tree (LAB_TEXT: share/vectors/lab-vectors.json; the Server code and the server module's
+// messages: server/vectors), as the apps take them from LAB_TEXT. Two tests need relays the CI job starts (rx-apple.yml,
+// mac): a mock ntfy relay with no Daylight server on it ($DLS_LAB_RELAY), and one that takes connections and never
+// answers ($DLS_SILENT_RELAY). The UI tests' pairing link's relay, 127.0.0.1:9, refuses every connection: no network.
+// What VoiceOver was told is listed in the main window with `-DLSShowAnnouncements` (Debug; `AnnouncementLog`).
 
 /// What the Lab UI tests share.
 @MainActor
@@ -24,11 +26,18 @@ enum LabUI {
     static let copyServerCodeID = "lab-server-copy"
     static func featureID(_ id: String) -> String { "lab-feature-\(id)" }
 
-    /// The Back button of the pages the Lab section opens (`MacLabPage.back`).
+    /// The Back button of the pages the Lab section opens (`MacLabPage.back`), their title (`MacLabPage.titleID`) and
+    /// What's in Lab's list, whose name is that title (`MacWhatsInLab.listID`).
     static let back = "Back"
+    static let pageTitleID = "lab-page-title"
+    static let whatsInLabListID = "lab-whats-in-lab-list"
 
-    /// The server module's OFFLINE text (server/client/daylight-server.js STATE_MESSAGES, `ServerMessages`).
-    static let offline = "Couldn’t reach the Daylight server. Check your connection and try again."
+    /// Each announcement's text in the main window with `-DLSShowAnnouncements` (`AnnouncementLog.textID`).
+    static let announcedID = "dls-announced"
+
+    /// The gate's 5 s deadline as a UI test can see it (a click and a look each take the test a moment), as the
+    /// iPhone's LabNoteTests.gateAsSeen.
+    static let gateAsSeen: TimeInterval = 8
 
     /// The secrets the setup texts name: none may show before something is tapped (F00.7).
     static let secretNames = ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "ANTHROPIC_API_KEY", "DAYLIGHT_SERVER_CODE",
@@ -48,6 +57,22 @@ enum LabUI {
 
     static func labText() throws -> [String: Any] {
         try XCTUnwrap(try json("share/vectors/lab-vectors.json")["labText"] as? [String: Any], "no labText in the Lab vectors")
+    }
+
+    /// The server module's message for a state (server/client/daylight-server.js STATE_MESSAGES, `ServerMessages`), as
+    /// server-vectors.json › serverState expects it. Under a control these states show the module's sentence (LAB-PLAN
+    /// 1.6); labText.messages has only their short states (OFFLINE's: "Can’t reach the server").
+    static func stateMessage(_ state: String) throws -> String {
+        let serverState = try XCTUnwrap(try json("server/vectors/server-vectors.json")["serverState"] as? [String: Any])
+        for key in ["fromStatus", "fromError"] {
+            for case let c as [String: Any] in (serverState[key] as? [Any]) ?? [] {
+                guard let expect = c["expect"] as? [String: Any], expect["state"] as? String == state,
+                      let message = expect["message"] as? String else { continue }
+                return message
+            }
+        }
+        XCTFail("server-vectors.json has no \(state) message")
+        return ""
     }
 
     /// A LAB_TEXT string by its dotted id (lab-vectors.json › labText.strings).
@@ -93,15 +118,17 @@ enum LabUI {
     }
 
     /// Starts the app on fresh, empty storage of its own: with Lab as `-DLSLab` says, or not set (nil: a first start, as
-    /// a fresh install or the first start after an update has it), Comfort as given, paired or not (on `relay`), and with
-    /// the sample history.
+    /// a fresh install or the first start after an update has it), Comfort as given, paired or not (on `relay`; nil: the
+    /// pairing link's 127.0.0.1:9, where nothing listens), with the sample history, and listing what VoiceOver is told
+    /// (`announcements`: `-DLSShowAnnouncements`).
     static func launch(lab: Bool?, paired: Bool, relay: String? = nil, comfort: Bool = false, history: Bool = false,
-                       extra: [String] = []) -> XCUIApplication {
+                       announcements: Bool = false, extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         var arguments = ["-DLSTestStorage", "-DLSComfort", comfort ? "1" : "0"]
         if let lab { arguments += ["-DLSLab", lab ? "1" : "0"] }
         if paired { arguments += ["-DLSPairLink", pairingLink(relay: relay)] }
         if history { arguments += ["-DLSSampleHistory"] }
+        if announcements { arguments += ["-DLSShowAnnouncements"] }
         app.launchArguments = arguments + extra
         app.launch()
         UITestSupport.waitUntilReadable(app)
@@ -149,10 +176,77 @@ enum LabUI {
         XCTAssertTrue(root.buttons[back].waitForExistence(timeout: 10), "\(rowID) did not open its page")
     }
 
-    /// Back to Settings from a Lab page.
-    static func goBack(in root: XCUIElement) {
-        root.buttons[back].click()
+    /// Back to Settings from a Lab page: the page goes (its Back button, its title and `pageOnly`, an element only that
+    /// page has, leave the tree), and Settings shows. The navigation stack keeps Settings in the tree under a page, so the
+    /// Lab switch being there proves nothing by itself.
+    static func goBack(in root: XCUIElement, leaving pageOnly: String) {
+        let button = root.buttons[back]
+        let page = element(pageOnly, in: root)
+        XCTAssertTrue(page.exists, "\(pageOnly) is not on the page Back should leave")
+        button.click()
+        XCTAssertTrue(waitUntilGone(button), "Back did not leave the page: its Back button is still there")
+        XCTAssertTrue(waitUntilGone(element(pageTitleID, in: root)), "Back did not leave the page: its title is still there")
+        XCTAssertTrue(waitUntilGone(page), "Back did not leave the page: \(pageOnly) is still there")
         XCTAssertTrue(element(labSwitchID, in: root).waitForExistence(timeout: 10), "Back did not return to Settings")
+    }
+
+    /// Waits (at most `timeout` seconds) until `element` is no longer in the tree.
+    static func waitUntilGone(_ element: XCUIElement, timeout: TimeInterval = 10) -> Bool {
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
+        return XCTWaiter().wait(for: [gone], timeout: timeout) == .completed
+    }
+
+    /// A Lab page shows its title once: as its own header (`MacLabPage`), and nowhere else under `root` but in the row
+    /// that opened it (which the navigation stack keeps underneath) and as the name of What's in Lab's list. macOS 15
+    /// also put the kit's `.navigationTitle` in a strip at the top of the sheet, so the title showed twice.
+    static func checkTitleShowsOnce(_ title: String, openedBy rowID: String, in root: XCUIElement,
+                                    file: StaticString = #filePath, line: UInt = #line) throws {
+        let snapshot = try root.snapshot()
+        // Where the row is laid out (its words may be an element beside it rather than inside it).
+        var rows: [CGRect] = []
+        func findRows(_ s: XCUIElementSnapshot) {
+            if s.identifier == rowID, !s.frame.isEmpty { rows.append(s.frame.insetBy(dx: -1, dy: -1)) }
+            for child in s.children { findRows(child) }
+        }
+        findRows(snapshot)
+        var headers = 0
+        var others: [String] = []
+        func visit(_ s: XCUIElementSnapshot, isRoot: Bool) {
+            if s.identifier == rowID { return }
+            if !isRoot, s.identifier != whatsInLabListID, !rows.contains(where: { $0.contains(s.frame) }),
+               [s.label, s.title, UITestSupport.text(s.value)].contains(title) {
+                if s.identifier == pageTitleID {
+                    headers += 1
+                } else {
+                    let f = s.frame
+                    others.append("\(AXTree.typeName(s.elementType)) “\(s.identifier)” at \(Int(f.minX)),\(Int(f.minY)) "
+                                  + "\(Int(f.width))×\(Int(f.height))")
+                }
+            }
+            for child in s.children { visit(child, isRoot: false) }
+        }
+        visit(snapshot, isRoot: true)
+        print("UI test: “\(title)” shows as the page's title \(headers)×, and elsewhere \(others.count)× \(others)")
+        XCTAssertEqual(headers, 1, "the page does not show its title “\(title)” once", file: file, line: line)
+        XCTAssertEqual(others, [], "the page's title “\(title)” also shows elsewhere", file: file, line: line)
+    }
+
+    /// What VoiceOver was told since launch, in order (`-DLSShowAnnouncements`: one text each in the main window).
+    static func announcements(_ app: XCUIApplication) -> [String] {
+        app.staticTexts.matching(identifier: announcedID).allElementsBoundByIndex.map { (e: XCUIElement) -> String in
+            let value = UITestSupport.text(e.value)
+            return value.isEmpty ? e.label : value
+        }
+    }
+
+    /// Waits (at most `timeout` seconds) until `text` was said to VoiceOver.
+    static func waitForAnnouncement(_ text: String, in app: XCUIApplication, timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if announcements(app).contains(text) { return true }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        return announcements(app).contains(text)
     }
 
     /// Every word an element and everything inside it shows or says: labels, titles and values.
@@ -332,7 +426,7 @@ final class LabFirstRunTests: XCTestCase {
     }
 }
 
-/// F00.3 (not paired), F17.2 and the Share menu card's own switch: no relay needed.
+/// F00.3 (not paired), F00.6 with no network, F17.2 and the Share menu card's own switch: no relay needed.
 final class LabNoteTests: XCTestCase {
     /// F17.2: a Mac that has never heard a Lab hello shows its delivered rows as "Delivered ✓" (v1.1's words) and, at
     /// the top of What's in Lab, the needs-inbox short state.
@@ -354,14 +448,16 @@ final class LabNoteTests: XCTestCase {
     }
 
     /// F00.3, not paired: each server feature is listed under the heading with its short state ("Pair first"); a row is
-    /// an enabled control, and a tap shows exactly the needs-pairing sentence under it, with OK, which closes it.
+    /// an enabled control, and a tap shows exactly the needs-pairing sentence under it, said to VoiceOver, with OK, which
+    /// closes it. What's in Lab (in the Settings window) shows its title once.
     @MainActor
     func testATapWhenNotPairedSaysPairFirst() throws {
         continueAfterFailure = true
-        let app = LabUI.launch(lab: true, paired: false)
+        let app = LabUI.launch(lab: true, paired: false, announcements: true)
         let window = LabUI.openSettings(app, paired: false)
         LabUI.open(LabUI.whatsInLabID, in: window)
         XCTAssertTrue(LabUI.waitFor(try LabUI.text("short.needs-pairing"), in: window), "the server heading's line is not “Pair first”")
+        try LabUI.checkTitleShowsOnce(try LabUI.text("whatsInLab"), openedBy: LabUI.whatsInLabID, in: window)
         for id in ["F02", "F37", "F19", "F36"] {
             let row = LabUI.element(LabUI.featureID(id), in: window)
             XCTAssertTrue(row.exists, "What's in Lab does not list \(id)")
@@ -370,15 +466,48 @@ final class LabNoteTests: XCTestCase {
         LabUI.element(LabUI.featureID("F37"), in: window).click()
         let note = LabUI.element(LabUI.noteID, in: window)
         XCTAssertTrue(note.waitForExistence(timeout: 5), "no note under Summaries with Claude")
-        XCTAssertTrue(UITestSupport.staticText(try LabUI.needsSentence("needs-pairing"), in: note).exists,
+        let sentence = try LabUI.needsSentence("needs-pairing")
+        XCTAssertTrue(UITestSupport.staticText(sentence, in: note).exists,
                       "the note is not the needs-pairing sentence: \(LabUI.said(note))")
         XCTAssertFalse(UITestSupport.staticText(try LabUI.text("checking"), in: window).exists,
                        "a local answer said it was checking the server")
+        XCTAssertTrue(LabUI.waitForAnnouncement(sentence, in: app), "the needs-pairing sentence was not said to VoiceOver: "
+                      + "\(LabUI.announcements(app))")
+        XCTAssertFalse(LabUI.announcements(app).contains(try LabUI.text("checking")), "a local answer was said to be checking the server")
         UITestSupport.screenshot(app, "mac-lab-note-needs-pairing", in: self)
         let ok = try LabUI.text("noteButton")
         note.buttons[ok].click()
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: note)
         waitForExpectations(timeout: 5)
+        app.terminate()
+    }
+
+    /// F00.6 (offline): paired on a relay that refuses every connection (the pairing link's 127.0.0.1:9), What's in Lab's
+    /// server heading says it can't reach the server, and a tap on Summaries with Claude shows the server module's
+    /// OFFLINE sentence under it within the gate's 5 s, said to VoiceOver.
+    @MainActor
+    func testWithNoNetworkSummariesSayOffline() throws {
+        continueAfterFailure = true
+        let offline = try LabUI.stateMessage("OFFLINE")
+        let app = LabUI.launch(lab: true, paired: true, announcements: true)
+        let sheet = LabUI.openSettings(app, paired: true)
+        LabUI.open(LabUI.whatsInLabID, in: sheet)
+        try LabUI.waitForOverview(in: sheet)
+        XCTAssertTrue(LabUI.waitFor(try LabUI.text("short.OFFLINE"), in: sheet),
+                      "the server heading's line is not “Can’t reach the server”: \(LabUI.said(sheet))")
+        let row = LabUI.element(LabUI.featureID("F37"), in: sheet)
+        XCTAssertTrue(row.isEnabled, "Summaries with Claude looks unavailable")
+        let tapped = Date()
+        row.click()
+        let note = LabUI.element(LabUI.noteID, in: sheet)
+        XCTAssertTrue(note.waitForExistence(timeout: 5), "no note under Summaries with Claude")
+        XCTAssertTrue(LabUI.waitFor(offline, in: note, timeout: 12), "no OFFLINE sentence with no network: \(LabUI.said(sheet))")
+        let took = Date().timeIntervalSince(tapped)
+        print("UI test: with no network, OFFLINE showed \(String(format: "%.1f", took)) s after the tap started")
+        XCTAssertLessThanOrEqual(took, LabUI.gateAsSeen, "the OFFLINE sentence took longer than the gate's 5 s")
+        XCTAssertTrue(LabUI.waitForAnnouncement(offline, in: app), "the OFFLINE sentence was not said to VoiceOver: "
+                      + "\(LabUI.announcements(app))")
+        UITestSupport.screenshot(app, "mac-lab-note-no-network", in: self)
         app.terminate()
     }
 
@@ -418,19 +547,21 @@ final class LabNoteTests: XCTestCase {
 /// (OFFLINE at 5 s).
 final class LabServerNoteTests: XCTestCase {
     /// F00.3, F00.5, F00.6 (online): with no server on the relay, the heading's short state is "Not set up", a tap on
-    /// Summaries with Claude shows the needs-server sentence well within 5 s, and its Copy Server code puts this
-    /// pairing's Server code on the clipboard; the Daylight server section shows the same code and copies it too.
+    /// Summaries with Claude shows the needs-server sentence well within 5 s, said to VoiceOver, and its Copy Server code
+    /// puts this pairing's Server code on the clipboard; the Daylight server section shows the same code and copies it
+    /// too. Each page (in the Settings sheet) shows its title once.
     @MainActor
     func testNoServerSaysSoAndCopiesTheServerCode() throws {
         continueAfterFailure = true
         let relay = try LabUI.relay("DLS_LAB_RELAY")
         let code = try LabUI.serverCode(relay: relay)
-        let app = LabUI.launch(lab: true, paired: true, relay: relay)
+        let app = LabUI.launch(lab: true, paired: true, relay: relay, announcements: true)
         let sheet = LabUI.openSettings(app, paired: true)
         LabUI.open(LabUI.whatsInLabID, in: sheet)
         try LabUI.waitForOverview(in: sheet)
         XCTAssertTrue(LabUI.waitFor(try LabUI.text("serverHeadingShort.needs-server"), in: sheet),
                       "the server heading's line is not “Not set up”: \(LabUI.said(sheet))")
+        try LabUI.checkTitleShowsOnce(try LabUI.text("whatsInLab"), openedBy: LabUI.whatsInLabID, in: sheet)
 
         let row = LabUI.element(LabUI.featureID("F37"), in: sheet)
         XCTAssertTrue(row.isEnabled, "Summaries with Claude looks unavailable")
@@ -441,6 +572,9 @@ final class LabServerNoteTests: XCTestCase {
         XCTAssertTrue(UITestSupport.staticText(sentence, in: sheet).waitForExistence(timeout: 5),
                       "no needs-server sentence within 5 s: \(LabUI.said(sheet))")
         print("UI test: the needs-server note showed \(Int(Date().timeIntervalSince(tapped) * 1000)) ms after the tap")
+        XCTAssertTrue(UITestSupport.staticText(sentence, in: note).exists, "the needs-server sentence is not in the note")
+        XCTAssertTrue(LabUI.waitForAnnouncement(sentence, in: app), "the needs-server sentence was not said to VoiceOver: "
+                      + "\(LabUI.announcements(app))")
         UITestSupport.screenshot(app, "mac-lab-note-needs-server", in: self)
 
         NSPasteboard.general.clearContents()
@@ -450,10 +584,11 @@ final class LabServerNoteTests: XCTestCase {
         copy.click()
         XCTAssertEqual(LabUI.pasteboard(becomes: code), code, "Copy Server code did not copy this pairing's Server code")
 
-        LabUI.goBack(in: sheet)
+        LabUI.goBack(in: sheet, leaving: LabUI.featureID("F37"))
         LabUI.open(LabUI.serverRowID, in: sheet)
         let shown = LabUI.element(LabUI.serverCodeID, in: sheet)
         XCTAssertTrue(shown.waitForExistence(timeout: 15), "the Daylight server section shows no Server code")
+        try LabUI.checkTitleShowsOnce(try LabUI.text("serverRow"), openedBy: LabUI.serverRowID, in: sheet)
         XCTAssertTrue([shown.label, UITestSupport.text(shown.value)].contains(code),
                       "the Server code shown is not server-vectors.json › derived's: \(shown.label) / \(UITestSupport.text(shown.value))")
         NSPasteboard.general.clearContents()
@@ -462,28 +597,48 @@ final class LabServerNoteTests: XCTestCase {
         // The section is where setup happens: the steps show there (with the secret names), and only there.
         XCTAssertTrue(LabUI.waitFor(try LabUI.text("serverSection.stepsHeading"), in: sheet), "no setup steps with no server")
         UITestSupport.screenshot(app, "mac-lab-server-section", in: self)
+        LabUI.goBack(in: sheet, leaving: LabUI.serverCodeID)
         app.terminate()
     }
 
-    /// F00.6: with a relay that never answers, a tap on Summaries with Claude says "Checking your Daylight server…" and
-    /// then, at 5 s, the OFFLINE sentence.
+    /// F00.6: with a relay that never answers, a tap on Summaries with Claude says "Checking your Daylight server…" under
+    /// it and then, at 5 s, the OFFLINE sentence; VoiceOver is told both, in that order.
+    ///
+    /// Two clocks, as the iPhone's: the tap's start comes before the gate starts, so OFFLINE must come at least 4.5 s
+    /// after it; the test seeing "Checking…" comes after the gate started, so OFFLINE must come at most 8 s after that
+    /// (`gateAsSeen`). A gate that gave up at 3 s fails the first, one that answered at 9.5 s the second.
     @MainActor
     func testARelayThatNeverAnswersSaysOfflineAtFiveSeconds() throws {
         continueAfterFailure = true
         let relay = try LabUI.relay("DLS_SILENT_RELAY")
-        let app = LabUI.launch(lab: true, paired: true, relay: relay)
+        let offline = try LabUI.stateMessage("OFFLINE")
+        let checking = try LabUI.text("checking")
+        let app = LabUI.launch(lab: true, paired: true, relay: relay, announcements: true)
         let sheet = LabUI.openSettings(app, paired: true)
         LabUI.open(LabUI.whatsInLabID, in: sheet)
+        // What's in Lab asks the server too when it opens: its answer (OFFLINE, at 5 s) comes before the tap.
         try LabUI.waitForOverview(in: sheet)
         let tapped = Date()
         LabUI.element(LabUI.featureID("F37"), in: sheet).click()
-        XCTAssertTrue(LabUI.waitFor(try LabUI.text("checking"), in: sheet, timeout: 4),
-                      "no “Checking your Daylight server…” while the server does not answer")
-        XCTAssertTrue(LabUI.waitFor(LabUI.offline, in: sheet, timeout: 12), "no OFFLINE sentence: \(LabUI.said(sheet))")
-        let took = Date().timeIntervalSince(tapped)
-        print("UI test: OFFLINE showed \(Int(took * 1000)) ms after the tap")
-        XCTAssertGreaterThan(took, 2.5, "OFFLINE came before the gate's 5 s: the relay did answer")
-        XCTAssertLessThan(took, 10, "OFFLINE came long after the gate's 5 s")
+        let note = LabUI.element(LabUI.noteID, in: sheet)
+        XCTAssertTrue(LabUI.waitFor(checking, in: note, timeout: 4),
+                      "no “Checking your Daylight server…” under the control while the server does not answer: \(LabUI.said(sheet))")
+        let seen = Date()
+        XCTAssertTrue(LabUI.waitFor(offline, in: note, timeout: 12), "no OFFLINE sentence: \(LabUI.said(sheet))")
+        let fromTap = Date().timeIntervalSince(tapped)
+        let fromSeen = Date().timeIntervalSince(seen)
+        print("UI test: a relay that never answers gave OFFLINE \(String(format: "%.1f", fromTap)) s after the tap started, "
+              + "\(String(format: "%.1f", fromSeen)) s after “Checking…” was seen")
+        XCTAssertGreaterThanOrEqual(fromTap, 4.5, "OFFLINE came before the gate's 5 s: the relay did answer")
+        XCTAssertLessThanOrEqual(fromSeen, LabUI.gateAsSeen, "OFFLINE came long after the gate's 5 s")
+        XCTAssertTrue(LabUI.waitForAnnouncement(offline, in: app), "the OFFLINE sentence was not said to VoiceOver: "
+                      + "\(LabUI.announcements(app))")
+        let said = LabUI.announcements(app)
+        if let c = said.lastIndex(of: checking), let o = said.lastIndex(of: offline) {
+            XCTAssertLessThan(c, o, "VoiceOver was told OFFLINE before “Checking…”: \(said)")
+        } else {
+            XCTFail("VoiceOver was not told “Checking your Daylight server…” and then OFFLINE: \(said)")
+        }
         UITestSupport.screenshot(app, "mac-lab-note-offline", in: self)
         app.terminate()
     }
@@ -537,7 +692,7 @@ final class LabAccessibilityAuditTests: XCTestCase {
             UITestSupport.screenshot(app, "mac-lab-whats-in-lab-note\(shot)", in: self)
             try UITestSupport.audit(app, "what's in lab, a note" + suffix, allowed: Self.allowed)
 
-            LabUI.goBack(in: sheet)
+            LabUI.goBack(in: sheet, leaving: LabUI.featureID("F37"))
             LabUI.open(LabUI.serverRowID, in: sheet)
             XCTAssertTrue(LabUI.element(LabUI.serverCodeID, in: sheet).waitForExistence(timeout: 15), "the server section did not load")
             Thread.sleep(forTimeInterval: 2) // the section's rows have settled in place
