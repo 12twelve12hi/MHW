@@ -179,7 +179,10 @@ How it is checked, in the `mac` job of `rx-apple.yml`:
 
 - the UI tests in `macOS/UITests/LabTests.swift`: `LabFirstRunTests` (a first start has Lab on and no note, after an
   update too, with the pairing and history kept, F00.1; no screen reachable without a click on a Lab feature names a
-  secret or shows a needs-setup sentence, F00.7; the switch hides and brings back its rows and leaves Comfort, F27.6),
+  secret or shows a needs-setup sentence, F00.7, the iPhone's check: any name like `ANTHROPIC_API_KEY`, and the start
+  of every sentence of LAB-PLAN 1.6's table, LAB_TEXT's `needs.*` (`later` among them) and `labOff`, the server
+  module's STATE_MESSAGES (OFFLINE, locked, needs-r2, …) and the re-run help, with a test of the check itself; the
+  switch hides and brings back its rows and leaves Comfort, F27.6),
   `LabNoteTests` (a Daylight that never said hello: *Delivered ✓* rows and *Needs Lab on your Daylight*, F17.2; not
   paired: *Pair first* and its sentence under the clicked row, said to VoiceOver, F00.3; no network, a relay that
   refuses every connection: *Can’t reach the server* and the OFFLINE sentence within the gate's 5 s, said to
@@ -217,12 +220,20 @@ How it is checked, in the `mac` job of `rx-apple.yml`:
   timeline comes). Then F00.4 with a Lab Daylight (`--lab`): a link shared while the relay cannot be reached waits, Lab
   is turned off (`-DLSLab 0`), the relay comes back and the link is sent and delivered with Lab off (*Delivered ✓*),
   still paired, the ledger still learning (the Daylight's hello and caps, the link's state *reader*), and with Lab on
-  again they are there at once. (No Daylight server runs in CI, so the server pin's part of F00.4 is the kit's
-  `DaylightServerTests`.)
+  again they are there at once. (No Daylight server runs in CI, so the server pin's part of F00.4 is the kit's:
+  `AppModelTests.testLabOffAndOnAgainKeepsTheServerPin` turns Lab off and on with a pinned server, and
+  `DaylightServerTests` keeps the pin across a re-pairing and Unpair.)
 
-F17.4 (a real Daylight turning Lab on) is a device check (DEVICE-CHECKS.md, the W0 round on Rooted 2). So is
-VoiceOver's order on a Lab page (What's in Lab, Daylight server) at the W0 device round: the navigation stack keeps
-Settings in the accessibility tree under a page, and VoiceOver must not reach Settings' hidden controls from there.
+The Mac's items for the W0 device round on Rooted 2 (LAB-PLAN 6.2, 6.4; their results go into DEVICE-CHECKS.md, which
+does not list them yet):
+
+- F17.4 on the Mac: with the app open, turning Lab on in Daylight Share on the Daylight makes What's in Lab's first
+  line read *Your Daylight: Lab on · checked in …* within one ack check;
+- F00.1 and F00.7 on the real Mac: the update from the last non-Lab build has Lab on, no note, the pairing and the
+  history; nothing spells out setup before a click;
+- VoiceOver's order on a Lab page (What's in Lab, Daylight server): the navigation stack keeps Settings in the
+  accessibility tree under a page, and VoiceOver must not reach Settings' hidden controls from there;
+- F27.3: a VoiceOver run of pair → send → delivered announces each state change.
 
 ## Install on a Mac
 

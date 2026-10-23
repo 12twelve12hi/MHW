@@ -39,9 +39,14 @@ enum LabUI {
     /// iPhone's LabNoteTests.gateAsSeen.
     static let gateAsSeen: TimeInterval = 8
 
-    /// The secrets the setup texts name: none may show before something is tapped (F00.7).
+    /// The secrets and variables the setup texts name: none may show before something is tapped (F00.7). `secretName`
+    /// finds these and any other; the check's own test makes sure it finds each of these.
     static let secretNames = ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "ANTHROPIC_API_KEY", "DAYLIGHT_SERVER_CODE",
                               "DAYLIGHT_EMAIL_DOMAIN", "DAYLIGHT_WORKERS_PLAN"]
+
+    /// A secret's or a variable's name (ANTHROPIC_API_KEY, CLOUDFLARE_ACCOUNT_ID, DAYLIGHT_SERVER_CODE, …), as the
+    /// iPhone's `LabUI.secretName`.
+    static let secretName = try! NSRegularExpression(pattern: "\\b[A-Z][A-Z0-9]+_[A-Z0-9_]+\\b")
 
     /// …/reader-experiment/<path>, read from the source tree (as the Lab-off baselines are).
     static func repo(_ path: String) -> URL {
@@ -63,16 +68,32 @@ enum LabUI {
     /// server-vectors.json › serverState expects it. Under a control these states show the module's sentence (LAB-PLAN
     /// 1.6); labText.messages has only their short states (OFFLINE's: "Can’t reach the server").
     static func stateMessage(_ state: String) throws -> String {
+        try XCTUnwrap(try stateMessages()[state], "server-vectors.json has no \(state) message")
+    }
+
+    /// The server module's message for each state it can show (STATE_MESSAGES: OFFLINE, locked, needs-r2,
+    /// pairing-mismatch, server-outdated, app-outdated, …), as server-vectors.json › serverState expects them and as the
+    /// iPhone's `LabUI.stateMessages` reads them: "ready" has none, and "error" is the server's own words (those that
+    /// say how to set something up name a secret, which `secretName` finds).
+    static func stateMessages() throws -> [String: String] {
         let serverState = try XCTUnwrap(try json("server/vectors/server-vectors.json")["serverState"] as? [String: Any])
+        var out: [String: String] = [:]
         for key in ["fromStatus", "fromError"] {
             for case let c as [String: Any] in (serverState[key] as? [Any]) ?? [] {
-                guard let expect = c["expect"] as? [String: Any], expect["state"] as? String == state,
-                      let message = expect["message"] as? String else { continue }
-                return message
+                guard let expect = c["expect"] as? [String: Any], let state = expect["state"] as? String,
+                      let message = expect["message"] as? String, state != "error", state != "ready" else { continue }
+                if out[state] == nil { out[state] = message }
             }
         }
-        XCTFail("server-vectors.json has no \(state) message")
-        return ""
+        return out
+    }
+
+    /// The start of the deploy's re-run help (RERUN_HELP, the second of the Daylight server section's steps: "In GitHub
+    /// › Actions, open the latest …").
+    static func rerunHelp() throws -> String {
+        let steps = try text("serverSection.steps")
+        let r = try XCTUnwrap(steps.range(of: "In GitHub › Actions"), "the server section's steps have no re-run help")
+        return String(steps[r.lowerBound...].prefix(40))
     }
 
     /// A LAB_TEXT string by its dotted id (lab-vectors.json › labText.strings).
@@ -88,11 +109,31 @@ enum LabUI {
         return try XCTUnwrap(m?["expect"] as? String, "no Mac sentence for \(state) in the Lab vectors")
     }
 
-    /// Every needs-setup sentence the Mac can show (F00.7).
+    /// The Mac's needs-setup sentences as a tapped control shows them (labText.messages, platform "mac": {app} and
+    /// {path} filled in).
     static func needsSentences() throws -> [String] {
         let messages = try XCTUnwrap(try labText()["messages"] as? [[String: Any]])
         return messages.filter { $0["platform"] as? String == "mac" && $0["short"] as? Bool != true }
             .compactMap { $0["expect"] as? String }
+    }
+
+    /// The start of every sentence that says how to set something up (F00.7: every needs-setup sentence of LAB-PLAN
+    /// 1.6's table), as the iPhone's `LabUI.setupSentences` and Android's `LabKit.setupSentences`: LAB_TEXT's
+    /// needs-setup sentences (`needs.*`, `later` among them) and "Turn on Lab in …" (`labOff`), the Mac's own, the server
+    /// module's state messages (`stateMessages`) and the deploy's re-run help. Each is cut at its first placeholder and
+    /// after 40 characters, so it is found however it is filled in.
+    static func setupSentences() throws -> [String] {
+        let strings = try XCTUnwrap(try labText()["strings"] as? [String: Any]).compactMapValues { $0 as? String }
+        var all = strings.filter { $0.key.hasPrefix("needs.") || $0.key == "labOff" }.map { $0.value }.sorted()
+        all += try needsSentences()
+        all += try stateMessages().sorted { $0.key < $1.key }.map { $0.value }
+        all.append(try rerunHelp())
+        var out: [String] = []
+        for s in all {
+            let head = String(s.prefix { $0 != "{" }.prefix(40)).trimmingCharacters(in: .whitespaces)
+            if head.count >= 12 && !out.contains(head) { out.append(head) }
+        }
+        return out
     }
 
     /// The Server code of the UI tests' pairing (the vectors' first secret: server-vectors.json › derived.serverCode)
@@ -265,10 +306,13 @@ enum LabUI {
         ((try? texts(root)) ?? []).map { "“\($0.prefix(80))”" }.joined(separator: ", ")
     }
 
-    /// The texts that spell out setup (F00.7): a secret's name, or a needs-setup sentence.
+    /// The texts that spell out setup (F00.7): a secret's name, or the start of a needs-setup sentence
+    /// (`setupSentences`).
     static func setupWords(_ texts: [String]) throws -> [String] {
-        let sentences = try needsSentences()
-        return texts.filter { t in secretNames.contains { t.contains($0) } || sentences.contains { t.contains($0) } }
+        let sentences = try setupSentences()
+        return texts.filter { t in
+            secretName.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)) != nil || sentences.contains { t.contains($0) }
+        }
     }
 
     /// Waits until some element under `root` has exactly these words as its label, title or value. (A walk of the tree,
@@ -359,8 +403,10 @@ final class LabFirstRunTests: XCTestCase {
     }
 
     /// F00.7: with nothing set up, no screen reachable without tapping a Lab feature or opening the Daylight server
-    /// section names a secret or shows a needs-setup sentence: the pairing screen, the main window with its history,
-    /// Settings (the window and the sheet), What's in Lab (opened, nothing tapped) and the Share menu card.
+    /// section names a secret or shows a needs-setup sentence (`LabUI.setupWords`: any of LAB-PLAN 1.6's, the server
+    /// module's OFFLINE among them, which the paired pass's What's in Lab is in): the pairing screen, the main window
+    /// with its history, Settings (the window and the sheet), What's in Lab (opened, nothing tapped: its heading line,
+    /// its rows and the server row's subtitle) and the Share menu card.
     @MainActor
     func testNothingSpellsOutSetupUntilSomethingIsTapped() throws {
         continueAfterFailure = true
@@ -395,6 +441,44 @@ final class LabFirstRunTests: XCTestCase {
         XCTAssertTrue(LabUI.element(LabUI.labSwitchID, in: card.windows.firstMatch).waitForExistence(timeout: 30))
         try check(card.windows.firstMatch, "the Share menu card")
         card.terminate()
+    }
+
+    /// F00.7's check itself (no app): `LabUI.setupWords` finds every needs-setup sentence however it is filled in (the
+    /// Mac's, LAB_TEXT's `later` and "Turn on Lab in …", each of the server module's STATE_MESSAGES, the re-run help)
+    /// and every secret's name, and none of the words the Lab screens show before a tap (the short states, the
+    /// headings, the switch's footer, the server row's subtitle, "Checking…" and the ad-hoc line).
+    @MainActor
+    func testTheSetupCheckFindsEverySetupSentence() throws {
+        continueAfterFailure = true
+        let messages = try LabUI.stateMessages()
+        for state in ["OFFLINE", "locked", "needs-r2", "pairing-mismatch", "server-outdated", "app-outdated", "needs-key",
+                      "needs-domain", "needs-paid", "needs-server", "needs-lab-inbox"] {
+            XCTAssertNotNil(messages[state], "server-vectors.json › serverState has no \(state) message")
+        }
+        var setup = try LabUI.needsSentences()
+        setup += messages.keys.sorted().compactMap { messages[$0] }
+        setup.append(try LabUI.text("needs.later").replacingOccurrences(of: "{feature}", with: "Summaries with Claude"))
+        setup.append(try LabUI.text("labOff").replacingOccurrences(of: "{app}", with: "Send to Daylight"))
+        let steps = try LabUI.text("serverSection.steps").components(separatedBy: ".,")
+        let rerun = try XCTUnwrap(steps.first(where: { $0.hasPrefix("In GitHub › Actions") }),
+                                "the server section's steps have no re-run help")
+        setup.append(rerun + ".")
+        setup += LabUI.secretNames.map { "Add \($0) in GitHub › Settings › Secrets." }
+        XCTAssertGreaterThanOrEqual(setup.count, 7 + 11 + 2 + 1 + 6)
+        for s in setup {
+            XCTAssertEqual(try LabUI.setupWords([s]), [s], "F00.7's check does not see “\(s)”")
+        }
+
+        let strings = try XCTUnwrap(try LabUI.labText()["strings"] as? [String: Any]).compactMapValues { $0 as? String }
+        var shown = strings.filter { $0.key.hasPrefix("short.") || $0.key.hasPrefix("serverHeadingShort.") }.map { $0.value }
+        XCTAssertFalse(shown.isEmpty, "LAB_TEXT has no short states")
+        for id in ["lab", "switchFooter", "whatsInLab", "serverRow", "serverHeading", "checking", "adHocMac", "comfort"] {
+            if let s = strings[id] { shown.append(s) }
+        }
+        for short in ["short.needs-pairing", "short.OFFLINE", "short.needs-server"] {
+            shown.append(try LabUI.text("serverRowSubtitle").replacingOccurrences(of: "{short}", with: try LabUI.text(short)))
+        }
+        XCTAssertEqual(try LabUI.setupWords(shown.sorted()), [], "F00.7's check takes words shown before a tap for setup")
     }
 
     /// 1.1, 1.3 and F27.6: the switch hides What's in Lab and Daylight server and brings them back, and Comfort stays as
