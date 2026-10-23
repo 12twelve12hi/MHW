@@ -813,6 +813,21 @@ test('F26: Setup check’s lines and buttons; the test article from Waiting for 
   const lines = await setup.locator('.lab-check-line').allTextContents();
   assert.ok(lines.includes('✓ Pairing'));
   assert.ok(lines.includes('✓ Keyboard shortcut'));
+  // Chrome's toolbar pin (action.getUserSettings; a new profile has the button unpinned): "! Toolbar button" with Show
+  // steps, which shows LAB_TEXT's steps under the line, since no page can open where the pin is (F26.3). The steps stay
+  // open for the axe runs below.
+  assert.ok(lines.includes('! Toolbar button'), lines.join(' | '));
+  const pin = setup.locator('li[data-check="toolbarButton"]');
+  const show = pin.getByRole('button', { name: `${LAB_TEXT.setup.showSteps}: ${LAB_TEXT.setup.checks.toolbarButton}`, exact: true });
+  assert.equal(await show.textContent(), LAB_TEXT.setup.showSteps);
+  assert.equal(await show.getAttribute('aria-expanded'), 'false');
+  assert.equal(await pin.locator('.lab-check-steps').isHidden(), true);
+  await show.click();
+  assert.equal(await show.getAttribute('aria-expanded'), 'true');
+  assert.equal(await pin.locator('.lab-check-steps').isVisible(), true);
+  assert.equal(await pin.locator('.lab-check-steps').textContent(), 'Click the puzzle piece in Chrome’s toolbar, then the pin next to Send to Daylight.');
+  assert.equal(await pin.locator('.lab-check-steps').textContent(), LAB_TEXT.setup.steps.toolbarButton);
+  assert.equal(await show.getAttribute('aria-controls'), await pin.locator('.lab-check-steps').getAttribute('id'));
   // Chrome has no Site access line: it reads only the tab the user chose (activeTab) and asks one site at a time where
   // a PDF or the Daylight server needs more, so a fresh install has nothing to fix here and nothing asks for every
   // site (Safari's line: safari.test.mjs).

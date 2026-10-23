@@ -18,6 +18,8 @@
 //   node --test test/unit/lab-send.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { built } from '../helpers/built.mjs';
 import { fakeBrowser } from '../helpers/fake-browser.mjs';
 import { startMockRelay } from '../../../share/js/mock-relay.mjs';
@@ -31,9 +33,10 @@ const L = await b.load('daylight-lab.js');
 const quiet = { warn() {}, log() {} };
 const MIN = 60000;
 const { LAB_TEXT } = L;
+const NORMALISE = JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), '..', '..', '..', 'share', 'vectors', 'normalise.json'), 'utf8'));
 
-async function setup({ target = 'chrome', paired = true, settings = {}, now, countdownMs = 60, popupHoldMs = 200, omnibox = true, commands, popupApi } = {}) {
-  const relay = await startMockRelay();
+async function setup({ target = 'chrome', paired = true, settings = {}, now, countdownMs = 60, popupHoldMs = 200, omnibox = true, commands, popupApi, relay: relayOpts = {} } = {}) {
+  const relay = await startMockRelay(relayOpts);
   const fb = fakeBrowser({ os: 'mac', omnibox, popupApi, commands: commands ?? [
     { name: 'send-page', shortcut: 'Alt+Shift+D', description: 'Send this page to Daylight' },
     { name: 'send-selection', shortcut: 'Alt+Shift+S', description: 'Send selection to Daylight' },
@@ -139,11 +142,17 @@ test('lab-send.js: the badge mark of the most recent row (F01), and whether stat
 });
 
 test('lab-send.js: the omnibox’s address, the clean article page, who gets no countdown, and the queue', () => {
-  assert.equal(LS.normalizeUserUrl('example.com/story'), 'https://example.com/story');
-  assert.equal(LS.normalizeUserUrl('  https://a.example/x?y=1 '), 'https://a.example/x?y=1');
-  assert.equal(LS.normalizeUserUrl('read https://a.example/x now'), 'https://a.example/x');
-  assert.equal(LS.normalizeUserUrl('not an address'), null);
-  assert.equal(LS.normalizeUserUrl(''), null);
+  assert.equal(LS.typedUrl('example.com/story'), 'https://example.com/story');
+  assert.equal(LS.typedUrl('  https://a.example/x?y=1 '), 'https://a.example/x?y=1');
+  // Words around an address make it text for smart intake (textLinkItem), never v1.1's findUrl (F16 step 1).
+  assert.equal(LS.typedUrl('read https://a.example/x now'), null);
+  assert.equal(LS.typedUrl('“https://a.example/q”'), null);
+  assert.equal(LS.typedUrl('not an address'), null);
+  assert.equal(LS.typedUrl(''), null);
+  assert.deepEqual(LS.textLinkItem('read https://a.example/x?utm_source=z now'), { kind: 'url', url: 'https://a.example/x', title: 'read now', extras: { 'x-orig': 'https://a.example/x?utm_source=z' } });
+  assert.deepEqual(LS.textLinkItem('He said “https://example.com/q”'), { kind: 'url', url: 'https://example.com/q', title: 'He said' });
+  assert.deepEqual(LS.textLinkItem('https://a.example/x?utm_source=z', { lab: true, labUse: { F16: false } }), { kind: 'url', url: 'https://a.example/x?utm_source=z', title: '' });
+  assert.equal(LS.textLinkItem('just words'), null);
   assert.equal(LS.cleanArticleHtml({ title: 'A <b>title</b>', url: 'https://a.example/p?q="1"', byline: 'Ann', site: 'A & B', content: '<p>Body</p>' }),
     '<!doctype html><html><head><meta charset="utf-8"><title>A &lt;b&gt;title&lt;/b&gt;</title><base href="https://a.example/p?q=&quot;1&quot;">'
     + '<meta name="dl:capture" content="clean"></head><body><article><h1>A &lt;b&gt;title&lt;/b&gt;</h1><p>Ann · A &amp; B</p><p>Body</p></article></body></html>');
@@ -678,6 +687,49 @@ test('F33: Paste and send sends the link in copied text, cleaned; no link says s
   } finally { await s.close(); }
 });
 
+test('F16: the omnibox and Paste and send give shared text whole to normaliseShare: every text-only case of normalise.json', async () => {
+  // The text-only cases: shared text with no URL of its own, which is all these two entry points carry. They have no
+  // subject and no selection (a selection is the menu's, F11), so for a case with either the vector pins the URL and
+  // x-orig, and the title is the text's own.
+  const cases = NORMALISE.cases.filter((c) => c.input.url === undefined && c.input.text !== undefined);
+  assert.equal(cases.length, 39);
+  const s = await setup();
+  try {
+    let links = 0;
+    for (const c of cases) {
+      const i = c.input;
+      await s.msg({ type: 'labSetUse', feature: 'F16', on: i.clean !== false });
+      for (const [via, send] of [
+        ['omnibox', () => s.app.onOmnibox(i.text)],
+        ['Paste and send', () => s.msg({ type: 'labSendCopied', text: i.text })],
+      ]) {
+        const what = `${c.name} (${via})`;
+        const r = await send();
+        if (!c.expect.url) {
+          assert.deepEqual(r, { noLink: true }, what);
+          assert.deepEqual(await s.receive(), [], what);
+          continue;
+        }
+        assert.ok(r?.row, what);
+        const [item] = await s.receive();
+        assert.equal(item.header.kind, 'url', what);
+        assert.equal(item.header.url, c.expect.url, what);
+        assert.deepEqual(item.extras ?? {}, c.expect.orig ? { 'x-orig': c.expect.orig } : {}, what);
+        if (!i.subject && !i.source) assert.equal(item.header.title ?? '', c.expect.title && c.expect.title !== c.expect.url ? c.expect.title : '', what);
+        links++;
+      }
+    }
+    assert.equal(links, 2 * cases.filter((c) => c.expect.url).length);
+    // B1's four: the parentheses, curly quotes, single curly quotes and », and brackets come out as the vectors say.
+    for (const [text, url] of [
+      ['See (https://en.wikipedia.org/wiki/Foo_(bar)).', 'https://en.wikipedia.org/wiki/Foo_(bar)'],
+      ['He said “https://example.com/q”', 'https://example.com/q'],
+      ['Link: ‘https://example.com/s’ and «https://example.com/t»', 'https://example.com/s'],
+      ['[https://example.com/x]', 'https://example.com/x'],
+    ]) assert.equal(NORMALISE.cases.find((c) => c.input.text === text && !c.input.url)?.expect.url, url, text);
+  } finally { await s.close(); }
+});
+
 test('6.5 Q5: the Use switches (F04, F10, F16, F33) are on by default, kept in settings.labUse; F03 and others have none', async () => {
   const s = await setup();
   try {
@@ -713,6 +765,20 @@ test('F26: Setup check’s lines and buttons, the test article along the timelin
     ]);
     assert.ok(c.checks.every((x) => !x.origins));
     assert.equal(c.test, null);
+    // Chrome's toolbar pin (action.getUserSettings's isOnToolbar; the fake has no such call until pinned()). Unpinned,
+    // its button is Show steps with LAB_TEXT's steps, since no page can open where the pin is (F26.3, LAB-PLAN 1.6's
+    // "Copy added Oct 22"); pinned, the line is met and has no button.
+    s.fb.pinned(false);
+    c = await s.msg({ type: 'labChecks' });
+    assert.deepEqual(c.checks.map((x) => x.id), ['paired', 'toolbarButton', 'shortcut']);
+    assert.deepEqual(c.checks[1], {
+      id: 'toolbarButton', name: 'Toolbar button', ok: false, line: '! Toolbar button', button: 'Show steps', action: 'steps',
+      steps: 'Click the puzzle piece in Chrome’s toolbar, then the pin next to Send to Daylight.',
+    });
+    assert.deepEqual([c.checks[1].button, c.checks[1].steps], [LAB_TEXT.setup.showSteps, LAB_TEXT.setup.steps.toolbarButton]);
+    s.fb.pinned(true);
+    c = await s.msg({ type: 'labChecks' });
+    assert.deepEqual(c.checks[1], { id: 'toolbarButton', name: 'Toolbar button', ok: true, line: '✓ Toolbar button', button: null, action: null, steps: null });
     // The test article: a page of about 400 words at daylight.invalid, x-cap "test".
     const day = await labDaylight(s.pairing, { stateFor: () => 'waiting' });
     const sent = await s.msg({ type: 'labTestSend' });
@@ -745,10 +811,43 @@ test('F26: Setup check’s lines and buttons, the test article along the timelin
     assert.ok(log.every((l) => !l.includes('example')));
     await s.app.unpair();
     c = await s.msg({ type: 'labChecks' });
-    assert.deepEqual(c.checks[0], { id: 'paired', name: 'Pairing', ok: false, line: '! Pairing', button: 'Open setting', action: 'pair' });
+    assert.deepEqual(c.checks[0], { id: 'paired', name: 'Pairing', ok: false, line: '! Pairing', button: 'Open setting', action: 'pair', steps: null });
     // Lab off: no Setup check.
     await s.msg({ type: 'setLab', lab: false });
     assert.deepEqual(await s.msg({ type: 'labChecks' }), { lab: false });
+  } finally { await s.close(); }
+});
+
+test('F26: the activity log shows the HTTP status of a row’s last failed publish (413, 429), from a send, a retry and the re-send pass', async () => {
+  let fail = null; // the mock relay's answer to the next publishes (failPublish), or null to take them
+  let clock = Date.now();
+  const s = await setup({ now: () => clock, relay: { failPublish: () => fail } });
+  try {
+    const line = (l) => l.split(' ').slice(1).join(' '); // the activity line without its time
+    fail = 429;
+    const r = await s.app.sendUrl('https://example.com/limited', 'Limited');
+    const id8 = r.row.id.slice(0, 8);
+    assert.deepEqual([r.row.status, r.row.http], ['failed', 429]);
+    fail = 413;
+    const again = (await s.msg({ type: 'retry', id: r.row.id })).row;
+    assert.deepEqual([again.status, again.http], ['failed', 413]);
+    fail = null;
+    const ok = (await s.msg({ type: 'retry', id: r.row.id })).row;
+    assert.deepEqual([ok.status, ok.http], ['sent', 0]);
+    // The re-send pass (tick): an unacked row goes again after RESEND_MESSAGE_MS; refused, its 429 is logged.
+    clock += ds.RESEND_MESSAGE_MS + MIN;
+    fail = 429;
+    await s.app.tick();
+    fail = null;
+    const lines = (await s.msg({ type: 'labActivity' })).lines.map(line);
+    assert.deepEqual(lines, [
+      `send ${id8} url failed 429`,
+      `retry ${id8} url failed 413`,
+      `retry ${id8} url sent -`,
+      `failed ${id8} url failed 429`,
+    ]);
+    // Copy diagnostics carries them too (its last 50 events).
+    assert.match((await s.msg({ type: 'labDiagnostics' })).text, new RegExp(` send ${id8} url failed 429\n`));
   } finally { await s.close(); }
 });
 

@@ -289,6 +289,8 @@ input.switch:checked::before { left: calc(100% - 1.23em); background: var(--btn-
 .lab-check-item:last-child { border-bottom: 1px solid var(--rule); }
 .lab-check-line { margin: 0; flex: 1 1 12em; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
 .lab-check-fix { width: auto; margin-top: 0; }
+/* Show steps (F26.3): the steps take the line's whole width under it. */
+.lab-check-steps { flex: 1 1 100%; margin: 0; overflow-wrap: anywhere; }
 .lab-test { margin: 14px 0 6px; }
 .lab-test-footer { margin: 6px 0 4px; }
 .lab-test-progress p { margin: 4px 0 0; }

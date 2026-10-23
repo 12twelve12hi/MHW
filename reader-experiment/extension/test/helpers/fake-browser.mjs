@@ -49,6 +49,7 @@ export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenu
   let activeTab = null;
   let requestAnswer = async () => false;
   let contexts = []; // runtime.getContexts's answer: the extension's open pages ({contextType, documentUrl})
+  let toolbar = false; // action.getUserSettings's isOnToolbar (Chrome), once pinned() gives the fake that call
   const realFetch = globalThis.fetch;
 
   function notify(changes) {
@@ -244,5 +245,10 @@ export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenu
       if (open) contexts.push({ contextType: 'TAB', documentUrl });
     },
     onRequest: (fn) => { requestAnswer = fn; },
+    /**
+     * Chrome's toolbar pin: from the first call, action.getUserSettings() answers {isOnToolbar: on} (without one the
+     * fake has no getUserSettings, as before Chrome 91, and Setup check shows no toolbar line).
+     */
+    pinned: (on) => { toolbar = !!on; api.action.getUserSettings ??= async () => ({ isOnToolbar: toolbar }); },
   };
 }

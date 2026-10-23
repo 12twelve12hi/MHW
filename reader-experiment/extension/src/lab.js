@@ -698,7 +698,9 @@ export function createLab({
    * the keyboard shortcut (commands.getAll; Chrome, which can set one); site access (Safari only: permissions.contains,
    * since Safari asks on each site until it may read pages; Chrome needs only the tab the user chose, activeTab, and
    * asks one site at a time where a PDF or the Daylight server needs more, so it has nothing to report here); then the
-   * test article along its way. Each check: {id, name, ok, line ("✓ …" or "! …"), button, action}.
+   * test article along its way. Each check: {id, name, ok, line ("✓ …" or "! …"), button, action, steps}. Chrome can't
+   * open the place where the toolbar button is pinned, so that unmet line's button is Show steps (action "steps"), which
+   * shows LAB_TEXT.setup.steps.toolbarButton under it (F26.3; LAB-PLAN 1.6, "Copy added Oct 22").
    * -> {lab, checks, test: null | {id, label, delivered, reader, lines}}
    */
   async function checks() {
@@ -706,14 +708,16 @@ export function createLab({
     if (!on(s)) return { lab: false };
     const C = LAB_TEXT.setup.checks;
     const out = [];
-    const add = (id, name, ok, button = null, action = null) => out.push({
+    const add = (id, name, ok, button = null, action = null, steps = null) => out.push({
       id, name, ok, line: fillText(ok ? LAB_TEXT.setup.ok : LAB_TEXT.setup.notOk, { check: name }),
-      button: ok ? null : button, action: ok ? null : action,
+      button: ok ? null : button, action: ok ? null : action, steps: ok ? null : steps,
     });
     const pairing = await getPairing();
     add('paired', C.paired, !!pairing, LAB_TEXT.buttons['needs-quick-sends'], 'pair');
     if (platform === 'chrome' && typeof api.action?.getUserSettings === 'function') {
-      try { add('toolbarButton', C.toolbarButton, !!(await api.action.getUserSettings())?.isOnToolbar); } catch { /* not told */ }
+      let pinned = null;
+      try { pinned = !!(await api.action.getUserSettings())?.isOnToolbar; } catch { pinned = null; /* not told */ }
+      if (pinned !== null) add('toolbarButton', C.toolbarButton, pinned, LAB_TEXT.setup.showSteps, 'steps', LAB_TEXT.setup.steps.toolbarButton);
     }
     if (platform === 'chrome' && api.commands?.getAll) {
       let key = '';

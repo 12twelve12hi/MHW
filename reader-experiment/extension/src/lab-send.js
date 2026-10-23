@@ -5,10 +5,11 @@
 //   F04  share in place: who gets the countdown and who gets the choices and Send (noCountdown)
 //   F07  the rows waiting for a connection (waitingRows, queueRows)
 //   F10  Send as: the four modes, the default by context, the mode remembered per site, the clean article's page
-//   F34  the right-click menu entries with Lab on and off (menuEntries), and the omnibox's typed address
+//   F16  text that may hold a link, through smart intake (textLinkItem: F33's copied text, the omnibox)
+//   F34  the right-click menu entries with Lab on and off (menuEntries), and the omnibox's typed address (typedUrl)
 
-import { webUrl, findUrl } from './daylight-share.js';
-import { LAB_TEXT, SETTLED_STATES, STATE_DIGEST_WINDOW_MS, labUseOn } from './daylight-lab.js';
+import { webUrl } from './daylight-share.js';
+import { LAB_TEXT, SETTLED_STATES, STATE_DIGEST_WINDOW_MS, labUseOn, normaliseShare } from './daylight-lab.js';
 
 /** F10's modes, in the menu's order. A selection is never remembered for a site. */
 export const SEND_MODES = ['page', 'clean', 'link', 'selection'];
@@ -158,14 +159,27 @@ export function wantsStates(rows, states = {}, now = Date.now()) {
 }
 
 /**
- * F34's omnibox: a typed address, with https:// added to "example.com/story" (as the web sender reads one), or the
- * first URL in the text. -> a web URL, or null.
+ * F34's omnibox: an address typed on its own: the input when it passes the web URL rule, or https:// added to
+ * "example.com/story" (as the web sender reads one). It never looks for a URL inside text: anything else is shared
+ * text, which goes to smart intake (textLinkItem: normaliseShare finds the URL by F16's own rules). -> a web URL, or
+ * null.
  */
-export function normalizeUserUrl(input) {
+export function typedUrl(input) {
   const s = String(input ?? '').trim();
   if (!s) return null;
-  const direct = webUrl(s) ?? findUrl(s);
-  if (direct) return direct;
-  if (/^[\w-]+(\.[\w-]+)+(:\d+)?([/?#]\S*)?$/.test(s)) return webUrl(`https://${s}`);
-  return null;
+  return webUrl(s) ?? (/^[\w-]+(\.[\w-]+)+(:\d+)?([/?#]\S*)?$/.test(s) ? webUrl(`https://${s}`) : null);
+}
+
+/**
+ * Smart intake (F16) of text that may hold a link (F33's copied text, the omnibox's words around an address): the
+ * text goes to normaliseShare whole, which finds the URL itself (parentheses, quotes, trailing punctuation), unwraps
+ * redirectors and drops tracking unless F16's Use switch is off; the URL as shared goes as x-orig, and the rest of the
+ * text is the title. settings: the extension's settings (labUseOn). -> the url item, or null when there is no link.
+ */
+export function textLinkItem(text, settings = {}) {
+  const n = normaliseShare({ text: String(text ?? ''), clean: labUseOn(settings, 'F16') });
+  if (n.kind !== 'link' || !n.url) return null;
+  const item = { kind: 'url', url: n.url, title: n.title && n.title !== n.url ? n.title : '' };
+  if (n.orig) item.extras = { 'x-orig': n.orig };
+  return item;
 }

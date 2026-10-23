@@ -11,7 +11,7 @@ import {
 } from './logic.js';
 import {
   MENU_IDS, PDF_LINK_PATTERNS as LINK_PDF_PATTERNS, COMMANDS, menuEntries, defaultMode, rememberMode, cleanArticleHtml,
-  THIN_WORDS, COUNTDOWN_MS, FLUSH_GAP_MS, ALARM_OFFLINE as OFFLINE_ALARM, badgeMark, wantsStates, waitingForConnection, normalizeUserUrl, clickToSend,
+  THIN_WORDS, COUNTDOWN_MS, FLUSH_GAP_MS, ALARM_OFFLINE as OFFLINE_ALARM, badgeMark, wantsStates, waitingForConnection, typedUrl, textLinkItem, clickToSend,
   noCountdown, siteOf,
 } from './lab-send.js';
 
@@ -343,7 +343,7 @@ export function createApp({
       return r;
     });
     if (c.on) {
-      await lab.logEvent({ type: defer ? 'defer' : 'send', id: row.id, kind: row.kind, status: row.status });
+      await lab.logEvent({ type: defer ? 'defer' : 'send', id: row.id, kind: row.kind, status: row.status, http: row.http });
       if (defer) await markOffline();
       if (waitingForConnection(row)) ensureOfflineAlarm();
       await labBadge();
@@ -809,7 +809,7 @@ export function createApp({
     if (now() - ((await storage.get(FLUSH_KEY)) ?? 0) < FLUSH_GAP_MS) return [];
     await storage.set(FLUSH_KEY, now());
     const attempted = await run(() => sender.flushNetwork());
-    for (const r of attempted) await lab.logEvent({ type: 'flush', id: r.id, kind: r.kind, status: r.status });
+    for (const r of attempted) await lab.logEvent({ type: 'flush', id: r.id, kind: r.kind, status: r.status, http: r.http });
     if (attempted.length >= waiting.length) await storage.remove(OFFLINE_KEY);
     if (!(await sender.list()).some(waitingForConnection)) await clearOfflineAlarm();
     await labBadge();
@@ -845,7 +845,7 @@ export function createApp({
     const s = await requireSender();
     const row = await run(() => s.retry(id));
     scheduleSoon();
-    if ((await labCtx()).on && row) await lab.logEvent({ type: 'retry', id: row.id, kind: row.kind, status: row.status });
+    if ((await labCtx()).on && row) await lab.logEvent({ type: 'retry', id: row.id, kind: row.kind, status: row.status, http: row.http });
     return { row };
   }
 
@@ -886,13 +886,16 @@ export function createApp({
     return r;
   }
 
-  /** F26's activity log: each row whose status changed between two reads of the outbox. */
+  /**
+   * F26's activity log: each row whose status changed between two reads of the outbox, or that went again, with the HTTP
+   * status of its last failed publish (`http`: 413, 429, …; 0 when there was none, LAB-PROTOCOL 2.7.1).
+   */
   async function logChanges(before, after) {
     const was = new Map((before ?? []).map((x) => [x.id, x]));
     for (const row of after ?? []) {
       const old = was.get(row.id);
       if (old && (old.status !== row.status || old.lastPublish !== row.lastPublish)) {
-        await lab.logEvent({ type: old.status !== row.status ? row.status : 'resend', id: row.id, kind: row.kind, status: row.status });
+        await lab.logEvent({ type: old.status !== row.status ? row.status : 'resend', id: row.id, kind: row.kind, status: row.status, http: row.http });
       }
     }
   }
@@ -940,10 +943,8 @@ export function createApp({
   async function sendCopied(text) {
     const c = await labCtx();
     if (!c.on || !labUseOn(c.s, 'F33')) return { noLink: true };
-    const n = normaliseShare({ text: String(text ?? ''), clean: labUseOn(c.s, 'F16') });
-    if (n.kind !== 'link' || !n.url) return { noLink: true };
-    const item = { kind: 'url', url: n.url, title: n.title && n.title !== n.url ? n.title : '' };
-    if (n.orig) item.extras = { 'x-orig': n.orig };
+    const item = textLinkItem(text, c.s);
+    if (!item) return { noLink: true };
     return sendItem(item, undefined, { lab: c });
   }
 
@@ -1041,8 +1042,10 @@ export function createApp({
   }
 
   /**
-   * Chrome's omnibox (F34): "dl example.com/story" sends that link (normalizeUserUrl, then normaliseShare). With Lab off
-   * it opens lab.html with the Lab-off sentence; a text that isn't a web address sends nothing and shows "!".
+   * Chrome's omnibox (F34): "dl example.com/story" sends that link (typedUrl, then normaliseShare through sendUrl);
+   * anything else typed is text, which goes to normaliseShare whole (textLinkItem, F16), so "dl see (https://…)." finds
+   * the URL by smart intake's rules and the words around it are the title. With Lab off it opens lab.html with the
+   * Lab-off sentence; a text with no web address sends nothing and shows "!".
    */
   async function onOmnibox(text) {
     try {
@@ -1052,9 +1055,11 @@ export function createApp({
         return { labOff: true };
       }
       if (!(await getPairing())) { await openPairing(); return { paired: false }; }
-      const url = normalizeUserUrl(text);
-      if (!url) { await badge.show(LAB_TEXT.badge.error); return { noLink: true }; }
-      return await withBadge(() => sendUrl(url, ''));
+      const url = typedUrl(text);
+      if (url) return await withBadge(() => sendUrl(url, ''));
+      const item = textLinkItem(text, c.s);
+      if (!item) { await badge.show(LAB_TEXT.badge.error); return { noLink: true }; }
+      return await withBadge(() => sendItem(item, undefined, { lab: c }));
     } catch (e) {
       log.warn?.('Send to Daylight:', e?.message ?? e);
       return undefined;

@@ -253,8 +253,20 @@ async function renderSetup(seq, { focus = null } = {}) {
       const b = el('button', 'btn secondary lab-check-fix', c.button);
       b.type = 'button';
       b.setAttribute('aria-label', `${c.button}: ${c.name}`);
-      b.addEventListener('click', () => fixCheck(c));
       li.append(b);
+      if (c.action === 'steps') {
+        // Show steps (F26.3; Chrome's toolbar pin, which no page can open): the steps under the line, as a disclosure.
+        const steps = el('p', 'hint small lab-check-steps', c.steps ?? '');
+        steps.id = `lab-check-steps-${c.id}`;
+        steps.hidden = true;
+        b.setAttribute('aria-expanded', 'false');
+        b.setAttribute('aria-controls', steps.id);
+        b.addEventListener('click', () => {
+          steps.hidden = !steps.hidden;
+          b.setAttribute('aria-expanded', String(!steps.hidden));
+        });
+        li.append(steps);
+      } else b.addEventListener('click', () => fixCheck(c));
     }
     list.append(li);
   }
@@ -337,7 +349,10 @@ function followTest(test) {
   } else { clearInterval(testTimer); testTimer = null; }
 }
 
-/** An unmet check's button: pair (the popup's pairing in a tab), the shortcuts page, or site access (Safari). */
+/**
+ * An unmet check's button: pair (the popup's pairing in a tab), the shortcuts page, or site access (Safari). Show steps
+ * (the toolbar pin) opens nothing: it shows its steps under the line (renderSetup).
+ */
 async function fixCheck(c) {
   if (c.action === 'sites') { await askSite(c.origins); await render(); return; }
   if (c.action === 'shortcuts') { await openTab('chrome://extensions/shortcuts'); return; }
