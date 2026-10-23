@@ -11,7 +11,9 @@ import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,19 +21,27 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -62,6 +72,53 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.semantics.Role as A11yRole
+
+/** Lab: the Inbox screen's Instant delivery switch, which Setup check's "Open setting" opens ([MainActivity.inboxFocus]). */
+const val INBOX_FOCUS_INSTANT = "instantDelivery"
+
+/** Lab: the Inbox screen's arrival notice settings (F15), which F15's row in What's in Lab opens ([MainActivity.inboxFocus]). */
+const val INBOX_FOCUS_ARRIVALS = "F15"
+
+/**
+ * A setting another Lab screen asked this screen to open (LAB-PLAN 1.5 "Open setting": "it opens that setting with its
+ * footer and never changes it by itself"; 1.4: a tap on a feature opens it). [opened] is its key while the screen
+ * shows; [mark] puts the marks on it, so it comes into view at once (no motion, F27), takes focus and carries
+ * [LAB_OPENED_SETTING_TAG]. Nothing is marked otherwise, so the screen is unchanged (Lab-off parity).
+ */
+@Stable
+internal class OpenedSetting {
+    var opened by mutableStateOf<String?>(null)
+    val shows = BringIntoViewRequester()
+    val focuses = FocusRequester()
+
+    @OptIn(ExperimentalFoundationApi::class)
+    fun mark(key: String, modifier: Modifier = Modifier): Modifier =
+        if (opened == key) modifier.bringIntoViewRequester(shows).focusRequester(focuses).testTag(LAB_OPENED_SETTING_TAG) else modifier
+}
+
+/**
+ * Takes the request in [asked] (and clears it): with [enabled], marks that setting, runs [first] (a list scrolls to
+ * the item that holds it, so it is composed), then brings it into view and focuses it.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun rememberOpenedSetting(asked: MutableState<String?>, enabled: Boolean, first: suspend () -> Unit = {}): OpenedSetting {
+    val s = remember { OpenedSetting() }
+    val key = asked.value
+    LaunchedEffect(key) {
+        if (key == null) return@LaunchedEffect
+        asked.value = null
+        if (!enabled) return@LaunchedEffect
+        s.opened = key
+        withFrameNanos { }
+        first()
+        // After the layout that placed it: into view, then focused.
+        withFrameNanos { }
+        runCatching { s.shows.bringIntoView() }
+        runCatching { s.focuses.requestFocus() }
+    }
+    return s
+}
 
 /** The Daylight Inbox: the pairing code, how items reach the Reader, and what arrived. */
 @Composable
@@ -112,8 +169,13 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
     val stopped = remember(resumes, live, instant) { InboxHealth.stopped(app) }
     // Lab: K6: who receives for this pairing (the handover to the Lab Reader).
     val handover by app.handover.state.collectAsStateWithLifecycle()
+    // Lab (1.5, 1.4; K5 review): Setup check's "Open setting" for Instant delivery, and F15's row, open this screen at
+    // that setting with its footer. "Getting items to the Reader" comes after these items (keep the count in step).
+    val list = rememberLazyListState()
+    val deliverItem = listOf(true, lab, handover.elsewhere != null, notice != null, labNote, sync.storeFull, relayWarning != null, true).count { it }
+    val opened = rememberOpenedSetting(activity.inboxFocus, lab) { list.scrollToItem(deliverItem) }
 
-    ScreenList {
+    ScreenList(list) {
         item {
             HeaderRow(title = {
                 Text("Daylight Inbox", style = MaterialTheme.typography.headlineSmall)
@@ -197,13 +259,15 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
                     Text("Daylight Reader isn’t installed. Items stay here; open them with another app.", style = MaterialTheme.typography.bodyMedium)
                 }
                 // One control (label, line and state together), and static: the Inbox never animates (F27).
-                SwitchRow(
-                    "Instant delivery", instant,
-                    detail = "Keeps a connection open so items arrive within seconds (a small notification stays). Off: every 15 minutes, and whenever this screen is open.",
-                ) {
-                    instant = it
-                    app.prefs.instantDelivery = it
-                    if (it) InstantDeliveryService.start(activity) else InstantDeliveryService.stop(activity)
+                Box(opened.mark(INBOX_FOCUS_INSTANT, Modifier.fillMaxWidth())) {
+                    SwitchRow(
+                        "Instant delivery", instant,
+                        detail = "Keeps a connection open so items arrive within seconds (a small notification stays). Off: every 15 minutes, and whenever this screen is open.",
+                    ) {
+                        instant = it
+                        app.prefs.instantDelivery = it
+                        if (it) InstantDeliveryService.start(activity) else InstantDeliveryService.stop(activity)
+                    }
                 }
                 if (instant && !unrestricted) {
                     Text("With the screen off, Android pauses connections to save battery. Let Daylight Share run unrestricted to keep Instant delivery instant.", style = MaterialTheme.typography.bodySmall)
@@ -271,7 +335,7 @@ fun InboxScreen(activity: MainActivity, onSettings: () -> Unit) {
                 // Lab (F15): "Arrival notices" and "Quiet hours", with the Inbox's other ways of getting items to the Reader.
                 if (lab) {
                     HorizontalDivider(color = Ink)
-                    ArrivalSettings(app)
+                    ArrivalSettings(app, opened.mark(INBOX_FOCUS_ARRIVALS, Modifier.fillMaxWidth()))
                 }
             }
         }
@@ -455,23 +519,28 @@ private fun InboxHealthCard(activity: MainActivity, line: String?, warning: Inbo
     }
 }
 
-/** F15's settings on the Inbox screen: "Arrival notices" (Off, Quiet, Alert) and "Quiet hours". */
+/**
+ * F15's settings on the Inbox screen: "Arrival notices" (Off, Quiet, Alert) and "Quiet hours" with its footer (LAB_TEXT's
+ * `arrivals.quietHoursFooter`, Oct 22: the 22:00–07:00 it covers). [modifier] marks them when F15's row opened them.
+ */
 @Composable
-private fun ArrivalSettings(app: App) {
+private fun ArrivalSettings(app: App, modifier: Modifier = Modifier) {
     var mode by remember { mutableStateOf(InboxLab.arrivals(app)) }
     var quiet by remember { mutableStateOf(app.prefs.labQuietHours) }
-    Text(LabText["arrivals.setting"], style = MaterialTheme.typography.bodyLarge)
-    Column(Modifier.selectableGroup()) {
-        for (m in Arrivals.entries) {
-            Choice(m.label, mode == m) {
-                mode = m
-                app.prefs.labArrivals = m.key
+    Column(modifier, verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
+        Text(LabText["arrivals.setting"], style = MaterialTheme.typography.bodyLarge)
+        Column(Modifier.selectableGroup()) {
+            for (m in Arrivals.entries) {
+                Choice(m.label, mode == m) {
+                    mode = m
+                    app.prefs.labArrivals = m.key
+                }
             }
         }
-    }
-    SwitchRow(LabText["arrivals.quietHours"], quiet) {
-        quiet = it
-        app.prefs.labQuietHours = it
+        SwitchRow(LabText["arrivals.quietHours"], quiet, detail = LabText["arrivals.quietHoursFooter"]) {
+            quiet = it
+            app.prefs.labQuietHours = it
+        }
     }
 }
 
@@ -496,6 +565,12 @@ fun InboxSetupCheck(activity: MainActivity, onBack: () -> Unit, onHome: () -> Un
     val checks = remember(resumes) { InboxLab.checks(activity, batteryExempt(activity)) }
     val S = "setup"
 
+    fun readerTest() {
+        testError = null
+        val item = InboxLab.startReaderTest(activity)
+        if (item == null) testError = InboxText.OUT_OF_SPACE else testId = item.id
+    }
+
     fun fix(id: String) {
         when (id) {
             "notifications" -> openNotificationSettings(activity)
@@ -503,8 +578,17 @@ fun InboxSetupCheck(activity: MainActivity, onBack: () -> Unit, onHome: () -> Un
                 .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName).putExtra(Settings.EXTRA_CHANNEL_ID, App.CH_ITEMS))
             "overlay" -> openSystem(activity, Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${activity.packageName}")))
             "batteryOptimisation" -> openBatterySettings(activity)
-            "instantDelivery" -> onHome()
-            "reader" -> onSettings()
+            // 1.5 "Open setting": the setting comes into view with its footer (K5 review), never changed by itself.
+            "instantDelivery" -> {
+                activity.inboxFocus.value = INBOX_FOCUS_INSTANT
+                onHome()
+            }
+            "reader" -> {
+                activity.settingsFocus.value = SETTINGS_FOCUS_DELIVER_TO
+                onSettings()
+            }
+            // The Reader turned pages down: its steps say what to change there, then test again (LAB-PLAN 1.6, Oct 22).
+            "readerReadLater" -> readerTest()
         }
     }
 
@@ -517,16 +601,12 @@ fun InboxSetupCheck(activity: MainActivity, onBack: () -> Unit, onHome: () -> Un
         Section {
             checks.forEachIndexed { i, c ->
                 if (i > 0) HorizontalDivider(color = Ink)
-                InboxCheckLine(LabText["$S.checks.${c.id}"], c.ok, checkButton(c.id)) { fix(c.id) }
+                InboxCheckLine(LabText["$S.checks.${c.id}"], c.ok, checkButton(c.id), checkSteps(c.id)) { fix(c.id) }
             }
         }
 
         Section {
-            PrimaryButton(LabText["$S.readerTest"]) {
-                testError = null
-                val item = InboxLab.startReaderTest(activity)
-                if (item == null) testError = InboxText.OUT_OF_SPACE else testId = item.id
-            }
+            PrimaryButton(LabText["$S.readerTest"]) { readerTest() }
             testError?.let { Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced()) }
             val test = received.firstOrNull { it.id == testId }
             if (test != null) {
@@ -562,13 +642,18 @@ fun InboxSetupCheck(activity: MainActivity, onBack: () -> Unit, onHome: () -> Un
 
 /**
  * The button of an unmet check (F26.3): "Open Settings" for Android's settings, "Open setting" for this app's own
- * (Instant delivery, Deliver to). The Reader's read-later is the Reader's own setting: no button here.
+ * (Instant delivery, Deliver to). The Reader's read-later is the Reader's own setting: its steps say where, and its
+ * button is **Test the Reader hand-off** (LAB_TEXT's `setup.steps.readerReadLater` and `setup.readerTest`, Oct 22).
  */
 private fun checkButton(id: String): String? = when (id) {
     "notifications", "newItemsChannel", "overlay", "batteryOptimisation" -> LabText.button("needs-notifications")
     "instantDelivery", "reader" -> LabText.button("needs-quick-sends")
+    "readerReadLater" -> LabText["setup.readerTest"]
     else -> null
 }
+
+/** The steps under an unmet check, for a setting this app cannot open (the Reader's own), or null. */
+private fun checkSteps(id: String): String? = if (id == "readerReadLater") LabText["setup.steps.readerReadLater"] else null
 
 /** Opens one of Android's settings screens; when the device has none for it, the app's details. */
 private fun openSystem(context: Context, intent: Intent) {
@@ -581,11 +666,12 @@ private fun openSystem(context: Context, intent: Intent) {
     }
 }
 
-/** One check: "✓ {check}" or "! {check}", and for an unmet one its [button]. */
+/** One check: "✓ {check}" or "! {check}", and for an unmet one its [steps] and its [button]. */
 @Composable
-private fun InboxCheckLine(check: String, ok: Boolean, button: String?, onFix: () -> Unit) {
+private fun InboxCheckLine(check: String, ok: Boolean, button: String?, steps: String? = null, onFix: () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
         Text(LabText.fill(LabText[if (ok) "setup.ok" else "setup.notOk"], mapOf("check" to check)), style = MaterialTheme.typography.bodyLarge)
+        if (!ok && steps != null) Text(steps, style = MaterialTheme.typography.bodyMedium)
         if (!ok && button != null) SecondaryButton(button) { onFix() }
     }
 }

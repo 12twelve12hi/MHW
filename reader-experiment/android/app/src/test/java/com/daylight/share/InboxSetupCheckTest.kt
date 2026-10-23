@@ -171,10 +171,21 @@ class InboxSetupCheckTest {
         compose.waitForIdle()
         compose.onNodeWithText("Instant delivery").assertIsDisplayed()
 
-        // A refused read-later lately: unmet, with no button (it is the Reader's own setting).
+        // A refused read-later lately: unmet. It is the Reader's own setting, so its steps say where (LAB_TEXT's
+        // setup.steps.readerReadLater, Oct 22), and its button is Test the Reader hand-off (setup.readerTest).
         InboxLab.noteSavePage(app, "refused")
         openSetupCheck()
         compose.onNodeWithText(line("readerReadLater", false)).assertIsDisplayed()
+        compose.onNodeWithText(LabText["setup.steps.readerReadLater"]).assertIsDisplayed()
+        assertTrue(LabText["setup.steps.readerReadLater"].startsWith("The Reader turned down the last pages it was handed."))
+        val tests = compose.onAllNodes(hasText(LabText["setup.readerTest"]) and hasClickAction())
+        assertEquals("the check's button and the section's", 2, tests.fetchSemanticsNodes().size)
+        val stepsBox = compose.onNodeWithText(LabText["setup.steps.readerReadLater"]).fetchSemanticsNode().boundsInRoot
+        val under = tests.fetchSemanticsNodes().indexOfFirst { it.boundsInRoot.top >= stepsBox.bottom - 1 && it.boundsInRoot.top - stepsBox.bottom < 80 }
+        assertTrue("the check's button is under its steps", under >= 0)
+        tests[under].performClick()
+        compose.waitForIdle()
+        assertNotNull("it runs the Reader hand-off test", app.prefs.labReaderTestId)
     }
 
     /** F26: with no Reader that saves pages, "Open setting" opens Settings, where Deliver to is. */

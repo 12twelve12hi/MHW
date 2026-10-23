@@ -44,13 +44,16 @@ import java.io.File
  *    "Can’t reach Daylight Reader (lab) right now." **Receive here again** ([receiveHereAgain]) shows only once the
  *    Reader said false, and asks again before it resumes.
  *
- * On resuming, the receive cursor moves up to the last time the Lab Reader may have been receiving (less the protocol's
- * 30-minute overlap), so the Inbox does not take again what the Lab Reader took meanwhile; what nobody took is still
+ * On resuming, the receive cursor moves up to the last time the Lab Reader may have been receiving (in relay time, from
+ * the relay's clock as the Inbox last heard it; less the protocol's 30-minute overlap), so the Inbox does not take again
+ * what the Lab Reader took meanwhile; what nobody took is still
  * cached on the relay, or comes again with its sender's re-send. Then Instant delivery starts again when it is on, a
  * hello goes, and the poll runs. A new pairing on the Inbox (Reset pairing) ends a handover at once: nobody else has it.
  *
- * Lab off does not end a handover (LAB-PLAN 1.3: it never stops a receiver or changes what is sent; the resume rule
- * still runs), and the Inbox screen keeps saying who receives. Log lines (tag `DaylightShare`): `lab: handover: …`.
+ * Lab off does not end a handover (LAB-PLAN 1.3, "a handover outlives Lab off", decided Oct 22: ending it silently
+ * would make both apps receive; the resume rule still runs), and the Inbox screen keeps its handover line, with
+ * **Receive here again** once the Lab Reader says it stopped. Its words are LAB_TEXT's `handover.*` (5.3.4, word for
+ * word). Log lines (tag `DaylightShare`): `lab: handover: …`.
  */
 class Handover(private val app: App) {
     /** What the Lab Reader last answered (`receiving`), for the Lab card and the Inbox screen. */
@@ -194,6 +197,8 @@ class Handover(private val app: App) {
                 }
             }
         }
+        // No poll, so no ack digest: the 48-hour lab: 0 repeat goes on its own (K6 review).
+        if (!poll) app.labReporter.whileElsewhere()
         return poll
     }
 
@@ -315,14 +320,20 @@ class Handover(private val app: App) {
     /**
      * Moves the receive cursor of pairing [topic] up to [seenAt] less the protocol's overlap (never back), and forgets
      * the incomplete items that started before it (the Lab Reader's to take; the cursor would otherwise go back to them).
+     * [seenAt] is a time of this device's clock and the cursor a relay time: it is turned into relay time with the
+     * relay's clock as the Inbox last heard it (`Prefs.inboxRelayOffsetMs`), so a DC-1 whose clock runs fast does not
+     * skip what reached the relay after the Lab Reader stopped (K6 review). Without one yet, the device's clock it is.
      */
     private fun skipCursor(topic: String, seenAt: Long) {
         if (seenAt <= 0L) return
+        val offset = app.prefs.inboxRelayOffsetMs
+        if (offset == null) logw("lab: handover: the relay's clock is not known yet; this device's clock stands in for it")
+        val relaySeenAt = seenAt + (offset ?: 0L)
         runCatching {
             val store = receiverStore(topic)
             synchronized(store.lock) {
                 val st = store.load()
-                val from = maxOf(0L, seenAt / 1000 - Limits.CURSOR_OVERLAP_S)
+                val from = maxOf(0L, relaySeenAt / 1000 - Limits.CURSOR_OVERLAP_S)
                 val prev = st.since.toLongOrNull()
                 if (prev != null && prev >= from) return@runCatching
                 st.since = from.toString()

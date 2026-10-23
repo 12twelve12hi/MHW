@@ -649,9 +649,15 @@ object Notices {
 
     fun sender(item: InboxItem): String = item.from?.trim()?.takeIf { it.isNotEmpty() } ?: "your phone"
 
-    fun heading(item: InboxItem): String = "New ${kind(item)} from ${sender(item)}"
+    /**
+     * "New PDF from iPhone". With [lab] (F15; LAB_TEXT's `arrivals.excerptOne`, Oct 22), one waiting excerpt reads
+     * "New excerpt from iPhone", not "New HTML document from iPhone".
+     */
+    fun heading(item: InboxItem, lab: Boolean = false): String =
+        if (lab && InboxLab.isExcerpt(item)) LabText.fill(LabText["arrivals.excerptOne"], mapOf("from" to sender(item)))
+        else "New ${kind(item)} from ${sender(item)}"
 
-    fun title(item: InboxItem): String = "${heading(item)}: ${item.displayTitle}"
+    fun title(item: InboxItem, lab: Boolean = false): String = "${heading(item, lab)}: ${item.displayTitle}"
 
     private fun several(sorted: List<InboxItem>, lab: Boolean = false): String {
         val senders = sorted.map(::sender).distinct()
@@ -665,12 +671,12 @@ object Notices {
     /**
      * One notice per item, oldest first, and a summary when there are several. Only the newest item not in [seen] (never
      * announced before) alerts, and none when [quiet] (the card shows them instead, or Quiet hours). With [lab], the
-     * summary of excerpts from one sender reads "3 excerpts from iPhone" (F15).
+     * summary of excerpts from one sender reads "3 excerpts from iPhone", and one excerpt "New excerpt from iPhone" (F15).
      */
     fun plan(items: List<InboxItem>, seen: Set<String>, quiet: Boolean = false, lab: Boolean = false): Plan {
         val sorted = items.sortedBy { it.received }
         val newest = if (quiet) null else sorted.lastOrNull { it.id !in seen }?.id
-        val notices = sorted.map { Item(it.id, title(it), heading(it), TAP, alert = it.id == newest) }
+        val notices = sorted.map { Item(it.id, title(it, lab), heading(it, lab), TAP, alert = it.id == newest) }
         if (sorted.size < 2) return Plan(notices, null)
         return Plan(notices, Summary(several(sorted, lab), "Tap to add them to the Reader", sorted.map { "${kind(it)}: ${it.displayTitle}" }))
     }
@@ -683,7 +689,7 @@ object Notices {
     fun card(items: List<InboxItem>, lab: Boolean = false): Card {
         val sorted = items.sortedBy { it.received }
         val later = if (lab) LabText["arrivals.keepForLater"] else LATER
-        if (sorted.size == 1) return Card(heading(sorted[0]), sorted[0].displayTitle, "Add to Reader", later)
+        if (sorted.size == 1) return Card(heading(sorted[0], lab), sorted[0].displayTitle, "Add to Reader", later)
         val lines = sorted.take(3).map { "${kind(it)}: ${it.displayTitle}" } + if (sorted.size > 3) listOf("and ${sorted.size - 3} more") else emptyList()
         return Card(several(sorted, lab), lines.joinToString("\n"), "Add all to Reader", later)
     }

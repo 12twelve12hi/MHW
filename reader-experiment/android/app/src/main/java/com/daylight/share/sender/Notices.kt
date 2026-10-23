@@ -26,7 +26,8 @@ import com.daylight.share.ui.MainActivity
  * - "Couldn’t send ‘{title}’ to {name}" / "Open to try again." when an item shared in place ends failed or expired
  *   after the card closed (a `network` failure is the exception: it waits for a connection, F07), unless "Tell me when a
  *   send fails" is off;
- * - "In your Reader ✓: {title}", quietly, when the ledger confirms `reader`, only with "Tell me when it’s in my Reader".
+ * - "In your Reader ✓: {title}", quietly, when the ledger confirms `reader` for a delivered row while a Lab Inbox is
+ *   fresh (2.2.6), only with "Tell me when it’s in my Reader".
  *
  * Each is posted once per item, only with Lab on, and never without notification permission (F04's row in What's in
  * Lab then says "Needs notifications"). Tapping one opens the app at its row: the home screen, scrolled to it.
@@ -75,7 +76,9 @@ object Notices {
             val row = byId[id] ?: continue
             when {
                 endedBadly(row) -> failed(app, row)
-                snapshot?.state(id)?.s == "reader" -> inReader(app, row)
+                // 2.2.6: a state counts only for a delivered row, and only while a Lab Inbox is fresh (no "In your
+                // Reader" without an ack, F01.4). Until then the id stays listed.
+                inReaderNow(row, snapshot) -> inReader(app, row)
                 // Delivered two days ago and still not in the Reader: nothing more will be told.
                 row.status == Status.DELIVERED && now - row.delivered > KEEP_DELIVERED_MS -> Unit
                 else -> keep += id
@@ -84,13 +87,20 @@ object Notices {
         if (keep.size != ids.size) app.prefs.setLabInPlaceIds(keep)
     }
 
+    /**
+     * Whether the ledger says [row] is in the Reader in a way the timeline would show (2.2.6): the row is delivered (an
+     * ack listed its id), a fresh publisher has Lab on, and its state is `reader`.
+     */
+    fun inReaderNow(row: OutboxRow, snapshot: LabLedger.Snapshot?): Boolean =
+        row.status == Status.DELIVERED && snapshot != null && snapshot.inboxLab && snapshot.state(row.id)?.s == "reader"
+
     /** The failure notice for [row] (when "Tell me when a send fails" is on and notifications are allowed). */
     fun failed(app: App, row: OutboxRow) {
         if (!app.prefs.labTellFails) return
         val title = LabText.fill(LabText["shareInPlace.failedTitle"], mapOf("title" to titleOf(row), "name" to PhoneLab.daylightName(app)))
         if (post(app, row.id, title, LabText["shareInPlace.failedText"], quiet = false)) {
             logi("lab: send result notice for ${row.id.take(8)} (${row.status}${row.errorCode.ifEmpty { null }?.let { " $it" } ?: ""})")
-            ActivityLog.add(app, "notice", row.id, row.kind, row.status)
+            ActivityLog.addRow(app, "notice", row)
         }
     }
 

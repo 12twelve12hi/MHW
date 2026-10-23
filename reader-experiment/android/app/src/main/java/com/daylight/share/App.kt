@@ -471,6 +471,15 @@ class Prefs(private val context: Context) {
         get() = sp.getLong("labHandoverSeenAt", 0L)
         set(v) = sp.edit().putLong("labHandoverSeenAt", v).apply()
 
+    /**
+     * The relay's clock less this device's (ms), from the Inbox's last answer from its relay (a publish's time, a Date
+     * header; `RelayClient.relayClock`), or null before one. The handover's resume turns [labHandoverSeenAt], a time of
+     * this device's clock, into relay time with it (K6 review: a DC-1 whose clock runs fast must not skip items).
+     */
+    var inboxRelayOffsetMs: Long?
+        get() = if (sp.contains("inboxRelayOffsetMs")) sp.getLong("inboxRelayOffsetMs", 0L) else null
+        set(v) = sp.edit().apply { if (v == null) remove("inboxRelayOffsetMs") else putLong("inboxRelayOffsetMs", v) }.apply()
+
     fun senderPairing(): Pairing? = senderLink?.let { runCatching { Pairing.parse(it) }.getOrNull() }
 
     private fun defaultDeviceName(): String {

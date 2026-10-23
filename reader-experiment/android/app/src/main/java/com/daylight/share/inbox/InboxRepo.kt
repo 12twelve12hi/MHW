@@ -307,12 +307,21 @@ class InboxRepo(private val app: App) {
             pairing = p,
             store = FileReceiverStore(File(dir, "receiver-${p.keys.inboxTopic}.json")),
             reassembler = Reassembler(File(dir, "spool")),
-            relay = RelayClient(p.relay, relayHttp()),
+            relay = RelayClient(p.relay, relayHttp(), clock = { clock() }),
             from = app.prefs.deviceName,
             accept = ::accept,
         )
         receiver = r
         return r
+    }
+
+    /** This device's clock for the relay's ([noteRelayClock]); tests use the handover's fake one. */
+    @VisibleForTesting
+    internal var clock: () -> Long = System::currentTimeMillis
+
+    /** Keeps the relay's clock as the last answer gave it (`Prefs.inboxRelayOffsetMs`, for the handover's resume). */
+    private fun noteRelayClock(r: Receiver) {
+        r.relay.relayClock?.let { app.prefs.inboxRelayOffsetMs = it.offsetMs }
     }
 
     /** Polls once (catch-up). Returns the number of new items; errors land in [sync]. */
@@ -321,7 +330,9 @@ class InboxRepo(private val app: App) {
         if (!app.handover.beforePoll()) return@withContext 0
         sync.value = sync.value.copy(checking = true)
         try {
-            val r = receiver().pollOnce()
+            val rc = receiver()
+            val r = rc.pollOnce()
+            noteRelayClock(rc)
             val stored = r.items.isNotEmpty()
             sync.value = sync.value.copy(
                 lastCheck = System.currentTimeMillis(), checking = false,
@@ -357,6 +368,7 @@ class InboxRepo(private val app: App) {
                 r.ackFailed()
             }
             app.labReporter.afterLiveAcks(ackFailed = error != null, limitStatus = out.limitStatus)
+            noteRelayClock(r)
         }
         app.labReporter.afterLive(limitStatus = res.limitStatus, flush = res.items.isNotEmpty() || res.ackIds.isNotEmpty())
         if (res.items.isNotEmpty()) sync.value = sync.value.copy(lastCheck = System.currentTimeMillis(), error = null, storeFull = false)

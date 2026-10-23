@@ -13,10 +13,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.daylight.share.App
-import com.daylight.share.R
+import com.daylight.share.core.lab.LabText
 import com.daylight.share.ui.MainActivity
 import com.daylight.share.ui.SecondaryButton
 import com.daylight.share.ui.Section
@@ -28,8 +27,8 @@ import kotlinx.coroutines.withContext
 
 /*
  * The handover's words (LAB-PLAN 5.3.4; card K6): in the Lab card (Inbox role, Lab on) and at the top of the Inbox while
- * another app receives. The sentences are the plan's, in the K6 block of `res/values/strings.xml`: LAB_TEXT has no
- * handover strings yet (reported to the share lane). Nothing here moves (F27): the note appears and goes at once.
+ * another app receives (Lab on or off: a handover outlives Lab off, 1.3). Every sentence is LAB_TEXT's `handover.*`
+ * (`LabText`, added Oct 22, 5.3.4 word for word). Nothing here moves (F27): the note appears and goes at once.
  */
 
 /** The test tag of the handover's line on the Inbox screen. */
@@ -64,8 +63,8 @@ fun HandoverRows(activity: MainActivity) {
         }
     }
     val armed = remember(st.armedUntil, lapsed) { app.handover.armed() }
-    SecondaryButton(stringResource(R.string.handover_let), Modifier.fillMaxWidth()) { app.handover.arm() }
-    if (armed) Text(stringResource(R.string.handover_armed), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced())
+    SecondaryButton(LabText["handover.letReceive"], Modifier.fillMaxWidth()) { app.handover.arm() }
+    if (armed) Text(LabText["handover.armed"], style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced())
 }
 
 /** The Inbox screen's line while another app receives for this Daylight (Lab on or off: it says why nothing arrives). */
@@ -88,11 +87,11 @@ fun HandoverStatus(activity: MainActivity, st: Handover.State) {
     LaunchedEffect(activity.resumes.intValue, st.elsewhere) {
         withContext(Dispatchers.IO) { app.handover.check() }
     }
-    Text(stringResource(R.string.handover_elsewhere), style = MaterialTheme.typography.bodyLarge)
+    Text(LabText["handover.receivingElsewhere"], style = MaterialTheme.typography.bodyLarge)
     when (st.reach) {
         Handover.Reach.UNREACHABLE ->
-            Text(stringResource(R.string.handover_unreachable), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced())
-        Handover.Reach.NOT_RECEIVING -> SecondaryButton(stringResource(R.string.handover_receive_here), Modifier.fillMaxWidth()) {
+            Text(LabText["handover.unreachable"], style = MaterialTheme.typography.bodyMedium, modifier = Modifier.announced())
+        Handover.Reach.NOT_RECEIVING -> SecondaryButton(LabText["handover.receiveHereAgain"], Modifier.fillMaxWidth()) {
             scope.launch { withContext(Dispatchers.IO) { app.handover.receiveHereAgain() } }
         }
         Handover.Reach.RECEIVING, null -> Unit

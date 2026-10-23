@@ -8,6 +8,8 @@ import androidx.work.workDataOf
 import com.daylight.share.core.ErrorCode
 import com.daylight.share.core.Outbox
 import com.daylight.share.core.Status
+import com.daylight.share.core.lab.LabFrame
+import com.daylight.share.core.lab.LabInboxInfo
 import com.daylight.share.core.lab.LabText
 import com.daylight.share.sender.FlushWorker
 import com.daylight.share.sender.Notices
@@ -16,6 +18,7 @@ import com.daylight.share.sender.Shared
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -118,6 +121,60 @@ class PhoneJobsTest {
         runBlocking { app.sender.tick() }
         val n = PhoneKit.notifications(app).single()
         assertEquals(LabText.fill(LabText["shareInPlace.inReader"], mapOf("title" to "Read me too")), PhoneKit.titleOf(n))
+    }
+
+    /**
+     * K4 review (2.2.6, F01.4): "In your Reader ✓" only for a delivered row while a Lab Inbox is fresh. A `reader` state
+     * without its ack (missed, or the Lab Reader's during a handover) posts nothing while the row reads "Sent"; nor does
+     * one after the Inbox's `lab: 0`. The id stays listed, and the notice comes once both hold.
+     */
+    @Test
+    fun theReaderNoticeWaitsForTheAckAndAFreshLabInbox() {
+        PhoneKit.phone(app, relay)
+        PhoneKit.grantNotifications(app)
+        app.prefs.labTellReader = true
+        val row = shareInPlace("https://example.com/no-ack", "No ack yet")
+        runBlocking { SendWorker.run(app, row.id) }
+        PhoneKit.hello(relay, mapOf(row.id to "reader"))
+        runBlocking { app.sender.tick() }
+        assertEquals(Status.SENT, app.sender.rows.value.single { it.id == row.id }.status)
+        assertTrue("no notice before the ack", PhoneKit.notifications(app).isEmpty())
+        assertTrue(row.id in app.prefs.labInPlaceIds())
+
+        // The Inbox turns Lab off (its lab: 0 replaces its entry), then the ack comes: delivered, but no Lab Inbox.
+        relay.publish(LabKit.vectorPairing.keys.ackTopic, LabFrame.build(LabKit.vectorPairing.keys, LabInboxInfo(0, "android/1.0.99", emptyList(), poll = System.currentTimeMillis()), from = name))
+        PhoneKit.ack(relay, listOf(row.id))
+        runBlocking { app.sender.tick() }
+        assertEquals(Status.DELIVERED, app.sender.rows.value.single { it.id == row.id }.status)
+        assertTrue("no notice without a fresh Lab Inbox", PhoneKit.notifications(app).isEmpty())
+        assertTrue(row.id in app.prefs.labInPlaceIds())
+
+        // Lab on again on the Daylight: now the row is delivered and the state is fresh.
+        PhoneKit.hello(relay)
+        runBlocking { app.sender.tick() }
+        assertEquals(LabText.fill(LabText["shareInPlace.inReader"], mapOf("title" to "No ack yet")), PhoneKit.titleOf(PhoneKit.notifications(app).single()))
+        assertFalse(row.id in app.prefs.labInPlaceIds())
+    }
+
+    /**
+     * F26's activity log shows why a send failed (the share lane's `http`, Oct 22): "failed/network 429" and
+     * "failed/full 413", not only the status; a publish that goes reads "sent -".
+     */
+    @Test
+    fun theActivityLogShowsTheRelaysAnswer() {
+        PhoneKit.phone(app, relay)
+        val row = runBlocking { app.sender.add(Shared.Link("https://example.com/limits", "Limits")) }
+        relay.publishStatus = 429
+        runBlocking { app.sender.publish(row.id) }
+        relay.publishStatus = 413
+        runBlocking { app.sender.retry(row.id) }
+        relay.publishStatus = 200
+        runBlocking { app.sender.retry(row.id) }
+        val log = com.daylight.share.sender.ActivityLog.read(app).filter { it.id8 == row.id.take(8) }
+        assertEquals(listOf("share" to "sending", "send" to "failed/network", "retry" to "failed/full", "retry" to "sent"), log.map { it.type to it.status })
+        assertEquals(listOf(0, 429, 413, 0), log.map { it.http })
+        assertTrue(com.daylight.share.core.lab.SetupCheck.activityLine(log[1]).endsWith(" send ${row.id.take(8)} url failed/network 429"))
+        assertTrue(com.daylight.share.core.lab.SetupCheck.activityLine(log[3]).endsWith(" retry ${row.id.take(8)} url sent -"))
     }
 
     /** With Lab off nothing of F04's is posted (Lab's notifications go with it, 1.3). */

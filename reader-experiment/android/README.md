@@ -281,7 +281,8 @@ Inbox's waits for its own Wave 1 build).
   or "Always show Options before sending", the card opens with the choices and **Send**, and nothing goes until Send. A
   share-in-place item that ends failed or expired posts "Couldn’t send ‘{title}’ to {name}" / "Open to try again." in the
   channel **Send results** ("Tell me when a send fails", on); "Tell me when it’s in my Reader" (off) posts a quiet "In your
-  Reader ✓: {title}". Tapping a notice opens the app at its row (the home screen, scrolled to it, its details shown).
+  Reader ✓: {title}", only once the row is delivered (an ack listed it) and a Lab Inbox is fresh (2.2.6: a state counts
+  only then). Tapping a notice opens the app at its row (the home screen, scrolled to it, its details shown).
   Each item is remembered for its notice before its job is asked for, so a job that fails at once still posts it.
   Without notification permission nothing is posted and F04's row says "Needs notifications"; the app asks once, after
   a share in place (Android 13 and later). A shared file is copied into `files/outbox-incoming` while the card is up; a
@@ -290,7 +291,9 @@ Inbox's waits for its own Wave 1 build).
   outside wait: the card stays until the items are in the outbox (a big file from a slow provider may still be
   copying), then closes by itself, and a card that goes anyway (its task swiped away) still stores what it was
   copying. The card scrolls when it is taller than the screen (the largest text on a small phone), and the tap outside
-  it is a gesture, not a control a screen reader would land on. F04's Use switch off: the v1.1 card.
+  it is a gesture, not a control a screen reader would land on. When only some items of a share could be stored (one
+  file too big), the card says it in v1.1's words, "{n} items. {line}" (the line alone for one), then the error
+  (LAB-PLAN 1.6: no new string). F04's Use switch off: the v1.1 card.
 - **The link-only hint (F03).** The first share that brings only a link shows once, on whichever card the share used
   (share in place's, or the v1.1 card with F04's Use switch off), and the card stays until OK: "Only the link came
   through. For pages behind a login, send from your computer’s browser with the Send to Daylight extension." After that
@@ -323,8 +326,9 @@ Inbox's waits for its own Wave 1 build).
   switch off: links go exactly as shared.
 - **Setup check (F26).** From its row in What's in Lab: Pairing, Notifications and Battery optimisation, each unmet one
   with the button that opens the right screen; the hints shown once; **Send a test article** (`x-cap: "test"`, followed
-  to "✓ Delivered" and "✓ In your Reader"); the activity log (type, id8, kind, status, nothing else); **Copy diagnostics**,
-  redacted (`SetupCheck.diagnosticsReport`).
+  to "✓ Delivered" and "✓ In your Reader"); the activity log (type, id8, kind, status and the relay's HTTP status,
+  nothing else: an outbox row's event reads "failed/full 413" or "failed/network 429", from `OutboxRow.http`, Oct 22);
+  **Copy diagnostics**, redacted (`SetupCheck.diagnosticsReport`).
 - **Send copied link (F33).** On resume only the clipboard's description is read (a `text/uri-list` clip, or on Android
   12+ a text Android's classifier is at least 0.5 sure is a URL), so no "pasted from" notice shows; **Send copied link**
   reads it on tap and asks "Send {host} to {name}?" with **Send** and **Cancel**. Android 10 and later answer only a
@@ -335,7 +339,9 @@ Inbox's waits for its own Wave 1 build).
   "In a later update" once one is ready (F02 comes to Android in Wave S).
 
 The **Use** switches (6.5 Q5) are on the rows of F04, F08, F16 and F33, on by default, each with its footer ("When
-it’s off, …"); TalkBack reads "Use {feature}". The one Lab switch still turns all of Lab off.
+it’s off, …"); TalkBack reads "Use {feature}". The one Lab switch still turns all of Lab off. A tapped row's
+needs-setup note shows directly under the row, before its switches (1.5). What's in Lab reads the ack topic and asks
+the server as it opens, both within one shared 5 s (`LabRepo.overviewFresh`).
 
 **Still to check on a device** (W1 device round on Rooted 2, with an Android 13 or 14 phone and the real ntfy.sh relay):
 
@@ -390,13 +396,15 @@ Inbox from this build. With Lab off every screen, notice and hand-off is v1.1's.
   later on your Daylight" (`held`). **Add to Reader** (the notice, the card, or the row) hands it over: `reader` for a
   link the Reader saved, `handed` for a document. The card's Keep for later leaves the item's notice in the shade, as
   v1.1's Later does; the notice's own Keep for later takes it away. Waiting excerpts from one sender share one notice:
-  "3 excerpts from iPhone".
+  "3 excerpts from iPhone"; one waiting excerpt reads "New excerpt from iPhone" (`arrivals.excerptOne`).
 - **Saved to the Reader (F15).** An item handed over without a tap (links and pages, and documents with "Open as they
   arrive" or "Add to the library as a batch") gets one notice, "Saved to the Reader: {title}" / "From {from}", with only
   **Dismiss** (no state), grouped under "{n} saved from {from}" ("from your devices" for several senders). An item that
   had a notice before (it waited for a tap) never gets another. **Arrival notices** on the Inbox screen, under "Getting
   items to the Reader": Off, **Quiet** (the default; the channel "Arrivals", low importance) or Alert ("Arrivals
-  (alert)", high). **Quiet hours** (off): from 22:00 to 07:00 arrival notices, and waiting items' notices, go silently.
+  (alert)", high). **Quiet hours** (off; its footer: "From 22:00 to 07:00, arrivals don’t make a sound."): from 22:00 to
+  07:00 arrival notices, and waiting items' notices, go silently. Arrival notices' row in What's in Lab, when ready, opens
+  the Inbox screen at these settings, in view with that footer (1.4, 1.5).
 - **Inbox health (F15).** At the top of the Inbox: "Last checked 4 min ago · Instant delivery on" ("just now" while the
   live connection is open) and one warning at a time: "Instant delivery stopped. Turn it back on to get items within
   seconds." with **Turn on** (Instant delivery is on, its service is not running and wrote no heartbeat for 2 minutes;
@@ -407,8 +415,11 @@ Inbox from this build. With Lab off every screen, notice and hand-off is v1.1's.
   Display over other apps, Battery optimisation, Instant delivery (on and running), A Reader that saves pages, and The
   Reader’s read-later (no SAVE_PAGE refused in the last week since the last one it took), each "✓ {check}" or
   "! {check}". An unmet one has **Open Settings** (Android's notification, channel, overlay or battery settings) or
-  **Open setting** (Instant delivery: the Inbox screen, where its switch is; the Reader: Settings, where Deliver to is);
-  the Reader's read-later is the Reader's own setting, so it has none. **Test the Reader hand-off** puts the bundled test
+  **Open setting** (Instant delivery: the Inbox screen, scrolled to its switch with its footer; the Reader: Settings,
+  scrolled to Deliver to with its words; 1.5, never changed by itself). The Reader's read-later is the Reader's own
+  setting: its line says where ("The Reader turned down the last pages it was handed. Open the Reader’s settings, allow
+  pages from other apps, then tap Test the Reader hand-off.") with **Test the Reader hand-off** as its button.
+  **Test the Reader hand-off** puts the bundled test
   article (`SetupCheck.testArticle`, `x-cap: "test"`, `https://daylight.invalid/test/<id>`) in the Inbox and hands it
   over the usual way (the Inbox is in front), then shows "✓ In your Reader" once the Reader saved it, and the item's own
   words until then. **Activity log** (type, id8, kind, status, nothing else: received, waiting, held, handoff, notice,
@@ -437,6 +448,11 @@ Inbox from this build. With Lab off every screen, notice and hand-off is v1.1's.
   Reader"; each unmet check's button opens the right screen on Android 13 and 14 (the channel's settings, "Display over
   other apps" for Daylight Share, the battery list).
 - **F11.4:** an excerpt of a page already in the Reader arrives as a new document, not "already in your library".
+- **1.5 "Open setting" on the DC-1 in landscape:** Setup check's Open setting for Instant delivery and for the Reader
+  open the Inbox screen and Settings with that setting in view with its footer, and TalkBack starts there; Arrival
+  notices' row does the same for its settings.
+- **The read-later check (F26.3):** the Reader's own name for the setting in "Open the Reader’s settings, allow pages
+  from other apps" (LAB-PLAN 1.6 says the device round checks it), and its Test the Reader hand-off ticks it again.
 
 ### The handover to the Lab Reader (card K6)
 
@@ -465,16 +481,21 @@ library quietly. One app receives per pairing: two would both take every item. `
    (lab) right now." **Receive here again** shows only once the Reader said false, and asks once more first.
 
 On receiving here again, the receive cursor moves up to the last time the Lab Reader may have been receiving (the
-handover, then each answer but "not receiving"), less the protocol's 30-minute overlap, so the Inbox does not take again
+handover, then each answer but "not receiving"), turned into relay time with the relay's own clock as the Inbox last
+heard it (a publish's `time` or an answer's Date header, `RelayClient.relayClock`, kept in `Prefs.inboxRelayOffsetMs`:
+a DC-1 whose clock runs fast must not skip what reached the relay after the Reader stopped), less the protocol's
+30-minute overlap, so the Inbox does not take again
 what the Lab Reader took (a few items from just before it stopped may arrive in both); anything nobody took is still on
 the relay or comes with its sender's re-send. Instant delivery starts again when it is on (from the background Android
 may refuse; then the health card offers Turn on), and a hello goes. A new pairing on the Inbox (Reset pairing) ends a
-handover at once. **Lab off does not end a handover** (the Lab Reader still receives; LAB-PLAN 1.3: Lab off never
-stops a receiver), so the Inbox screen keeps its line with Lab off, and the resume rule still runs. The server lane (S0,
-Wave S) is not part of it: it stays with Daylight Share until the Lab Reader's hello carries the cap `server`.
+handover at once. **A handover outlives Lab off** (LAB-PLAN 1.3, decided Oct 22: ending it silently would make both
+apps receive), so the Inbox screen keeps its handover line with Lab off, with **Receive here again** once the Reader
+says it stopped, and the resume rule still runs. No poll runs during a handover, so no ack digest either: the skipped
+polls repeat the `lab: 0` frame every 11 hours for 48 hours instead (`LabReporter.whileElsewhere`, 2.2.4). The server
+lane (S0, Wave S) is not part of it: it stays with Daylight Share until the Lab Reader's hello carries the cap `server`.
 
-The five sentences are the plan's, in the K6 block of `res/values/strings.xml`: LAB_TEXT has no handover strings yet
-(the share lane is asked to add them; the app then shows LAB_TEXT's). Log lines (`adb logcat -s DaylightShare`):
+The five sentences are LAB_TEXT's `handover.*` (`LabText`, LAB-PLAN 5.3.4 word for word; `HandoverScreenTest` pins
+them). Log lines (`adb logcat -s DaylightShare`):
 `lab: handover: armed for 120 s`, `… <package> receives for this Daylight now; the Inbox stops polling`, `… <package>
 receives; poll skipped`, `… can't reach <package>; poll skipped …`, `… the Inbox receives here again (<why>)`,
 `… receiving from relay time <s> on …`, `… refused the pairing to <package>`.
@@ -585,13 +606,13 @@ unless a test says so.
 | Test | Covers |
 |---|---|
 | `SenderTimelineTest` | F01.3 (the check-in header), F01.4 (no Delivered or In your Reader without an ack; failed rows keep v1.1's sentence and button), F01.5 (a v1.1 Inbox's rows), F01.6 (three rows: the step line only on the newest and the unfinished, "{label}. {sentence}" for TalkBack, the step line hidden from it, details on tap), F07.1/F07.2 ("Waiting for connection" in "Waiting to send (n)", Cancel), the one-time note |
-| `ShareInPlaceTest` | F04.4 and F04.5 on Robolectric's clock (nothing in the 1.5 s countdown, then the outbox and `send-<id>`, the card gone; Options stops it; Comfort, TalkBack and Switch Access (flags stubbed) and "Always show Options before sending" wait for Send; a card that goes, or comes back from saved state, sends nothing), F04.6's order (each item remembered for its notice before its job is asked for), no copy left behind (Close, Back, destroyed, a stopped copy, the sweep at start), F03.3 (the hint once, on share in place's card and on the v1.1 card), F11 (a headline + link stays a link; "Send as excerpt"), F02e.1 (a 14.2 MB file: "Send files over 9 MB ›" with its needs-server sentence, and with a ready server (stubbed) `later`), F04's Use switch off |
-| `PhoneJobsTest` | F04.6 (413 after the card closed: the "Send results" notice, once; off, or without permission: none; a network failure waits instead; "In your Reader ✓" only when asked; nothing with Lab off; the job through `TestListenableWorkerBuilder`), F07 (`defer`, the flush when the network is back, passes 3 minutes apart, nothing with Lab off) |
+| `ShareInPlaceTest` | F04.4 and F04.5 on Robolectric's clock (nothing in the 1.5 s countdown, then the outbox and `send-<id>`, the card gone; Options stops it; Comfort, TalkBack and Switch Access (flags stubbed) and "Always show Options before sending" wait for Send; a card that goes, or comes back from saved state, sends nothing), F04.6's order (each item remembered for its notice before its job is asked for), no copy left behind (Close, Back, destroyed, a stopped copy, the sweep at start), F03.3 (the hint once, on share in place's card and on the v1.1 card), F11 (a headline + link stays a link; "Send as excerpt"), F02e.1 (a 14.2 MB file: "Send files over 9 MB ›" with its needs-server sentence, and with a ready server (stubbed) `later`), F04's Use switch off; a batch where only some items were stored says v1.1's "{n} items. {line}" and the error |
+| `PhoneJobsTest` | F04.6 (413 after the card closed: the "Send results" notice, once; off, or without permission: none; a network failure waits instead; "In your Reader ✓" only when asked, and only for a delivered row while a Lab Inbox is fresh: not before the ack, not after the Inbox's `lab: 0`; nothing with Lab off; the job through `TestListenableWorkerBuilder`), F07 (`defer`, the flush when the network is back, passes 3 minutes apart, nothing with Lab off), F26's log with the relay's answer ("failed/network 429", "failed/full 413") |
 | `ShortcutsTest` | F08: pushed on a send with the name (short label cut at 10), updated with the name, removed on Unpair, Lab off, F08's Use switch off and the Inbox role; the share target in `shortcuts.xml` |
 | `AutomationActivityTest` | F09.3: the sheet before anything goes, `RESULT_OK` with id and status, Cancel, quick sends only with the setting (and the note that says how; its **Open setting** opens What's in Lab at that setting, in view with its footer, unchanged), 10 a minute, Lab off, unpaired, not a link; `daylightshare://send` routed from MainActivity, and a web page cannot send silently |
 | `CopiedLinkTest` | F33.1-F33.3: the chip from the clipboard's description only, read again when the window gains focus (a resume before focus keeps it), the host before Send, Cancel, no chip for text that is not a URL, the classifier's confidence (API 31+), the Use switch and Lab off |
 | `SendResultsNoticeTest` | F04: tapping a "Send results" notice opens the app at its row, below a dozen newer ones; Lab off ignores it |
-| `WhatsInLabPhoneTest` | 1.4 and 6.5 Q5 on the phone: its features (no F03 row), the Use switches (on by default, "Use {feature}", one feature off at a time), F04's and F09's settings; F11's row with F04's Use switch off ("Use Share in place", a tap opens that switch); F04's needs-notifications note with Open Settings; F26 (the checks, the test article followed to ✓ Delivered and ✓ In your Reader, the activity log, Copy diagnostics with no URL, title, code or topic; a hint shown once stays listed) |
+| `WhatsInLabPhoneTest` | 1.4 and 6.5 Q5 on the phone: its features (no F03 row), the Use switches (on by default, "Use {feature}", one feature off at a time), F04's and F09's settings; F11's row with F04's Use switch off ("Use Share in place", a tap opens that switch); F04's needs-notifications note with Open Settings, directly under the row and before its switches (1.5); F26 (the checks, the test article followed to ✓ Delivered and ✓ In your Reader, the activity log, Copy diagnostics with no URL, title, code or topic; a hint shown once stays listed) |
 | `SharePathVectorsTest` | F16.1 and F11.5 on the phone's own share path: every share-sheet case of `normalise.json` through `parseLab` and the intake; Lab off is v1.1's path |
 | `LabScreensAccessibilityTest` | also the phone's home with the timeline and the queue, and Setup check (as shipped and with Comfort at 200 %) |
 
@@ -603,8 +624,9 @@ unless a test says so.
 | `InboxRowLineTest` | F03.4 (every row's kind line, read by a screen reader; v1.1's meta line gone with Lab on), F01 (details on a tap: "Sender sees", "Cleaned from"; never on the row), F15 ("Kept for later" on the row, Add to Reader clears it), Lab off: v1.1's rows |
 | `ArrivalNoticesTest` | F15.1: the notice's Add to Reader and Keep for later (Lab off: Open Inbox); Keep for later → `held`, a hand-off with the Inbox in front leaves the item, Add to Reader → `handed` (a document) or `reader` (a link); a swipe → `held`; the card's Keep for later; excerpts grouped; "Saved to the Reader" for items handed over by themselves (title, source, Dismiss only, grouped, Dismiss records nothing, never twice, never after a notice), the three channels, Alert, Off, Quiet hours on both kinds of notice; nothing with Lab off |
 | `HealthTest` | F15.2 with a fake heartbeat and clock: stopped, the warnings' order, the line, the heartbeat with Lab on only, the 15-minute job's notice at most once every 12 hours with Turn on (and `SyncWorker` running the check), the card's Turn on, notifications off, the poll's error, no card with Lab off |
-| `InboxSetupCheckTest` | 1.4 and F26 on the Inbox: What's in Lab's two features (Arrival notices "Needs notifications", its sentence and Open Settings), the arrival settings on the Inbox screen, every check and its button (F26.3), no Reader → Deliver to, Test the Reader hand-off through `HandoffActivity` to "✓ In your Reader" with no state for senders, the activity log and Copy diagnostics with no URL, title, code or topic (F26.2) |
+| `InboxSetupCheckTest` | 1.4 and F26 on the Inbox: What's in Lab's two features (Arrival notices "Needs notifications", its sentence and Open Settings), the arrival settings on the Inbox screen, every check and its button (F26.3; the read-later check's steps and its Test the Reader hand-off), no Reader → Deliver to, Test the Reader hand-off through `HandoffActivity` to "✓ In your Reader" with no state for senders, the activity log and Copy diagnostics with no URL, title, code or topic (F26.2) |
 | `LabScreensAccessibilityTest` | also the Inbox's home with Lab's rows, health card, a kept item and an item's details, and the Inbox's Setup check (as shipped and with Comfort at 200 %) |
+| `OpenSettingInViewTest` | 1.5 "Open setting" and 1.4 in a 480 dp tall window: Setup check's Open setting for Instant delivery opens the Inbox screen with the switch wholly in view with its footer, the one for the Reader opens Settings at Deliver to, Arrival notices' row (ready) opens the Inbox at its settings with Quiet hours' footer; none changes a setting |
 
 `HandoffDecisionsTest` runs v1.1's hand-off decisions with Lab off (LAB-PLAN 1.3); `LabReporterTest` expects the
 hello's `cap-kind`.
@@ -613,8 +635,8 @@ hello's `cap-kind`.
 
 | Test | Covers |
 |---|---|
-| `HandoverTest` | LAB-PLAN 5.3.4 with a fake provider on each side (the Lab Reader's `ShareInboxProvider`, and Daylight Share's provider as a named calling package reaches it): the authorities and the manifest's `<queries>`; the pairing only while armed (2 minutes; a clock set back), with Lab on, on the Inbox, only to the Lab Reader, used up, nothing to an unnamed caller; then no poll, no 15-minute job's poll, no live connection, Instant delivery stopped and stopping itself, health not "stopped", one `lab: 0` frame and no hello through Lab off and on; the resume rule: a "not receiving" answer or an uninstall resumes, and an **invisible provider while the package is installed** (none, throwing SecurityException, IllegalArgumentException or another, no Boolean answer) never does; Receive here again asks first; the cursor skips what the Lab Reader took; the cursor in the answer; a new pairing ends it; Lab off keeps it; a new process reads it back |
-| `HandoverScreenTest` | the Lab card without the Lab Reader (no row); Let Daylight Reader (lab) receive and its step; the handed-over line in Settings and on the Inbox; "Can’t reach …" with no button; Receive here again once the Reader said false, which resumes; F27 checks for each (as shipped, and Comfort at 200 % on a 360 dp phone) with `lab-handover-*.png` |
+| `HandoverTest` | LAB-PLAN 5.3.4 with a fake provider on each side (the Lab Reader's `ShareInboxProvider`, and Daylight Share's provider as a named calling package reaches it): the authorities and the manifest's `<queries>`; the pairing only while armed (2 minutes; a clock set back), with Lab on, on the Inbox, only to the Lab Reader, used up, nothing to an unnamed caller; then no poll, no 15-minute job's poll, no live connection, Instant delivery stopped and stopping itself, health not "stopped", one `lab: 0` frame and no hello through Lab off and on; the resume rule: a "not receiving" answer or an uninstall resumes, and an **invisible provider while the package is installed** (none, throwing SecurityException, IllegalArgumentException or another, no Boolean answer) never does; Receive here again asks first; the cursor skips what the Lab Reader took, in relay time (a DC-1 clock 2 hours fast skips nothing that came after); the `lab: 0` repeat every 11 hours for 48 hours while polls are skipped; the cursor in the answer; a new pairing ends it; Lab off keeps it; a new process reads it back |
+| `HandoverScreenTest` | the five sentences are LAB_TEXT's (5.3.4's words); the Lab card without the Lab Reader (no row); Let Daylight Reader (lab) receive and its step; the handed-over line in Settings and on the Inbox; "Can’t reach …" with no button; Receive here again once the Reader said false, which resumes; with Lab off the Inbox keeps the line and Receive here again (1.3); F27 checks for each (as shipped, and Comfort at 200 % on a 360 dp phone) with `lab-handover-*.png` |
 
 ### Layout
 

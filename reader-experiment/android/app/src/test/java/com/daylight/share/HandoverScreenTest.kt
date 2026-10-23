@@ -48,11 +48,24 @@ class HandoverScreenTest {
     private val app: App get() = compose.activity.application as App
     private val relay = FakeRelay()
 
-    private val let get() = app.getString(R.string.handover_let)
-    private val armed get() = app.getString(R.string.handover_armed)
-    private val elsewhere get() = app.getString(R.string.handover_elsewhere)
-    private val receiveHere get() = app.getString(R.string.handover_receive_here)
-    private val unreachable get() = app.getString(R.string.handover_unreachable)
+    private val let get() = LabText["handover.letReceive"]
+    private val armed get() = LabText["handover.armed"]
+    private val elsewhere get() = LabText["handover.receivingElsewhere"]
+    private val receiveHere get() = LabText["handover.receiveHereAgain"]
+    private val unreachable get() = LabText["handover.unreachable"]
+
+    /**
+     * K6 review: the five sentences are LAB_TEXT's `handover.*` (LabText), and those are LAB-PLAN 5.3.4's words, U+2019
+     * included. The share lane's lab.test.mjs pins LAB_TEXT against the plan; this pins what the screens show.
+     */
+    @Test
+    fun theHandoverWordsAreLabTexts() {
+        assertEquals("Let Daylight Reader (lab) receive", let)
+        assertEquals("Open Daylight Reader (lab) › Settings › Labs › Send to Daylight and choose Take over.", armed)
+        assertEquals("Daylight Reader (lab) receives for this Daylight now.", elsewhere)
+        assertEquals("Receive here again", receiveHere)
+        assertEquals("Can\u2019t reach Daylight Reader (lab) right now.", unreachable)
+    }
 
     @Before
     fun reset() {
@@ -198,5 +211,35 @@ class HandoverScreenTest {
         waitForText(let)
         assertNull(app.handover.receivingElsewhere())
         assertTrue(gone(elsewhere))
+    }
+
+    /**
+     * LAB-PLAN 1.3 (Oct 22): a handover outlives Lab off. With Lab off the Inbox screen keeps its handover line (it says
+     * where items go), and offers **Receive here again** once the Lab Reader says it stopped; the Lab card is gone.
+     */
+    @Test
+    fun withLabOffTheInboxKeepsItsHandoverLine() {
+        inbox(labReader = true)
+        readerInbox(receiving = true)
+        app.handover.arm()
+        takeOver()
+        app.setLab(false)
+        compose.waitForIdle()
+        waitForText(elsewhere)
+        compose.onNode(hasTestTag(HANDOVER_TAG)).assertIsDisplayed()
+        assertTrue(gone(receiveHere))
+
+        HandoverTest.FakeReaderInbox.receiving(false)
+        compose.runOnUiThread { compose.activity.resumes.intValue++ }
+        waitForText(receiveHere)
+        assertEquals(Handover.LAB_READER, app.handover.receivingElsewhere())
+        compose.onNode(hasText(receiveHere) and hasClickAction()).performScrollTo().performClick()
+        compose.waitUntil(10_000) { app.handover.receivingElsewhere() == null }
+        compose.waitForIdle()
+        assertTrue(gone(elsewhere))
+        // Settings: with Lab off, the Lab card holds only its switch (no handover row).
+        openSettings()
+        assertTrue(gone(let))
+        assertTrue(gone("${LabText.WHATS_IN_LAB} ›"))
     }
 }

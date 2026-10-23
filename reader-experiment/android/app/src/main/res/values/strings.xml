@@ -4,11 +4,5 @@
     <string name="share_label">Send to Daylight</string>
     <!-- Lab: K4 -->
     <string name="automation_label">Send to Daylight</string>
-    <!-- Lab: K6 (LAB-PLAN 5.3.4, the handover to the Lab Reader). The plan's words: LAB_TEXT has no handover strings
-         yet; once the share lane adds them, these follow LAB_TEXT. -->
-    <string name="handover_let">Let Daylight Reader (lab) receive</string>
-    <string name="handover_armed">Open Daylight Reader (lab) › Settings › Labs › Send to Daylight and choose Take over.</string>
-    <string name="handover_elsewhere">Daylight Reader (lab) receives for this Daylight now.</string>
-    <string name="handover_receive_here">Receive here again</string>
-    <string name="handover_unreachable">Can’t reach Daylight Reader (lab) right now.</string>
+    <!-- Lab: K6's handover words come from LAB_TEXT (handover.*, LabText) since Oct 22. -->
 </resources>

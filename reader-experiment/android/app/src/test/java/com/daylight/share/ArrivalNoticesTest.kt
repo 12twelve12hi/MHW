@@ -302,6 +302,13 @@ class ArrivalNoticesTest {
         assertEquals("2 new items", Notices.plan(listOf(excerpt(1), excerpt(2, from = "Mac")), emptySet(), lab = true).summary!!.title)
         // Lab off: v1.1's.
         assertEquals("3 new from iPhone", Notices.plan(three, emptySet()).summary!!.title)
+        // One waiting excerpt (LAB_TEXT's arrivals.excerptOne, Oct 22): "New excerpt from iPhone", not "New HTML document".
+        val one = excerpt(1)
+        assertEquals(LabText.fill(LabText["arrivals.excerptOne"], mapOf("from" to "iPhone")), Notices.card(listOf(one), lab = true).heading)
+        assertEquals("New excerpt from iPhone", Notices.plan(listOf(one), emptySet(), lab = true).items.single().heading)
+        assertEquals("New excerpt from iPhone: ${one.displayTitle}", Notices.plan(listOf(one), emptySet(), lab = true).items.single().title)
+        assertEquals("New HTML document from iPhone", Notices.card(listOf(one)).heading)
+        assertEquals("New PDF from iPhone", Notices.card(listOf(pdf), lab = true).heading)
 
         inboxWith(*three.toTypedArray())
         Handoff.notifyWaiting(app, three, DocumentMode.ASK)

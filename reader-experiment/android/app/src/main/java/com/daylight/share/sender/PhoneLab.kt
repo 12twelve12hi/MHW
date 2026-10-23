@@ -142,6 +142,13 @@ object ActivityLog {
         list.mapNotNull { SetupCheck.Event.fromJson(it as? Map<*, *>) }
     }
 
+    /**
+     * An event about an outbox row: its status as "failed/full" (`SetupCheck.rowStatus`) and the HTTP status of its last
+     * failed publish (`OutboxRow.http`: 413, 429, …), so the log shows why, and not only that, a send failed.
+     */
+    fun addRow(app: App, type: String, row: com.daylight.share.core.OutboxRow) =
+        add(app, type, row.id, row.kind, SetupCheck.rowStatus(row.status, row.errorCode), row.http)
+
     /** Appends one event (Lab on only); never throws. */
     fun add(app: App, type: String, id: String? = "", kind: String? = "", status: String? = "", http: Int = 0) {
         if (!app.prefs.lab) return

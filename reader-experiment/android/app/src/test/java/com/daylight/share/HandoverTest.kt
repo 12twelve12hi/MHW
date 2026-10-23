@@ -129,6 +129,8 @@ class HandoverTest {
         LabKit.useRelay(app, relay)
         app.labReporter.clock = { now }
         handover.clock = { now }
+        // The device's clock as the Inbox's relay client reads it (the relay's clock is the relay's, FakeRelay's `now`).
+        app.inbox.clock = { now }
         app.prefs.inboxRelay = ScreenKit.NOWHERE
         app.prefs.inboxRelayChecked = ScreenKit.NOWHERE
         // The Lab state digest runs with the v1.1 ack digest, every 11 hours: not due at the start of a test.
@@ -418,6 +420,32 @@ class HandoverTest {
         assertEquals(1.0, labLevels().last())
     }
 
+    /**
+     * K6 review (2.2.4): no poll runs while the Lab Reader receives, so there is no ack digest, yet the `lab: 0` frame is
+     * still repeated every 11 hours for 48 hours, so a sender that was offline still reads this Inbox's Lab as off.
+     */
+    @Test
+    fun theLabZeroFrameIsRepeatedDuringAHandover() {
+        app.labReporter.flushNow()
+        now += 31_000
+        handOver()
+        readerInbox(receiving = true)
+        app.labReporter.flushNow()
+        assertEquals(listOf<Any?>(1.0, 0.0), labLevels())
+        relay.requests.clear()
+        // Within the 11 hours a skipped poll sends nothing.
+        now += 3_600_000L
+        assertEquals(0, poll())
+        assertEquals(listOf<Any?>(1.0, 0.0), labLevels())
+        // Then one lab: 0 frame each 11 hours, while within 48 hours of the first; nothing after.
+        for (i in 1..5) {
+            now += Limits.DIGEST_INTERVAL_MS
+            assertEquals(0, poll())
+        }
+        assertEquals(listOf<Any?>(1.0, 0.0, 0.0, 0.0, 0.0, 0.0), labLevels())
+        assertEquals("nothing polled meanwhile", emptyList<String>(), inboxRequests())
+    }
+
     // -------------------------------------------------------------------------------------- step 4: the resume rule
 
     @Test
@@ -536,6 +564,37 @@ class HandoverTest {
         assertFalse(tookByReader in ids)
         val since = FileReceiverStore(File(app.filesDir, "inbox/receiver-${keys.inboxTopic}.json")).load().since.toLong()
         assertTrue("cursor $since from ${lastSeen / 1000 - Limits.CURSOR_OVERLAP_S}", since >= lastSeen / 1000 - Limits.CURSOR_OVERLAP_S)
+    }
+
+    /**
+     * K6 review: the cursor is a relay time, so the resume turns the device's last-seen time into relay time with the
+     * relay's own clock (the times of its answers). A DC-1 whose clock runs 2 hours fast still takes what reached the
+     * relay after the Lab Reader stopped; before, it skipped everything within 1.5 hours of that.
+     */
+    @Test
+    fun aFastClockDoesNotSkipWhatCameAfterTheReaderStopped() {
+        val fast = 2 * 3_600_000L
+        handover.clock = { now + fast }
+        app.labReporter.clock = { now + fast }
+        app.inbox.clock = { now + fast }
+        val s = sender()
+        sendLink(s, "Before")
+        assertEquals(1, poll()) // its ack's publish answers with the relay's time
+        assertEquals(-fast, app.prefs.inboxRelayOffsetMs)
+
+        now += 3_600_000L
+        handOver()
+        readerInbox(receiving = true)
+        now += 30 * 60_000L
+        assertEquals(0, poll()) // the Reader still receives: the last time it may have been
+        now += 5 * 60_000L
+        FakeReaderInbox.receiving(false) // it stops, and then this reaches the relay: nobody took it
+        now += 5 * 60_000L
+        val after = sendLink(s, "After")
+        assertEquals(1, poll())
+        assertTrue(after in app.inbox.items.value.map { it.id })
+        val since = FileReceiverStore(File(app.filesDir, "inbox/receiver-${keys.inboxTopic}.json")).load().since.toLong()
+        assertTrue("the cursor $since is a relay time, not ahead of the item's", since <= relay.messages(keys.inboxTopic).last().time)
     }
 
     @Test

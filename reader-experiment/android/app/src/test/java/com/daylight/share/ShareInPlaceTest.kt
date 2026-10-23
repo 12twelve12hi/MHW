@@ -484,6 +484,36 @@ class ShareInPlaceTest {
         }
     }
 
+    /**
+     * K4 review (LAB-PLAN 1.6): a batch where only some items went into the outbox says it in v1.1's result words, the
+     * stored row's line, then the error of the one that did not (no "1 of 2 on the way", which LAB_TEXT does not have).
+     */
+    @Test
+    fun aBatchWhereSomeWentUsesV11sResultWords() {
+        PhoneKit.phone(app, relay)
+        val small = File(System.getProperty("java.io.tmpdir"), "k4-part-${System.nanoTime()}.pdf").apply { writeBytes(ByteArray(3_000) { (it % 251).toByte() }) }
+        val big = File(System.getProperty("java.io.tmpdir"), "k4-part-big-${System.nanoTime()}.pdf")
+        RandomAccessFile(big, "rw").use { it.setLength(14_200_000) }
+        try {
+            val i = Intent(app, ShareActivity::class.java).setAction(Intent.ACTION_SEND_MULTIPLE).setType("application/pdf")
+                .putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(Uri.fromFile(small), Uri.fromFile(big)))
+            ActivityScenario.launch<ShareActivity>(i).use { s ->
+                val a = s.activity()
+                waitMs(ShareInPlace.COUNTDOWN_MS)
+                PhoneKit.until(what = "the stored row") { rows().size == 1 }
+                val tooBig = "Too big to send. Files can be up to 9 MB; this one is 14.2 MB."
+                val expected = ShareInPlace.partialText(rows(), "Kitchen Daylight", online = true, error = tooBig)
+                assertEquals(ShareActivity.resultText(rows(), 1, "Kitchen Daylight", online = true) + "\n" + tooBig, expected)
+                PhoneKit.until(what = "the partial result") { compose.onAllNodes(hasText(expected)).fetchSemanticsNodes().isNotEmpty() }
+                assertTrue(compose.onAllNodes(hasText("on the way", substring = true)).fetchSemanticsNodes().isEmpty())
+                assertFalse("the card stays, with Close", a.isFinishing)
+            }
+        } finally {
+            small.delete()
+            big.delete()
+        }
+    }
+
     /** F02e.1, with a ready server (stubbed): "Send files over 9 MB ›" says F02 comes to this app in a later update. */
     @Test
     fun aFileOver9MbWithAReadyServerSaysLater() {

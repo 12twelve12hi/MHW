@@ -266,12 +266,18 @@ class LabRepo(private val app: App) {
 
     /**
      * What's in Lab as it opens (1.4, 1.5): the ack topic is read (the header is then current) and the server is
-     * asked, both at once and each within 5 s.
+     * asked, both at once and within one shared 5 s ([deadlineMs]): a server that has not answered by then is
+     * OFFLINE, and an ack check still running is left to finish in the background (K4 review: two waits one after
+     * the other could take 10 s).
      */
     suspend fun overviewFresh(): Overview = withContext(Dispatchers.IO) {
         val acks = if (!inbox && app.sender.pairing() != null) app.scope.async(Dispatchers.IO) { runCatching { app.sender.tick() } } else null
-        val p = probeInTime(force = true)
-        acks?.let { withTimeoutOrNull(deadlineMs) { it.await() } }
+        val server = app.scope.async(Dispatchers.IO) { probe(force = true) }
+        withTimeoutOrNull(deadlineMs) {
+            server.join()
+            acks?.join()
+        }
+        val p = if (server.isCompleted) runCatching { server.await() }.getOrNull() ?: localProbe("OFFLINE") else localProbe("OFFLINE")
         overviewOf(p)
     }
 

@@ -215,6 +215,7 @@ class ShareInPlace(
         val excerpt = asExcerpt
         app.scope.launch {
             val ids = ArrayList<String>()
+            val stored = ArrayList<com.daylight.share.core.OutboxRow>()
             var failed: String? = null
             var tooBig = false
             var excerptSent = false
@@ -224,6 +225,7 @@ class ShareInPlace(
                     copy = copies[i]?.await()?.getOrThrow()
                     val row = app.sender.add(s, ShareOptions(title = edited, asExcerpt = excerpt, copied = copy, sourceApp = sourceApp))
                     ids += row.id
+                    stored += row
                     if (excerpt) excerptSent = true
                     app.sender.noteInPlace(listOf(row.id))
                     if (!FlushWorker.waiting(row)) SendWorker.enqueue(app, row.id)
@@ -247,7 +249,8 @@ class ShareInPlace(
             withContext(Dispatchers.Main) {
                 when {
                     failed != null -> {
-                        error = if (ids.isEmpty()) failed else "${ids.size} of ${items.size} on the way. $failed"
+                        // Some went, some did not: v1.1's result wording ("{n} items. {line}", LAB-PLAN 1.6), then the error.
+                        error = if (ids.isEmpty()) failed else partialText(stored, PhoneLab.daylightName(app), PhoneLab.online(app), failed!!)
                         bigFiles = tooBig
                     }
                     once != null -> hint = once
@@ -331,5 +334,13 @@ class ShareInPlace(
     companion object {
         /** The countdown: the card sends 1.5 s after it opens unless Options is tapped (F04). */
         const val COUNTDOWN_MS = 1_500L
+
+        /**
+         * A batch where only some items went into the outbox (K4 review; LAB-PLAN 1.6 "needs no new string"): the v1.1
+         * card's result wording for the [stored] rows ("{n} items. {line}", the line alone for one), then on its own
+         * line the [error] of the ones that did not.
+         */
+        fun partialText(stored: List<com.daylight.share.core.OutboxRow>, daylight: String, online: Boolean, error: String): String =
+            ShareActivity.resultText(stored, stored.size, daylight, online) + "\n" + error
     }
 }

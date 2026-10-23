@@ -1,5 +1,6 @@
 package com.daylight.share.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -54,6 +55,9 @@ fun RoleScreen(activity: MainActivity, onPick: (Role) -> Unit) {
     }
 }
 
+/** Lab: Settings' "Deliver to" (the Inbox), which Setup check's "Open setting" opens ([MainActivity.settingsFocus]). */
+const val SETTINGS_FOCUS_DELIVER_TO = "deliverTo"
+
 @Composable
 fun SettingsScreen(activity: MainActivity, onBack: () -> Unit, onLab: (LabPage) -> Unit = {}) {
     val app = App.of(activity)
@@ -69,6 +73,9 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit, onLab: (LabPage) 
     val comfort by app.comfort.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     @Suppress("UNUSED_VARIABLE") val tick = activity.resumes.intValue
+    // Lab (1.5 "Open setting"; K5 review): Setup check's Reader check opens Deliver to, in view with its words.
+    val lab by app.labOn.collectAsStateWithLifecycle()
+    val opened = rememberOpenedSetting(activity.settingsFocus, lab && role == Role.INBOX)
 
     ScreenColumn(padding = 16.dp) {
         HeaderRow(title = { Text("Settings", style = MaterialTheme.typography.headlineSmall) }) {
@@ -152,33 +159,37 @@ fun SettingsScreen(activity: MainActivity, onBack: () -> Unit, onLab: (LabPage) 
         if (role == Role.INBOX) {
             val readers = remember(activity.resumes.intValue) { ReaderApps.installed(activity) }
             val apps = remember(activity.resumes.intValue) { ReaderApps.candidates(activity) }
-            Section("Deliver to") {
-                Text("Which app gets the items. Automatic is the Daylight Reader; any other app that takes saved pages or documents (such as a side-by-side test copy of the Reader) can be chosen here. What the chosen app doesn’t take goes to Automatic.", style = MaterialTheme.typography.bodyMedium)
-                Column(Modifier.selectableGroup()) {
-                Choice(
-                    "Automatic",
-                    deliverTo.isEmpty(),
-                    detail = if (readers.isEmpty()) "No Daylight Reader found" else ReaderApps.label(activity, readers.first()),
-                ) {
-                    deliverTo = ""
-                    app.prefs.deliverTo = ""
-                    app.labReporter.flushSoon() // the Inbox's Lab caps may change (reader-link): a hello
-                }
-                for (c in apps) {
-                    val takes = listOfNotNull(if (c.links) "links and pages" else null, if (c.documents) "documents" else null).joinToString(" and ")
-                    val rest = when {
-                        !c.documents -> "; documents go to Automatic"
-                        !c.links -> "; links and pages go to Automatic"
-                        else -> ""
+            // The marks go inside the card, whose still bring-into-view then shows it at once (no motion, F27).
+            Section {
+                Column(opened.mark(SETTINGS_FOCUS_DELIVER_TO, Modifier.fillMaxWidth()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Deliver to", style = MaterialTheme.typography.titleMedium)
+                    Text("Which app gets the items. Automatic is the Daylight Reader; any other app that takes saved pages or documents (such as a side-by-side test copy of the Reader) can be chosen here. What the chosen app doesn’t take goes to Automatic.", style = MaterialTheme.typography.bodyMedium)
+                    Column(Modifier.selectableGroup()) {
+                    Choice(
+                        "Automatic",
+                        deliverTo.isEmpty(),
+                        detail = if (readers.isEmpty()) "No Daylight Reader found" else ReaderApps.label(activity, readers.first()),
+                    ) {
+                        deliverTo = ""
+                        app.prefs.deliverTo = ""
+                        app.labReporter.flushSoon() // the Inbox's Lab caps may change (reader-link): a hello
                     }
-                    Choice(c.label, deliverTo == c.pkg, detail = "${c.pkg} · takes $takes$rest") {
-                        deliverTo = c.pkg
-                        app.prefs.deliverTo = c.pkg
-                        app.labReporter.flushSoon()
+                    for (c in apps) {
+                        val takes = listOfNotNull(if (c.links) "links and pages" else null, if (c.documents) "documents" else null).joinToString(" and ")
+                        val rest = when {
+                            !c.documents -> "; documents go to Automatic"
+                            !c.links -> "; links and pages go to Automatic"
+                            else -> ""
+                        }
+                        Choice(c.label, deliverTo == c.pkg, detail = "${c.pkg} · takes $takes$rest") {
+                            deliverTo = c.pkg
+                            app.prefs.deliverTo = c.pkg
+                            app.labReporter.flushSoon()
+                        }
                     }
+                    }
+                    if (deliverTo.isNotEmpty() && apps.none { it.pkg == deliverTo }) Text("$deliverTo is not installed; using Automatic.", style = MaterialTheme.typography.bodySmall)
                 }
-                }
-                if (deliverTo.isNotEmpty() && apps.none { it.pkg == deliverTo }) Text("$deliverTo is not installed; using Automatic.", style = MaterialTheme.typography.bodySmall)
             }
         }
 

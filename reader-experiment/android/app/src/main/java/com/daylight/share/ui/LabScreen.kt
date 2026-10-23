@@ -118,7 +118,7 @@ fun LabScreen(activity: MainActivity, page: LabPage, onBack: () -> Unit, onOpen:
     LaunchedEffect(lab) { if (!lab) onBack() }
     if (!lab) return
     when (page) {
-        LabPage.WHATS_IN_LAB -> WhatsInLab(activity, onBack, onOpen, focus)
+        LabPage.WHATS_IN_LAB -> WhatsInLab(activity, onBack, onOpen, focus, onExit)
         LabPage.SERVER -> ServerSection(activity, onBack)
         // The Inbox's Setup check (K5) has its own checks and the Reader hand-off test; "Open setting" goes to the
         // Inbox screen (Instant delivery) or Settings (Deliver to).
@@ -140,10 +140,11 @@ private data class Note(val feature: String, val text: String, val button: Strin
  * cached states at once and asks the server and the ack topic as it opens (each within 5 s). A tap runs the feature's
  * gate: when something is missing, exactly one sentence shows under the row (1.5) until OK, another control or
  * leaving the screen. [focus]: a feature whose setting the list opens with, brought into view with its footer (the
- * automation sheet's "Open setting" asks for F09's "Allow quick sends from other apps").
+ * automation sheet's "Open setting" asks for F09's "Allow quick sends from other apps"). [onExit]: to the home screen
+ * (the Inbox's arrival notices, F15, have their settings there).
  */
 @Composable
-private fun WhatsInLab(activity: MainActivity, onBack: () -> Unit, onOpen: (LabPage) -> Unit = {}, focus: String? = null) {
+private fun WhatsInLab(activity: MainActivity, onBack: () -> Unit, onOpen: (LabPage) -> Unit = {}, focus: String? = null, onExit: () -> Unit = onBack) {
     val app = App.of(activity)
     var overview by remember { mutableStateOf<LabRepo.Overview?>(null) }
     var refreshing by remember { mutableStateOf(true) }
@@ -176,11 +177,15 @@ private fun WhatsInLab(activity: MainActivity, onBack: () -> Unit, onOpen: (LabP
             if (quick == null && tapped == n) note = Note(row.id, LabText.CHECKING, checking = true)
             val r = quick ?: gate.await()
             if (tapped != n) return@launch
-            // Ready: Setup check opens (F26, the phone and the Inbox); the other features have nothing more to open here
-            // (the server features are `later` once the server is ready; the Inbox's arrival notices have their
-            // settings on the Inbox screen).
+            // Ready: Setup check opens (F26, the phone and the Inbox); the Inbox's arrival notices open the Inbox screen
+            // at their settings, with Quiet hours' footer (1.4: a tap opens the feature; K5 review). The other features
+            // have nothing more to open here (the server features are `later` once the server is ready).
             note = if (r.ready) null else Note(row.id, r.message ?: "", r.button)
             if (r.ready && row.id == "F26") onOpen(LabPage.SETUP)
+            if (r.ready && row.id == "F15" && app.prefs.role == com.daylight.share.Role.INBOX) {
+                activity.inboxFocus.value = INBOX_FOCUS_ARRIVALS
+                onExit()
+            }
         }
     }
 
@@ -243,8 +248,8 @@ private const val QUICK_MS = 300L
 
 /**
  * One feature of What's in Lab: one button with its name, its sentence and its short state (a screen reader reads them
- * together), never greyed out; then [use], W1's Use switch for the features that have one (LAB-PLAN 6.5 Q5); then
- * its [note] when it was tapped.
+ * together), never greyed out; then its [note] when it was tapped, directly under it (1.5); then [use], W1's Use
+ * switch for the features that have one (LAB-PLAN 6.5 Q5) and their settings.
  */
 @Composable
 private fun LabFeatureRow(
@@ -269,7 +274,8 @@ private fun LabFeatureRow(
                 row.short?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
         }
-        use?.invoke()
+        // 1.5: the note goes directly under the tapped row, before the row's switches (K4 review: under F04's four
+        // switch rows it could be off-screen at Comfort's largest text).
         if (note != null) {
             LabNote(
                 note.text,
@@ -279,6 +285,7 @@ private fun LabFeatureRow(
                 onOk = if (note.checking) null else onOk,
             )
         }
+        use?.invoke()
     }
 }
 

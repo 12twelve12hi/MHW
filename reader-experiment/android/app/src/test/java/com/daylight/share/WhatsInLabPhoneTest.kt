@@ -17,6 +17,7 @@ import com.daylight.share.core.ItemHeader
 import com.daylight.share.core.lab.LabText
 import com.daylight.share.sender.PhoneLab
 import com.daylight.share.sender.Shared
+import com.daylight.share.ui.LAB_NOTE_TAG
 import com.daylight.share.ui.LAB_OPENED_SETTING_TAG
 import com.daylight.share.ui.LAB_TEST_TAG
 import com.daylight.share.ui.MainActivity
@@ -152,6 +153,13 @@ class WhatsInLabPhoneTest {
         val sentence = LabText.needsMessage("needs-notifications", platform = "android")!!
         assertEquals("Needs notifications for Daylight Share. Turn them on in Settings › Apps › Daylight Share › Notifications.", sentence)
         waitForText(sentence, 6_000)
+        // 1.5 (K4 review): directly under the tapped row, before its Use switch and F04's three settings.
+        val rowBox = compose.onNode(hasText(LabText.featureName("F04")) and hasClickAction()).fetchSemanticsNode().boundsInRoot
+        val noteBox = compose.onAllNodes(hasTestTag(LAB_NOTE_TAG)).fetchSemanticsNodes().single().boundsInRoot
+        val useBox = useSwitch("F04").fetchSemanticsNode().boundsInRoot
+        val firstSetting = compose.onNode(isToggleable() and hasText(LabText["shareInPlace.alwaysOptions"])).fetchSemanticsNode().boundsInRoot
+        assertTrue("the note is directly under F04's row: row $rowBox, note $noteBox", noteBox.top >= rowBox.bottom - 1 && noteBox.top <= rowBox.bottom + 16)
+        assertTrue("the switches come after the note: note $noteBox, Use $useBox", noteBox.bottom <= useBox.top + 1 && useBox.bottom <= firstSetting.top + 1)
         compose.onNodeWithText(LabText.button("needs-notifications")!!).performClick()
         compose.waitForIdle()
         assertEquals(Settings.ACTION_APP_NOTIFICATION_SETTINGS, shadowOf(app).nextStartedActivity?.action)

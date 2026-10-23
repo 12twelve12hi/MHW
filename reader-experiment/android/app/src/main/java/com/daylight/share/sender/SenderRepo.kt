@@ -310,7 +310,7 @@ class SenderRepo(private val app: App) {
                 addTo(topic, i.item, i.body, defer = defer)
             }
         }
-        ActivityLog.add(app, "share", row.id, row.kind, row.status)
+        ActivityLog.addRow(app, "share", row)
         if (FlushWorker.waiting(row)) FlushWorker.schedule(app)
         Shortcuts.push(app)
         return row
@@ -326,7 +326,7 @@ class SenderRepo(private val app: App) {
         val defer = !PhoneLab.online(app)
         val row = addTo(topic, item, body, defer = defer)
         app.prefs.labTestId = row.id
-        ActivityLog.add(app, "test", row.id, row.kind, row.status)
+        ActivityLog.addRow(app, "test", row)
         if (defer) {
             FlushWorker.schedule(app)
             row
@@ -366,7 +366,7 @@ class SenderRepo(private val app: App) {
         Work.syncLater(app, 30)
         Work.syncLater(app, 180)
         if (r != null && app.prefs.lab) {
-            ActivityLog.add(app, "send", r.id, r.kind, r.status)
+            ActivityLog.addRow(app, "send", r)
             if (FlushWorker.waiting(r)) FlushWorker.schedule(app)
         }
         r
@@ -380,7 +380,7 @@ class SenderRepo(private val app: App) {
         val o = outbox() ?: return@withContext emptyList()
         val out = o.flushNetwork()
         _rows.value = o.rows()
-        for (r in out) ActivityLog.add(app, "flush", r.id, r.kind, r.status)
+        for (r in out) ActivityLog.addRow(app, "flush", r)
         if (out.isNotEmpty()) {
             logi("sender: ${out.size} sent after waiting for a connection")
             Work.syncLater(app, 30)
@@ -418,6 +418,7 @@ class SenderRepo(private val app: App) {
         readLab()
         if (app.prefs.lab) {
             if (t.delivered > 0) ActivityLog.add(app, "acks", "", "", "delivered ${t.delivered}")
+            for (r in t.resentRows) ActivityLog.addRow(app, "resend", r)
             // F04: an item shared in place that ended badly, or reached the Reader, is told about once.
             Notices.review(app, rows, _lab.value)
             // F07: rows that wait for a connection go as soon as it is back.
@@ -450,7 +451,7 @@ class SenderRepo(private val app: App) {
 
     suspend fun retry(id: String) = withContext(Dispatchers.IO) {
         outbox()?.let { o ->
-            o.retry(id)
+            o.retry(id)?.let { ActivityLog.addRow(app, "retry", it) }
             _rows.value = o.rows()
         }
         Work.syncLater(app, 30)

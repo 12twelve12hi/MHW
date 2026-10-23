@@ -195,6 +195,24 @@ class LabReporter(private val app: App) {
         }
     }
 
+    /**
+     * A poll skipped because another app receives for this pairing (K6, LAB-PLAN 5.3.4): no poll means no v1.1 ack
+     * digest, but the `lab: 0` frame is still repeated on the digest's 11 hours, for 48 hours after it went (2.2.4), so a
+     * sender that was offline still reads this Inbox's Lab as off (K6 review). Nothing else goes: the Lab Reader says
+     * its own hellos.
+     */
+    fun whileElsewhere() {
+        val li = inbox() ?: return
+        val now = clock()
+        if (now - app.prefs.labDigestAt < Limits.DIGEST_INTERVAL_MS && app.prefs.labDigestAt <= now) return
+        app.prefs.labDigestAt = now
+        inWorker("digest") {
+            // The store in line with the handover first (its lab: 0 frame), then the repeat.
+            if (li.debugState()["on"] == true && !labOn()) afterFlush(li.labTurnedOff())
+            li.digest().also(::afterFlush)
+        }
+    }
+
     /** A poll failed with the relay's [status] (a 429 makes the Lab frames give way for an hour). */
     fun pollFailed(status: Int) {
         if (status == 429 || status == 413) inbox()?.noteRelayLimit(status)

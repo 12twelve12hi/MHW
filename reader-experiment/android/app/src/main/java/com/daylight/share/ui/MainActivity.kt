@@ -58,6 +58,16 @@ class MainActivity : ComponentActivity() {
      */
     val openLabFocus = mutableStateOf<String?>(null)
 
+    /**
+     * Lab (1.5 "Open setting", 1.4; K5 review): the Inbox screen's setting to bring into view with its footer when the
+     * screen next shows, [INBOX_FOCUS_INSTANT] (Setup check's Instant delivery) or [INBOX_FOCUS_ARRIVALS] (F15's row in
+     * What's in Lab), or null.
+     */
+    val inboxFocus = mutableStateOf<String?>(null)
+
+    /** Lab (1.5 "Open setting"; K5 review): Settings' section to bring into view, [SETTINGS_FOCUS_DELIVER_TO], or null. */
+    val settingsFocus = mutableStateOf<String?>(null)
+
     /** Lab (F04): the history row a "Send results" notice opens the app at, or null. */
     val openRow = mutableStateOf<String?>(null)
 
