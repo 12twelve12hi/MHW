@@ -85,10 +85,10 @@ The next round: every device item of Lab Wave 0 and Wave 1 (LAB-PLAN 6.2, 6.4), 
 This is the plan, not the record. Write what happens in a new section after this one, "Round 4 (date): results",
 as rounds 1–3 did, and leave this list as it is.
 
-Sources: LAB-PLAN 3.1–3.3 (the acceptance lists), 1.3, 1.6 and 6.4, and the "Still to check on a device" lists in
-`apple/README.md` (the Mac's W0 items), `android/README.md` (four lists), `android/share-core/README.md`,
-`extension/README.md`, `web/README.md`, `windows/README.md` and `e2e/README.md`. If a README's list has changed since,
-the README wins.
+Sources: LAB-PLAN 3.1–3.3 (the acceptance lists), 1.3, 1.6, 2.6 and 6.4, LOOSE-ENDS, and the "Still to check on a
+device" lists in `apple/README.md` (the iPhone's and iPad's, the Mac's, and its two "Once …" groups),
+`android/README.md` (four lists), `android/share-core/README.md`, `extension/README.md`, `web/README.md`,
+`windows/README.md` and `e2e/README.md`. If a README's list has changed since, the README wins.
 
 What the user decided that this round leans on (LAB-DECISIONS):
 - Text becomes an excerpt only from an explicit selection; "headline + link" shares stay links (Q1).
@@ -105,7 +105,7 @@ What the user decided that this round leans on (LAB-DECISIONS):
     (`com.daylightcomputer.reader`);
   - the real ntfy.sh relay;
   - the Mac mini: the Mac app, Chromium, the command line;
-  - an iPhone, only when the user brings one;
+  - an iPhone, only when the user brings one, and an iPad if they have one (its split widths);
   - an Android 13 or 14 phone, or the Android 14 emulator where the item allows it;
   - a Windows 10 or 11 PC, only if the user has one at hand.
 - **Never JP4R03005.** No install and no adb command on it, whatever the item says.
@@ -135,7 +135,9 @@ An item without [unlocked] or [user] runs with the Mac at its lock screen (comma
   (`gh release download reader-experiment-latest -R 12twelve12hi/MHW -p Send-to-Daylight-mac.zip`). Downloaded by `gh`,
   it carries no quarantine flag, so it opens without the right-click step.
 - **iPhone** (W0 now, W1 after A4): `Send-to-Daylight-unsigned.ipa` from the same release, sideloaded by the user
-  (AltStore or Sideloadly), or the user's own Xcode build. [user]
+  (AltStore or Sideloadly), or the user's own Xcode build. [user] For the upgrade check (F00.1), first the last
+  non-Lab build, the P0 close-out's: artifact `send-to-daylight-ios` of the last green rx-apple run before A1
+  (fb7c2ed). Sideload both with the same tool and Apple ID, so the W0 build updates it in place.
 - **Daylight Share** (the Inbox and the Android phone; W0 and W1 now): `daylight-share-debug.apk`, artifact
   `daylight-share-debug-apk` of rx-android. Only debug builds take the setup link (`android/README.md`, "Debug
   builds").
@@ -179,20 +181,31 @@ An item without [unlocked] or [user] runs with the Mac at its lock screen (comma
      `transition_animation_scale`, `animator_duration_scale`), `settings get system accelerometer_rotation` and
      `user_rotation`, `settings get secure enabled_accessibility_services`, Wi-Fi, and the Reader's read-later
      setting.
-4. **Mark every test item**, so it can be found and removed: titles start with "R4", links are
-   `https://example.com/?r4=<name>`, PDFs come from `node reader-experiment/e2e/make-pdf.mjs <file> "R4 <name>"`
-   (about 2 KB; add a size in bytes as the third argument for a bigger one).
+4. **Mark every test item**, so it can be found and removed. The mark is "R4-" and a name:
+   - titles contain "(R4-<name>)", as `sender.mjs` makes them from its tag: `send-page R4-x` is "Walden, sent from a
+     phone (R4-x)"; `send-pdf R4-a` is "Test PDF (R4-a)", file `daylight-share-R4-a.pdf`; an excerpt's title starts
+     with its quote in quote marks, “I went to the woods … deliberately (R4-x), …”, then " · Walden, sent from a
+     phone (R4-x)" when it has a link. A title typed by hand does the same: "Link (R4-cli-C2)";
+   - links are `https://example.com/?r4=<name>`;
+   - PDFs come from `node reader-experiment/e2e/make-pdf.mjs r4-<name>.pdf "PDF (R4-<name>)"` (about 2 KB; add a
+     size in bytes as the third argument for a bigger one);
+   - what the round cannot name goes into `~/round4/sent.txt` as it is sent (the time, the sender, the title or
+     address): a link the Reader titles from the page it fetched, a real site's page, a test article ("Test article
+     from {device}"), a share from another app. Excerpts' file names carry no mark either: "Excerpt - I went to the
+     woods because.html" and "Note - I went to the woods because.md".
 5. **Restore the baseline at the end**, and also when the round stops half-way:
-   - delete every R4 item and test article from the Reader, as rounds 1–3 did, until the count line equals the
-     baseline exactly: library, deleted, total and ids;
+   - delete every test item from the Reader, as rounds 1–3 did: each title or file name with "R4-" in it, in any case
+     ("(R4-x)", `daylight-share-R4-a.pdf`, `r4-ask.pdf`), each `?r4=` link, the two excerpt file names of rule 4, and
+     each line of `~/round4/sent.txt`. Then the count line must equal the baseline exactly: library, deleted, total
+     and ids. If it does not, something is still there: look again;
    - uninstall Daylight Share if it was not there at the start: `$D uninstall com.daylight.share`;
    - put back every setting from step 3, and delete what the round left on the tablet (`/data/local/tmp/r4*`);
-   - on the Mac: VoiceOver off, Comfort and Lab as they were, the mock relay stopped, `~/round4/chrome-profile` and
-     `~/round4/cli` deleted;
+   - on the Mac: VoiceOver off, Comfort and Lab as they were, the mock relay and the test pages' server stopped,
+     `~/round4/chrome-profile` and `~/round4/cli` deleted;
    - end the results with the line round 3 ended with: "Rooted 2 is back at its baseline (`…`), Daylight Share is
      uninstalled, and the lock is released." Then remove the lock.
-6. **Never write a pairing code, a topic, a Server code or a setup link** into DEVICE-CHECKS.md or a commit. Shorten
-   them as round 3 did ("dls-30ecf2be…").
+6. **Never write a pairing code, a topic, a Server code or a setup link** (Daylight Share's or the Daylight server's)
+   into DEVICE-CHECKS.md or a commit. Shorten them as round 3 did ("dls-30ecf2be…").
 
 ### The relay's limits
 
@@ -210,7 +223,8 @@ An item without [unlocked] or [user] runs with the Mac at its lock screen (comma
   - day 1: set-up, round 3's items, the Mac's and the Inbox's W0 items, then W1 on the Inbox, the Android phone, the
     command line, Chromium and the web sender, condition by condition;
   - day 2: what is left, Windows, and the usability pass while the user is there;
-  - later: the iPhone's and the Mac's W1 items, once A4 and A5 land; the K6 items once R1 exists.
+  - later: the iPhone's and the Mac's W1 items, once A4 and A5 land; the K6 items once R1 exists; the two "Once …"
+    groups of section 1, once the Daylight server is deployed and the Developer ID secrets exist.
 
 ### Set-up
 
@@ -222,23 +236,26 @@ D="adb -s JP4R01422"
 
 1. **A fresh pairing** on the real relay. The e2e phone makes the secret and prints the 28-character code:
    `E2E_STATE=~/round4/phone.json node $R/e2e/sender.mjs pair https://ntfy.sh` → `$CODE`.
-2. **Daylight Share as the Inbox**, Lab on, Instant delivery on, Documents = Ask:
+2. **Daylight Share as the Inbox**, Instant delivery on, Documents = Ask. The link has no `lab=`: on a fresh install
+   Lab must be on by itself (the Inbox's F00.1, section 3). Screenshot the Inbox at once, before anything taps OK.
 
    ```sh
    $D install -r daylight-share-debug.apk
    $D shell am start -a android.intent.action.VIEW -n com.daylight.share/.ui.MainActivity \
-     -d "daylightshare://setup?role=inbox&c=$CODE&r=https%3A%2F%2Fntfy.sh&n=Rooted%202&instant=1&docs=ask&lab=1"
+     -d "daylightshare://setup?role=inbox&c=$CODE&r=https%3A%2F%2Fntfy.sh&n=Rooted%202&instant=1&docs=ask"
    ```
 
-   The same link with the same code changes one setting and keeps the pairing: `docs=ask|quiet|open` (quiet is "Add
-   to the library as a batch"), `lab=0|1`, `instant=0|1`.
+   If Daylight Share was installed at the baseline, this is not a fresh install: add `&lab=1` and mark the Inbox's
+   F00.1 skipped. Never uninstall it to make it fresh. The same link with the same code changes one setting and keeps
+   the pairing: `docs=ask|quiet|open` (quiet is "Add to the library as a batch"), `lab=0|1`, `instant=0|1`.
 3. **Watch the Inbox** for the whole round, in the background:
    `$D logcat -v time -s DaylightShare | tee -a ~/round4/logs/inbox.log`. Expect
    `lab: hello caps=st,tap,reader-link,cap-kind`.
 4. **Pair the senders** with `daylightshare://pair?c=$CODE&r=https%3A%2F%2Fntfy.sh&n=Rooted%202`:
    - command line: `daylight-send pair "<that link>"` (short names: step 6);
    - Mac app: `-DLSPairLink "<that link>"` (below), only after the Mac's F00.1;
-   - Android phone: the setup link above with `role=sender` (`adb -s <phone>`), or scan the Inbox's QR code;
+   - Android phone: the setup link of step 2 with `role=sender&lab=1` (`adb -s <phone>`), or scan the Inbox's QR
+     code;
    - Chromium, the web sender, Windows: paste the code; iPhone: the user scans the QR code.
 5. **Clocks.** Note `date -u +%s` next to `$D shell date +%s`, so log times and sender times can be compared.
 6. **Short names** used below:
@@ -306,6 +323,18 @@ curl -X POST 'http://127.0.0.1:8787/__mock/fail-publish?count=1&status=413'
 - A real 413 from ntfy.sh would fill the whole household's attachment allowance for 3 hours: only from a phone on
   mobile data, and last.
 
+**Test pages** (Safari's PDF and Review items), served from the Mac mini in the background:
+
+```sh
+mkdir -p ~/round4/www && cd ~/round4/www && node $R/e2e/make-pdf.mjs r4-ask.pdf "PDF (R4-ask)"
+node -e 'const p = Array.from({ length: 2800 }, (_, i) => `<p>Line ${i}: ${"word ".repeat(70)}</p>`).join("\n");
+  require("fs").writeFileSync("r4-mega.html", `<!doctype html><title>Mega page (R4-mega)</title><h1>Mega</h1>${p}`)'
+python3 -m http.server 8000 -d ~/round4/www
+```
+
+`r4-mega.html` is about 1 MB. The Mac opens `http://127.0.0.1:8000/…`, the iPhone
+`http://<Mac mini's name>.local:8000/…`.
+
 **What to record for every item:**
 - the start time (UTC), and the result: pass, fail (with what was seen), or skipped (with why);
 - the times the item asks for, in seconds from the send. For F01.1: "Sent", "On your Daylight ✓", "In your
@@ -341,6 +370,9 @@ Mac before that launch:
   (`CLOUDFLARE_…`, `ANTHROPIC_API_KEY`) or shows a needs-setup sentence. Walk the main window, Settings, What's in
   Lab and the Share menu card. What's in Lab ends with the ad-hoc line ("This copy of the Mac app isn’t signed with a
   team, …").
+- [ ] **Share menu card's Lab switch** [unlocked] (LAB-PLAN 1.1) In Finder › Share › Daylight's settings, turn the
+  card's own Lab switch off: the card is v1.1's but for the switch itself, and the app's Lab stays on (`lab: true`
+  in `$S`). Screenshot the card, then turn the switch back on.
 - [ ] **F17.4** Pair the Mac (`-DLSPairLink`), open What's in Lab [unlocked], then turn the Inbox's Lab off and on
   (the setup link with `lab=0`, then `lab=1`). The first line goes from "Needs Lab on your Daylight" to "Your
   Daylight: Lab on · checked in …" within one ack check. Record the seconds from the Inbox's `lab: hello caps=…`
@@ -354,8 +386,9 @@ Mac before that launch:
   off.") shows once in the first W1 build; OK dismisses it for good.
 - [ ] **F01.1** A link from the app (`-DLSSendLink`; the Mac may be locked) in C1–C4: "In your Reader ✓" within 45 s
   of "On your Daylight ✓".
-- [ ] **F01.2** Documents = Ask: a PDF (`open -a "Send to Daylight" r4.pdf`) reads "Waiting for a tap on your
-  Daylight". After the tap: "Handed to the Reader" and "The Reader doesn’t confirm documents yet." at the next check.
+- [ ] **F01.2** Documents = Ask: a PDF (`open -a "Send to Daylight" ~/round4/www/r4-ask.pdf`) reads "Waiting for a
+  tap on your Daylight". After the tap: "Handed to the Reader" and "The Reader doesn’t confirm documents yet." at the
+  next check.
 - [ ] **F01.3** The header reads "Your Daylight checked in N min ago". With the DC-1's Wi-Fi off
   (`$D shell cmd wifi set-wifi-enabled disabled`, only with adb over USB), a send still goes out. Wi-Fi back on.
 - [ ] **F01.6** VoiceOver reads each row as "{label}. {sentence}", with no step count. The step line shows only on
@@ -368,7 +401,8 @@ Mac before that launch:
   online, it goes within a minute. The user turns the network off: it cuts this session too.
 - [ ] **F09.1** In Shortcuts, "Send link to Daylight" returns an id and status "sent". "Get delivery status" returns
   "delivered", and its label once in the Reader.
-- [ ] **F09.3** `open 'daylightshare://send?url=https%3A%2F%2Fexample.com%2F%3Fr4%3Dscheme&title=R4%20scheme'` shows
+- [ ] **F09.3**
+  `open 'daylightshare://send?url=https%3A%2F%2Fexample.com%2F%3Fr4%3Dscheme&title=Scheme%20%28R4-scheme%29'` shows
   "Send to Rooted 2?". With `&quick=1` and the quick-sends setting off, the sheet still shows. A test web page that
   opens the link cannot send silently.
 - [ ] **F11.2** Selected text with no link (TextEdit) › Services › Send to Daylight arrives as a Markdown note that
@@ -387,8 +421,39 @@ Mac before that launch:
 - **F04.6** on the Mac needs a team-signed build: skipped while the Mac stays ad-hoc (Q6). The ad-hoc card shows its
   failure itself (F04.3).
 
+**Once the Daylight server is deployed** (LOOSE-ENDS › Deploy the Daylight server; LAB-PLAN 2.6 "Setup link"), on the
+Mac [unlocked] and the iPhone [user]. Skip the group until then. The user reads the deploy's one-time setup link in
+Cloudflare (D1 › daylight-server › Console); never write it down (rule 6).
+- [ ] **Setup link** Paste it in the Mac app's Lab settings › Daylight server › Set up with a link. "Use this
+  Daylight server?" names the link's own address: record only that it matches. Use it: "Setting up…", then the done
+  line, and the section reads Ready with the server's host and fingerprint. A screenshot of each step.
+- [ ] **The other Apple device** The iPhone, Lab on and paired with the same code, finds the server on its own:
+  Daylight server reads Ready with the same host and fingerprint, nothing pasted there.
+- [ ] **Re-pairing locks the old server** Last, and only with the user's yes: the server stays locked for this pairing
+  until the deploy is re-run and its new setup link pasted. Pair the Mac with another code (`-DLSPairLink`, a code
+  from `E2E_STATE=~/round4/phone2.json node $R/e2e/sender.mjs pair https://ntfy.sh`): the old server is locked first,
+  and the follow-up shows the new Server code and the re-run help (2.6 "Re-pairing"). Then pair back with `$CODE`.
+
+**Once the Developer ID secrets exist** (LOOSE-ENDS › Sign and notarize; `apple/README.md` › Signing) [unlocked]. Skip
+the group until then: the Mac stays ad-hoc (Q6) unless the user adds them.
+- [ ] **The signed app replaces the ad-hoc one** Download the zip again once the release is signed:
+  `codesign -dv --verbose=2 "/Applications/Send to Daylight.app" 2>&1 | grep Authority` names "Developer ID
+  Application", and `spctl -a -vv` says "Notarized Developer ID". Replace the app as in F00.1, and open it with a
+  double-click. `$S` keeps the pairing, the history rows, Comfort, `lab`, `caps` and `labStates`, and its storage is
+  now the App Group; Daylight server keeps its pin, if one was set up. Record `$S` before and after.
+- [ ] **The ad-hoc line goes** What's in Lab no longer ends with "This copy of the Mac app isn’t signed with a team, …".
+- [ ] **One pairing** Share › Daylight sends without asking for the code, follows the app's Lab switch (it has none of
+  its own), and its item shows in the app's history. The Safari extension uses the app's pairing (nothing to paste
+  in its popup), with no "Allow unsigned extensions".
+- Then the Mac's F04.6 and F04.3's team-signed part (as F04.1) run too.
+
 **Safari on the Mac** (gate) [unlocked]:
 - [ ] **F01.1** A link from the popup, left open, in C1–C4.
+- [ ] **F01.2** Documents = Ask, site access allowed: a PDF tab (`http://127.0.0.1:8000/r4-ask.pdf`, "Test pages")
+  reads "Waiting for a tap on your Daylight" (badge ⌛), then "Handed to the Reader" and "The Reader doesn’t confirm
+  documents yet." at the next check.
+- [ ] **F01.3** The header reads "Your Daylight checked in N min ago"; with the DC-1 offline (as in the app's F01.3),
+  a send still goes out.
 - [ ] **F03.1** [user] A page that needs the user's login arrives whole, and the Reader shows the logged-in text.
 - [ ] **F04** With "Send when I click the toolbar button" on: the page still goes when the popup closes at once;
   Options stops it; with VoiceOver on, and with Comfort on, nothing goes before Send.
@@ -399,6 +464,8 @@ Mac before that launch:
   date. From a page already in the Reader, it is a new document.
 - [ ] **F26 (Site access)** A fresh install reads "! Site access". Allow shows Safari's own prompt, and the line then
   follows what Safari › Settings › Extensions says.
+- [ ] **F26.1** Setup check's test article in C1–C4 ticks "✓ Delivered" and "✓ In your Reader" ("Waiting for a tap
+  on your Daylight" meanwhile where the Inbox asks).
 - [ ] **F33** Safari shows its Paste button; the host shows before anything is sent.
 - [ ] **F34.2** The right-click entries are there; unticking one removes it.
 - [ ] **F27.3** A VoiceOver run of pair → send → delivered → in the Reader announces each change, with no step count.
@@ -408,24 +475,36 @@ Mac before that launch:
   it exits 0 once delivered. With `--wait=1` on a new item it exits 2, and the item stays in the outbox.
 - [ ] **F09.5** An empty file (`: > ~/round4/empty.pdf`) fails with a sentence on stderr; nothing is published and
   no item reaches the Inbox.
-- [ ] **F01.1** In each condition, `daylight-send https://example.com/?r4=cli-C<n> --title "R4 cli C<n>" --json`, then
-  `status` every 10 s: "In your Reader ✓" within 45 s of "On your Daylight ✓". (`--wait-for reader --wait=180` also
-  exits 0.)
+- [ ] **F01.1** In each condition,
+  `daylight-send https://example.com/?r4=cli-C<n> --title "Link (R4-cli-C<n>)" --json`, then `status` every 10 s:
+  "In your Reader ✓" within 45 s of "On your Daylight ✓". (`--wait-for reader --wait=180` also exits 0.)
 - [ ] **F11.1, F11.2, F11.4** `sender.mjs send-page R4-x`, then `sender.mjs send-excerpt R4-x
   https://example.com/walden-R4-x`: one new document with the quote, the source link and the date, not "already in
   your library". `sender.mjs send-excerpt R4-n` (no link): a Markdown note the Reader opens.
 
-### 2. iPhone [user]
+### 2. iPhone and iPad [user]
 
 All with the user and their iPhone on the Mac mini's Wi-Fi, paired by scanning the Inbox's QR code.
 
 **Wave 0** (now):
-- [ ] **F00.1** Install over the non-Lab build if the phone has one, else fresh: Lab is on, no one-time note, and the
-  pairing and history are kept.
+- [ ] **F00.1** The upgrade from the last non-Lab build. Install the P0 close-out's .ipa ("Builds"; if the phone has
+  a Lab build, delete it first, with the user's yes), pair it, and send `https://example.com/?r4=iphone-p0` from
+  Safari › Share › Daylight. Then install the W0 .ipa over it: Lab is on, no one-time note, and the pairing and the
+  history (that link's row) are kept. Record both builds' versions, and screenshot Home.
+- [ ] **F00.1 (share sheet)** The share sheet follows the app's switch; it has none of its own. With Lab off in the
+  app, Safari › Share › Daylight is v1.1's, as the P0 build showed it. Lab back on. Screenshot the sheet both ways.
 - [ ] **F00.7** Before tapping a Lab feature or opening Daylight server, no screen names a secret or says how to set
   something up.
 - [ ] **F17.4** With the app open on What's in Lab, turn the Inbox's Lab off and on: "Your Daylight: Lab on ·
   checked in …" within one ack check. Time it from the Inbox's `lab: hello caps=…` line.
+- [ ] **F00.3** With VoiceOver on, tap Summaries with Claude in What's in Lab: its one sentence shows under it
+  ("Needs your Daylight server. …", with Copy Server code), and VoiceOver reads it out. Record what VoiceOver says
+  (Settings › Accessibility › VoiceOver › Caption Panel on, and a screen recording).
+- [ ] **F27.3 (W0)** A VoiceOver run of pair (again, with the same code) → send → delivered announces each state
+  change ("Sent · waiting for your Daylight", "Delivered ✓"). Record it the same way.
+- [ ] **iPad** (if the user has one; the same .ipa) Settings › Lab, What's in Lab and Daylight server at one-third,
+  half and two-thirds of a Split View beside Safari: every word shows, and nothing is cut off or overlaps. A
+  screenshot of each page at each width.
 - [ ] The usability pass (section 7).
 
 **Wave 1** (A4):
@@ -462,10 +541,24 @@ All with the user and their iPhone on the Mac mini's Wi-Fi, paired by scanning t
   host; Send sends the link.
 - [ ] **F27.3** A VoiceOver run of pair → send → delivered → in the Reader announces each change.
 
-**Safari on the iPhone** (gate): F01.1 from the popup in C1–C4; F03.1 with the user's login; F04 (the popup closes at
-once and the page still goes); F07.1 (flight mode: it goes when iOS next lets the extension run); F11.1 and F11.4
-from Selection mode; F26's Site access (Settings › Apps › Safari › Extensions); F33 (Safari's Paste callout); F27.3.
-Same words as on the Mac.
+**Safari on the iPhone** (gate). Same words as on the Mac.
+- [ ] **F01.1** A link from the popup in C1–C4.
+- [ ] **F03.1** A page behind the user's login arrives whole.
+- [ ] **F04** The popup closes at once and the page still goes.
+- [ ] **F04 (PDF)** As on the Mac, with `http://<Mac mini's name>.local:8000/r4-ask.pdf`: "Allow and send" or "Send
+  the link"; closing the popup at once sends the link with its sentence, and nothing more goes 3 s later. The toolbar
+  popup's address is exactly `popup.html`: with Web Inspector [unlocked] (the iPhone on a cable to the Mac mini,
+  Settings › Apps › Safari › Advanced › Web Inspector on; Mac Safari › Develop › the iPhone › the popup), its console
+  gives `true` for `location.href.split('#')[0] === browser.runtime.getURL('popup.html')`. Record the line.
+- [ ] **F07.1** Flight mode: it goes when iOS next lets the extension run.
+- [ ] **F10.4** With Review on (What's in Lab › Send as › Review before sending), send `r4-mega.html` from
+  `http://<Mac mini's name>.local:8000/`: Review renders the 1 MB page within 1 s. Review's `<body data-rendered>`
+  holds the milliseconds (Web Inspector), else time a screen recording. Change the title to "Edited (R4-mega)"
+  before Send: the Reader shows that title. Record the milliseconds and the iPhone's model.
+- [ ] **F11.1, F11.4** From Selection mode.
+- [ ] **F26** Site access (Settings › Apps › Safari › Extensions).
+- [ ] **F33** Safari's Paste callout.
+- [ ] **F27.3** The VoiceOver run.
 
 **The web sender in Safari** (now, HTTPS host):
 - [ ] **F01.1** A link in C1–C4 with the page open; **F01.6** VoiceOver reads *{label}. {sentence}*, never the step
@@ -482,6 +575,13 @@ Same words as on the Mac.
 ### 3. Daylight Share on Rooted 2 (the Lab Inbox), with the Reader
 
 **Wave 0** (now):
+- [ ] **F00.1 (Inbox)** After set-up step 2 (a fresh install, and no `lab=` in the link): Settings' Lab card shows Lab
+  on, and the log has `lab: hello caps=…` though nothing turned Lab on. Screenshot Settings. Skipped if Daylight
+  Share was there at the baseline.
+- [ ] **F00.1 (the Inbox's note)** This build has the Inbox's Wave 1 (K5), so `LAB_NOTE_ENABLED` is on: set-up step
+  2's screenshot shows "Lab is on. New features to try are in Settings › Lab, where you can turn it off." with OK, on
+  the Inbox. Tap OK ("Tapping on the DC-1"). It does not come back: not after leaving the app
+  (`$D shell input keyevent KEYCODE_HOME`) and C1's start, nor after `lab=0` then `lab=1`. Screenshot after OK.
 - [ ] **F17 (hello)** After set-up the log shows `lab: hello caps=st,tap,reader-link,cap-kind`. The setup link with
   `lab=0` gives `lab: hello lab=0`; `lab=1` a new hello. (F17.4 on each sender times this.)
 - [ ] **cb57057** With the Reader in front and Documents = Ask, a PDF is announced at once on the "New items"
