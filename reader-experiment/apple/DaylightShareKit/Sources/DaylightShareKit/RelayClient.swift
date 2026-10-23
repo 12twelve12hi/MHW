@@ -85,22 +85,8 @@ public final class RelayClient {
     @discardableResult
     public func publish(topic: String, frame: Data) async throws -> Bool {
         let small = Frame.isSmall(frame.count)
-        var req = URLRequest(url: try topicURL(topic))
-        req.setValue("no", forHTTPHeaderField: "Firebase")
-        req.setValue("yes", forHTTPHeaderField: "Cache")
-        let body: Data
-        if small {
-            req.httpMethod = "POST"
-            req.setValue("text/plain", forHTTPHeaderField: "Content-Type")
-            body = Data(Base64.encode(frame).utf8)
-        } else {
-            req.httpMethod = "PUT"
-            req.setValue("dls1.bin", forHTTPHeaderField: "Filename")
-            req.setValue("dls1", forHTTPHeaderField: "Message")
-            req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-            req.timeoutInterval = 300
-            body = frame
-        }
+        let req = try publishRequest(topic: topic, small: small)
+        let body = small ? Data(Base64.encode(frame).utf8) : frame
         var attempt = 0
         while true {
             let response: HTTPURLResponse
@@ -129,6 +115,26 @@ public final class RelayClient {
             }
             throw ShareError("network", "HTTP \(status)", reason: "server", status: status)
         }
+    }
+
+    /// The request that publishes one frame (PROTOCOL 3.1), without its body: a small frame is POSTed as base64 message
+    /// text, a large one PUT as an attachment. The body is the frame's base64 text or its bytes (F04's frame files hold
+    /// exactly that, `FrameFileBuilder`).
+    public func publishRequest(topic: String, small: Bool) throws -> URLRequest {
+        var req = URLRequest(url: try topicURL(topic))
+        req.setValue("no", forHTTPHeaderField: "Firebase")
+        req.setValue("yes", forHTTPHeaderField: "Cache")
+        if small {
+            req.httpMethod = "POST"
+            req.setValue("text/plain", forHTTPHeaderField: "Content-Type")
+        } else {
+            req.httpMethod = "PUT"
+            req.setValue("dls1.bin", forHTTPHeaderField: "Filename")
+            req.setValue("dls1", forHTTPHeaderField: "Message")
+            req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+            req.timeoutInterval = 300
+        }
+        return req
     }
 
     // MARK: Receive (PROTOCOL 3.2)

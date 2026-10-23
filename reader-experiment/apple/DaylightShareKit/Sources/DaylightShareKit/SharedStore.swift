@@ -195,10 +195,12 @@ public final class SharedStore: @unchecked Sendable {
 
     /// This device's settings, which move into the App Group when the group has no value of its own (an update keeps
     /// them, LAB-PLAN 1.2, 1.3), paired or not: Comfort, the Lab switch, the one-time Lab note and this device's name.
-    static let deviceSettingKeys = [Key.comfort, Key.lab, Key.labNoteShown, Key.deviceName]
+    /// Lab W1's Use switches and feature settings (`LabPreferences`) are this device's too.
+    static let deviceSettingKeys = [Key.comfort, Key.lab, Key.labNoteShown, Key.deviceName] + LabPreferences.Key.all
     /// The files beside the outbox that belong to its pairing: the outbox and its bodies, Lab's ledger (`lab.json`, whose
-    /// item states go with the outbox's ack cursor) and the Daylight server's pin, config and notices (`server.json`).
-    static let pairingFiles = ["outbox.json", "outbox", LabLedger.fileName, FileServerStore.fileName]
+    /// item states go with the outbox's ack cursor), Setup check's activity log (`lab-activity.json`) and the Daylight
+    /// server's pin, config and notices (`server.json`).
+    static let pairingFiles = ["outbox.json", "outbox", LabLedger.fileName, ActivityLog.fileName, FileServerStore.fileName]
 
     /// What this process kept without the App Group (an earlier ad-hoc build, say: the ad-hoc Mac app updated to the
     /// Developer ID one) moves into the group, paired or not:

@@ -107,7 +107,7 @@ public struct PreparedItem {
 
     /// Number of frames at `chunkSize`.
     public func partCount(chunkSize: Int = DLS.chunk) -> Int {
-        max(1, (encoded.count + chunkSize - 1) / chunkSize)
+        Self.partCount(encodedLength: encoded.count, chunkSize: chunkSize)
     }
 
     /// Seals part `i` with a fresh nonce (or the given one).
@@ -128,8 +128,19 @@ public struct PreparedItem {
 
     /// The length of part `i`'s frame: "DLS1", the nonce, the header's length and bytes, the chunk and the tag.
     public func frameLength(part i: Int, chunkSize: Int = DLS.chunk) -> Int {
-        let n = partCount(chunkSize: chunkSize)
-        let chunk = min(chunkSize, encoded.count - i * chunkSize)
+        Self.frameLength(header: header, encodedLength: encoded.count, part: i, chunkSize: chunkSize)
+    }
+
+    /// The number of parts of an encoded body of `encodedLength` bytes at `chunkSize`.
+    public static func partCount(encodedLength: Int, chunkSize: Int = DLS.chunk) -> Int {
+        max(1, (encodedLength + chunkSize - 1) / chunkSize)
+    }
+
+    /// The length of part `i`'s frame for `header` (part 0, without part/parts) and an encoded body of `encodedLength`
+    /// bytes: what a frame will be before it is sealed (F04's frame files are measured this way too).
+    public static func frameLength(header: ItemHeader, encodedLength: Int, part i: Int, chunkSize: Int = DLS.chunk) -> Int {
+        let n = partCount(encodedLength: encodedLength, chunkSize: chunkSize)
+        let chunk = min(chunkSize, encodedLength - i * chunkSize)
         return 4 + 12 + 4 + header.forPart(i, of: n).jsonData.count + max(0, chunk) + 16
     }
 
@@ -257,21 +268,21 @@ public enum ItemBuilder {
         if !from.isEmpty { header.from = from }
         if let app = item.app, !app.isEmpty { header.app = ShareText.utf16Prefix(app, 60) }
 
-        var prepared = PreparedItem(header: header, encoded: encoded)
-        prepared.header.extras = labExtras(item.extras, for: prepared)
-        return prepared
+        header.extras = labExtras(item.extras, header: header, encodedLength: encoded.count)
+        return PreparedItem(header: header, encoded: encoded)
     }
 
     /// The Lab fields part 0 carries (the JS `buildItemFrames`): `ItemHeader.labHeaderFields` of the request, without
     /// `x-orig` when part 0's frame would be large with it and small without it (an attachment is kept 3 hours and
     /// re-sent at 185 minutes; vectors > normalise.json › xOrigFrames).
-    static func labExtras(_ requested: [String: String], for item: PreparedItem, chunkSize: Int = DLS.chunk) -> [String: String] {
+    static func labExtras(_ requested: [String: String], header: ItemHeader, encodedLength: Int,
+                          chunkSize: Int = DLS.chunk) -> [String: String] {
         var extras = ItemHeader.labHeaderFields(cap: requested["x-cap"], orig: requested["x-orig"])
         guard extras["x-orig"] != nil else { return extras }
         func small(_ fields: [String: String]) -> Bool {
-            var h = item.header
+            var h = header
             h.extras = fields
-            return PreparedItem(header: h, encoded: item.encoded).isSmallPart(0, chunkSize: chunkSize)
+            return Frame.isSmall(PreparedItem.frameLength(header: h, encodedLength: encodedLength, part: 0, chunkSize: chunkSize))
         }
         if !small(extras) {
             var without = extras

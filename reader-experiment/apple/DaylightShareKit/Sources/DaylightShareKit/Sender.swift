@@ -43,6 +43,10 @@ public final class ShareSender {
     public var now: () -> Date = Date.init
     /// See `AckHeaderHook`; nil for a sender without Lab (v1.1).
     public var onAckHeader: AckHeaderHook?
+    /// Share in place (F04): the background attempts that still have live upload tasks (`BackgroundPublisher.liveAttempts`,
+    /// read once per tick). A `sending` row whose `bgAttempt` is among them is not stale, however long it waits; without
+    /// live tasks the v1.1 rule applies (15 minutes after its attempt last made progress).
+    public var liveBackgroundAttempts: Set<String> = []
 
     public init(pairing: Pairing, outbox: OutboxStore, from: String = "", app: String = "", session: URLSession? = nil,
                 onAckHeader: AckHeaderHook? = nil) throws {
@@ -109,6 +113,11 @@ public final class ShareSender {
         var row = start
         row.status = .sending
         row.attemptStarted = now()
+        // This attempt is the app's own: a background attempt's late answers no longer count (F04).
+        row.bgAttempt = nil
+        row.bgParts = 0
+        row.bgDone = []
+        row.bgFirstDone = nil
         guard let begun = persist(row) else { return (row, nil) }
         row = begun
         if row.status == .delivered { return (row, nil) }
@@ -203,6 +212,7 @@ public final class ShareSender {
     func isDue(_ row: OutboxRow, at t: Date) -> Bool {
         switch row.status {
         case .sending:
+            if let a = row.bgAttempt, liveBackgroundAttempts.contains(a) { return false }
             return t.timeIntervalSince(row.attemptStarted ?? row.lastPublish ?? row.created) >= DLS.sendingStale
         case .sent:
             guard let last = row.lastPublish else { return true }

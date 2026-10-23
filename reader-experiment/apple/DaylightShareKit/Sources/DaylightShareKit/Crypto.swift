@@ -19,6 +19,18 @@ public enum DLSCrypto {
         return Data(h.finalize())
     }
 
+    /// SHA-256 over data given in parts (F04's `FrameFileBuilder` hashes a file chunk by chunk).
+    public struct SHA256Stream {
+        private var hasher = SHA256()
+
+        public init() {}
+
+        public mutating func update(_ data: Data) { hasher.update(data: data) }
+
+        /// The lowercase hex digest.
+        public func finalizeHex() -> String { Hex.encode(hasher.finalize()) }
+    }
+
     /// Cryptographically secure random bytes.
     public static func randomBytes(_ count: Int) -> Data {
         var g = SystemRandomNumberGenerator()

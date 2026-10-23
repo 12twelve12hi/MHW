@@ -48,6 +48,13 @@ public struct OutboxRow: Codable, Identifiable, Equatable {
     /// 4xx, or 408 and 5xx after the in-call retries; 0 when that failure had no HTTP answer, and 0 again once a publish
     /// of the row goes or it is delivered. Rows stored without it (1.0, 1.1) read as 0.
     public var http: Int
+    /// Share in place (F04, `BackgroundPublisher`): the background attempt this `sending` row waits for (a UUID), the
+    /// number of its frames, the parts the relay took so far and when the first of them was taken. nil / 0 / [] for
+    /// every other row; any attempt the app makes itself clears them, so a late answer of the old one is ignored.
+    public var bgAttempt: String?
+    public var bgParts: Int
+    public var bgDone: [Int]
+    public var bgFirstDone: Date?
 
     public init(id: String, kind: ItemKind, title: String = "", url: String = "", name: String = "", mime: String = "",
                 size: Int = 0, header: ItemHeader, created: Date, status: Status, lastPublish: Date? = nil,
@@ -74,11 +81,15 @@ public struct OutboxRow: Codable, Identifiable, Equatable {
         self.errorCode = errorCode
         self.slowFails = slowFails
         self.http = http
+        bgAttempt = nil
+        bgParts = 0
+        bgDone = []
+        bgFirstDone = nil
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, kind, title, url, name, mime, size, header, created, status, lastPublish, attachment, attempts, error,
-             delivered, hasBody, attemptStarted, errorCode, slowFails, http
+             delivered, hasBody, attemptStarted, errorCode, slowFails, http, bgAttempt, bgParts, bgDone, bgFirstDone
     }
 
     /// Rows saved by 1.0 have no `errorCode` or `slowFails`: they read as "" and 0.
@@ -104,6 +115,10 @@ public struct OutboxRow: Codable, Identifiable, Equatable {
         errorCode = try c.decodeIfPresent(String.self, forKey: .errorCode) ?? ""
         slowFails = try c.decodeIfPresent(Int.self, forKey: .slowFails) ?? 0
         http = try c.decodeIfPresent(Int.self, forKey: .http) ?? 0
+        bgAttempt = try c.decodeIfPresent(String.self, forKey: .bgAttempt)
+        bgParts = try c.decodeIfPresent(Int.self, forKey: .bgParts) ?? 0
+        bgDone = try c.decodeIfPresent([Int].self, forKey: .bgDone) ?? []
+        bgFirstDone = try c.decodeIfPresent(Date.self, forKey: .bgFirstDone)
     }
 
     /// `sending`, `sent` or `failed`: the outbox keeps it whatever its age, and the app polls for it.
@@ -263,6 +278,7 @@ public final class OutboxStore {
         try? FileManager.default.removeItem(at: bodiesURL)
         try? FileManager.default.createDirectory(at: bodiesURL, withIntermediateDirectories: true)
         LabLedger(outbox: self).clear()
+        ActivityLog(outbox: self).clear()
     }
 
     /// Runs `body` under the lock every `ShareSender` on this outbox directory holds while it works (in this process):
