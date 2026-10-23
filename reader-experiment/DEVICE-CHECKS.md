@@ -464,6 +464,8 @@ the group until then: the Mac stays ad-hoc (Q6) unless the user adds them.
   date. From a page already in the Reader, it is a new document.
 - [ ] **F26 (Site access)** A fresh install reads "! Site access". Allow shows Safari's own prompt, and the line then
   follows what Safari › Settings › Extensions says.
+- [ ] **F26.3 (pairing)** Before pairing the extension, Setup check reads "! Pairing", and its button opens the
+  extension's pairing (the code field). After pairing, the line reads "✓ Pairing".
 - [ ] **F26.1** Setup check's test article in C1–C4 ticks "✓ Delivered" and "✓ In your Reader" ("Waiting for a tap
   on your Daylight" meanwhile where the Inbox asks).
 - [ ] **F33** Safari shows its Paste button; the host shows before anything is sent.
