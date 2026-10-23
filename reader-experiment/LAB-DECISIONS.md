@@ -60,3 +60,12 @@ The rules every Lab build follows. Each line is the user's decision (Oct 20, 202
   - (c) keeping the Daylight Share item id with what it saves.
 
   Each is proved first in the side-by-side Lab Reader on the lab tablet.
+
+## Follow-ups decided by the build (Oct 23)
+
+- **Text with no link is a note.** Under the excerpt answer (explicit selections only), a share of plain text with no
+  link at all (Notes, Books, Mac Services) still becomes a Markdown note. It has no link to fall back to, and the
+  person chose that text. A text-fragment link alone (#:~:text=) stays a link.
+- **F03's Use switch** turns off only the "only the link came through" hint. Pages are still cleaned of scripts and
+  form contents, which protects what is sent and is not optional.
+- **A handover to the Lab Reader outlives Lab off** (LAB-PLAN 1.3), so the two never both receive.

@@ -1506,6 +1506,11 @@ URL when it deduplicates (`CanonicalUrl.of`). It re-fetches pages under 150 word
 
   Everything else is a link, with the text as its title (F16). The `labExcerpt` and `normalise.json` vectors hold
   real headline + link shares, which must come out as links, and selections, which must come out as excerpts.
+
+  **After the user's answer to 6.5 Q1 = (b) (Oct 22):** rules 2 and 4 are off, so only rule 1 makes an excerpt (the
+  share lane's LAB-PROTOCOL 2.9.1 is normative). Rule 3 stays. A share of text with no URL at all, from Notes, Books or
+  the Mac's Services, has no link to fall back to, and the person chose that text. It becomes a note, which follows
+  the Inbox's Documents setting like any document.
 - **Excerpts follow the Inbox's Documents setting.** With Ask, they wait for a tap; with the Lab Reader (R1), they
   arrive quietly. A two-second "send this passage" must not become a tablet interruption, so **6.5 Q1 decides how
   far F11 goes before R1**. Until the user answers, only the explicit paths are built: the Chrome and Safari context
@@ -1520,7 +1525,7 @@ URL when it deduplicates (`CanonicalUrl.of`). It re-fetches pages under 150 word
 | Chrome, Safari | The "Send selection to Daylight" context menu (macOS Safari and Chrome) and the Selection mode (every build, including iPhone Safari, which has no context menus). |
 | iPhone, iPad (after Q1) | A Safari share with a selection uses `GetPage.js`'s selection (rule 1). Text from other apps goes through `classifyShare`. |
 | Mac (after Q1) | `NSServices` "Send to Daylight" for text, URLs and files (`macOS/App/Services.swift`, `Info.plist` `NSServices` with `NSSendTypes` `public.utf8-plain-text`, `public.url` and `public.file-url`). Text goes through `classifyShare`. |
-| Android phone (after Q1) | `ACTION_SEND` `text/plain` goes through `classifyShare`. Chrome's "Share" of a selection carries a `#:~:text=` link (rule 2) and becomes an excerpt with that URL. |
+| Android phone (after Q1) | `ACTION_SEND` `text/plain` goes through `classifyShare`. Under Q1 = (b), a `#:~:text=` link alone does not make an excerpt (Google adds text fragments to ordinary result links), so Chrome's "Share" of a selection arrives as a link; an excerpt comes from Options › "Send as excerpt". Text with no URL becomes a note (rule 3). |
 | DC-1 Inbox | The row title is the header's `title`; the kind line reads "Excerpt" (F03). |
 
 **Acceptance:**
