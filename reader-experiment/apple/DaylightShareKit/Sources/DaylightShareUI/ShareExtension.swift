@@ -116,7 +116,8 @@ public enum SharePayloadReader {
         return unreadable
     }
 
-    /// A pairing link is a pairing; short text that holds a link is the link; anything else is sent as a text file.
+    /// A pairing link is a pairing; short text that holds a link is the link (with the text, which Lab reads as text:
+    /// `ShareExtensionModel.labInput`); anything else is sent as a text file.
     static func textPayload(_ s: String, title: String?) -> SharePayload? {
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return nil }
@@ -126,6 +127,14 @@ public enum SharePayloadReader {
             return .link(url: url, title: rest.isEmpty ? title : rest, text: s)
         }
         return .text(t)
+    }
+
+    /// The share item's own title for a link that came as text (`textPayload`), when the text was the link alone (then
+    /// v1.1 titles it with the item's title, and so does Lab), else nil.
+    static func itemTitle(url: String, title: String?, text: String) -> String? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rest = t.replacingOccurrences(of: url, with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return rest.isEmpty ? title : nil
     }
 
     // MARK: NSItemProvider helpers
@@ -285,8 +294,21 @@ public final class ShareExtensionModel: ObservableObject {
     var countdown: Task<Void, Never>?
     /// What fetches an Apple News page for smart intake (F16); tests give a stub.
     var pageFetch: ShareNormaliser.PageFetch = ShareNormaliser.ephemeralFetch
-    /// The background session share in place hands its uploads to (an App Group build); tests give a fake.
-    var backgroundUploads: BackgroundUploads?
+    /// Tests: makes a share's background session (a fake) from its attempt id and the handler for its answers; nil uses
+    /// the system's, "com.daylight.share.bg.<attempt>" (`BackgroundUploadSession.connect`).
+    var backgroundSession: ((_ attempt: String, _ onAnswer: @escaping BackgroundAnswer) -> BackgroundUploads)?
+    /// Where this process posts F04's failure notices for answers it hears (tests give a fake); nil: the system's
+    /// notification center (posting only: the app asks for the permission, never the extension).
+    var noticeCenter: NoticeCenter?
+    /// Tests: the URL session what this card sends reaches the relay with (a stand-in's); nil: the default.
+    var relaySession: URLSession?
+    /// A file was refused as over 9 MB: with Lab on and `labFeatures.bigFilesEntry`, the result shows the F02 entry point
+    /// under v1.1's too-big sentence (`showsBigFilesEntry`).
+    @Published public internal(set) var refusedTooBig = false
+    /// Cancel was tapped (or the host cancelled): nothing goes after this, a countdown included.
+    var cancelled = false
+    /// The Lab model the F02 entry point's gate runs on, made when first needed.
+    private var gateModel: LabModel?
     private var started = false
     /// The pairing the confirmation is about, and whether the shared items are sent once it is applied.
     private var pending: (pairing: Pairing, thenSend: Bool)?
@@ -448,13 +470,15 @@ public final class ShareExtensionModel: ObservableObject {
     /// place's card chose (F04 without a background session: the ad-hoc Mac), in place of the payloads, with `preparedNote`.
     func send(prepared: [Result<ItemInput, Error>]? = nil, preparedNote: String? = nil) async {
         let store = self.store
+        let session = relaySession
         await store.ready()
-        guard let sender = await AppModel.onStorage({ try? DaylightShare.sender(store: store) }) else {
+        guard let sender = await AppModel.onStorage({ try? DaylightShare.sender(store: store, session: session) }) else {
             phase = .needsPairing
             return
         }
         phase = .sending
         var problems: [(title: String, message: String)] = []
+        var tooBig = false
         var sent: [OutboxRow] = []
         let labPaths = lab && labFeatures.smartIntake
         var labNotes: [String] = preparedNote.map { [$0] } ?? []
@@ -480,10 +504,12 @@ public final class ShareExtensionModel: ObservableObject {
                     sent.append(row)
                 }
             } catch {
+                if (error as? ShareError)?.code == "too-large" { tooBig = true }
                 problems.append(("Not sent", (error as? ShareError)?.message ?? error.localizedDescription))
             }
         }
         cleanUpTemporaryFiles()
+        refusedTooBig = tooBig
         if lab && (labPaths || prepared != nil) && !sent.isEmpty {
             // F26: Setup check's "Daylight in the share sheet", and the activity log.
             let rows = sent
@@ -494,7 +520,7 @@ public final class ShareExtensionModel: ObservableObject {
         }
         if labPaths || prepared != nil {
             var line = labNotes.first
-            if line == nil { line = await labOnceNote() }
+            if line == nil { line = await labOnceNote(excerpt: Self.sentExcerpt(sent)) }
             note = line
         } else {
             note = Self.note(for: payloads)
@@ -522,9 +548,25 @@ public final class ShareExtensionModel: ObservableObject {
         }
     }
 
+    /// Cancel (or the host cancelled the request): the countdown stops and nothing more goes; the temporary files go.
     public func cancel() {
+        cancelled = true
+        countdown?.cancel()
+        countdown = nil
         cleanUpTemporaryFiles()
         onCancel()
+    }
+
+    /// Whether the result shows the F02 entry point (W1): Lab on, the build has it (`labFeatures.bigFilesEntry`), and a
+    /// file was refused as over 9 MB. With Lab off the result is v1.1's.
+    public var showsBigFilesEntry: Bool { lab && labFeatures.bigFilesEntry && refusedTooBig }
+
+    /// The Lab model the F02 entry point's gate runs on (the app's switch, pairing and server through this storage).
+    var labGateModel: LabModel {
+        if let gateModel { return gateModel }
+        let m = LabModel(center: LabCenter(store: store, fetch: fetch))
+        gateModel = m
+        return m
     }
 
     public func done() {
@@ -664,6 +706,9 @@ public struct ShareExtensionView: View {
                 summaryText
                 if !message.isEmpty {
                     Text(message).dlsFont(.callout).multilineTextAlignment(.center).wrapping(message)
+                }
+                if model.showsBigFilesEntry {
+                    BigFilesEntry(lab: model.labGateModel)
                 }
                 noteText
                 doneButton

@@ -8,7 +8,9 @@ import XCTest
 /// Share in place's background answers (LAB-PLAN F04): a fake upload session drives 2xx, 413, 429 and a network error
 /// into the v1.1 row states; answers for an attempt the row no longer waits for are ignored; parts that finish more
 /// than 3 hours apart make the row due for a re-send at once; a failure posts the notice through a fake notification
-/// center (F04.6), and none with "Tell me when a send fails" off or a network failure.
+/// center (F04.6), and none with "Tell me when a send fails" off or a network failure. Each share has its own session
+/// ("com.daylight.share.bg.<attempt>"), one object per identifier in a process; whichever process holds it hears its
+/// answers; the Mac app takes over the sessions of shares 15 minutes old.
 final class BackgroundCompletionTests: XCTestCase {
     var dir: URL!
     var store: SharedStore!
@@ -227,6 +229,104 @@ final class BackgroundCompletionTests: XCTestCase {
         XCTAssertEqual(center.posted.count, 2)
     }
 
+    /// Apple's rule for app extensions: one process per background session, one session object per identifier in it.
+    /// Each share gets its own identifier (so the app never holds one the extension uses, and a share extension the OS
+    /// reuses makes a new one), and a process asking twice for one identifier gets the same object.
+    func testEachShareHasItsOwnSession() throws {
+        let a = BackgroundPublisher.newAttempt()
+        let b = BackgroundPublisher.newAttempt()
+        XCTAssertNotEqual(a, b)
+        let idA = BackgroundPublisher.sessionIdentifier(attempt: a)
+        XCTAssertEqual(idA, "com.daylight.share.bg.\(a)")
+        XCTAssertNotEqual(idA, BackgroundPublisher.sessionIdentifier(attempt: b))
+        XCTAssertEqual(BackgroundPublisher.attempt(ofSession: idA), a)
+        XCTAssertNil(BackgroundPublisher.attempt(ofSession: "com.daylight.share.refresh"))
+        XCTAssertNil(BackgroundPublisher.attempt(ofSession: "com.daylight.share.bg"))
+        XCTAssertNil(BackgroundPublisher.attempt(ofSession: "com.daylight.share.bg."))
+
+        let registry = BackgroundSessionRegistry<FakeUploads>()
+        var made = 0
+        let first = registry.session(idA) { made += 1; return FakeUploads() }
+        let again = registry.session(idA) { made += 1; return FakeUploads() }
+        XCTAssertTrue(first.made)
+        XCTAssertFalse(again.made)
+        XCTAssertTrue(first.session === again.session, "one session object per identifier in a process")
+        XCTAssertEqual(made, 1)
+        let other = registry.session(BackgroundPublisher.sessionIdentifier(attempt: b)) { FakeUploads() }
+        XCTAssertFalse(other.session === first.session)
+        XCTAssertEqual(registry.all.map(\.identifier), [idA, BackgroundPublisher.sessionIdentifier(attempt: b)])
+
+        // Every row of one share carries the share's attempt (its session's name) in its tasks' labels.
+        let p = publisher()
+        let r1 = try p.start(.link("https://example.com/1", title: "1"), pairing: pairing, attempt: a)
+        let r2 = try p.start(.link("https://example.com/2", title: "2"), pairing: pairing, attempt: a)
+        XCTAssertEqual(r1.bgAttempt, a)
+        XCTAssertEqual(r2.bgAttempt, a)
+        XCTAssertEqual(uploads.started.map(\.description), [BackgroundPublisher.describe(id: r1.id, part: 0, attempt: a),
+                                                            BackgroundPublisher.describe(id: r2.id, part: 0, attempt: a)])
+    }
+
+    /// The answers a session hears go to the outbox wherever it is held (the share extension while it runs, the app
+    /// after): the row, the frame files and the failure notice (review finding: the extension dropped them).
+    func testASessionsAnswersReachTheOutbox() async throws {
+        center.authorized = true
+        let box = BackgroundPublisher.SessionBox()
+        box.session = uploads
+        let answer = BackgroundPublisher.answers(store: store, notices: FailureNotices(center: center, prefs: LabPreferences(store: store)),
+                                                 daylightName: { "Test Daylight" }, box: box)
+        // `answers` writes to the store's outbox: start on that one.
+        let p = BackgroundPublisher(outbox: OutboxStore(store: store), uploads: uploads)
+        let row = try p.start(.link("https://example.com/story", title: "A story"), pairing: pairing)
+        let frame = uploads.started[0].file
+        await answer(uploads.started[0].description, 413, nil)
+        let failed = try XCTUnwrap(OutboxStore(store: store).row(row.id))
+        XCTAssertEqual(failed.status, .failed)
+        XCTAssertEqual(failed.errorCode, "full")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: frame.path), "the frame file goes")
+        XCTAssertEqual(center.posted.map(\.title), ["Couldn’t send ‘A story’ to Test Daylight"])
+
+        let ok = try p.start(.link("https://example.com/ok", title: "OK"), pairing: pairing)
+        await answer(uploads.started[1].description, 200, nil)
+        XCTAssertEqual(OutboxStore(store: store).row(ok.id)?.status, .sent)
+    }
+
+    /// The sessions a process holds: their live tasks keep their rows from going stale; one with no task left whose
+    /// attempt the outbox no longer waits for is let go, and one the outbox still waits for is kept (its answers may
+    /// still be on their way).
+    func testLiveAttemptsAndLettingGo() async throws {
+        let registry = BackgroundSessionRegistry<FakeUploads>()
+        let (a, b, c) = (BackgroundPublisher.newAttempt(), BackgroundPublisher.newAttempt(), BackgroundPublisher.newAttempt())
+        let id = "0123456789abcdef0123456789abcdef"
+        let live = registry.session(BackgroundPublisher.sessionIdentifier(attempt: a)) { FakeUploads() }.session
+        live.live = [BackgroundPublisher.describe(id: id, part: 0, attempt: a)]
+        let done = registry.session(BackgroundPublisher.sessionIdentifier(attempt: b)) { FakeUploads() }.session
+        let waiting = registry.session(BackgroundPublisher.sessionIdentifier(attempt: c)) { FakeUploads() }.session
+        var released: [FakeUploads] = []
+        let attempts = await BackgroundPublisher.liveAttempts(in: registry, waiting: [a, c]) { released.append($0) }
+        XCTAssertEqual(attempts, [a])
+        XCTAssertEqual(released.count, 1)
+        XCTAssertTrue(released.first === done)
+        XCTAssertEqual(registry.all.map(\.session).count, 2)
+        XCTAssertTrue(registry.all.contains { $0.session === waiting })
+    }
+
+    /// The Mac app is never woken for the share extension's sessions: it takes over those of shares 15 minutes old (by
+    /// then the extension that started them has ended), and only of rows still sending.
+    func testTheMacTakesOverTheSessionsOfOldShares() {
+        func row(_ n: Int, _ status: OutboxRow.Status, age: TimeInterval, attempt: String?) -> OutboxRow {
+            let id = String(format: "%032x", n)
+            var r = OutboxRow(id: id, kind: .url, url: "https://e.com/\(n)", header: ItemHeader(id: id, kind: .url, sent: ""),
+                              created: clock.addingTimeInterval(-age), status: status)
+            r.bgAttempt = attempt
+            return r
+        }
+        let rows = [row(1, .sending, age: 16 * 60, attempt: "old"), row(2, .sending, age: 5 * 60, attempt: "new"),
+                    row(3, .sent, age: 60 * 60, attempt: nil), row(4, .sending, age: 60 * 60, attempt: nil),
+                    row(5, .failed, age: 60 * 60, attempt: "gone")]
+        XCTAssertEqual(BackgroundPublisher.adoptable(rows, now: clock), ["old"])
+        XCTAssertEqual(BackgroundPublisher.waiting(rows), ["old", "new"])
+    }
+
     func testTheAppAsksForNotificationsOnceAfterAShareInPlace() async {
         let notices = FailureNotices(center: center, prefs: LabPreferences(store: store))
         let none = await notices.askIfNeeded()
@@ -271,6 +371,9 @@ final class FakeUploads: BackgroundUploads {
     var started: [Upload] = []
     var live: [String] = []
     var cancelled: [String] = []
+    /// The attempts it was made for, and the handler its answers go to (the share sheet's fake sessions).
+    var attempts: [String] = []
+    var answer: BackgroundAnswer?
 
     func upload(_ request: URLRequest, fromFile file: URL, description: String) {
         started.append(Upload(request: request, file: file, description: description))

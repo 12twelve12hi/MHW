@@ -38,6 +38,13 @@ public final class AppModel: ObservableObject {
     /// question, is presented from one place (`View.appSheets`): SwiftUI shows one sheet at a time, so a pairing link
     /// that arrives while one is open closes it and asks instead (`presented`).
     @Published public var sheet: Sheet?
+    /// What the offline queue's path monitor last said (F07): true online, false offline, nil before it said anything
+    /// (or before `startOfflineQueue`). With Lab on, rows that wait read "Waiting for connection" while it is false
+    /// (`rowText`, 2.5 rule 2); the history re-renders when it changes.
+    @Published public private(set) var online: Bool?
+    /// Whether the app's window shows (2.5's faster checks run only then): the iPhone app stops its timers in the
+    /// background (`stopAutoRefresh`); the Mac app sets this from its window's visibility. True until set.
+    public var isVisible = true
     /// Whether the window presents the re-pairing follow-up (`Presented.repaired`, LAB-PLAN 2.6, DESIGN 12.7): set when
     /// this app re-paired with another Daylight while it knew a Daylight server, which it locked first. What it shows
     /// is `lab.repaired` (nil with Lab off, so nothing shows then); Settings › Lab shows it too until OK.
@@ -105,13 +112,19 @@ public final class AppModel: ObservableObject {
     /// object: the Lab views observe it. `-DLSLab 0|1` (1.7) applies before the first render.
     public let lab: LabModel
     private var timer: Timer?
+    /// 2.5's faster checks: every `Lab.fastCheckMs` while the app runs its timers (`fastCheck`).
+    private var fastTimer: Timer?
+    private var fastChecking = false
     private var observer: NSObjectProtocol?
     /// Lab W1 (A3): the ledger's changes ("In your Reader", F01, F27), the offline queue (F07) and the notices (F04).
     private var ledgerWatch: AnyCancellable?
     private var lastLedger: LabLedger.Snapshot?
     /// Share in place's notices (F04): set by the app (`FailureNotices(center: SystemNoticeCenter.shared, …)`) to post
-    /// "In your Reader ✓: {title}" while it runs, when that setting is on. nil posts none.
+    /// "In your Reader ✓: {title}" while it runs, when that setting is on, and "Couldn’t send …" for the background
+    /// answers it hears. nil posts none.
     public var notices: FailureNotices?
+    /// Tests: the URL session the senders reach the relay with (a stand-in's); nil: the default.
+    var relaySession: URLSession?
     /// The offline queue (F07), once the app starts it (`startOfflineQueue`); with Lab on a share made offline waits.
     public private(set) var offlineQueue: OfflineQueue?
     private var bannerTask: Task<Void, Never>?
@@ -157,27 +170,42 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    /// Starts the offline queue (F07; the app calls it once, with `SystemPathSource()`): while Lab is on, a share made
-    /// offline is stored and reads "Waiting for connection"; coming back online sends what waits, in passes at least 3
-    /// minutes apart. With Lab off the queue sends nothing: rows go on v1.1's back-off (1.3).
+    /// Starts the offline queue (F07; the app calls it once, at launch, with `SystemPathSource()`): while Lab is on, a
+    /// share made offline is stored and reads "Waiting for connection"; coming back online sends what waits, in passes
+    /// at least 3 minutes apart, and `refresh()` (launch, foreground, background refresh) sends what was shared offline;
+    /// rows the relay refused keep v1.1's back-off (`OfflineQueue`). The path monitor also sets `online`. With Lab off the
+    /// queue sends nothing: rows go on v1.1's back-off (1.3).
     public func startOfflineQueue(path: NetworkPathSource) {
         guard offlineQueue == nil else { return }
         let store = self.store
+        let session = relaySession
         let queue = OfflineQueue(sender: { [weak self] in
             guard let self, await self.lab.isOn else { return nil }
             await store.ready()
-            return await Self.onStorage { try? DaylightShare.sender(store: store) }
+            return await Self.onStorage { try? DaylightShare.sender(store: store, session: session) }
         }, path: path, onPass: { [weak self] rows in
             guard !rows.isEmpty else { return }
             await Self.onStorage { ActivityLog(store: store).add(type: "flushNetwork", rows: rows) }
             await self?.reloadNow()
+        }, onPath: { [weak self] online in
+            await self?.setOnline(online)
         })
         offlineQueue = queue
         Task { await queue.start() }
     }
 
+    private func setOnline(_ value: Bool) {
+        if online != value { online = value }
+    }
+
     /// Whether this device reported offline (F07's "Waiting for connection"; nil when not known).
     public func isOffline() async -> Bool { await offlineQueue?.shouldDefer ?? false }
+
+    /// How a history row reads (2.5, `LabModel.rowText`) with this device's connection: with Lab on, a row that waits
+    /// reads "Waiting for connection" while the path monitor says offline. Exactly `RowText` with Lab off.
+    public func rowText(_ row: OutboxRow, now: Date = Date()) -> LabRowText {
+        lab.rowText(row, now: now, online: online)
+    }
 
     // MARK: Setup check (F26) and the copied link (F33)
 
@@ -457,8 +485,9 @@ public final class AppModel: ObservableObject {
     /// A sender for the stored pairing (read on the storage queue), or nil when not paired.
     private func sender() async -> ShareSender? {
         let store = self.store
+        let session = relaySession
         await store.ready()
-        return await Self.onStorage { try? DaylightShare.sender(store: store) }
+        return await Self.onStorage { try? DaylightShare.sender(store: store, session: session) }
     }
 
     /// Sends one item and reports the outcome in the banner: the row's label and sentence (CHANGES-v1.1 2.5), or why
@@ -637,13 +666,16 @@ public final class AppModel: ObservableObject {
 
     // MARK: Maintenance (PROTOCOL 3.3)
 
-    /// Reads acks and re-sends what is due (not while the history holds the UI tests' sample rows).
+    /// Reads acks and re-sends what is due (not while the history holds the UI tests' sample rows). Call it at launch,
+    /// in the foreground and from background refresh (`BGAppRefreshTask`): with Lab on it also sends what was shared
+    /// offline (F07, `OfflineQueue.flushIfDue`).
     public func refresh() async {
         await reloadNow()
         // Checked once the sender is known: there is one only after the launch's pairing, which comes after
         // `holdsSampleHistory` is set.
         guard let sender = await sender(), !holdsSampleHistory else { return }
         let before = Dictionary(rows.map { ($0.id, $0.status) }, uniquingKeysWith: { a, _ in a })
+        await followBackgroundUploads(sender)
         _ = await sender.tick()
         // The ledger keeps the states of the items still in the outbox only (LAB-PROTOCOL 2.2.6).
         let store = self.store
@@ -658,6 +690,51 @@ public final class AppModel: ObservableObject {
         if lab.isOn, let queue = offlineQueue { _ = await queue.flushIfDue() }
     }
 
+    // MARK: Share in place's background sessions (F04)
+
+    /// Before a tick: which share-in-place attempts still have live upload tasks in the sessions this app holds (a
+    /// `sending` row of one is not stale). The Mac app is never woken for the share extension's sessions, so it takes
+    /// over the session of a share that is 15 minutes old (`BackgroundPublisher.adoptable`): its answers come here from
+    /// then on, and its live tasks count. The iPhone app connects to a session only when the OS wakes it for one
+    /// (`handleBackgroundEvents`).
+    private func followBackgroundUploads(_ sender: ShareSender) async {
+        #if canImport(ObjectiveC)
+        let store = self.store
+        guard store.isShared else { return }
+        let current = rows
+        #if os(macOS)
+        let notices = self.notices
+        let adopted = BackgroundPublisher.adoptable(current, now: Date())
+        for attempt in adopted {
+            BackgroundUploadSession.connect(attempt: attempt, store: store, notices: notices,
+                                            daylightName: { store.pairing?.displayName })
+        }
+        #else
+        let adopted = Set<String>()
+        #endif
+        let live = await BackgroundUploadSession.liveAttempts(waiting: BackgroundPublisher.waiting(current))
+        // A session taken over just now delivers what it kept a moment later: its rows are not stale on this tick.
+        sender.liveBackgroundAttempts = live.union(adopted)
+        #endif
+    }
+
+    #if canImport(ObjectiveC)
+    /// iPhone's `application(_:handleEventsForBackgroundURLSession:completionHandler:)`: a share in place's session
+    /// ("com.daylight.share.bg.<attempt>") whose share extension has gone. The app reconnects to it (the only time it
+    /// does), the answers update the history and post the failure notice (`notices`), and `completion` is called once
+    /// they are handled. Returns false for an identifier that is not one of these (call `completion` yourself).
+    @discardableResult
+    public func handleBackgroundEvents(identifier: String, completion: @escaping () -> Void) -> Bool {
+        let store = self.store
+        return BackgroundUploadSession.handleEvents(identifier: identifier, store: store, notices: notices,
+                                                    daylightName: { store.pairing?.displayName },
+                                                    completion: { [weak self] in
+                                                        completion()
+                                                        Task { @MainActor in self?.reload() }
+                                                    })
+    }
+    #endif
+
     /// Checks for the Daylight's ack again ~30 s after a send, while the app runs.
     private func followUp(_ sender: ShareSender) {
         Task { [weak self] in
@@ -669,7 +746,8 @@ public final class AppModel: ObservableObject {
         }
     }
 
-    /// While the app runs: every `interval` seconds, if anything waits for an ack or a re-send, run a pass.
+    /// While the app runs: every `interval` seconds, if anything waits for an ack or a re-send, run a pass; and every
+    /// `Lab.fastCheckMs` (30 s) the faster checks of 2.5 (`fastCheck`).
     public func startAutoRefresh(interval: TimeInterval = 60) {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
@@ -678,11 +756,34 @@ public final class AppModel: ObservableObject {
                 await self.refresh()
             }
         }
+        fastTimer?.invalidate()
+        fastTimer = Timer.scheduledTimer(withTimeInterval: Double(Lab.fastCheckMs) / 1000, repeats: true) { [weak self] _ in
+            Task { @MainActor in _ = await self?.fastCheck() }
+        }
     }
 
     public func stopAutoRefresh() {
         timer?.invalidate()
         timer = nil
+        fastTimer?.invalidate()
+        fastTimer = nil
+    }
+
+    /// Faster checks while something is in flight (2.5, F01.1): while the app shows (`isVisible`), Lab is on and a row
+    /// delivered in the last 10 minutes has no settled state (`LabRowText.wantsFastChecks`), the ack topic is read now,
+    /// so the Inbox's item states ("In your Reader ✓") reach the ledger, the rows and the announcement within one
+    /// check. `startAutoRefresh` runs it every 30 s. Returns whether it read the ack topic.
+    @discardableResult
+    public func fastCheck(now: Date = Date()) async -> Bool {
+        guard isVisible, lab.isOn, !holdsSampleHistory, !fastChecking,
+              LabRowText.wantsFastChecks(rows, now: now, ledger: lab.ledger) else { return false }
+        fastChecking = true
+        defer { fastChecking = false }
+        guard let sender = await sender() else { return false }
+        _ = try? await sender.checkAcks()
+        await reloadNow()
+        await lab.reloadNow()
+        return true
     }
 
     // MARK: Status dump (CI smoke tests and debugging)

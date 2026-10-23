@@ -19,20 +19,26 @@ public struct LabShareFeatures: Equatable, Sendable {
     /// F03, F10, F11 (rule 3), F16: with Lab on a Safari page goes as GetPage.js's clean copy (x-cap "seen"), links and
     /// text go through smart intake (cleaned links with x-orig, Apple News resolved, text with no link as a note).
     public var smartIntake: Bool
-    /// F04: the share-in-place card, "Sending to {name}" with Options for 1.5 s (with Lab on and F04's Use switch on).
+    /// F04: the share-in-place card, "Sending to {name}" with Options for 1.5 s (with Lab on). Options and "Always show
+    /// Options before sending" follow Lab alone (LAB-PROTOCOL 2.9.6).
     public var shareInPlace: Bool
-    /// F04 with an App Group: the card closes once the uploads are handed to the background session
-    /// (`BackgroundPublisher`); without it the card waits until the item is sent (the ad-hoc Mac, 1.1).
+    /// F04 with an App Group: while F04's Use switch is on, the card closes once the uploads are handed to the share's
+    /// background session (`BackgroundPublisher`). Without it, or with the switch off, the card waits until the item is
+    /// sent, as v1.1 does (the ad-hoc Mac, 1.1).
     public var backgroundPublishing: Bool
     /// F03.3: "Only the link came through …" once on this device when a share carries only a link (iPhone).
     public var linkOnlyHint: Bool
+    /// The F02 entry point (W1): "Send files over 9 MB ›" under v1.1's too-big sentence when a file is refused, which
+    /// runs the F02 gate and shows its note (`needs-server`, or `later` once a server is ready).
+    public var bigFilesEntry: Bool
 
     public init(smartIntake: Bool = false, shareInPlace: Bool = false, backgroundPublishing: Bool = false,
-                linkOnlyHint: Bool = false) {
+                linkOnlyHint: Bool = false, bigFilesEntry: Bool = false) {
         self.smartIntake = smartIntake
         self.shareInPlace = shareInPlace
         self.backgroundPublishing = backgroundPublishing
         self.linkOnlyHint = linkOnlyHint
+        self.bigFilesEntry = bigFilesEntry
     }
 }
 
@@ -113,19 +119,34 @@ public enum ShareInPlace {
 extension ShareExtensionModel {
     // MARK: Beginning
 
-    /// The items are read and the pairing is there: the share-in-place card (Lab, F04 in use, `labFeatures.shareInPlace`),
-    /// else the card that sends at once (v1.1, or Lab's smart intake with `labFeatures.smartIntake`).
+    /// The items are read and the pairing is there: the share-in-place card (Lab, `labFeatures.shareInPlace`), else the
+    /// card that sends at once (v1.1, or Lab's smart intake with `labFeatures.smartIntake`). F04's Use switch decides only
+    /// whether the card closes before the item is sent (`commit`): Options follow Lab alone (LAB-PROTOCOL 2.9.6).
     func begin() async {
-        let store = self.store
-        var f04 = false
         if lab && labFeatures.shareInPlace {
-            f04 = await AppModel.onStorage { LabPreferences(store: store).inUse("F04") }
-        }
-        if f04 {
             await presentCard()
         } else {
             await send()
         }
+    }
+
+    /// The mode a page starts in (F10, F11): while F10 is in use, its default (a selection, then the mode last used on
+    /// the site, then Page); with F10's Use switch off, a Safari selection still goes as an excerpt (F11's explicit path,
+    /// which F10 does not gate: LAB-PROTOCOL 2.9.6), else Page.
+    nonisolated static func startMode(capture: PageCapture?, f10: Bool, remembered: String?) -> LabShare.SendAs {
+        if f10 { return LabShare.defaultMode(capture: capture, remembered: remembered) }
+        return capture?.hasSelection == true ? .selection : .page
+    }
+
+    /// The mode a page goes in when no card asked (`send()`): `startMode` with this device's settings.
+    func pageMode(capture: PageCapture, url: String) async -> LabShare.SendAs {
+        let store = self.store
+        let host = URL(string: url)?.host
+        let read = await AppModel.onStorage { () -> (f10: Bool, remembered: String?) in
+            let p = LabPreferences(store: store)
+            return (p.inUse("F10"), host.flatMap { p.sendAs(host: $0) })
+        }
+        return Self.startMode(capture: capture, f10: read.f10, remembered: read.remembered)
     }
 
     /// What one payload sends with Lab on (F03, F16, F11 rule 3), and the line to show with it. Reads files and may fetch
@@ -141,9 +162,22 @@ extension ShareExtensionModel {
                 let input = try Self.input(for: payload)
                 return (input, Self.note(for: [payload]))
             }
-            return LabShare.pageInput(html: html, url: url, title: title, capture: c, mode: mode ?? .page)
-        case let .link(url, title, text):
-            let input = await LabShare.linkInput(url: url, title: title, text: text, clean: clean, fetch: fetch)
+            var m = mode
+            if m == nil { m = await pageMode(capture: c, url: url) }
+            return LabShare.pageInput(html: html, url: url, title: title, capture: c, mode: m ?? .page)
+        case .link(let url, let title, let text?):
+            // Text that holds a link (Notes, Messages, …: `SharePayloadReader.textPayload`): read as the text it is
+            // (F16 steps 1 and 2, LAB-PROTOCOL 2.9.1), not as v1.1's link and the words around it, so the link keeps a
+            // closing ")" and the title loses a trailing ":" or quote. The item's own title is the title only when the
+            // text is the link alone.
+            let fallback = SharePayloadReader.itemTitle(url: url, title: title, text: text)
+            guard let input = await LabShare.textInput(text, clean: clean, fallbackTitle: fallback, fetch: fetch) else {
+                throw ShareError("content", "There’s nothing here Send to Daylight can send.")
+            }
+            return (input, nil)
+        case .link(let url, let title, nil):
+            // A link given as one (Safari without a page, a URL item): as given (F16 cleans it).
+            let input = await LabShare.linkInput(url: url, title: title, text: nil, clean: clean, fetch: fetch)
             return (input, nil)
         case let .text(text):
             guard let input = await LabShare.textInput(text, clean: clean, fetch: fetch) else {
@@ -156,17 +190,31 @@ extension ShareExtensionModel {
         }
     }
 
-    /// A line to show once on this device after a Lab share (F03.3's "Only the link came through …" for a share that
-    /// carried only a link, `labFeatures.linkOnlyHint`), or nil. Marks it shown.
-    func labOnceNote() async -> String? {
-        guard labFeatures.linkOnlyHint, payloads.count == 1, case .link = payloads[0] else { return nil }
+    /// A line to show once on this device after a Lab share, or nil; marks it shown. `excerpt`: an excerpt or a note
+    /// went (`x-cap: "excerpt"`), which waits for a tap on the Daylight under 6.5 Q1: F11's "Excerpts wait for a tap on
+    /// your Daylight for now.", the first time. Else F03.3's "Only the link came through …" for a share that carried
+    /// only a link (`labFeatures.linkOnlyHint`, F03 in use).
+    func labOnceNote(excerpt: Bool = false) async -> String? {
+        var linkOnly = false
+        if labFeatures.linkOnlyHint, payloads.count == 1, case .link = payloads[0] { linkOnly = true }
+        guard excerpt || linkOnly else { return nil }
         let store = self.store
+        let wantsLinkLine = linkOnly
         return await AppModel.onStorage { () -> String? in
             let p = LabPreferences(store: store)
-            guard p.inUse("F03"), !p.linkOnlyShown else { return nil }
+            if excerpt, !p.excerptNoteShown {
+                p.excerptNoteShown = true
+                return LabText["excerpt.waitsOnce"]
+            }
+            guard wantsLinkLine, p.inUse("F03"), !p.linkOnlyShown else { return nil }
             p.linkOnlyShown = true
             return LabText["linkOnly.iphone"]
         }
+    }
+
+    /// Whether an excerpt or a note is among `rows` (F11's once-only line).
+    nonisolated static func sentExcerpt(_ rows: [OutboxRow]) -> Bool {
+        rows.contains { $0.header.extras["x-cap"] == "excerpt" }
     }
 
     // MARK: The card (F04)
@@ -190,6 +238,9 @@ extension ShareExtensionModel {
                 content = .page(clean: c?.article != nil, selection: c?.hasSelection ?? false)
             case let .text(t):
                 if ShareNormaliser.findShareURL(t) != nil { content = .textWithLink }
+            case .link(_, _, let t?):
+                // Short text that holds a link (`SharePayloadReader.textPayload`): F11's "Send as excerpt" choice too.
+                if ShareNormaliser.findShareURL(t) != nil { content = .textWithLink }
             default:
                 break
             }
@@ -201,7 +252,7 @@ extension ShareExtensionModel {
         if hint == nil, let capture, capture.cleanHTML == nil, capture.article == nil, !capture.hasSelection { hint = LabText["shareInPlace.linkOnlyCard"] }
         let isPage: Bool
         if case .page = content { isPage = true } else { isPage = false }
-        let sendAs = read.f10 ? LabShare.defaultMode(capture: capture, remembered: read.remembered) : .page
+        let sendAs = Self.startMode(capture: capture, f10: read.f10, remembered: read.remembered)
         let waits = ShareInPlace.waitsForSend(comfort: comfort, alwaysShowOptions: read.always)
             || (isPage && read.f10 && read.review) || once != nil
         let name = ShareText.cleanName(daylightName)
@@ -259,11 +310,12 @@ extension ShareExtensionModel {
         card?.optionsOpen = true
     }
 
-    /// Send (or the end of the countdown): the thin check and Review first when they apply, then the items go.
+    /// Send (or the end of the countdown): the thin check and Review first when they apply, then the items go. Nothing
+    /// goes once the card was cancelled.
     public func sendFromCard() async {
         countdown?.cancel()
         countdown = nil
-        guard var c = card, !c.sending else { return }
+        guard !cancelled, var c = card, !c.sending else { return }
         var capture: PageCapture?
         var pageURL: String?
         if payloads.count == 1, case let .page(_, url, _, cap) = payloads[0] {
@@ -293,31 +345,38 @@ extension ShareExtensionModel {
                 return
             }
         }
+        guard !cancelled else { return }
         c.sending = true
         card = c
         await commit(c, pageHost: pageURL.flatMap { URL(string: $0)?.host })
     }
 
-    /// Makes the items the card chose and sends them: handed to the background session and closed (an App Group
-    /// build), or sent here with v1.1's card until "Sent" (the ad-hoc Mac).
+    /// Makes the items the card chose and sends them: handed to the share's background session and closed (an App Group
+    /// build, F04 in use), or sent here with v1.1's card until "Sent" (the ad-hoc Mac, or F04's Use switch off).
     private func commit(_ c: ShareInPlaceCard, pageHost: String?) async {
         let store = self.store
+        // F04's Use switch: off, the card waits until the item is sent, as v1.1 does (LAB-PROTOCOL 2.9.6).
+        var inPlace = false
+        if labFeatures.backgroundPublishing, store.isShared {
+            inPlace = await AppModel.onStorage { LabPreferences(store: store).inUse("F04") }
+        }
         var made: [Result<ItemInput, Error>] = []
         var files: [URL?] = []
         var lines: [String] = []
         for payload in payloads {
             do {
-                var mode: LabShare.SendAs? = c.sendAsOffered ? c.sendAs : .page
+                // The card's mode: F10's choice, or (F10 off) a Safari selection as an excerpt, else the page.
+                var mode = c.sendAs
                 if c.linkInstead { mode = .link }
                 var input: ItemInput
                 switch payload {
-                case let .text(text) where c.asExcerpt:
+                case .text(let text) where c.asExcerpt, .link(_, _, let text?) where c.asExcerpt:
                     let r = ShareNormaliser.normalise(text: text, source: ShareNormaliser.sourceSelection)
                     guard let item = LabShare.excerptInput(text: r.excerpt ?? text, url: r.url, pageTitle: nil) else {
                         throw ShareError("content", "There’s nothing here Send to Daylight can send.")
                     }
                     input = item
-                case let .file(url, name) where labFeatures.backgroundPublishing && store.isShared:
+                case let .file(url, name) where inPlace:
                     // Streamed from the file by the frame builder (never all of it in memory).
                     if let link = AppModel.linkInShortcutFile(url) {
                         input = .link(link, title: (name as NSString).deletingPathExtension)
@@ -345,39 +404,55 @@ extension ShareExtensionModel {
             let mode = c.sendAs.rawValue
             await AppModel.onStorage { LabPreferences(store: store).setSendAs(mode, host: host) }
         }
-        if labFeatures.backgroundPublishing, store.isShared, let uploads = backgroundUploads ?? Self.systemUploads(store) {
-            await publishInBackground(made, files: files, uploads: uploads)
+        guard !cancelled else { return }
+        if inPlace {
+            await publishInBackground(made, files: files)
         } else {
             await send(prepared: made, preparedNote: lines.first)
         }
     }
 
-    /// The system's background session for this App Group (nil where there is none).
-    static func systemUploads(_ store: SharedStore) -> BackgroundUploads? {
-        #if canImport(ObjectiveC)
-        return BackgroundUploadSession(appGroup: store.appGroup)
-        #else
-        return nil
-        #endif
+    /// One share's background session (F04): the system's, "com.daylight.share.bg.<attempt>", whose answers this process
+    /// handles while it runs (`BackgroundUploadSession.connect`), or the one `make` gives (tests), wired the same way.
+    /// The failure notice goes to `center` (the system's notification center when nil). Touches storage when it answers.
+    nonisolated static func backgroundSession(attempt: String, store: SharedStore,
+                                              make: ((_ attempt: String, _ onAnswer: @escaping BackgroundAnswer) -> BackgroundUploads)?,
+                                              center: NoticeCenter?) -> BackgroundUploads {
+        let notices = FailureNotices(center: center ?? SystemNoticeCenter.shared, prefs: LabPreferences(store: store))
+        let name: @Sendable () -> String? = { store.pairing?.displayName }
+        guard let make else {
+            return BackgroundUploadSession.connect(attempt: attempt, store: store, notices: notices, daylightName: name)
+        }
+        let box = BackgroundPublisher.SessionBox()
+        let session = make(attempt, BackgroundPublisher.answers(store: store, notices: notices, daylightName: name, box: box))
+        box.session = session
+        return session
     }
 
-    /// F04 with an App Group: builds each item's frames, starts their uploads and closes; the app reads the answers
-    /// (`BackgroundPublisher.complete`) and posts the notice when one fails. Anything refused here (too big, not a web
-    /// address) shows on the card, as v1.1 shows it.
-    private func publishInBackground(_ made: [Result<ItemInput, Error>], files: [URL?], uploads: BackgroundUploads) async {
+    /// F04 with an App Group: builds each item's frames, starts their uploads on the share's own background session and
+    /// closes. Answers heard while this extension still runs are handled here (the row, the frame files, the failure
+    /// notice); the app hears the rest (`BackgroundUploadSession`). Anything refused here (too big, not a web address)
+    /// shows on the card, as v1.1 shows it. An excerpt or a note keeps the card open for F11's once-only line.
+    private func publishInBackground(_ made: [Result<ItemInput, Error>], files: [URL?]) async {
         let store = self.store
+        let make = backgroundSession
+        let center = noticeCenter
+        let attempt = BackgroundPublisher.newAttempt()
         phase = .sending
-        let problems = await AppModel.onStorage { () -> [String] in
-            guard let pairing = store.pairing else { return [ShareError.notPaired.message] }
+        let outcome = await AppModel.onStorage { () -> (problems: [String], tooBig: Bool, started: [OutboxRow]) in
+            guard let pairing = store.pairing else { return ([ShareError.notPaired.message], false, []) }
+            let uploads = Self.backgroundSession(attempt: attempt, store: store, make: make, center: center)
             let publisher = BackgroundPublisher(outbox: OutboxStore(store: store), uploads: uploads)
             var out: [String] = []
+            var tooBig = false
             var started: [OutboxRow] = []
             for (k, r) in made.enumerated() {
                 do {
                     started.append(try publisher.start(try r.get(), file: files[k], pairing: pairing,
                                                        from: DaylightShare.deviceName(store: store),
-                                                       app: DaylightShare.appIdentifier))
+                                                       app: DaylightShare.appIdentifier, attempt: attempt))
                 } catch {
+                    if (error as? ShareError)?.code == "too-large" { tooBig = true }
                     out.append((error as? ShareError)?.message ?? error.localizedDescription)
                 }
             }
@@ -387,13 +462,20 @@ extension ShareExtensionModel {
                 prefs.shareSheetUsed = true
                 ActivityLog(store: store).add(type: "send", rows: started)
             }
-            return out
+            return (out, tooBig, started)
         }
-        if problems.isEmpty {
-            done()
+        refusedTooBig = outcome.tooBig
+        if outcome.problems.isEmpty {
+            if let line = await labOnceNote(excerpt: Self.sentExcerpt(outcome.started)), let first = outcome.started.first {
+                // F11's line, once: the card stays until Done so it can be read.
+                note = line
+                phase = .sent(RowText(row: first))
+            } else {
+                done()
+            }
         } else {
-            phase = .result(title: problems.count == made.count ? "Not sent" : "Not everything was sent",
-                            message: problems.joined(separator: " "))
+            phase = .result(title: outcome.problems.count == made.count ? "Not sent" : "Not everything was sent",
+                            message: outcome.problems.joined(separator: " "))
         }
     }
 }
@@ -589,6 +671,28 @@ public struct ReviewView: View {
         }
         .buttonStyle(.bordered)
         .comfortBorder()
+    }
+}
+
+/// The F02 entry point (LAB-PLAN 3.1, F02e; W1): "Send files over 9 MB ›" under v1.1's too-big sentence when a file is
+/// refused. A tap runs the F02 gate and shows its one sentence under it: `needs-server` (with Copy Server code) until a
+/// Daylight server is set up, `later` once one is ready (F02 itself comes in Wave S). The share card shows it with Lab on
+/// in builds that turn on `LabShareFeatures.bigFilesEntry`; an app's own too-big message can place it too.
+public struct BigFilesEntry: View {
+    @ObservedObject var lab: LabModel
+
+    public init(lab: LabModel) {
+        self.lab = lab
+    }
+
+    public static let id = "lab-big-files"
+
+    public var body: some View {
+        LabGateButton(lab: lab, feature: "F02", action: {}) {
+            Text(LabText["bigFiles"]).wrapping(LabText["bigFiles"]).comfortTarget()
+                .accessibilityIdentifier(Self.id)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

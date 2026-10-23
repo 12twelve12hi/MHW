@@ -280,6 +280,18 @@ these need a real device once A4 and A5 have wired them:
 - F01 and F27: with VoiceOver, a row that reaches the Reader announces "In your Reader ✓, {title}"; the step line is
   not read out.
 - F26.1: Send a test article from Setup check reaches the Reader and ticks Delivered and In your Reader on Rooted 2.
+- F01.1 (iPhone and Mac): with the app open, a link sent to Rooted 2 with the Inbox in front shows "In your Reader ✓"
+  within 45 s of "On your Daylight ✓" (the faster checks, `AppModel.fastCheck`), and VoiceOver announces it.
+- F10.4 (the lab iPhone of the W1 round, its model recorded in DEVICE-CHECKS.md): Review renders the 1 MB fixture page
+  within 1 s, and the edited title is the title sent.
+- F04's background sessions on the iPhone: share twice within a few seconds (the OS reuses the share extension's
+  process): both items go, each on its own session; a 413 answered while the extension still runs posts the notice
+  from the extension; with the extension gone, the OS wakes the app (`handleEventsForBackgroundURLSession`) and the
+  row ends `sent` or `failed` without a duplicate publish.
+- F04 on a team-signed Mac (6.5 Q6) with the menu-bar app running: Share › Daylight from Safari, Finder and Preview
+  closes at once; the app never holds the extension's session while the extension runs; a share whose extension has
+  gone is taken over by the app after 15 minutes (`BackgroundPublisher.adoptable`) and ends `sent` or `failed`; the
+  notice posted from the Share extension shows as the app's.
 
 **Once the Daylight server is deployed** (LOOSE-ENDS: the Cloudflare secrets), on the iPhone or the Mac: paste the
 deploy's setup link in Lab settings › Daylight server › *Set up with a link*. The question names the link's own

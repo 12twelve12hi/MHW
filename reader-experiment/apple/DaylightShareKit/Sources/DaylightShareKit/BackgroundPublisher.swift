@@ -3,7 +3,7 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// Upload tasks that outlive the process that started them: a background `URLSession` in the apps
+/// Upload tasks that outlive the process that started them: one background `URLSession` per share in place
 /// (`BackgroundUploadSession`), a fake in tests.
 public protocol BackgroundUploads: AnyObject {
     /// Starts one upload of `file` as the body of `request`, labelled `description` ("<id>:<part>:<attempt>").
@@ -14,12 +14,29 @@ public protocol BackgroundUploads: AnyObject {
     func cancel(where matches: @escaping (String) -> Bool) async
 }
 
+/// One background upload's answer, as the session heard it: the task's label, its HTTP status (nil when there was
+/// none) and its error.
+public typealias BackgroundAnswer = @Sendable (_ description: String, _ status: Int?, _ error: Error?) async -> Void
+
 /// Share in place's first attempt (LAB-PLAN F04, iPhone and Mac with an App Group): the share extension builds the
 /// frames as files (`FrameFileBuilder`, two passes, never the whole file in memory), saves the row `sending` with its
-/// background attempt, starts one upload task per frame on the background session and closes. The OS finishes the
-/// uploads; their answers come back here (`complete`), in the app: `handleEventsForBackgroundURLSession` on iPhone, at
-/// launch and while it runs on the Mac.
+/// background attempt, starts one upload task per frame on that attempt's own background session and closes. The OS
+/// finishes the uploads, and every answer goes to `complete`, in whichever process holds the session:
 ///
+/// - **One session per share, per process.** Apple's rule for app extensions is one process per background session, and
+///   one session object per identifier in a process. Each share in place gets its own session,
+///   "com.daylight.share.bg.<attempt>" (`sessionIdentifier(attempt:)`): an extension process the OS reuses for a second
+///   share makes a second session with another identifier, and the app never holds an identifier the extension uses.
+///   `BackgroundUploadSession.connect` keeps one session object per identifier in a process.
+/// - **The extension hears its own answers** while it still runs (a link's POST is usually answered within a second of
+///   the card closing): the row becomes `sent` or `failed`, the frame files go and the failure notice is posted there.
+/// - **The app hears the rest.** iPhone: the OS wakes it for a session whose extension has gone
+///   (`handleEventsForBackgroundURLSession`, `handleEvents(identifier:…)`), the only time it connects to one. Mac: the app
+///   is never woken for them, so it takes over a session once its share is `adoptAfter` (15 minutes) old, by which time
+///   the extension that started it has ended (`adoptable`, `AppModel.refresh`); until then the share extension's process
+///   hears the answers.
+///
+/// What an answer does:
 /// - All parts 2xx: the row is `sent`. ntfy.sh dates an attachment from its upload, and the parts can finish hours
 ///   apart, so a row of more than one part counts as an attachment row and its `lastPublish` is the first part's
 ///   completion; when the last part completes more than 170 minutes after the first, part 0 may already be gone, and the
@@ -29,15 +46,46 @@ public protocol BackgroundUploads: AnyObject {
 ///   cancelled (in place of "later frames are not published"), and the failure notice is posted (`FailureNotices`).
 /// - An answer for an attempt the row no longer waits for (the app re-sent it, it was removed) is ignored.
 ///
-/// Re-sends run in the app as today (`ShareSender`), from the stored body. Ad-hoc Mac builds (no App Group) publish in
-/// the extension as v1.1 does and never use this.
+/// Re-sends run in the app as today (`ShareSender`), from the stored body. A `sending` row whose attempt has live tasks
+/// in a session this process holds is not stale (`liveAttempts(waiting:)`, once per tick); otherwise v1.1's 15 minutes
+/// apply. Ad-hoc Mac builds (no App Group) publish in the extension as v1.1 does and never use this.
 public final class BackgroundPublisher {
-    /// The background session's identifier, the same in the app and its share extension.
-    public static let sessionIdentifier = "com.daylight.share.bg"
+    /// The start of every share in place's background session identifier: "com.daylight.share.bg.<attempt>".
+    public static let sessionPrefix = "com.daylight.share.bg."
     /// The frame files' folder beside the outbox.
     public static let folder = "bg"
     /// A row whose last part came this long after its first is re-sent at once (part 0 may have expired: 180 min).
     public static let partsApartLimit: TimeInterval = 170 * 60
+    /// The Mac app takes over a share's session once the share is this old (v1.1's stale time): the extension process
+    /// that started it has ended by then, so no two processes use one session.
+    public static let adoptAfter: TimeInterval = DLS.sendingStale
+
+    /// A new attempt id (a lowercased UUID): one per share in place, shared by its rows, and its session's name.
+    public static func newAttempt() -> String { UUID().uuidString.lowercased() }
+
+    /// The background session of one share in place: "com.daylight.share.bg.<attempt>".
+    public static func sessionIdentifier(attempt: String) -> String { sessionPrefix + attempt }
+
+    /// The attempt a session identifier belongs to, or nil when it is not one of ours.
+    public static func attempt(ofSession identifier: String) -> String? {
+        guard identifier.hasPrefix(sessionPrefix) else { return nil }
+        let a = String(identifier.dropFirst(sessionPrefix.count))
+        guard !a.isEmpty, !a.contains(":"), !a.contains(".") else { return nil }
+        return a
+    }
+
+    /// The attempts the outbox still waits for: `sending` rows handed to a background session.
+    public static func waiting(_ rows: [OutboxRow]) -> Set<String> {
+        Set(rows.compactMap { $0.status == .sending ? $0.bgAttempt : nil })
+    }
+
+    /// The Mac app's take-overs (`adoptAfter`): the attempts of `sending` rows whose share is at least 15 minutes old.
+    public static func adoptable(_ rows: [OutboxRow], now: Date) -> Set<String> {
+        Set(rows.compactMap { r in
+            guard r.status == .sending, let a = r.bgAttempt, now.timeIntervalSince(r.created) >= adoptAfter else { return nil }
+            return a
+        })
+    }
 
     public let outbox: OutboxStore
     let uploads: BackgroundUploads
@@ -62,10 +110,12 @@ public final class BackgroundPublisher {
 
     /// Builds `input`'s frames and starts their uploads, then returns the row (`sending`), or throws ShareError for bad
     /// input (nothing is stored). A file goes from `file` (read in chunks); a page or a file given as `input.content` is
-    /// written to a file first; a link is one small frame.
+    /// written to a file first; a link is one small frame. `attempt`: the share's attempt id, whose session `uploads` is
+    /// (`sessionIdentifier(attempt:)`); every row of one share has the same one.
     @discardableResult
     public func start(_ input: ItemInput, file: URL? = nil, pairing: Pairing, from: String = "", app: String = "",
-                      chunkSize: Int = DLS.chunk, nonces: [Data]? = nil) throws -> OutboxRow {
+                      attempt: String = BackgroundPublisher.newAttempt(), chunkSize: Int = DLS.chunk,
+                      nonces: [Data]? = nil) throws -> OutboxRow {
         var item = input
         if item.from == nil { item.from = from }
         if item.app == nil { item.app = app }
@@ -74,7 +124,6 @@ public final class BackgroundPublisher {
         let relay = try RelayClient(relay: pairing.relay)
         let fm = FileManager.default
         try fm.createDirectory(at: framesDirectory, withIntermediateDirectories: true)
-        let attempt = UUID().uuidString.lowercased()
         let t = now()
         var row: OutboxRow
         var frames: [FrameFileBuilder.FrameFile]
@@ -125,7 +174,7 @@ public final class BackgroundPublisher {
         return row
     }
 
-    // MARK: Answers (the app)
+    // MARK: Answers (the process that holds the session)
 
     /// "<id>:<part>:<attempt>".
     public static func describe(id: String, part: Int, attempt: String) -> String { "\(id):\(part):\(attempt)" }
@@ -223,7 +272,7 @@ public final class BackgroundPublisher {
         return outcome
     }
 
-    /// The background attempts with live tasks (for `ShareSender.liveBackgroundAttempts`, once per tick).
+    /// The attempts with live tasks in this publisher's session.
     public func liveAttempts() async -> Set<String> {
         Set(await uploads.liveDescriptions().compactMap { Self.parse($0)?.attempt })
     }
@@ -232,21 +281,158 @@ public final class BackgroundPublisher {
     public func removeFrames(_ id: String) {
         for f in FrameFileBuilder.frameFiles(id: id, in: framesDirectory) { try? FileManager.default.removeItem(at: f) }
     }
+
+    // MARK: Sessions
+
+    /// Holds a session weakly for its own answers (a session keeps its answer handler, so the handler must not keep it).
+    public final class SessionBox: @unchecked Sendable {
+        public weak var session: BackgroundUploads?
+        public init() {}
+    }
+
+    /// What a session does with each answer it hears: `complete` on `store`'s outbox once storage is settled, cancelling
+    /// through the session in `box` (the one that heard it), with `notices` for the failure notice.
+    public static func answers(store: SharedStore, notices: FailureNotices?, daylightName: @escaping @Sendable () -> String?,
+                               box: SessionBox) -> BackgroundAnswer {
+        { description, status, error in
+            await store.ready()
+            guard let uploads = box.session else { return }
+            let publisher = BackgroundPublisher(outbox: OutboxStore(store: store), uploads: uploads, notices: notices,
+                                                daylightName: daylightName)
+            _ = await publisher.complete(description: description, status: status, error: error)
+        }
+    }
+
+    /// The attempts with live tasks in the sessions of `registry` (this process's), for
+    /// `ShareSender.liveBackgroundAttempts`, once per tick. A session with no live task whose attempt the outbox no
+    /// longer waits for (`waiting`) is let go (`release`), so no process holds it any more.
+    static func liveAttempts<S: BackgroundUploads>(in registry: BackgroundSessionRegistry<S>, waiting: Set<String>,
+                                                   release: (S) -> Void) async -> Set<String> {
+        var out = Set<String>()
+        for (identifier, session) in registry.all {
+            let live = Set(await session.liveDescriptions().compactMap { Self.parse($0)?.attempt })
+            out.formUnion(live)
+            if live.isEmpty, let a = Self.attempt(ofSession: identifier), !waiting.contains(a),
+               registry.remove(identifier, session) {
+                release(session)
+            }
+        }
+        return out
+    }
+}
+
+/// The background sessions this process holds, one object per identifier (Apple: a process makes one session per
+/// identifier; a second one with the same identifier is a duplicate the system warns about and may not deliver to).
+final class BackgroundSessionRegistry<Session: AnyObject> {
+    private let lock = NSLock()
+    private var sessions: [String: Session] = [:]
+    private var order: [String] = []
+
+    /// The session for `identifier`: the one this process already has, else `make()`'s (kept). `made` says which.
+    func session(_ identifier: String, make: () -> Session) -> (session: Session, made: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let s = sessions[identifier] { return (s, false) }
+        let s = make()
+        sessions[identifier] = s
+        order.append(identifier)
+        return (s, true)
+    }
+
+    /// Every session held, oldest first.
+    var all: [(identifier: String, session: Session)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return order.compactMap { id -> (identifier: String, session: Session)? in
+            guard let s = sessions[id] else { return nil }
+            return (identifier: id, session: s)
+        }
+    }
+
+    /// Forgets `session` (when it is still the one held for `identifier`); returns whether it did.
+    @discardableResult
+    func remove(_ identifier: String, _ session: Session) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let s = sessions[identifier], s === session else { return false }
+        sessions[identifier] = nil
+        order.removeAll { $0 == identifier }
+        return true
+    }
 }
 
 #if canImport(ObjectiveC)
-/// The background `URLSession` (identifier `BackgroundPublisher.sessionIdentifier`, in the App Group's container):
-/// not discretionary, waking the app when it ends (iPhone), and giving each upload 24 hours. The app and its share
-/// extension each make one; the app's hears the answers (`onComplete`) and, when the OS woke it for them, calls the
-/// completion handler it was given (`handleEvents`).
+/// One share in place's background `URLSession` ("com.daylight.share.bg.<attempt>", in the App Group's container): not
+/// discretionary, waking the app when it ends while the extension has gone (iPhone), and giving each upload 24 hours.
+/// Made with `connect`, which keeps one object per identifier in a process; every task's answer goes to its
+/// `onAnswer`, and, when the OS woke the app for the session, the completion handler it was given (`finish`) is called
+/// once every answer has been handled.
 public final class BackgroundUploadSession: NSObject, BackgroundUploads, URLSessionTaskDelegate {
+    public let identifier: String
     private var session: URLSession!
     private let lock = NSLock()
-    private var finishHandlers: [() -> Void] = []
-    /// Each task's answer: its label, its HTTP status (nil when none) and its error.
-    public var onComplete: ((_ description: String, _ status: Int?, _ error: Error?) -> Void)?
+    private var finishHandlers: [() -> Void]
+    private var answer: BackgroundAnswer
+    /// Answers being handled: the OS's completion handler waits for them.
+    private let answering = DispatchGroup()
 
-    public init(appGroup: String?, identifier: String = BackgroundPublisher.sessionIdentifier) {
+    static let registry = BackgroundSessionRegistry<BackgroundUploadSession>()
+
+    /// This process's session for `identifier`: the one it already holds, else a new one, which reconnects to the
+    /// tasks the OS keeps under that identifier (the app woken for a share's session, or the Mac app taking one over).
+    /// `onAnswer` hears every task's answer from now on; `finish` (the OS's completion handler, iPhone) is called once
+    /// the session has delivered its events and every answer has been handled.
+    public static func connect(identifier: String, appGroup: String?, finish: (() -> Void)? = nil,
+                               onAnswer: @escaping BackgroundAnswer) -> BackgroundUploadSession {
+        let held = registry.session(identifier) {
+            BackgroundUploadSession(identifier: identifier, appGroup: appGroup, finish: finish, onAnswer: onAnswer)
+        }
+        if !held.made {
+            held.session.setAnswer(onAnswer)
+            if let finish { held.session.handleEvents(finish) }
+        }
+        return held.session
+    }
+
+    /// The share's session for `attempt`, whose answers `complete` handles on `store`'s outbox (and posts `notices`).
+    @discardableResult
+    public static func connect(attempt: String, store: SharedStore, notices: FailureNotices?,
+                               daylightName: @escaping @Sendable () -> String?,
+                               finish: (() -> Void)? = nil) -> BackgroundUploadSession {
+        let box = BackgroundPublisher.SessionBox()
+        let s = connect(identifier: BackgroundPublisher.sessionIdentifier(attempt: attempt), appGroup: store.appGroup,
+                        finish: finish,
+                        onAnswer: BackgroundPublisher.answers(store: store, notices: notices, daylightName: daylightName, box: box))
+        box.session = s
+        return s
+    }
+
+    /// The attempts with live tasks in the sessions this process holds; lets go of the sessions whose attempt the outbox
+    /// no longer waits for (`waiting`) and that have no task left.
+    public static func liveAttempts(waiting: Set<String>) async -> Set<String> {
+        await BackgroundPublisher.liveAttempts(in: registry, waiting: waiting) { $0.release() }
+    }
+
+    /// iPhone's `application(_:handleEventsForBackgroundURLSession:completionHandler:)`: when `identifier` is a share's
+    /// session, reconnects to it once `store` is settled (answers go to `complete`, notices to `notices`) and calls
+    /// `completion` when they have been handled; returns false for any other identifier (call `completion` yourself).
+    @discardableResult
+    public static func handleEvents(identifier: String, store: SharedStore, notices: FailureNotices?,
+                                    daylightName: @escaping @Sendable () -> String?,
+                                    completion: @escaping () -> Void) -> Bool {
+        guard let attempt = BackgroundPublisher.attempt(ofSession: identifier) else { return false }
+        Task {
+            await store.ready()
+            BackgroundUploadSession.connect(attempt: attempt, store: store, notices: notices, daylightName: daylightName,
+                                            finish: completion)
+        }
+        return true
+    }
+
+    private init(identifier: String, appGroup: String?, finish: (() -> Void)?, onAnswer: @escaping BackgroundAnswer) {
+        self.identifier = identifier
+        answer = onAnswer
+        finishHandlers = finish.map { [$0] } ?? []
         super.init()
         let c = URLSessionConfiguration.background(withIdentifier: identifier)
         c.sharedContainerIdentifier = appGroup
@@ -255,7 +441,14 @@ public final class BackgroundUploadSession: NSObject, BackgroundUploads, URLSess
         c.sessionSendsLaunchEvents = true
         #endif
         c.timeoutIntervalForResource = 24 * 60 * 60
+        // The handlers are in place before the session exists: it may deliver at once.
         session = URLSession(configuration: c, delegate: self, delegateQueue: nil)
+    }
+
+    private func setAnswer(_ onAnswer: @escaping BackgroundAnswer) {
+        lock.lock()
+        answer = onAnswer
+        lock.unlock()
     }
 
     public func upload(_ request: URLRequest, fromFile file: URL, description: String) {
@@ -272,25 +465,43 @@ public final class BackgroundUploadSession: NSObject, BackgroundUploads, URLSess
         for t in await session.allTasks where matches(t.taskDescription ?? "") { t.cancel() }
     }
 
-    /// iPhone's `application(_:handleEventsForBackgroundURLSession:completionHandler:)`: the handler is called once the
-    /// session has delivered every answer.
+    /// Adds the OS's completion handler (iPhone): called once the session has delivered its events and every answer
+    /// has been handled.
     public func handleEvents(_ completion: @escaping () -> Void) {
         lock.lock()
         finishHandlers.append(completion)
         lock.unlock()
     }
 
+    /// Lets go of the session (it has no task left): this process no longer holds the identifier.
+    func release() {
+        setAnswer { _, _, _ in }
+        session.finishTasksAndInvalidate()
+    }
+
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         let status = (task.response as? HTTPURLResponse)?.statusCode
-        onComplete?(task.taskDescription ?? "", status, error)
+        let description = task.taskDescription ?? ""
+        lock.lock()
+        let answer = self.answer
+        lock.unlock()
+        let group = answering
+        group.enter()
+        Task.detached {
+            await answer(description, status, error)
+            group.leave()
+        }
     }
 
     public func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
-        lock.lock()
-        let handlers = finishHandlers
-        finishHandlers = []
-        lock.unlock()
-        DispatchQueue.main.async { handlers.forEach { $0() } }
+        answering.notify(queue: .main) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let handlers = self.finishHandlers
+            self.finishHandlers = []
+            self.lock.unlock()
+            handlers.forEach { $0() }
+        }
     }
 }
 #endif

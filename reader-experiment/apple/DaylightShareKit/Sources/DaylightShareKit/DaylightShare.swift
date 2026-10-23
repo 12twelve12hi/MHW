@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// App-level conveniences shared by the apps and extensions.
 public enum DaylightShare {
@@ -38,12 +41,12 @@ public enum DaylightShare {
 
     /// A sender for the stored pairing, or ShareError.notPaired. Its ack reads feed the Lab ledger (`lab.json` next to the
     /// outbox; LAB-PROTOCOL 2.2.6), whether Lab is on or off, so turning Lab on shows the Inbox's states at once; with Lab
-    /// off nothing shows them.
-    public static func sender(store: SharedStore = .shared) throws -> ShareSender {
+    /// off nothing shows them. `session`: the URL session for the relay (tests give a stand-in's; nil: the default).
+    public static func sender(store: SharedStore = .shared, session: URLSession? = nil) throws -> ShareSender {
         guard let pairing = store.pairing else { throw ShareError.notPaired }
         let outbox = OutboxStore(store: store)
         return try ShareSender(pairing: pairing, outbox: outbox, from: deviceName(store: store), app: appIdentifier,
-                               onAckHeader: LabLedger(outbox: outbox).hook())
+                               session: session, onAckHeader: LabLedger(outbox: outbox).hook())
     }
 
     /// Normalises what a user typed into "Send a link": a URL, text containing one, or a bare domain.

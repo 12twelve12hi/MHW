@@ -151,6 +151,78 @@ final class OfflineQueueTests: XCTestCase {
         XCTAssertEqual(resent.first?.status, .sent)
     }
 
+    /// A row the relay refused (429: ntfy.sh's daily quota) while this device stayed online is not the queue's: an
+    /// hour of refreshes, one a minute (the Mac app's timer while a row waits), tries it only as v1.1's back-off says
+    /// (2, 4, 8 and 16 minutes after each try), and the queue schedules no passes of its own (review finding: a pass
+    /// every 3 minutes all day).
+    func testARowTheRelayRefusedKeepsItsBackOff() async throws {
+        let sender = try makeSender()
+        let queue = makeQueue(sender, path: FakePath())
+        await queue.pathChanged(true) // the launch's first report: nothing waits
+        FakeRelay.with { $0.failNext = Array(repeating: 429, count: 1000) }
+        let row = try await sender.send(.link("https://example.com/quota", title: "Quota"))
+        XCTAssertEqual(row.status, .failed)
+        XCTAssertEqual(row.errorCode, "network")
+        XCTAssertEqual(row.attempts, 1)
+        XCTAssertEqual(row.http, 429)
+        let before = publishedTopics().count
+        var tried: [TimeInterval] = []
+        let start = clock
+        for _ in 0..<60 {
+            clock += 60
+            let n = await queue.flushIfDue()
+            if !n.isEmpty { tried.append(clock.timeIntervalSince(start)) }
+        }
+        XCTAssertEqual(tried, [120, 360, 840, 1800], "v1.1's back-off")
+        XCTAssertEqual(publishedTopics().count - before, 4)
+        let scheduled = await queue.hasScheduledPass
+        XCTAssertFalse(scheduled)
+        await queue.stop()
+    }
+
+    /// Coming back online after the path source said offline sends what waits at once, whatever its back-off; a pass
+    /// that hits a 429 schedules no follow-up (the rest keeps its back-off until the next reconnect).
+    func testComingBackOnlineSendsWhateverTheBackOff() async throws {
+        let sender = try makeSender()
+        let queue = makeQueue(sender, path: FakePath())
+        FakeRelay.with { $0.failNext = [503, 503, 503, 503] }
+        let row = try await sender.send(.link("https://example.com/later", title: "Later"))
+        XCTAssertEqual(row.errorCode, "network")
+        await queue.pathChanged(false)
+        clock += 30 // not due by its back-off (2 minutes)
+        await queue.pathChanged(true)
+        XCTAssertEqual(sender.outbox.row(row.id)?.status, .sent, "a reconnect sends it now")
+
+        // A reconnect pass that meets a 429: no follow-up pass of its own.
+        clock += 1
+        _ = try await sender.send(.link("https://example.com/a", title: "A"), defer: true)
+        _ = try await sender.send(.link("https://example.com/b", title: "B"), defer: true)
+        await queue.pathChanged(false)
+        clock += 600
+        FakeRelay.with { $0.failNext = [429] }
+        await queue.pathChanged(true)
+        let followUp = await queue.followUp
+        let scheduled = await queue.hasScheduledPass
+        XCTAssertFalse(followUp)
+        XCTAssertFalse(scheduled)
+        await queue.stop()
+    }
+
+    /// The path source's reports reach the app (its rows read "Waiting for connection" while offline, 2.5).
+    func testThePathReachesTheApp() async throws {
+        let sender = try makeSender()
+        let path = FakePath()
+        let heard = Heard()
+        let queue = OfflineQueue(sender: { sender }, path: path, now: { [unowned self] in self.clock },
+                                 onPath: { online in await heard.add(online) })
+        await queue.start()
+        path.set(false)
+        try await waitFor { await heard.values == [false] }
+        path.set(true)
+        try await waitFor { await heard.values == [false, true] }
+        await queue.stop()
+    }
+
     func waitFor(_ condition: @escaping () async -> Bool, timeout: TimeInterval = 5) async throws {
         let end = Date().addingTimeInterval(timeout)
         while Date() < end {
@@ -159,6 +231,12 @@ final class OfflineQueueTests: XCTestCase {
         }
         XCTFail("timed out")
     }
+}
+
+/// What a path callback heard.
+actor Heard {
+    var values: [Bool] = []
+    func add(_ v: Bool) { values.append(v) }
 }
 
 /// A network path that the test switches.

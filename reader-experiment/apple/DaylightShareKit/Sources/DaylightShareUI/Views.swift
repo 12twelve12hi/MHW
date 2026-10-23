@@ -237,6 +237,14 @@ public struct HistoryRowView: View {
             .filter { !$0.isEmpty }.joined(separator: ", ")
     }
 
+    /// What the label's text says to VoiceOver where each text of a row is an element of its own (the Mac): "{label}.
+    /// {sentence}" when the sentence is hidden (a final row that is not the newest), so it is heard whether it shows or
+    /// not (2.5, F01.6); the label alone when the sentence follows as its own text. (On iPhone and iPad the row is one
+    /// element, `spokenLabel`.)
+    public static func spokenStatus(_ lab: LabRowText, showsDetail: Bool) -> String {
+        showsDetail ? lab.label : lab.a11yLabel
+    }
+
     @ViewBuilder private var statusLabel: some View {
         if let lab {
             let label = lab.label
@@ -245,6 +253,7 @@ public struct HistoryRowView: View {
                     .foregroundColor(StatusLabel.color(row))
                     .accessibilityHidden(true)
                 Text(label).listRowText(label)
+                    .accessibilityLabel(Self.spokenStatus(lab, showsDetail: showsDetail))
             }
             .dlsFont(.caption, weight: .medium)
         } else {

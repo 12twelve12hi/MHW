@@ -282,5 +282,82 @@ final class AppModelTests: XCTestCase {
         XCTAssertNil(moved["serverLocked"])
         XCTAssertEqual(Self.lockRequests(net).count, 1)
     }
+
+    // MARK: Lab W1 review fixes (A3)
+
+    /// 2.5's faster checks (F01.1): while the app shows, a link delivered a minute ago with no state yet makes the app
+    /// read the ack topic; the Inbox's "reader" state reaches the ledger, the row reads "In your Reader ✓" and VoiceOver
+    /// hears it. Settled, or with the window hidden, nothing is read.
+    @MainActor
+    func testFastChecksBringTheReaderStateWhileTheAppShows() async throws {
+        FakeRelay.reset()
+        let store = SharedStore(defaults: UserDefaults(suiteName: suite)!, directory: root)
+        let pairing = try Pairing.generate(relay: "https://relay.test", name: "Test Daylight")
+        await store.pair(pairing)
+        let id = "00112233445566778899aabbccddeeff"
+        let h = ItemHeader(id: id, kind: .url, url: "https://example.com/long", title: "A long read", sent: "")
+        OutboxStore(store: store).save(OutboxRow(id: id, kind: .url, title: "A long read", url: "https://example.com/long",
+                                                 header: h, created: Date().addingTimeInterval(-120), status: .delivered,
+                                                 delivered: Date().addingTimeInterval(-60)))
+        var said: [String] = []
+        let post = Announcer.post
+        Announcer.post = { said.append($0) }
+        defer { Announcer.post = post }
+        let model = AppModel(store: store)
+        model.relaySession = FakeRelay.session
+        try await waitFor("the history") { model.rows.count == 1 && model.lab.isLoaded }
+        XCTAssertEqual(model.rowText(model.rows[0]).label, RowText(row: model.rows[0]).label, "no Lab Inbox heard yet")
+
+        // Hidden: no check.
+        model.isVisible = false
+        let hidden = await model.fastCheck()
+        XCTAssertFalse(hidden)
+        model.isVisible = true
+
+        // The Lab Inbox says it is in the Reader.
+        let nowMs = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        let frame = try LabFrame.build(keys: pairing.keys, inbox: LabInboxInfo(lab: 1, app: "android/1.5.0", caps: ["st"]),
+                                       states: [LabState(i: id, s: "reader", t: nowMs)], from: "Test Daylight")
+        FakeRelay.inject(topic: pairing.keys.ackTopic, frame: frame, time: Int(Date().timeIntervalSince1970), attachment: false)
+        let read = await model.fastCheck()
+        XCTAssertTrue(read)
+        try await waitFor("the Reader state") { model.lab.ledger.state(id)?.s == "reader" }
+        XCTAssertEqual(model.rowText(model.rows[0]).label, "In your Reader ✓")
+        try await waitFor("the announcement") { said.contains("In your Reader ✓, A long read") }
+
+        // Settled: no more fast checks.
+        let again = await model.fastCheck()
+        XCTAssertFalse(again)
+    }
+
+    /// F07.1: rows that wait read "Waiting for connection" while the path monitor says offline, and v1.1's words when
+    /// it is online or not known (2.5 rule 2); the model publishes the path's state.
+    @MainActor
+    func testRowsWaitForTheConnectionWhileOffline() async throws {
+        FakeRelay.reset()
+        let store = SharedStore(defaults: UserDefaults(suiteName: suite)!, directory: root)
+        await store.pair(try Pairing.generate(relay: "https://relay.test", name: "Test Daylight"))
+        let model = AppModel(store: store)
+        model.relaySession = FakeRelay.session
+        try await waitFor("the first read") { model.isLoaded && model.lab.isLoaded }
+        let path = FakePath()
+        model.startOfflineQueue(path: path)
+        try await waitFor("offline") {
+            path.set(false)
+            return model.online == false
+        }
+        let sent = await model.send(.link("https://example.com/later", title: "Later"))
+        let row = try XCTUnwrap(sent)
+        XCTAssertEqual(row.status, .failed)
+        XCTAssertEqual(row.errorCode, "network")
+        XCTAssertEqual(row.attempts, 0, "deferred, not tried")
+        XCTAssertEqual(model.rowText(row).label, "Waiting for connection")
+        XCTAssertEqual(model.rowText(row).sentence, "It will send when this device is back online.")
+        // Back online: v1.1's words while it waits, and the queue sends it.
+        path.set(true)
+        try await waitFor("online") { model.online == true }
+        XCTAssertNotEqual(model.rowText(row).label, "Waiting for connection")
+        try await waitFor("sent") { model.rows.first?.status == .sent }
+    }
 }
 #endif

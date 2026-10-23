@@ -146,15 +146,17 @@ public enum LabShare {
 
     /// Shared text with Lab on (F16, F11 rule 3): a link with its headline as the title when the text holds one (every
     /// "headline + link" share stays a link), else a Markdown note ("Note - ….md", x-cap "excerpt"): text with no link
-    /// has nothing to fall back to, and the person chose it (LAB-DECISIONS, Oct 23). `app`: where the text came from,
-    /// when known. nil when there is nothing to send.
-    public static func textInput(_ text: String, title: String? = nil, clean: Bool, app: String? = nil, date: Date = Date(),
+    /// has nothing to fall back to, and the person chose it (LAB-DECISIONS, Oct 23). `title`: the share's subject (it
+    /// wins over the text's words); `fallbackTitle`: the title when the text gives none (the share item's own title for
+    /// text that is a link alone). `app`: where the text came from, when known. nil when there is nothing to send.
+    public static func textInput(_ text: String, title: String? = nil, clean: Bool, fallbackTitle: String? = nil,
+                                 app: String? = nil, date: Date = Date(),
                                  fetch: @escaping ShareNormaliser.PageFetch = ShareNormaliser.ephemeralFetch) async -> ItemInput? {
         let r = ShareNormaliser.normalise(text: text, subject: title ?? "", clean: clean)
         switch r.kind {
         case .link:
             guard let u = r.url else { return nil }
-            return await linkInput(url: u, title: r.title, text: nil, clean: clean, fetch: fetch).withOrig(r.orig)
+            return await linkInput(url: u, title: r.title ?? fallbackTitle, text: nil, clean: clean, fetch: fetch).withOrig(r.orig)
         case .note, .excerpt:
             return Excerpt.item(text: r.excerpt ?? text, app: app, date: date)?.input
         case .none:
