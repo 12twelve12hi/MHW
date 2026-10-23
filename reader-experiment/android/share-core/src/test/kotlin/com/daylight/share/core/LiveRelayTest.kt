@@ -2,6 +2,8 @@ package com.daylight.share.core
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Assume
 import org.junit.Test
 import java.io.File
@@ -51,5 +53,16 @@ class LiveRelayTest {
         }
         assertEquals(2, delivered)
         println("live round trip OK in ${System.currentTimeMillis() - t0} ms: delivered by ${out.row(link.id)!!.deliveredBy}")
+    }
+
+    /** The relay tells its clock when asked (`readClock`, the handover's resume): `/v1/health`'s Date, near the runner's. */
+    @Test
+    fun theRelayTellsItsClock() {
+        val relayUrl = System.getProperty("dls.liveRelay")
+        Assume.assumeTrue("set DLS_LIVE_RELAY to run", !relayUrl.isNullOrBlank())
+        val c = RelayClient(relayUrl!!).readClock()
+        println("live relay clock: $c")
+        assertNotNull("the relay's /v1/health answer had no Date", c)
+        assertTrue("the relay's clock is ${c!!.offsetMs} ms from the runner's", Math.abs(c.offsetMs) < 10 * 60_000L)
     }
 }
