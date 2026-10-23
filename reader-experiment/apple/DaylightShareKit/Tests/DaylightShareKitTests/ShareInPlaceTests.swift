@@ -71,7 +71,7 @@ final class ShareInPlaceTests: XCTestCase {
     }
 
     @MainActor
-    func waitFor(_ what: String, timeout: TimeInterval = 5, _ condition: () -> Bool) async throws {
+    func waitFor(_ what: String, timeout: TimeInterval = 5, _ condition: @escaping () -> Bool) async throws {
         let end = Date().addingTimeInterval(timeout)
         while Date() < end {
             if condition() { return }
