@@ -46,7 +46,10 @@ is forgotten, nothing is locked). Nothing for the app lanes to call.
 - `WhatsInLabView(lab:footer:useSwitch:onOpen:onOpenSetting:)`: short states only; the server group is always listed
   and never greyed; a tap runs the gate and shows its one sentence (`LabNote`). The ad-hoc Mac passes
   `footer: LabText.adHocMac`; `useSwitch` is for W1's Use switches.
-- `ServerSettingsView(lab:)`: the server section, where setup happens.
+- `ServerSettingsView(lab:)`: the server section, where setup happens. *Set up with a link* asks first
+  (`SetupLinkQuestion`): Set up reads the link and sends nothing; the question names that link's own address
+  (`LabText.setupConfirmText`); **Use it** sends that link, never what the field holds by then, and a field that holds
+  another link takes the question away (identifier `lab-setup-question`).
 - **The re-pairing follow-up.** After Switch, while Lab is on, the window presents it from `appSheets`
   (`AppModel.Presented.repaired`, `LabRepairedSheet`); swiped away, it stays at the top of `LabSettingsSection` until
   OK. `LabRepairedNote(repaired:onOK:)` is public, for a lane that wants it on its main screen too (as the extension's
@@ -66,8 +69,7 @@ is forgotten, nothing is locked). Nothing for the app lanes to call.
   `setLab(_:)` saves it there through `LabSettings`. With the App Group the card reads the app's switch (`model.lab`)
   and shows none; the iPhone's card never shows one. `ShareCardSample` cards take Lab from `-DLSLab` (on when not
   given), so the Mac's `needs-pairing` walk sees the switch off. Anything the Mac lane wants under the card's switch
-  while it is on goes in `ShareExtensionView(model:labRows:)` (an `AnyView`, nil by default). Note: the apps' README
-  (`../README.md`, "The Lab switch") still tells A2 to put the switch into `cardSettings` itself; it is there now.
+  while it is on goes in `ShareExtensionView(model:labRows:)` (an `AnyView`, nil by default).
 
 ## Tests
 
@@ -75,7 +77,8 @@ is forgotten, nothing is locked). Nothing for the app lanes to call.
 `ServerVectorTests` (`server/vectors`, the W0 subset), `LabLedgerTests`, `DaylightServerTests` (the client's flows on a
 stub network, re-pairing and Unpair included), `AppModelTests` (Switch locks the old server and presents the
 follow-up; Lab off shows nothing; the Share extension and the Safari handler lock too), `StorageResolutionTests` (the
-move into the App Group keeps Lab), `LabViewTests` (What's in Lab's cached states first) and `LabSkewTests` (F17: Swift's sender with and without the ledger against the JS reference as the
+move into the App Group keeps Lab), `LabViewTests` (What's in Lab's cached states first; the setup link's question
+names the link Use it sends) and `LabSkewTests` (F17: Swift's sender with and without the ledger against the JS reference as the
 Daylight through the mock relay, v1.0 and v1.1 peers, a Lab Inbox, two publishers in either order, Lab turned off).
 The skew suite drives `../scripts/e2e-receiver.mjs`, whose Lab options are:
 

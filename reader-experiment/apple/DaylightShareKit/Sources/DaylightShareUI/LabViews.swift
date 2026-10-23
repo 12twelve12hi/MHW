@@ -26,6 +26,8 @@ public enum LabIDs {
     public static let copyServerCode = "lab-server-copy"
     public static let setupField = "lab-setup-field"
     public static let setupButton = "lab-setup-button"
+    /// The setup link's question, "Use this Daylight server?" with the link's address (`SetupLinkQuestion`).
+    public static let setupQuestion = "lab-setup-question"
     public static let addressField = "lab-address-field"
     /// The re-pairing follow-up (`LabRepairedNote`), its Server code and its Copy button.
     public static let repaired = "lab-repaired"
@@ -534,6 +536,34 @@ public struct WhatsInLabView: View {
 
 // MARK: The Daylight server section (2.6)
 
+/// Set up with a link, steps 2 to 4 (2.6 "Setup link", DESIGN 3.5): Set up reads the link here and sends nothing; the
+/// question ("Use this Daylight server?") names the address of that very link (`LabText.setupConfirmText`); Use it sends
+/// that link and no other, whatever the field holds by then (as the JS ports keep the link they asked about). A field
+/// that no longer holds that link withdraws the question, so it never names one address while the field shows another.
+/// The Return that asked it (the iPhone's field takes it as Set up, `submitOnReturn`) is not a change of link.
+struct SetupLinkQuestion: Equatable {
+    /// The link as it was when Set up was tapped: what Use it sends.
+    let link: String
+    /// "{host} will get this pairing’s Server code. Continue only if this address is on your own Cloudflare account."
+    let body: String
+
+    /// Set up (step 2): the question for `field`'s link, or the module's message for a refused link (and no question).
+    static func ask(_ field: String) -> (question: SetupLinkQuestion?, error: String?) {
+        let r = LabCenter.checkSetupLink(field)
+        guard let body = r.confirm else { return (nil, r.error) }
+        return (SetupLinkQuestion(link: field, body: body), nil)
+    }
+
+    /// Whether the question still stands for what the field holds: the same link, line breaks aside.
+    func stands(for field: String) -> Bool {
+        Self.oneLine(field) == Self.oneLine(link)
+    }
+
+    private static func oneLine(_ s: String) -> String {
+        s.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "")
+    }
+}
+
 /// The Daylight server section (2.6), where setup happens, so it carries the long texts: the state ("Ready" or its long
 /// message, with the exact secret names); Set up with a link (first while the state says to paste a new setup link,
 /// else last); while the server is not set up, the steps to turn it on; the move question; "Your server" with its host
@@ -542,7 +572,7 @@ public struct WhatsInLabView: View {
 public struct ServerSettingsView: View {
     @ObservedObject var lab: LabModel
     @State private var setupLink = ""
-    @State private var setupConfirm: String?
+    @State private var setupQuestion: SetupLinkQuestion?
     @State private var setupSaid: String?
     @State private var setupWorking = false
     @State private var address = ""
@@ -680,17 +710,23 @@ public struct ServerSettingsView: View {
             field(S("setupPlaceholder"), text: $setupLink, label: S("setupRow"), id: LabIDs.setupField) {
                 if !setupWorking { checkSetupLink() }
             }
-            if let confirm = setupConfirm {
+            // The question is about the link as it was when Set up was tapped: another link in the field withdraws it.
+            .onChange(of: setupLink) { text in
+                if let q = setupQuestion, !q.stands(for: text) { setupQuestion = nil }
+            }
+            if let q = setupQuestion {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(S("setupConfirmTitle")).dlsFont(.headline).wrapping(S("setupConfirmTitle"))
                         .accessibilityAddTraits(.isHeader)
-                    Text(confirm).wrapping(confirm)
+                    Text(q.body).wrapping(q.body)
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: 10) { setupConfirmButtons }
                         VStack(alignment: .leading, spacing: 8) { setupConfirmButtons }
                     }
                 }
-                .onAppear { Announcer.announce(confirm) }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier(LabIDs.setupQuestion)
+                .onAppear { Announcer.announce(q.body) }
             } else {
                 Button {
                     checkSetupLink()
@@ -721,7 +757,7 @@ public struct ServerSettingsView: View {
         .buttonStyle(.borderedProminent)
         .comfortBorder()
         Button {
-            setupConfirm = nil
+            setupQuestion = nil
         } label: {
             Text(S("setupCancel")).wrapping(S("setupCancel")).comfortTarget()
         }
@@ -730,20 +766,22 @@ public struct ServerSettingsView: View {
     }
 
     private func checkSetupLink() {
-        let r = LabCenter.checkSetupLink(setupLink)
+        let r = SetupLinkQuestion.ask(setupLink)
         setupSaid = r.error
-        setupConfirm = r.confirm
+        setupQuestion = r.question
         if let e = r.error { Announcer.announce(e) }
     }
 
+    /// Use it: sends the link the question named (`SetupLinkQuestion.link`), never what the field holds by now.
     @MainActor private func runSetup() async {
-        setupConfirm = nil
+        guard let q = setupQuestion else { return }
+        setupQuestion = nil
         setupWorking = true
         Announcer.announce(S("setupWorking"))
-        let error = await lab.setup(link: setupLink)
+        let error = await lab.setup(link: q.link)
         setupWorking = false
         setupSaid = error ?? S("setupDone")
-        if error == nil { setupLink = "" }
+        if error == nil, q.stands(for: setupLink) { setupLink = "" }
         Announcer.announce(setupSaid ?? "")
     }
 

@@ -231,5 +231,52 @@ final class LabViewTests: XCTestCase {
         XCTAssertFalse(shared.showsCardLabSwitch)
         XCTAssertNil(group.defaults.object(forKey: "dls.lab"), "the app's switch: the card writes nothing")
     }
+
+    // MARK: Set up with a link (2.6 "Setup link", steps 2 to 4)
+
+    /// The question names the address of the link it was asked about, and Use it sends that link (the question's, not
+    /// the field's): a field that holds another link by then withdraws the question, so it never names one address while
+    /// another would be used. The Return that asked it (the iPhone's field) is no change of link. A refused link is the
+    /// module's message, with no question; Set up sends nothing either way.
+    @MainActor
+    func testTheSetupQuestionNamesTheLinkUseItSends() async throws {
+        let mine = "https://daylight-0123456789ab.example.workers.dev/setup#SETUP-JRTK-XSYV-FBNR-BSJP-AGJI-ZIDS-SD2A"
+        let other = "https://daylight-ba9876543210.someone-else.workers.dev/setup#SETUP-JRTK-XSYV-FBNR-BSJP-AGJI-ZIDS-SD2A"
+
+        let asked = SetupLinkQuestion.ask(mine)
+        let q = try XCTUnwrap(asked.question)
+        XCTAssertNil(asked.error)
+        XCTAssertEqual(q.link, mine, "Use it sends the link the question was asked about")
+        XCTAssertEqual(q.body, LabText.setupConfirmText("https://daylight-0123456789ab.example.workers.dev"))
+        XCTAssertTrue(q.body.hasPrefix("daylight-0123456789ab.example.workers.dev will get"), q.body)
+        XCTAssertTrue(q.stands(for: mine))
+        XCTAssertTrue(q.stands(for: mine + "\n"), "the Return that asked it")
+        XCTAssertFalse(q.stands(for: other), "another address in the field withdraws the question")
+        XCTAssertFalse(q.stands(for: mine + "x"))
+        XCTAssertFalse(q.stands(for: ""))
+        let theirs = try XCTUnwrap(SetupLinkQuestion.ask(other).question)
+        XCTAssertTrue(theirs.body.hasPrefix("daylight-ba9876543210.someone-else.workers.dev will get"), theirs.body)
+
+        let refused = SetupLinkQuestion.ask("https://daylight-help.example/setup#SETUP-JRTK-XSYV-FBNR-BSJP-AGJI-ZIDS-SD2A")
+        XCTAssertNil(refused.question)
+        XCTAssertEqual(refused.error, ServerCode.setupHostText)
+        let code = SetupLinkQuestion.ask("SERVER-UAP3-JDN6-YUOR-CUH7-GGOC-J35A-SRYA")
+        XCTAssertNil(code.question)
+        XCTAssertNotNil(code.error)
+
+        // Use it with the question's link: the setup request goes to that link's address only.
+        let store = makeStore("setup")
+        await store.pair(try Pairing.generate(relay: "https://relay.test", name: "Desk Daylight"))
+        let net = StubNet()
+        net.route("GET", "https://relay.test/") { _ in (200, Data()) }
+        net.json("POST", "https://daylight-0123456789ab.example.workers.dev/v1/setup", status: 409,
+                 ["error": ["code": "SETUP_USED"]])
+        let center = LabCenter(store: store, platform: "mac", fetch: net.fetch)
+        let said = await center.setup(link: q.link)
+        XCTAssertEqual(said, ServerMessages.errorMessage("SETUP_USED"))
+        let hosts = Set(net.requests.compactMap { $0.url?.host })
+        XCTAssertTrue(hosts.contains("daylight-0123456789ab.example.workers.dev"), "\(hosts)")
+        XCTAssertFalse(hosts.contains("daylight-ba9876543210.someone-else.workers.dev"), "\(hosts)")
+    }
 }
 #endif
