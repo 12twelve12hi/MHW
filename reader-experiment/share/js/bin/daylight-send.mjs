@@ -11,11 +11,11 @@ import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  ShareError, Sender, parsePairing, sha256, utf8, toHex, concat, webUrl, cleanTitle, cleanName, MAX_ITEM, tooBigMessage,
-  relayHost, PROTOCOL_VERSION,
+  ShareError, Sender, Receiver, parsePairing, sha256, utf8, toHex, concat, webUrl, cleanTitle, cleanName, MAX_ITEM,
+  tooBigMessage, relayHost, PROTOCOL_VERSION, RETURN_KINDS, fromUtf8,
 } from '../daylight-share.js';
 import {
-  LabLedger, labHook, describeLabRow, normaliseShare, LAB_TEXT, fillText, LAB_LEVEL,
+  LabLedger, labHook, describeLabRow, normaliseShare, LAB_TEXT, fillText, LAB_LEVEL, returnDeviceId,
 } from '../daylight-lab.js';
 import { FileStorage, FileLock } from './cli-store.mjs';
 
@@ -34,6 +34,9 @@ Usage:
   daylight-send status [<id>] [--json]      the newest item, or the one with this id (or the start of it)
   daylight-send tick [--json]               check for acks and re-send what is due, nothing else
   daylight-send pair <link|code>            save the pairing for later runs
+  daylight-send return --dump [--wait[=secs]]
+                                            read what your Daylight sends back, as a device (the return lane):
+                                            one JSON line per item, text and JSON contents included
 
 Options:
   --title T          the item's title
@@ -55,7 +58,7 @@ class CliError extends Error {
 }
 
 function parseArgs(argv) {
-  const o = { _: [], json: false, wait: null, waitFor: null, title: null, pairing: null, from: null, help: false, version: false };
+  const o = { _: [], json: false, wait: null, waitFor: null, title: null, pairing: null, from: null, help: false, version: false, dump: false };
   const bad = (m) => { throw new CliError(EXIT.other, `${m}\nRun daylight-send --help for the options.`, 'usage'); };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -66,6 +69,7 @@ function parseArgs(argv) {
     };
     if (a === '--') { o._.push(...argv.slice(i + 1)); break; }
     if (a === '--json') o.json = true;
+    else if (a === '--dump') o.dump = true;
     else if (a === '--wait') o.wait = DEFAULT_WAIT_S;
     else if (a.startsWith('--wait=')) {
       const s = Number(a.slice(7));
@@ -117,7 +121,7 @@ async function context(o) {
   const sender = new Sender({ pairing, storage, from, app: APP, onAckHeader: labHook(ledger) });
   const lock = new FileLock(path.join(dir, 'lock'));
   lockForSignals = lock;
-  return { dir, pairing, storage, ledger, sender, lock };
+  return { dir, pairing, storage, ledger, sender, lock, from };
 }
 
 /** tick() under the lock: acks (the Lab ledger learns from them too), then re-sends; then the ledger is pruned. */
@@ -290,6 +294,52 @@ async function cmdPair(src, o) {
   return EXIT.ok;
 }
 
+/** The text of a content whose type is text, JSON or XML (marks, queue and reading items are JSON), up to 1 MB. */
+const TEXTUAL = /^(text\/|application\/([\w.+-]+\+)?(json|xml)$)/i;
+function dumpLine(header, content, extras) {
+  const line = {
+    id: header.id, rk: extras?.rk ?? null, to: extras?.to ?? null, kind: header.kind, title: header.title ?? null,
+    url: header.url ?? null, name: header.name ?? null, mime: header.mime ?? null, size: content.length,
+    sha256: header.sha256 ?? null, sent: header.sent ?? null, from: header.from ?? null,
+  };
+  if (header.kind !== 'url' && TEXTUAL.test(header.mime ?? '') && content.length <= 1_000_000) {
+    try { line.text = fromUtf8(content); } catch { /* not UTF-8: size and sha256 only */ }
+  }
+  return line;
+}
+
+/**
+ * daylight-send return --dump (LAB-PLAN R2.3, L2): this computer as a device on the return lane. The first run says
+ * hello (so your Daylight counts it as a target); every run reads the shared return topic and its own, prints each
+ * item that arrives as one JSON line (every kind of return item, marks, queue and reading included), and acks with
+ * device frames under their daily cap (LAB-PROTOCOL 2.4.4). With --wait, it keeps reading every 5 s until then.
+ */
+async function cmdReturn(o) {
+  if (!o.dump) throw new CliError(EXIT.other, 'daylight-send return needs --dump.\nRun daylight-send --help for the options.', 'usage');
+  const ctx = await context(o);
+  const dev = await ctx.lock.run(() => returnDeviceId(ctx.storage));
+  const rx = new Receiver({
+    pairing: ctx.pairing, storage: ctx.storage, lane: 'return', device: { dev, from: ctx.from }, kinds: RETURN_KINDS,
+    accept: async ({ header, content, extras }) => { process.stdout.write(JSON.stringify(dumpLine(header, content, extras)) + '\n'); },
+  });
+  const readOnce = () => ctx.lock.run(async () => {
+    const st = await rx.frameState();
+    return st.firstHello ? rx.pollOnce() : rx.hello();
+  });
+  const pollMs = Math.max(50, Number(process.env.DAYLIGHT_SEND_POLL_MS) || 5000);
+  const deadline = Date.now() + (o.wait ?? 0) * 1000;
+  for (;;) {
+    try {
+      await readOnce();
+    } catch (e) {
+      throw new CliError(EXIT.other, e instanceof ShareError ? e.message : String(e?.message ?? e), 'network');
+    }
+    const left = deadline - Date.now();
+    if (left <= 0) return EXIT.ok;
+    await sleep(Math.min(pollMs, left));
+  }
+}
+
 let lockForSignals = null; // the run's lock, let go if the run is interrupted
 for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
   process.on(sig, () => { lockForSignals?.release(); process.exit(code); });
@@ -306,6 +356,7 @@ async function main(argv) {
     if (cmd === 'status') return await cmdStatus(rest[0], o);
     if (cmd === 'tick') return await cmdTick(o);
     if (cmd === 'pair') return await cmdPair(rest[0], o);
+    if (cmd === 'return') return await cmdReturn(o);
     if (rest.length) throw new CliError(EXIT.other, 'Send one URL or file at a time.\nRun daylight-send --help for the options.', 'usage');
     return await cmdSend(cmd, o);
   } catch (e) {

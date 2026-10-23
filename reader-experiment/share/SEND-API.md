@@ -42,9 +42,10 @@ daylight-send https://example.com/story
 | `daylight-send status [<id>] [--json]` | The newest item, or the one with this id (or a unique start of it, at least 4 characters): its title, label, sentence and delivery steps |
 | `daylight-send tick [--json]` | Reads the acks and re-sends what is due, nothing else: `{"delivered":n,"resent":n}` |
 | `daylight-send pair <link\|code>` | Checks the pairing and saves it to `~/.config/daylight-send/pairing` (mode 0600) |
+| `daylight-send return --dump [--wait[=secs]]` | This computer as a device on the return lane (LAB-PROTOCOL 2.4): reads what your Daylight sends back and prints one JSON line per item, `{"id","rk","to","kind","title","url","name","mime","size","sha256","sent","from","text"?}`, with `text` for text, JSON and XML contents up to 1 MB (R2's marks, R3's queue). Its first run says hello so your Daylight counts it as a device; it acks what it read with device frames, at most 3 a day. `--wait` keeps reading every 5 s until then |
 | `daylight-send --help`, `--version` | |
 
-A file whose name is `status`, `tick` or `pair` goes as `./status`.
+A file whose name is `status`, `tick`, `pair` or `return` goes as `./status`.
 
 **Options.**
 

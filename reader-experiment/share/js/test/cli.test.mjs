@@ -348,6 +348,41 @@ test('pairing: from the pairing file (daylight-send pair), and a clear sentence 
   } finally { await s.close(); }
 });
 
+test('return --dump (R2.3, L2): this computer as a device on the return lane prints what its Daylight sends back, marks included', async () => {
+  const t = await setup();
+  try {
+    // The first run says hello, so the Daylight counts this computer as a target.
+    let r = await run(['return', '--dump'], { dir: t.dir, env: t.env });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(r.stdout, '');
+    // The Daylight (the JS return Sender) hears it and sends back a link and an R2 marks batch.
+    const storage = new ds.MemoryStorage();
+    const back = new ds.Sender({ pairing: t.pairing, storage, lane: 'return', devices: new lab.ReturnDevices({ storage }), from: 'Test Daylight', retryDelaysMs: [0, 0, 0] });
+    await back.checkAcks();
+    const targets = await new lab.ReturnDevices({ storage }).targets();
+    assert.equal(targets.length, 1);
+    const marks = { v: 1, kind: 'marks', doc: { item: null, id: 'd1', title: 'A paper', url: null, sha256: 'ab' }, marks: [{ id: 'm1', type: 'highlight', text: 'Hello', page: 3 }] };
+    const link = await back.send({ kind: 'url', url: 'https://example.com/from-the-daylight', title: 'Shared on the Daylight' });
+    const batch = await back.send({ kind: 'file', rk: 'marks', name: 'A paper - notes.json', mime: 'application/vnd.daylight.marks+json', content: JSON.stringify(marks) });
+    r = await run(['return', '--dump'], { dir: t.dir, env: t.env });
+    assert.equal(r.code, 0, r.stderr);
+    const lines = r.stdout.trim().split('\n').map((l) => JSON.parse(l));
+    assert.deepEqual(lines.map((l) => [l.id, l.rk, l.kind]).sort(), [[link.id, 'share', 'url'], [batch.id, 'marks', 'file']].sort());
+    const got = lines.find((l) => l.rk === 'marks');
+    assert.deepEqual(JSON.parse(got.text), marks, 'the batch parses');
+    assert.equal(got.to, null);
+    assert.equal(got.sha256, ds.toHex(await ds.sha256(ds.utf8(JSON.stringify(marks)))));
+    // Again: nothing new (dedupe), and --wait keeps reading until it ends.
+    r = await run(['return', '--dump', '--wait=1'], { dir: t.dir, env: t.env });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(r.stdout, '');
+    // Without --dump: usage.
+    r = await run(['return'], { dir: t.dir, env: t.env });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /needs --dump/);
+  } finally { await t.relay.close(); }
+});
+
 test('usage: help, version, unknown options', async () => {
   const dir = path.join(ROOT, 'usage');
   const h = await run(['--help'], { dir });
