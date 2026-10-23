@@ -21,6 +21,8 @@ const HISTORY_SHOWN = 8;
 const TICK_MS = 60 * 1000;
 /** CHANGES-v1.1 2.5: a shared file the device had no room to keep (the share target's copy failed). */
 const NO_SPACE = 'This device is out of space, so it can’t send this.';
+/** v1.1's words for a link that holds no web address (the Link field, a share), Lab on or off. */
+const NOT_A_WEB_ADDRESS = 'That isn’t a web address. It should look like https://example.com/story.';
 
 const $ = (id) => document.getElementById(id);
 const local = serial();
@@ -289,11 +291,11 @@ async function sendItem(item) {
 async function sendLink(url, title) {
   if (labOn()) {
     const item = labLinkItem({ url, title }, labPage.model.settings);
-    if (!item) throw new ds.ShareError('url', 'That isn’t a web address. It should look like https://example.com/story.');
+    if (!item) throw new ds.ShareError('url', NOT_A_WEB_ADDRESS);
     return sendItem(item);
   }
   const u = normalizeUserUrl(url);
-  if (!u) throw new ds.ShareError('url', 'That isn’t a web address. It should look like https://example.com/story.');
+  if (!u) throw new ds.ShareError('url', NOT_A_WEB_ADDRESS);
   return sendItem({ kind: 'url', url: u, title });
 }
 
@@ -382,15 +384,22 @@ async function sendShare(share) {
   // finds the URL in text by its own rules; the URL as shared goes as x-orig. v1.1 sends sharedLink's reading.
   if (labOn() && share.raw) {
     const item = labShareItem(share, labPage.model.settings);
-    return item ? withBusy('Sending…', async () => [await sendItem(item)]) : [];
+    if (item) return withBusy('Sending…', async () => [await sendItem(item)]);
+    // No web address in it: what v1.1 does with the same share, below. A share that read as something ("…&url=just
+    // words") says so in sendLink's words, NOT_A_WEB_ADDRESS (sendLink reads it through smart intake too); one that
+    // read as nothing sends nothing.
   }
   if (!share.url) return [];
   return withBusy('Sending…', async () => [await sendLink(share.url, share.title)]);
 }
 
-/** The Link and Title fields for a share: smart intake's reading with Lab on (F16, labShareFields), else v1.1's. */
+/**
+ * The Link and Title fields for a share: smart intake's reading with Lab on (F16, labShareFields), else v1.1's. A share
+ * with no web address in it fills them as v1.1 does (what it read, "just words", to correct), Lab on or off.
+ */
 function shareFields(share) {
-  return labOn() && share.raw ? labShareFields(share) : { url: share.url ?? '', title: share.title ?? '' };
+  const lab = labOn() && share.raw ? labShareFields(share) : null;
+  return lab?.url ? lab : { url: share.url ?? '', title: share.title ?? '' };
 }
 
 /** F33's Paste and send: the link in copied text, through smart intake (F16); its question named the host already. */

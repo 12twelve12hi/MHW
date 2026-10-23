@@ -31,7 +31,7 @@ import * as ds from './daylight-share.js';
 import {
   LAB_TEXT, LabLedger, labHook, labGate, needsMessage, inboxLabText, featureName, serverHeadingShort,
   serverRowSubtitle, serverFeatureShort, labInboxSeenText, aiTodayText, setupConfirmText, serverMovedText,
-  GATE_DEADLINE_MS, USE_FEATURES, labUseOn, normaliseShare, testArticle, activityLine, diagnosticsReport,
+  GATE_DEADLINE_MS, USE_FEATURES, labUseOn, normaliseShare, findShareUrl, testArticle, activityLine, diagnosticsReport,
   describeLabRow, checkedInText, fillText,
 } from './daylight-lab.js';
 import { ACTIVITY_KEY, logActivity } from './web-flush.js';
@@ -109,19 +109,22 @@ export function withoutLabParam(href) {
 
 /**
  * Smart intake's reading (F16) of a link from any entry point while Lab is on: the Link field, the page's address
- * (?url=, ?text=, the Shortcut's and the bookmarklet's fragment) and the share target. `url` counts as an address only
- * when it is one on its own (typedUrl: the web URL rule, or https:// added to "example.com/story" as the plain page
- * does); anything else in it ("See (https://…).", “https://…”) is shared text, which goes to normaliseShare with
- * `text` (a share's text), so normaliseShare finds the URL by its own rules (F16 step 1), never v1.1's findUrl.
- * clean: false keeps the URL as found or given (F16's Use switch off, or the form's copy of a share). -> normaliseShare's
- * {kind, url, title, excerpt, orig}
+ * (?url=, ?text=, the Shortcut's and the bookmarklet's fragment) and the share target. What is in `url` was typed or
+ * shared, so it goes to normaliseShare as text, with `text` (a share's text) after it: normaliseShare finds the URL by
+ * its own text rules (F16 step 1: trailing . , ; : ! ? and quotes, and an unbalanced ) or ], are not part of it), never
+ * v1.1's findUrl, and an address on its own follows them too ("https://example.com/a/b." is https://example.com/a/b).
+ * An address on its own gets https:// first when it is "example.com/story" (typedUrl, as the plain page reads it). When
+ * a share has its own text beside an address on its own, the address is the URL (as the text rules read it) and the
+ * text gives the title, so a text that repeats the address doesn't put it in the title. clean: false keeps the URL as
+ * found (F16's Use switch off, or the form's copy of a share). -> normaliseShare's {kind, url, title, excerpt, orig}
  */
 function intake({ url = '', text = '', title = '' } = {}, clean = true) {
   const typed = typedUrl(url);
-  return normaliseShare({
-    url: typed ?? '', text: typed ? String(text ?? '') : [String(url ?? '').trim(), String(text ?? '')].filter(Boolean).join(' '),
-    subject: String(title ?? ''), clean,
-  });
+  const shared = String(text ?? '');
+  const subject = String(title ?? '');
+  const found = typed && shared.trim() ? findShareUrl(typed) : null;
+  if (found) return normaliseShare({ url: found.url, text: shared, subject, clean });
+  return normaliseShare({ text: [typed ?? String(url ?? '').trim(), shared].filter(Boolean).join(' '), subject, clean });
 }
 
 /**

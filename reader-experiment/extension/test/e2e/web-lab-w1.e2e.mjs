@@ -8,7 +8,9 @@
 //        page closed, the service worker's Background Sync sends it (dls-flush, dispatched through DevTools)
 //   F16  a typed link loses its tracking and carries the link as typed in x-orig; F16's Use switch off sends it as typed;
 //        every text-only case of normalise.json shared with ?text= arrives as the vectors say, and so do words around a
-//        link in the Link field, a share the page fills the form with, and the share sheet's text (B1); Lab off is v1.1
+//        link in the Link field, a share the page fills the form with, and the share sheet's text (B1); an address on
+//        its own in the Link field or from the Shortcut by the same text rules; a Shortcut with no web address says
+//        v1.1's sentence and fills the Link field, Lab on as off; Lab off is v1.1
 //   F33  Paste and send: "Send {host}?", Send and Cancel; "No link on the clipboard."; gone with its Use switch off
 //   F09  the bookmarklet, dragged or copied from Shortcuts and automation, sends the page it runs on
 //   F26  Setup check: the lines, the test article followed to "In your Reader", the activity log, Copy diagnostics; the
@@ -408,6 +410,57 @@ test('F16: every text-only case of normalise.json shared with ?text= arrives as 
     assert.equal(item.header.url, ds.findUrl('See (https://en.wikipedia.org/wiki/Foo_(bar)).'));
     assert.equal(item.header.url, 'https://en.wikipedia.org/wiki/Foo_(bar');
     assert.deepEqual(item.extras ?? {}, {});
+  } finally { await ctx.close(); }
+});
+
+test('F16: an address typed or shared on its own follows the text rules (Link field, Shortcut); a Shortcut with no web address says v1.1’s sentence and fills the Link field, Lab on as off', { timeout: 120000 }, async () => {
+  const NOT_A_WEB_ADDRESS = 'That isn’t a web address. It should look like https://example.com/story.';
+  const enc = encodeURIComponent;
+  const { ctx, page, pairing, secret } = await openPaired();
+  const link = await ds.pairingLink({ secret, relay: pairing.relay, name: 'Lab Daylight' });
+  const shortcut = (shared) => `${site.url}/#autosend=1&pair=${enc(link)}&url=${enc(shared)}`;
+  const day = new ds.Receiver({ pairing, storage: new ds.MemoryStorage() });
+  const next = async (what) => {
+    const until = Date.now() + 20000;
+    while (Date.now() < until) {
+      const { items } = await day.pollOnce();
+      if (items.length) { assert.equal(items.length, 1, `${what}: one item`); return items[0]; }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    throw new Error(`${what}: nothing arrived`);
+  };
+  const open = async (url) => {
+    await page.goto('about:blank');
+    await page.goto(url);
+    await ready(page);
+    await page.waitForFunction(() => location.hash === '' && /^(?!Sending)./.test(document.querySelector('#status')?.textContent ?? ''), null, { timeout: 20000 });
+  };
+  const outbox = async () => ((await storageGet(page, 'outbox')) ?? []).length;
+  try {
+    // Lab on: a full stop after an address typed on its own, and a stray bracket after one the Shortcut shares, are
+    // not part of the link, as when the same text comes with ?text= or Paste and send.
+    await sendLink(page, 'https://example.com/a/b.');
+    let item = await next('Link field');
+    assert.deepEqual([item.header.url, item.header.title ?? ''], ['https://example.com/a/b', '']);
+    await open(shortcut('https://en.wikipedia.org/wiki/Foo_(bar)).'));
+    item = await next('Shortcut');
+    assert.equal(item.header.url, 'https://en.wikipedia.org/wiki/Foo_(bar)');
+    // A Shortcut with words and no web address: v1.1's sentence, and the words in the Link field to correct; nothing sent.
+    const sent = await outbox();
+    const said = {};
+    for (const lab of [true, false]) {
+      await store(page, { settings: { from: 'W1 web', lab, labNoteShown: true } });
+      await open(shortcut('just words'));
+      await page.waitForFunction((t) => document.querySelector('#status')?.textContent === t, NOT_A_WEB_ADDRESS, { timeout: 10000 });
+      said[lab ? 'on' : 'off'] = { status: await page.textContent('#status'), url: await page.inputValue('#url'), title: await page.inputValue('#title') };
+      assert.equal(await outbox(), sent, `Lab ${lab ? 'on' : 'off'}: nothing sent`);
+    }
+    assert.deepEqual(said.on, { status: NOT_A_WEB_ADDRESS, url: 'just words', title: '' }, 'Lab on');
+    assert.deepEqual(said.on, said.off, 'Lab on says and fills what Lab off does');
+    // Lab off types and shares as v1.1 does: the address as given.
+    await sendLink(page, 'https://example.com/a/b.');
+    item = await next('Link field, Lab off');
+    assert.equal(item.header.url, 'https://example.com/a/b.');
   } finally { await ctx.close(); }
 });
 

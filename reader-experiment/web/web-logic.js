@@ -83,9 +83,9 @@ export function normalizeUserUrl(input) {
 
 /**
  * Lab (F16): an address typed or given on its own, and nothing else: the input when it passes the web URL rule, or
- * https:// added to "example.com/story". Unlike normalizeUserUrl it never looks for a URL inside text: smart intake
- * (normaliseShare) reads anything else as shared text, by its own rules (parentheses, quotes, trailing punctuation).
- * -> a web URL, or null.
+ * https:// added to "example.com/story". Unlike normalizeUserUrl it never looks for a URL inside text. Smart intake
+ * (web-lab.js) still hands what it returns to normaliseShare as text, as it hands anything else, so the text rules
+ * (parentheses, quotes, trailing punctuation) apply to it too. -> a web URL, or null.
  */
 export function typedUrl(input) {
   const s = String(input ?? '').trim();
