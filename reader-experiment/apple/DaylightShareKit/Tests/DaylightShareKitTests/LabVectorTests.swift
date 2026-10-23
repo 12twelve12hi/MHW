@@ -6,8 +6,10 @@ import XCTest
 @testable import DaylightShareKit
 
 /// The Lab vectors from the JavaScript reference: reader-experiment/share/vectors/lab-vectors.json (LAB-PLAN 2.8), every
-/// W0 section. The W1 sections (labExcerpt, diagnostics, testArticle, and labText's kindLines and cleanedFrom, which are
-/// the Inbox's) are A3's; `testEverySectionIsKnown` fails when a section appears that no port has looked at.
+/// W0 section. The W1 sections are A3's, each in its own suite: labExcerpt in `ExcerptVectorTests` (its `classify` in
+/// `NormaliseVectorTests`, with share/vectors/normalise.json), diagnostics, testArticle and labText's kindLines and
+/// cleanedFrom in `SetupCheckVectorTests`. `testEverySectionIsKnown` fails when a section appears that no port has
+/// looked at.
 final class LabVectorTests: XCTestCase {
     static func load(_ relative: String) -> [String: Any] {
         let url = URL(fileURLWithPath: #filePath) // …/apple/DaylightShareKit/Tests/DaylightShareKitTests/LabVectorTests.swift
@@ -25,7 +27,7 @@ final class LabVectorTests: XCTestCase {
 
     static let w0Sections: Set<String> = ["protocol", "generatedBy", "notes", "constants", "labTopics", "labFrames", "labParse",
                                           "labLedger", "labGate", "labHeaderExtras", "labRowText", "labText", "v1Safety"]
-    /// W1 (L1), ported by A3: smart intake's excerpts, Setup check's diagnostics and test article.
+    /// W1 (L1), ported by A3: smart intake's excerpts, Setup check's diagnostics and test article (their own suites).
     static let w1Sections: Set<String> = ["labExcerpt", "diagnostics", "testArticle"]
 
     func list(_ key: String, in obj: [String: Any] = LabVectorTests.vectors) -> [[String: Any]] {

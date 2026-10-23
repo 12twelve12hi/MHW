@@ -76,10 +76,12 @@ jobs:
           # the truncation audit's recorder, the UI tests' own storage.
           # Lab W0 (A0): every section of the Lab vectors and the server vectors' W0 subset, the ledger, the server
           # client's flows, and the F17 skew suite against the JS reference as the Daylight.
+          # Lab W1 (A3): smart intake (normalise.json), excerpts, Setup check's vectors (the rows' http included).
           for t in OutboxLockTests DownloadRuleTests AppModelTests testTheShareSheetSaysWhatTheRowSays \
                    testAFileThatCannotBeCopiedIsReported testAnUnreadableFileURLFallsBackToTheItemsData \
                    testABigPageGoesAsItsLinkAndTheShareSheetSaysSo AccessibilityBaselineTests \
-                   LabVectorTests ServerVectorTests LabLedgerTests DaylightServerTests LabSkewTests; do
+                   LabVectorTests ServerVectorTests LabLedgerTests DaylightServerTests LabSkewTests \
+                   NormaliseVectorTests ExcerptVectorTests SetupCheckVectorTests; do
             grep -qE "Test (Case|case) .*$t.* passed" "$RUNNER_TEMP/swift-test.log" || { echo "::error::$t did not run and pass"; exit 1; }
           done
 

@@ -44,11 +44,16 @@ public struct OutboxRow: Codable, Identifiable, Equatable {
     public var errorCode: String
     /// `full`/`refused` failures in a row; the third ends the row as `expired`.
     public var slowFails: Int
+    /// The HTTP status of the row's last failed publish (Lab, F26's activity log; LAB-PROTOCOL 2.7.1): 413, 429, another
+    /// 4xx, or 408 and 5xx after the in-call retries; 0 when that failure had no HTTP answer, and 0 again once a publish
+    /// of the row goes or it is delivered. Rows stored without it (1.0, 1.1) read as 0.
+    public var http: Int
 
     public init(id: String, kind: ItemKind, title: String = "", url: String = "", name: String = "", mime: String = "",
                 size: Int = 0, header: ItemHeader, created: Date, status: Status, lastPublish: Date? = nil,
                 attachment: Bool = false, attempts: Int = 0, error: String = "", delivered: Date? = nil,
-                hasBody: Bool = false, attemptStarted: Date? = nil, errorCode: String = "", slowFails: Int = 0) {
+                hasBody: Bool = false, attemptStarted: Date? = nil, errorCode: String = "", slowFails: Int = 0,
+                http: Int = 0) {
         self.id = id
         self.kind = kind
         self.title = title
@@ -68,11 +73,12 @@ public struct OutboxRow: Codable, Identifiable, Equatable {
         self.attemptStarted = attemptStarted
         self.errorCode = errorCode
         self.slowFails = slowFails
+        self.http = http
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, kind, title, url, name, mime, size, header, created, status, lastPublish, attachment, attempts, error,
-             delivered, hasBody, attemptStarted, errorCode, slowFails
+             delivered, hasBody, attemptStarted, errorCode, slowFails, http
     }
 
     /// Rows saved by 1.0 have no `errorCode` or `slowFails`: they read as "" and 0.
@@ -97,6 +103,7 @@ public struct OutboxRow: Codable, Identifiable, Equatable {
         attemptStarted = try c.decodeIfPresent(Date.self, forKey: .attemptStarted)
         errorCode = try c.decodeIfPresent(String.self, forKey: .errorCode) ?? ""
         slowFails = try c.decodeIfPresent(Int.self, forKey: .slowFails) ?? 0
+        http = try c.decodeIfPresent(Int.self, forKey: .http) ?? 0
     }
 
     /// `sending`, `sent` or `failed`: the outbox keeps it whatever its age, and the app polls for it.

@@ -60,6 +60,11 @@ public enum Lab {
     /// While a delivered row of the last 10 minutes has no settled state, a visible app reads acks this often (2.5).
     public static let fastCheckMs: Int64 = 30_000
     public static let fastCheckWindowMs: Int64 = 10 * 60_000
+    /// F07's pass coming back online (`ShareSender.flushNetwork`): at most 30 frames and 18 MB of attachment frames …
+    public static let flushMaxFrames = 30
+    public static let flushMaxAttachmentBytes = 18_000_000
+    /// … and passes at least 3 minutes apart, in which ntfy.sh's request bucket refills by 36 (2.7.1).
+    public static let flushSpacing: TimeInterval = 180
     /// 9999-12-31T23:59:59.999Z: the latest time an ISO string with a 4-digit year holds.
     public static let maxISOms: Int64 = 253_402_300_799_999
 
@@ -147,9 +152,9 @@ public enum Lab {
         return era * 146_097 + doe - 719_468
     }
 
-    private static func isLeap(_ y: Int64) -> Bool { (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 }
+    static func isLeap(_ y: Int64) -> Bool { (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 }
 
-    private static func monthDays(_ y: Int64, _ m: Int64) -> Int64 {
+    static func monthDays(_ y: Int64, _ m: Int64) -> Int64 {
         [31, isLeap(y) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][Int(m) - 1]
     }
 

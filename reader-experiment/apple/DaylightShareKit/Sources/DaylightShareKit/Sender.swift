@@ -60,12 +60,16 @@ public final class ShareSender {
     /// Shares one item now and returns its outbox row. Throws ShareError for bad input, with nothing stored: not a web
     /// address, over 9 MB ("Too big to send. Files can be up to 9 MB; …"), or no room to keep its copy ("This device
     /// is out of space, …"). Relay failures do not throw: they leave the row `failed` with its `errorCode`.
+    ///
+    /// `defer` (Lab, F07: this device is offline) publishes nothing: the row is stored `failed` with errorCode `network`,
+    /// `attempts` 0 and `lastPublish` now, its content kept as usual, for `flushNetwork()` or the next re-send pass
+    /// (LAB-PROTOCOL 2.7.1). It reads "Waiting for connection" while offline (2.5).
     @discardableResult
-    public func send(_ item: ItemInput, compress: Bool? = nil) async throws -> OutboxRow {
-        try await locked { try await self.sendUnlocked(item, compress: compress) }
+    public func send(_ item: ItemInput, compress: Bool? = nil, defer deferred: Bool = false) async throws -> OutboxRow {
+        try await locked { try await self.sendUnlocked(item, compress: compress, deferred: deferred) }
     }
 
-    private func sendUnlocked(_ item: ItemInput, compress: Bool?) async throws -> OutboxRow {
+    private func sendUnlocked(_ item: ItemInput, compress: Bool?, deferred: Bool = false) async throws -> OutboxRow {
         var input = item
         if input.from == nil { input.from = from }
         if input.app == nil { input.app = app }
@@ -82,6 +86,15 @@ public final class ShareSender {
             } catch {
                 throw ShareError.outOfSpace
             }
+        }
+        if deferred {
+            var waiting = row
+            waiting.status = .failed
+            waiting.errorCode = "network"
+            waiting.lastPublish = t
+            waiting.error = "deferred while offline"
+            outbox.save(waiting)
+            return waiting
         }
         outbox.save(row)
         return await attempt(row, prepared).row
@@ -123,12 +136,14 @@ public final class ShareSender {
             row.slowFails = (code == "full" || code == "refused") ? row.slowFails + 1 : 0
             if row.slowFails >= DLS.slowFailLimit { row.status = .expired }
             row.error = failure.message
+            row.http = (100...599).contains(failure.status) ? failure.status : 0
         } else {
             row.status = .sent
             row.errorCode = ""
             row.attempts = 0
             row.slowFails = 0
             row.error = ""
+            row.http = 0
         }
         row.lastPublish = now()
         return (persist(row) ?? row, failure)
@@ -157,17 +172,28 @@ public final class ShareSender {
         return row
     }
 
-    /// Re-sends a row from its stored content, or ends it (no content: `gone`; over 9 MB, a row saved by 1.0:
-    /// `too-large`, and its content is dropped).
-    private func attemptStored(_ start: OutboxRow) async -> (row: OutboxRow, error: ShareError?, attempted: Bool) {
-        var row = start
+    /// A row's item from its stored content, or nil after ending the row (no content: `gone`; over 9 MB, a row saved by
+    /// 1.0: `too-large`, and its content is dropped).
+    private func stored(_ row: OutboxRow) -> PreparedItem? {
         var encoded = Data()
         if row.kind != .url {
-            guard row.hasBody, let body = outbox.readBody(row.id) else { return (end(row, "gone", dropContent: false), nil, false) }
+            guard row.hasBody, let body = outbox.readBody(row.id) else {
+                _ = end(row, "gone", dropContent: false)
+                return nil
+            }
             encoded = body
         }
-        if row.size > DLS.maxItem { return (end(row, "too-large", dropContent: true), nil, false) }
-        let prepared = PreparedItem(header: row.header, encoded: encoded)
+        if row.size > DLS.maxItem {
+            _ = end(row, "too-large", dropContent: true)
+            return nil
+        }
+        return PreparedItem(header: row.header, encoded: encoded)
+    }
+
+    /// Re-sends a row from its stored content, or ends it (`stored`).
+    private func attemptStored(_ start: OutboxRow) async -> (row: OutboxRow, error: ShareError?, attempted: Bool) {
+        var row = start
+        guard let prepared = stored(row) else { return (outbox.row(row.id) ?? row, nil, false) }
         row.attachment = prepared.hasAttachment(chunkSize: chunkSize)
         let r = await attempt(row, prepared)
         return (r.row, r.error, true)
@@ -237,6 +263,7 @@ public final class ShareSender {
                 state.rows[i].delivered = when
                 state.rows[i].errorCode = ""
                 state.rows[i].error = ""
+                state.rows[i].http = 0
                 state.rows[i].hasBody = false
                 ids.append(state.rows[i].id)
             }
@@ -287,6 +314,48 @@ public final class ShareSender {
             if stopAll || (stopAttachments && row.attachment) { continue }
             let r = await attemptStored(row)
             if r.attempted { out.append(r.row) }
+            if r.error?.status == 429 {
+                stopAll = true
+            } else if r.error?.code == "full" {
+                stopAttachments = true
+            }
+        }
+        return out
+    }
+
+    /// Coming back online (Lab, F07; LAB-PROTOCOL 2.7.1): attempts the rows waiting with errorCode `network` (status
+    /// `failed`) now, oldest first, whatever their back-off. A pass stops before a row that would take it over
+    /// `maxFrames` frames or `maxAttachmentBytes` bytes of attachment frames (it always takes its first row, so a row
+    /// larger than the caps cannot block the queue). It follows `resendDue`'s pass rules: after a 429 it publishes
+    /// nothing more, and after a 413 no more attachments. Rows past the 7 days are left to `resendDue`, which expires
+    /// them. Callers space passes at least 3 minutes apart (`Lab.flushSpacing`). Returns the rows it attempted.
+    @discardableResult
+    public func flushNetwork(maxFrames: Int = Lab.flushMaxFrames, maxAttachmentBytes: Int = Lab.flushMaxAttachmentBytes) async -> [OutboxRow] {
+        await locked { await self.flushNetworkUnlocked(maxFrames: maxFrames, maxAttachmentBytes: maxAttachmentBytes) }
+    }
+
+    private func flushNetworkUnlocked(maxFrames: Int, maxAttachmentBytes: Int) async -> [OutboxRow] {
+        var stopAll = false
+        var stopAttachments = false
+        var frames = 0
+        var bytes = 0
+        var out: [OutboxRow] = []
+        let ids = outbox.load().rows.sorted { $0.created < $1.created }.map(\.id)
+        for id in ids {
+            if stopAll { break }
+            guard var row = outbox.row(id), row.status == .failed, row.errorCode == "network" else { continue }
+            if now().timeIntervalSince(row.created) > DLS.outboxExpiry { continue }
+            if stopAttachments && row.attachment { continue }
+            guard let prepared = stored(row) else { continue }
+            let attachmentBytes = prepared.attachmentBytes(chunkSize: chunkSize)
+            if stopAttachments && attachmentBytes > 0 { continue }
+            let n = prepared.partCount(chunkSize: chunkSize)
+            if !out.isEmpty && (frames + n > maxFrames || bytes + attachmentBytes > maxAttachmentBytes) { break }
+            frames += n
+            bytes += attachmentBytes
+            row.attachment = prepared.hasAttachment(chunkSize: chunkSize)
+            let r = await attempt(row, prepared)
+            out.append(r.row)
             if r.error?.status == 429 {
                 stopAll = true
             } else if r.error?.code == "full" {

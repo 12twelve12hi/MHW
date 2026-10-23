@@ -123,10 +123,26 @@ public struct PreparedItem {
     /// Whether any frame at `chunkSize` is too large for a message (it goes as an attachment): such an item is re-sent
     /// on the attachment schedule, and a pass that got a 413 skips it (CHANGES-v1.1 2.4).
     public func hasAttachment(chunkSize: Int = DLS.chunk) -> Bool {
+        (0..<partCount(chunkSize: chunkSize)).contains { !isSmallPart($0, chunkSize: chunkSize) }
+    }
+
+    /// The length of part `i`'s frame: "DLS1", the nonce, the header's length and bytes, the chunk and the tag.
+    public func frameLength(part i: Int, chunkSize: Int = DLS.chunk) -> Int {
         let n = partCount(chunkSize: chunkSize)
-        return (0..<n).contains { i in
-            let chunk = min(chunkSize, encoded.count - i * chunkSize)
-            return !Frame.isSmall(4 + 12 + 4 + header.forPart(i, of: n).jsonData.count + max(0, chunk) + 16)
+        let chunk = min(chunkSize, encoded.count - i * chunkSize)
+        return 4 + 12 + 4 + header.forPart(i, of: n).jsonData.count + max(0, chunk) + 16
+    }
+
+    /// Whether part `i` goes as a message (a small frame) rather than an attachment.
+    public func isSmallPart(_ i: Int, chunkSize: Int = DLS.chunk) -> Bool {
+        Frame.isSmall(frameLength(part: i, chunkSize: chunkSize))
+    }
+
+    /// The bytes of the parts that go as attachments (F07's 18 MB cap a pass).
+    public func attachmentBytes(chunkSize: Int = DLS.chunk) -> Int {
+        (0..<partCount(chunkSize: chunkSize)).reduce(0) { n, i in
+            let len = frameLength(part: i, chunkSize: chunkSize)
+            return Frame.isSmall(len) ? n : n + len
         }
     }
 
@@ -150,9 +166,14 @@ public struct ItemInput {
     public var sent: String?
     public var from: String?
     public var app: String?
+    /// The Lab header fields asked for (LAB-PROTOCOL 2.3, 2.9.2): `x-cap` and `x-orig`, set only with Lab on. The
+    /// builder keeps what `ItemHeader.labHeaderFields` allows, on part 0 only, and leaves `x-orig` out when it alone would
+    /// make part 0 a large frame; without any the frames are exactly v1.1's.
+    public var extras: [String: String]
 
     public init(kind: ItemKind, id: String? = nil, url: String? = nil, title: String? = nil, name: String? = nil,
-                mime: String? = nil, content: Data? = nil, sent: String? = nil, from: String? = nil, app: String? = nil) {
+                mime: String? = nil, content: Data? = nil, sent: String? = nil, from: String? = nil, app: String? = nil,
+                extras: [String: String] = [:]) {
         self.kind = kind
         self.id = id
         self.url = url
@@ -163,6 +184,7 @@ public struct ItemInput {
         self.sent = sent
         self.from = from
         self.app = app
+        self.extras = extras
     }
 
     public static func link(_ url: String, title: String? = nil) -> ItemInput { ItemInput(kind: .url, url: url, title: title) }
@@ -235,7 +257,28 @@ public enum ItemBuilder {
         if !from.isEmpty { header.from = from }
         if let app = item.app, !app.isEmpty { header.app = ShareText.utf16Prefix(app, 60) }
 
-        return PreparedItem(header: header, encoded: encoded)
+        var prepared = PreparedItem(header: header, encoded: encoded)
+        prepared.header.extras = labExtras(item.extras, for: prepared)
+        return prepared
+    }
+
+    /// The Lab fields part 0 carries (the JS `buildItemFrames`): `ItemHeader.labHeaderFields` of the request, without
+    /// `x-orig` when part 0's frame would be large with it and small without it (an attachment is kept 3 hours and
+    /// re-sent at 185 minutes; vectors > normalise.json › xOrigFrames).
+    static func labExtras(_ requested: [String: String], for item: PreparedItem, chunkSize: Int = DLS.chunk) -> [String: String] {
+        var extras = ItemHeader.labHeaderFields(cap: requested["x-cap"], orig: requested["x-orig"])
+        guard extras["x-orig"] != nil else { return extras }
+        func small(_ fields: [String: String]) -> Bool {
+            var h = item.header
+            h.extras = fields
+            return PreparedItem(header: h, encoded: item.encoded).isSmallPart(0, chunkSize: chunkSize)
+        }
+        if !small(extras) {
+            var without = extras
+            without["x-orig"] = nil
+            if small(without) { extras = without }
+        }
+        return extras
     }
 }
 
