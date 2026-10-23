@@ -217,6 +217,22 @@ class RelayClient(
         relayClock = RelayClock(ms, clock())
     }
 
+    /**
+     * Asks the relay for its clock now: a GET of ntfy's `/v1/health`, which reads no topic, keeping its answer's Date
+     * header whatever the status (an older ntfy answers 404 with one too). -> the new [relayClock], or null when the
+     * relay did not answer or its answer had no Date. The handover's resume reads it so that a DC-1 clock corrected
+     * while the Lab Reader received (NTP) is measured against the relay as it is now (K6 review).
+     */
+    fun readClock(timeoutMs: Int = 10_000): RelayClock? {
+        val res = try {
+            http.send("GET", "$relay/v1/health", maxResponseBytes = 4096, readTimeoutMs = timeoutMs)
+        } catch (e: Exception) {
+            return null
+        }
+        val ms = res.header("Date")?.let(::httpDateMs) ?: return null
+        return RelayClock(ms, clock()).also { relayClock = it }
+    }
+
     /** One attachment download's outcome (the download rule of PROTOCOL 3.2). */
     class Download(val outcome: Outcome, val frame: ByteArray? = null, val status: Int = 0)
 
