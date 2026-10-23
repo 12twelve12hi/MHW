@@ -2051,9 +2051,9 @@ DC-1 owner's "finally" items (3.1).
 
 | Order | Feature | Needs | Depends on | What it takes |
 |---|---|---|---|---|
-| 1 | L2 Return lane (infrastructure) | none | L0 (2.4) | In JS `Sender` and `Receiver`: `lane`, the per-lane storage prefix, `x-dev` and per-device delivery, and manifest replacement; then Kotlin and Swift. Also vectors, skew tests, and the return rows of 2.2.7 with their soak. |
-| 2 | F06 Send back from the DC-1 | none | L2 | The Inbox role's share-target `activity-alias` "Send to my phone or Mac" (the phone role keeps "Send to Daylight"). The Daylight's return outbox, with targets per 2.4. Senders poll the return topic with the ack-topic rules and show "From your Daylight" (Open, Save, Share). The cap `return`. 6.5 Q3 decides the default targets. |
-| 3 | F13 Big files on the same Wi-Fi | none | F17 (`lan` in `x-inbox`), F04 | The Inbox's LAN listener (`PUT /dls/v1/frame`, `GET /dls/v1/have`, `/dls/v1/ping`), with rate limits. Native senders upload 12 MiB frames directly. A new state, `needs-same-wifi`. The F02 entry point gains "Or send it over your Wi-Fi." |
+| 1 | L2 Return lane (infrastructure) | none | L0 (2.4) | In JS `Sender` and `Receiver`: `lane`, the per-lane storage prefix, `x-dev`, a topic per device and per-device delivery, presence re-sends with daily caps, and manifest replacement; then Kotlin and Swift. Also vectors, skew tests, and the return rows of 2.2.7 with their soak (4.1.1). |
+| 2 | F06 Send back from the DC-1 | none | L2 | The Inbox role's share target "Send to my phone or Mac" (its own activity; the phone role keeps "Send to Daylight"). The Daylight's return outbox, with targets per 2.4. Senders poll the return topics with the ack-topic rules and show "From your Daylight" (Open, Save or Copy link, Share, Remove). The caps `return` and `return-off`. 6.5 Q3 decides the default targets (4.1.1). |
+| 3 | F13 Big files on the same Wi-Fi | none | F17 (`lan` in `x-inbox`), F04 | The Inbox's LAN listener (`/dls/v1/ping`, `have`, `frame` and `cancel`, all with sealed tickets), with rate limits. Native senders upload 12 MiB frames directly. New states, `needs-same-wifi` among them. The F02 entry point gains "Or send it over your Wi-Fi ›" (4.1.1). |
 | 4 | F12 Note, tags, destination | none (filing into collections: Reader) | F04's Options; caps `note`, `dest`, `hold` | `x-note` (≤ 280), `x-tags` (≤ 8 × 40), `x-dest` (`now`, `quiet`, `hold`, `stack`). The Inbox shows and filters them, and puts "Note from {from}: …" at the top of pages. Senders gate `hold` and `stack` on caps (`needs-inbox`). |
 | 5 | F32 Already sent | none | F16 | A local history keyed by canonical URL and SHA-256. |
 | 6 | F48 Verified delivery, private items | none | F01 | The hash shown on both ends; `x-private`. |
@@ -2070,62 +2070,119 @@ DC-1 owner's "finally" items (3.1).
 
 ### 4.1.1 Wave 2 in detail: L2, F06 and F13
 
-*Added Oct 23, 2026. This specifies W2's first three steps (orders 1–3 above) the way 3.3 and 3.5 specify W1: the
-return lane, Send back from the DC-1, and big files on the same Wi-Fi. iPhone, Mac and the DC-1 Inbox come first.
-Where it changes section 2, the change is listed below, and L2 or L3 writes it into `share/LAB-PROTOCOL.md` before any
-port starts: that file stays the normative text (2.7). Where a relay or platform fact has not been measured, the text
-says so, and the design works either way.*
+*Added Oct 23, 2026, and revised the same day after a product, protocol and platform review (7.4). This specifies
+W2's first three steps (orders 1–3 above) the way 3.3 and 3.5 specify W1: the return lane, Send back from the DC-1,
+and big files on the same Wi-Fi. iPhone, Mac and the DC-1 Inbox come first, and on every platform F06 comes before
+F13, so the simpler feature never waits for the LAN path. Where it changes sections 1 and 2, the change is listed
+below, and L2, L3 or L4 writes it into `share/LAB-PROTOCOL.md` before any port starts: that file stays the normative
+text (2.7). Where a relay or platform fact has not been measured, the text says so, and the design works either
+way.*
 
 **What W2 delivers first.** Two of the DC-1 owner's "finally" items (3.1), with no server: what you share on the
 Daylight comes back to your phone or Mac (F06), and big PDFs and books go straight to the Daylight over the home Wi-Fi
 (F13). The return lane under F06 is also what R2 (notes coming home) builds on (5.4).
 
-#### Changes to section 2 (L2 and L3 write them into LAB-PROTOCOL)
+#### Changes to sections 1 and 2 (L2, L3 and L4 write them into LAB-PROTOCOL)
 
-1. **Caps (2.2.2).** `return` and `lan` leave the reserved list. The Inbox sets `return` while F06 is on (Lab on,
-   F06's Use switch on, Inbox role), and `lan` while F13 is on (Lab on, F13's Use switch on, Inbox role, not handed
-   over).
+1. **Caps (2.2.2).** `return` and `lan` leave the reserved list, and `return-off` and `lan-off` join them. The Inbox
+   sets:
+   - `return` while F06 is on there (Lab on, the Inbox role, the `F06inbox` Use switch on), and `return-off` while
+     Lab is on and that switch is off;
+   - `lan` while F13 is on there (Lab on, the Inbox role, the `F13inbox` Use switch on, not handed over), and
+     `lan-off` while Lab is on and that switch is off, including when 6.5 Q9 makes it off by default.
+
+   So a sender can tell "not updated" from "turned off" (the state `off-on-daylight`, change 10). All four fit 2.2.1's
+   worst case (16 tokens of 16 characters).
 2. **`x-inbox.lan` (2.2.1, 2.2.5).** A new optional field: the address the Inbox's Wi-Fi listener last bound, for
    example `"192.168.1.23:49613"`. The parser gains one step. A string `a.b.c.d:p` whose octets are 0–255 without
-   leading zeros, whose port is 1024–65535 and whose address is in 10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16 gives
-   that string; anything else gives null. With `lan` at its longest (21 characters), 2.2.1's worst-case frame grows to
-   2,638 bytes and 3,520 base64 characters, still under 3,800. A vector pins it. 2.2.4's hello rule gains "when `lan`
-   changed".
-3. **Level.** Both additions are optional and read by name, so `LAB_LEVEL` stays 1 (2.1 rule 7). W0 and W1 readers
-   keep `return` and `lan` as unknown tokens and ignore the field.
+   leading zeros, whose port is 4 or 5 digits without a leading zero and 1024–65535, and whose address is in
+   10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16 gives that string; anything else gives null (`"049613"` as a port
+   included: Swift's `Int("049613")` would accept it, so the vectors pin it). With `lan` at its longest (21
+   characters), 2.2.1's worst-case frame grows to 2,638 bytes and 3,520 base64 characters, still under 3,800. A vector
+   pins it. 2.2.4's hello rule gains "when `lan` changed".
+3. **Level.** Every addition is optional and read by name, so `LAB_LEVEL` stays 1 (2.1 rule 7). W0 and W1 readers
+   keep the new tokens as unknown caps and ignore the field.
 4. **Wire rule (2.1 rule 2)** gains a fifth item: F13's LAN path, whose requests carry only frames sealed with the
-   pairing key. `aadFor` (2.4) gains `lab-lan` = `dlshare/v1/lab-lan`, for its tickets and answers.
-5. **Return lane (2.4)**, refined as L2 says below: targets come only from the return-ack topic; device hellos and
-   `x-rx`; re-sends follow presence; `x-to` on re-sends; at most 60 ids in a return ack. Pairing-lane `x-dev` waits
-   for a feature that needs it. F06 does not.
-6. **Handover (5.3.4 step 3).** While the Lab Reader receives and F06 is on, Daylight Share's handover hello is `lab:
-   1` with caps `["return"]` and `poll` null, not `lab: 0`. It claims none of the receive caps, so senders still read
-   the Lab Reader's (2.2.6), and phones keep reading the return topic. It repeats on 2.2.4's 11-hour cadence, sent
-   from the 15-minute job, since no pairing-lane poll runs then. With F06 or Lab off it stays `lab: 0`.
-7. **Budget (2.2.7).** The table below is the busy day while the return lane runs, that is while the Inbox's hello
-   carries `return`.
+   pairing key. `aadFor` (2.4) gains `lab-lan` = `dlshare/v1/lab-lan`, for its tickets and answers, and
+   `lab-return-dev` = `dlshare/v1/lab-return-dev`, for the return lane's topic per device (L2).
+5. **Return lane (2.4)**, refined as L2 says below: a topic per device for anything meant for one device; targets
+   only from the return-ack topic; device frames with `x-rx` and `x-want`; re-sends follow presence, plus one
+   follow-up; daily caps on frames and bytes; at most 60 ids in a return ack. Pairing-lane `x-dev` waits for a feature
+   that needs it. F06 does not.
+6. **Handover (5.3.4 step 3).** While the Lab Reader receives and Daylight Share's Lab is on, Daylight Share's
+   handover hello is `lab: 1` with `poll` null and caps `["return"]` (`["return-off"]` when its `F06inbox` switch is
+   off), not `lab: 0`. It claims none of the receive caps, so senders still read the Lab Reader's (2.2.6), and phones
+   keep reading the return topic. It repeats on 2.2.4's 11-hour cadence, sent from the 15-minute job, since no
+   pairing-lane poll runs then. With Lab off it stays `lab: 0`.
+7. **Budget (2.2.7).** The tables below are the busy day while the return lane runs, that is while the Inbox's hello
+   carries `return`. The Lab cap drops to 18 then, not 20.
+8. **Extras and acks (2.3, 2.1 rule 3).** On the return lane, `extras` also carry `x-rk` (read from part 0) and
+   `x-to` (read from every frame), parsed by L2's `returnParse`. 2.1 rule 3 ("an ack frame that lists ids never
+   carries Lab fields") applies to the pairing lane's ack topic only: return acks carry `x-dev`, `x-rx` and `x-want`.
+   2.3's reserved list gains `x-rx` and `x-want`.
+9. **Server lane (4.2, S0).** The server-lane hello leaves out `lan` and the caps `return`, `return-off`, `lan` and
+   `lan-off`. They mean nothing there, and the user's Worker can open that hello (it is sealed with `boxKey`), so the
+   server never learns the Daylight's home address. S0's integration test checks it.
+10. **States (1.4, 1.6).** `LabLedger.capState(t)` (L3) answers, for the caps `return` and `lan`: `on` when a fresh
+    publisher with `lab ≥ 1` has `t`; for `lan` only, `handed` when a fresh `reader-lab` publisher has `lab ≥ 1`
+    (the Lab Reader receives, 5.3.4, so Daylight Share's listener is closed); `off` when a fresh publisher with
+    `lab ≥ 1` has `t-off`; else `missing`. `labGate` maps them to: go on, `lan-handed`, `off-on-daylight` and
+    `needs-inbox`. So `needs-inbox` ("Update Daylight Share on it…") shows only when an update can help. 1.4's short
+    states and 1.6's table gain `off-on-daylight`, `lan-handed`, `needs-devices`, `needs-same-wifi` and
+    `needs-local-network`, with the texts in the copy tables below. The `labGate` vectors pin every case of both
+    features.
+11. **Use switches (LAB-PROTOCOL 2.9.6).** `USE_FEATURES` gains `F06`, `F06inbox` and `F13inbox`, and 2.9.6's table
+    gains their rows (F06 and F13 below say what each one gates, and nothing else). `F06inbox` and `F13inbox` are
+    feature ids of their own: they sit in `featureOrder` (right after F06 and F13), in `features`, in `USE_FEATURES`
+    and in `labGate`, and only the Inbox role lists them. Each app's switches stay `USE_FEATURES` filtered by its own
+    features (`PhoneLab.USE`, Windows' `USE_SWITCHES`), so no sender shows an F13 switch, and the phone's
+    `labUse.F06` and the Inbox's `labUse.F06inbox` are different keys in the one APK. A `labText` vector pins each
+    app's feature and switch lists.
 
 #### The household budget with the return lane (2.2.7)
 
+2.2.7's busy day, plus a busy day of F06: five devices get items from the Daylight (iPhone, Mac, Android phone,
+Windows, and Chrome once its list has been opened), and the user sends back two PDFs and three links.
+
 | Traffic | Published by | Messages a day | What bounds it |
 |---|---|---|---|
-| Item frames, re-sends, pairing-lane acks, v1.1 ack digests | senders, DC-1 | ≤ 83 | As 2.2.7: 40 + 5 + 30 + 8 |
-| Lab hellos and state frames | DC-1 | ≤ 20 | The Lab cap drops from 30 to 20 (2.2.7). Hellos for a new `lan` count here. During a handover the Lab Reader publishes these frames and Daylight Share only its return-only hellos (≤ 3 a day), so the Lab Reader's `LabInbox` must take `framesPerDay` 17 while it receives. That is a one-line change asked of the Reader session with R2, the first R task after L2. Until then, a busy handover day on the lab tablet can reach 162, still under ntfy.sh's 250. |
+| Item frames, re-sends, pairing-lane acks, v1.1 ack digests | senders, DC-1 | ≤ 83 | As 2.2.7: 40 + 5 + 30 + 8. LAN items add no ack (F13). |
+| Lab hellos and state frames | DC-1 | ≤ 20 | The Lab cap drops from 30 to 18 while the return lane runs. Up to 2 hellos a day for a new `lan` go outside the cap and count here (F13). During a handover the Lab Reader publishes these frames and Daylight Share only its return-only hellos (≤ 3 a day), so the Lab Reader's `LabInbox` must take `framesPerDay` 15 while it receives. That is a one-line change asked of the Reader session with R2, the first R task after L2. Until then, a busy handover day on the lab tablet can reach 162, still under ntfy.sh's 250. |
 | Lab state digests | DC-1 | ≤ 4 | As 2.2.7 |
 | Server-lane acks and hellos (Wave S) | DC-1 | ≤ 15 | S0 batches its acks to one every **2 hours** (≤ 12), plus 3 hellos. This replaces 4.2's 15 minutes; S0 has not started. The server re-sends after 11 hours and keeps presence as a state, not a timer (DESIGN 5.2, 5.5), so a 2-hour ack changes nothing it does. |
-| F06 items | DC-1 | ≈ 9 | The user's shares: 5 a day, 3 links and 2 files of 1–3 parts |
-| F06 re-sends | DC-1 | ≤ 6 | Presence only, at most 6 frames a day (L2) |
-| Return acks and device hellos | phones, computers | ≤ 12 | 4 a day per device; 3 devices (iPhone, Mac, Chrome) |
-| F13 | — | 0 | Frames go over the Wi-Fi. The Inbox's ack is among the pairing-lane acks. |
-| **Household total** | | **≤ 149** | **Target: ≤ 150** |
+| F06 frames: items and re-sends | DC-1 | ≤ 12 | `RETURN_FRAMES_PER_DAY`, with at most 6 re-sent frames a day for any one device. Past it, rows wait for the next UTC day (L2). The busy day's 2 PDFs and 3 links take about 9. |
+| Device frames: return acks and hellos | phones, computers | ≤ 15 | 3 a day per device, the third kept for `x-want` (L2); 5 devices. Each further device adds 3: 6 devices make 152, 8 make 158, both under ntfy.sh's 250. The web sender publishes nothing here. |
+| F13 | — | 0 | Frames go over the Wi-Fi. A LAN item's ack rides on an ack frame the Inbox publishes anyway. |
+| **Household total** | | **≤ 149** | **Target: ≤ 150**, with up to 5 devices |
 
-- **Bandwidth.** ntfy.sh counts an attachment against its uploader once for the upload and once for each download
-  (NTFY-FACTS). A 9 MB file sent back to three devices uses 36 MB of the household's 200 MB a day. In W2 nothing large
-  goes back unless the user sends it.
-- **Not measured.** The 250 messages a day per address and the request bucket are ntfy.sh's documented values
-  (NTFY-FACTS, "Daily limits (docs)"). The soak uses them as they are.
-- **R2–R4 do not fit yet.** Their ≤ 20 frames (2.2.7) need room. Their acks already fit, because a device's acks are
-  capped per day, not per item. Each R task brings its own lever, and the soak decides (5.4–5.6).
+**Attachment traffic.** ntfy.sh allows 200 MB a day per address. An attachment counts against its uploader once for
+the upload and again for each download, wherever the download comes from (PROTOCOL 3.5). It also holds at most 20 MB
+of one uploader's attachments at a time (NTFY-FACTS). The phone at home and the Daylight share one address.
+
+| Traffic | MB a day | What bounds it |
+|---|---|---|
+| Pairing-lane files: 10 of 1–3 parts of 1.9 MB, each uploaded once and downloaded once by the Daylight | ≈ 76, at most 114 | 2.2.7's busy day |
+| Pairing-lane re-sends | ≤ 19 | ≤ 5 re-sends (2.2.7) |
+| F06 files | ≤ 60 | `RETURN_BYTES_PER_DAY`: each attachment frame counts its size once for the upload and once more for each device expected to download it (every target on the shared topic, one on a device's own topic). So about 15 MB of files a day go back to three devices, 10 MB to five, 30 MB to one. |
+| **Total** | **≈ 155, at most 193** | Under 200 |
+
+- **Re-sends go to one device.** `x-to`, the item id and the part number are inside the sealed frame, and for a
+  file part the sealed frame is the attachment (PROTOCOL 3.2). A re-send on the shared topic would be downloaded in
+  full by every reading device just to learn that it is not theirs. So W2 sends every re-send, and every item meant
+  for one device, on that device's own topic (L2), and only that device downloads it.
+- **At most 10 MB on the relay with F06.** An F06 attachment row waits until the attachment bytes the Daylight can
+  see on the relay (its own F06 uploads and the pairing-lane files it downloaded, from the last 3 hours) plus the row
+  come to at most 10 MB (`RETURN_LIVE_BYTES_MAX`). The largest row, 9 MB, fits on its own. It counts the phone's
+  files too, because the Daylight can't tell whether the phone is at home. While an F06 file is on the relay, a phone
+  at home has about 10 MB of the 20: one 9 MB item still fits, and a second big item within 3 hours gets `413` and
+  waits, as v1.1 already handles (PROTOCOL 3.3). So PROTOCOL 3.5's "two copies fit" holds only while no F06 file is
+  on the relay. A phone can't see the Daylight's bytes, so nothing can promise more.
+- **Giving way.** For an hour after any `413` or `429` the Daylight gets on any publish, F06 publishes no attachment.
+- **Not measured.** The 250 messages, the 200 MB and the request bucket are ntfy.sh's documented values (NTFY-FACTS,
+  "Daily limits (docs)"). For the 20 MB at a time, the probe saw more accepted, so the plan keeps the docs' figure.
+  The soak uses the documented values.
+- **R2–R4 do not fit yet.** Their ≤ 20 frames (2.2.7) need room. Their acks already fit, because a device's frames
+  are capped per day, not per item. Each R task brings its own lever, and the soak decides (5.4–5.6).
 
 #### L2 Return lane (infrastructure)
 
@@ -2136,60 +2193,125 @@ Daylight comes back to your phone or Mac (F06), and big PDFs and books go straig
   | Lane | Item topic, AAD | Ack topic, AAD | Storage |
   |---|---|---|---|
   | `pairing` | `inboxTopic`, `inbox` | `ackTopic`, `ack` | Today's keys, no prefix: `outbox`, `ackSince`, `inboxSince`, `seenItems` and the rest |
-  | `return` | `returnTopic`, `lab-return` | `returnAckTopic`, `lab-return-ack` | Keys under `lane/return/` (JS); the folder `lane-return/` next to the outbox (Kotlin, Swift) |
+  | `return` | `returnTopic`, `lab-return`, for items to every target · `returnDevTopic(dev)`, `lab-return-dev`, for items and re-sends to one device | `returnAckTopic`, `lab-return-ack` | Keys under `lane/return/` (JS); the folder `lane-return/` next to the outbox (Kotlin, Swift) |
+
+  ```
+  returnDevTopic(dev) = "dls-" + hex(SHA-256("dlshare/v1/lab-return-dev\0" ‖ secret ‖ dev))[0:32]
+  dev = the device's x-dev as 16 ASCII hex digits; AAD "dlshare/v1/lab-return-dev"; the pairing key
+  ```
 
   Without `lane`, both classes behave and store exactly as today, so an app that updates from W1 keeps its outbox and
-  cursors. The Daylight runs the return `Sender`; phones and computers run the return `Receiver`. The control lane
-  (W3) is not built.
-- **Device ids.** `x-dev` is 16 random lowercase hex digits, made on first use and kept per install: Apple
-  `dls.labDevId` in `SharedStore`, Android `labDevId` in `Prefs`, JS `lane/return/devId`. A new pairing secret makes a
-  new one. It is never synced.
-- **Return acks and device hellos.** A device acks return items on `returnAckTopic` with
-  `{"v":1,"kind":"ack","ids":[…],"sent":…,"from":…,"x-dev":…}`. A frame with `ids: []` is a device hello. The topic is
-  new, so 2.1 rule 3 (no Lab fields on acks that list ids) does not apply to it.
-  - At most 60 ids a frame, so the longest `from` with `x-dev` stays a small frame (a vector pins it).
-  - A device publishes only while it reads the return topic (F06: Lab on, F06's Use switch on, a fresh `return`): when
-    it holds acks and has published nothing in the last 30 minutes; when a read finds a return attachment that has
-    expired (PROTOCOL 3.2: `404` or `410`), so the Daylight knows to send it again; when it has published nothing on
-    this topic for 12 hours, at an app start, a foreground or a background run (the idle hello); and once when Lab or
-    F06 is turned on, or after pairing.
-  - At most 4 a UTC day. Past that, acks wait for the next day. Every frame carries all pending acks.
-  - When Lab or F06's Use switch goes off: one frame with `"x-rx": false`, outside the cap, then nothing.
+  cursors. The Daylight runs the return `Sender`; phones and computers run the return `Receiver`, which reads
+  `returnTopic` and its own `returnDevTopic`. It reads both in one request (`/{returnTopic},{devTopic}/json`, ntfy's
+  multi-topic form) once L2's probe shows that ntfy.sh answers it with one time cursor; otherwise in two requests,
+  each with its own cursor. The vectors pin `returnDevTopic`. The control lane (W3) is not built.
+- **Device ids.** `x-dev` is 16 random lowercase hex digits, made on first use and kept per install. It is never
+  synced and never in a backup:
+  - Apple: minted and read only after `SharedStore.ready()`, so a process that starts on its private storage never
+    makes a second id. It lives in the file `lab-dev-id` in the store's container (the App Group's, or the process's
+    own), marked `isExcludedFromBackup`, so a backup restored to a new iPhone makes a new id instead of a clone.
+    `SharedStore`'s defaults are in backups, so they don't hold it.
+  - Android: `labDevId` in `Prefs` (the app has `allowBackup="false"`).
+  - JS: `lane/return/devId` (Chrome's `storage.local` and the web sender's IndexedDB are not synced).
+
+  A missing id, or a new pairing secret, makes a new one.
+- **Device frames.** A device acks return items on `returnAckTopic` with
+  `{"v":1,"kind":"ack","ids":[…],"sent":…,"from":…,"x-dev":…}`, plus `"x-want":true` or `"x-rx":false` where the rules
+  below say. A frame with `ids: []` is a device hello. (Change 8: 2.1 rule 3 does not apply to this topic.)
+  - It publishes only right after it has read its return topics in the same run, so a frame always carries the acks
+    for everything it could read. And only while F06 is on for it: Lab on, F06's Use switch on, `capState('return')`
+    is `on` (2.2.6).
+  - **Acks** go when it holds acks and its last frame is at least 30 minutes old. Every frame carries all pending
+    acks, at most 60 ids, so the longest `from` still makes a small frame (a vector pins it).
+  - **`x-want`** goes when a read finds an expired return attachment (`404` or `410`, PROTOCOL 3.2) that is newer than
+    the device's first hello and newer than the newest message it stored an item from on that topic. An older one is
+    an earlier copy of something it has, or something sent before it joined.
+  - **The idle hello** goes when it has published nothing for 24 hours, at an app start, a foreground or a
+    background run. Targets age out after 14 days, so once a day is enough.
+  - **The first hello** goes once when Lab or F06 is turned on, after pairing, and in Chrome when its From your
+    Daylight list is first opened.
+  - **At most 3 a UTC day.** Acks and hellos use at most 2, and the third is kept for `x-want`. Past that, they wait
+    for the next day.
+  - **`x-rx: false`.** When Lab or F06's Use switch goes off: one frame, even past the cap, then nothing.
   - It gives way for an hour after a `429` or `413`, as Lab frames do (2.2.4).
+- **Parsing.** An exact algorithm, like 2.2.5. It never throws, and the `returnParse` vectors pin it in JS, Kotlin and
+  Swift, junk included:
+
+  ```
+  returnItemExtras(header)              for every frame on the return lane
+    rk : x-rk is one of "share", "marks", "queue", "reading"   -> it; else "unknown" (absent included).
+         Read from part 0.
+    to : x-to absent                                            -> null (every device)
+         x-to a string matching /^[0-9a-f]{16}$/                -> it
+         x-to anything else                                     -> "invalid" (no device)
+         Read from every frame: every part repeats the header (PROTOCOL 2.3).
+  returnAck(header)                     for every frame on returnAckTopic
+    1. not an object, kind != "ack", or ids is not an array      -> null
+    2. ids  : of its first 60 elements, the strings matching /^[0-9a-f]{32}$/; the rest are ignored
+    3. dev  : x-dev a string matching /^[0-9a-f]{16}$/ -> it; else null (the frame counts for no device)
+    4. rx   : false only for the JSON value false; else true
+    5. want : true only for the JSON value true; else false
+  ```
+
+  A device checks `to` first. A frame whose `to` is not null and not this device's id is marked handled at once,
+  before dedupe and reassembly, so it is never stored and never acked. (v1.1's Receiver acks duplicates, so the check
+  must come before that.)
 - **Targets.** The Daylight keeps each device it hears on `returnAckTopic`: `x-dev`, the frame's `from`, the relay
-  time, and whether its last frame said `x-rx: false`. An item's targets are the devices heard in the last 14 days
-  that did not say `x-rx: false`, newest 8. Two devices with the same name show as "iPhone" and "iPhone (2)", in the
-  order first heard. A reinstalled app is a new device. Its old id ages out in 14 days and costs nothing meanwhile,
-  because re-sends need presence.
-- **Return items** are v1 item headers (PROTOCOL 2.1) plus `x-rk` (`"share"` in W2) and an optional `x-to`. A row on
-  the Daylight also keeps `to` (its targets) and `got` (`x-dev` → ack time).
+  time of its newest frame (`heard`), and whether that frame said `x-rx: false`. An item's targets are the devices
+  heard in the last 14 days that did not say `x-rx: false`, newest 8.
+  - Two devices with the same `from` show as "iPhone" and "iPhone (2)" (`sendBack.sameName`), in the order first
+    heard.
+  - A reinstalled app, or a restored phone, is a new device. When a new id arrives with a known device's name, and
+    the older one then sends nothing for 2 days, the older one stops being a target. It comes back if it is heard
+    again.
+  - The web sender never publishes, so it is never a target. Chrome is one only after its list was first opened
+    (F06).
+- **Return items** are v1 item headers (PROTOCOL 2.1) plus `x-rk` (`"share"` in W2) and, on a device's own topic only,
+  `x-to` = that device's id. A row on the Daylight also keeps `to` (its targets), `got` (`x-dev` → ack time) and, for
+  each target D, `copyUntil(row, D)`: the relay time of the first frame of the newest copy D could read (`time` in
+  ntfy's publish answer), plus 3 hours if any frame of the row is an attachment, else 12 hours.
 - **Delivery per device.** The `x-dev` of a return ack names the device. A row is `delivered` when every target has
   acked. An ack without a valid `x-dev` counts for no device. At 7 days, a row that some target acked becomes
   `delivered`, with the rest listed as missing; a row nobody acked becomes `expired`.
 - **Re-sends follow presence, not timers.** The relay forgets a message after 12 hours and an attachment after 3
   (PROTOCOL 3.3). Timed re-sends for a device that is away for a week would cost two messages a day per item for seven
-  days. So a `sent` row is re-sent only when a target that has not acked is heard again after the relay dropped the
-  copy:
+  days. So a row is re-sent to D only when D shows that it read its topics after its copy was gone, plus one
+  follow-up after an `x-want`:
 
   ```
   due(row, D) = D in row.to and D not in row.got
-                and heard(D) > row.lastPublish + (3 h if any frame of row was an attachment, else 11 h)
-                and row was not published in the last 12 h
+                and ( heard(D) > copyUntil(row, D)       D read after its copy was gone (both relay times)
+                      or followUpAt(row, D) <= now )     once, after a re-send that D's x-want caused
+  followUpAt(row, D) = the Daylight's time of that re-send + 185 minutes, while D has not acked; else never
   ```
 
-  The re-send carries `x-to: D` when D is the only due target, and no `x-to` otherwise. At most 6 re-sent frames a UTC
-  day, oldest row first, and none for an hour after a `429` or `413`. A first publish that fails keeps v1.1's back-off
-  (PROTOCOL 3.3), which only gets the item onto the relay.
-- **`x-to` on devices.** A frame whose `x-to` names another device is marked handled once its header is read: no
-  store, no ack. Parts of a first publish and of a re-send combine, because their content and `sha256` are the same.
+  - A frame's acks are applied before `due` is checked, so a device that acks the row in the same frame gets no
+    re-send.
+  - Each re-send goes on D's own topic with `x-to: D`, so no other device downloads it, and sets
+    `copyUntil(row, D)` again. It goes as soon as the Daylight hears D (its reads, F06).
+  - Both sides of `heard(D) > copyUntil(row, D)` are relay times, so a Daylight clock that is hours off changes
+    nothing (2.2.6 already distrusts it). `followUpAt` compares the Daylight's own clock with itself.
+  - Why the follow-up: an iPhone that finds an expired copy is often open for only a minute, and the Daylight may
+    hear its `x-want` only at its next 15-minute run. The follow-up keeps a copy on the relay for about 3 more hours,
+    so the next opening finds it (F06.14).
+  - A first publish that fails keeps v1.1's back-off (PROTOCOL 3.3), which only gets the item onto the relay.
+- **Daily caps on the Daylight** (UTC days on its clock, as Lab frames). They bound the budget's F06 rows:
+  - at most 12 F06 frames, first publishes and re-sends together (`RETURN_FRAMES_PER_DAY`), and at most 6 re-sent
+    frames for any one device (`RETURN_RESENDS_PER_DEVICE`), so a device that is often away can't use up another's;
+  - at most 60 MB of attachment traffic (`RETURN_BYTES_PER_DAY`), counted as the budget says;
+  - an attachment row goes only while the attachments it can see on the relay, with the row, stay within 10 MB
+    (`RETURN_LIVE_BYTES_MAX`), as the budget says;
+  - a row goes whole or not at all: a 5-part row never sends 3 parts because the cap ran out. A row that doesn't fit
+    waits, oldest first, for the next day or for the bytes on the relay to fall;
+  - nothing for an hour after a `413` or `429` on any publish.
 - **Storing.** Store before ack (PROTOCOL 3.4): the app's `accept` writes the item to its From your Daylight store
-  (F06), then the id is remembered and acked. An unknown or missing `x-rk` (R2–R4's in a W2 build) is acked and
-  dropped (2.4).
+  (F06), then the id is remembered and acked. An unknown `x-rk` (R2–R4's in a W2 build) is acked and dropped (2.4).
+  Parts of a first publish and of a re-send combine, because their content and `sha256` are the same.
 - **Manifests replace each other** (2.4, for R3). `send(item, {replaces: key})` removes every older row with that key
   that is not `delivered`, with its content.
-- **The Lab frame cap.** `LabInbox` takes `framesPerDay`. The Inbox passes 20 while its caps hold `return`, else 30.
-- **Pairing changes.** A different secret removes `lane/return/*` (the `lane-return/` folder in Kotlin and Swift). The
-  From your Daylight store holds the user's files, so it stays.
+- **The Lab frame cap.** `LabInbox` takes `framesPerDay`. The Inbox passes 18 while its caps hold `return`, else 30.
+- **Pairing changes.** A different secret removes `lane/return/*` (the `lane-return/` folder in Kotlin and Swift) and
+  the device id. The From your Daylight store holds the user's files, so it stays.
 
 **Who sees what.** Nothing changes for an app that is not W2:
 
@@ -2197,33 +2319,51 @@ Daylight comes back to your phone or Mac (F06), and big PDFs and books go straig
 |---|---|---|---|---|
 | v1.0 or v1.1 sender | Unchanged | Lab frames ignored (`ids: []`, 2.1 rule 4) | Never derived | Never used |
 | v1.0 or v1.1 Inbox | Unchanged: W2 senders add no field to its items | Publishes no Lab frame, so W2 senders show `needs-inbox` | — | W2 senders refuse big files as v1.1 does |
-| W0 or W1 Lab sender | Unchanged | `return` and `lan` kept as unknown caps; `x-inbox.lan` ignored (2.2.5 reads only known fields) | Never derived | Never used |
-| W0 or W1 Lab Inbox | Unchanged | Its hello has neither cap, so W2 senders show `needs-inbox` for F06 and F13 | — | — |
+| W0 or W1 Lab sender | Unchanged | `return`, `return-off`, `lan` and `lan-off` kept as unknown caps; `x-inbox.lan` ignored (2.2.5 reads only known fields) | Never derived | Never used |
+| W0 or W1 Lab Inbox | Unchanged | Its hello has none of the four caps, so W2 senders show `needs-inbox` for F06 and F13 | — | — |
 
 **Acceptance (L2):**
 
 - [ ] **L2.1** Without `lane`, `Sender` and `Receiver` read and write exactly today's keys. `test-vectors.json`, the
-      F17
-  skew matrix and `describeRow` against a v1.1 Receiver are unchanged (CI).
-- [ ] **L2.2** A pairing-lane and a return-lane Sender on one storage object share no key (vectors).
+  F17 skew matrix and `describeRow` against a v1.1 Receiver are unchanged (CI).
+- [ ] **L2.2** A pairing-lane and a return-lane Sender on one storage object share no key. `returnDevTopic` matches
+  the vectors in JS, Kotlin and Swift.
 - [ ] **L2.3** With the iPhone and the Mac as targets, the iPhone's ack leaves the row waiting for the Mac; an ack
   without `x-dev` changes nothing; the Mac's `x-rx: false` completes the row. A 7-day-old row acked by the iPhone
   alone is `delivered`, with the Mac missing.
-- [ ] **L2.4** The Mac, heard 4 hours after an attachment row was published, gets one re-send with `x-to` = its id,
-      and
-  none again within 12 hours. The iPhone skips that frame and publishes no ack for it. The 7th re-sent frame of a day
-  waits for the next day. Nothing is re-sent for an hour after a `429`.
-- [ ] **L2.5** A device publishes at most 4 return acks a day, at least 30 minutes apart, each with at most 60 ids and
-  small (the worst-case vector); its idle hello after 12 hours; and one `x-rx: false` when Lab goes off.
+- [ ] **L2.4** For an attachment row, a Mac frame whose relay time is 2.9 hours after the copy's first frame causes
+  no re-send, and one at 3.1 hours does. For a message row, the same at 11.9 and 12.1 hours. The re-send goes on the
+  Mac's own topic with `x-to`, and the iPhone downloads nothing of it. After a re-send caused by an `x-want`, there is
+  one follow-up 185 minutes later if no ack came, then none. With the Daylight's clock 5 hours off, every case gives
+  the same result.
+- [ ] **L2.5** A device publishes only right after a read: at most 3 frames a day, the third kept for `x-want`; acks
+  at least 30 minutes apart; the idle hello after 24 hours; `x-want` only for an expired attachment newer than its
+  first hello and its newest stored item; one `x-rx: false` when Lab goes off, even past the cap. Its longest frame
+  is small (the worst-case vector).
 - [ ] **L2.6** `replaces` removes the older un-delivered row with the same key, and its content.
-- [ ] **L2.7** The W2 soak (2.8, with the table above): 7 days, one visitor address, 3 devices, the Mac offline for 2
-  of them, in both polling and Instant modes. No `429`; at most 150 messages on any day; Lab frames ≤ 20, return acks
-  ≤ 4 per device and re-sends ≤ 6 a day; every F06 item reaches every target that comes online within 7 days.
+- [ ] **L2.7** The caps: the 13th F06 frame of a day waits; a device's 7th re-sent frame waits; a 5-part row with 4
+  frames left today waits whole; F06 bytes past 60 MB wait; an attachment row waits while it would take the bytes on
+  the relay past 10 MB. After a `413` on any publish, including one during a re-send, no F06 attachment goes for an
+  hour, and the phone's own sends to the Daylight still go.
+- [ ] **L2.8** `returnParse` gives the vectors' results for junk in JS, Kotlin and Swift: an `x-to` of 15 or 17
+  digits, in upper case or a number; an unknown `x-rk`; `x-rx` as `0` or `"false"`; `x-want` as `1`; 61 ids; ids that
+  are not strings. A duplicate whose `x-to` names another device is neither stored nor acked.
+- [ ] **L2.9** The W2 soak (2.8, with the tables above): 7 days, one visitor address, 5 devices (among them an iPhone
+  that reads only when it is opened, twice a day, and a Mac that is offline for 2 of the days), in both polling and
+  Instant modes. It uses real sizes: chunks of 1,900,544 bytes (not the W1 soak's 100,000) and F06 files of 1–5
+  parts. S0 is modelled with 2-hour acks. The mock relay answers an upload over the daily bandwidth with `413`
+  `41301`, as ntfy.sh does (NTFY-FACTS), not `429`. Checks: no `429`; at most 150 messages on any day; attachment
+  traffic within the table's bound (193 MB), with no `413` for the daily bandwidth; Lab frames ≤ 20, device frames
+  ≤ 3 per device, F06 frames ≤ 12 and F06 bytes ≤ 60 MB a day; every pairing-lane item is delivered, and none reaches
+  its third `413`; every F06 item reaches every target that comes online within 7 days. A second run with 8 devices:
+  no `429`, and the day's count is reported.
 
-**Automated:** `share/js/test/return-lane.test.mjs` and the `returnLane` vectors (keys per lane, delivery sequences,
-presence re-sends, `x-to` skips, ack cadence, the worst-case return ack, `replaces`), plus a `labLedger` case for the
-return-only handover hello; the return matrix and the W2 soak in `lab-skew.test.mjs`; Kotlin `ReturnLaneVectorsTest`
-and `ReturnLaneSkewTest`; Swift `ReturnLaneVectorTests` and `ShareReceiverTests`.
+**Automated:** `share/js/test/return-lane.test.mjs` with the `returnLane` and `returnParse` vectors (keys per lane,
+`returnDevTopic`, delivery sequences, `due` at the window edges, follow-ups, `x-to` skips, device frame cadence, the
+caps, the worst-case return ack, `replaces`), plus a `labLedger` case for the return-only handover hello; the return
+matrix and the W2 soak in `lab-skew.test.mjs`; the mock relay's `413` for bandwidth; Kotlin `ReturnLaneVectorsTest`
+and `ReturnLaneSkewTest`; Swift `ReturnLaneVectorTests`, `ShareReceiverTests` and `DeviceIdTests` (an id asked for
+before `SharedStore.ready()` waits and is the same one afterwards; a missing file makes a new one).
 
 #### F06 Send back from the DC-1
 
@@ -2231,10 +2371,15 @@ and `ReturnLaneSkewTest`; Swift `ReturnLaneVectorTests` and `ShareReceiverTests`
 
 - **What goes back.** Anything shared to **Send to my phone or Mac** on the Daylight, from the Reader or any other
   app. `sendBackItems` (L3) makes the items:
-  - text with a link that passes the web URL rule (found as `findShareUrl` finds it, 2.9.1) → `kind: "url"`, titled
-    with the subject or the rest of the text (`shareTitle`);
-  - text with no link → a note: "Note - {first 6 words}.md", `text/markdown`, made by `excerptMarkdown` ("— shared
-    from {app} on {date}", where `{app}` is the source app's label);
+  - text with a link that passes the web URL rule (found as `findShareUrl` finds it, 2.9.1):
+    - when the text without the link is at most one line and at most 120 characters (`SEND_BACK_TITLE_MAX`), it is a
+      headline: `kind: "url"`, titled with the subject or that line (`shareTitle`);
+    - otherwise it is a note that keeps the whole text, link included: "Note - {first 6 words}.md", `text/markdown`,
+      made by `excerptMarkdown`, with `url` = the link. Reading apps share a quote as passage + link, and the passage
+      is what the user wants to keep. LAB-DECISIONS limits excerpts sent *to* the Daylight so they don't interrupt
+      the tablet; nothing interrupts a phone here.
+  - text with no link → a note, the same way ("— shared from {app} on {date}", where `{app}` is the source app's
+    label);
   - files (`EXTRA_STREAM`, or up to 10 with `SEND_MULTIPLE`) → one `kind: "file"` item each. The name comes from
     `OpenableColumns.DISPLAY_NAME` through the safe-file-name rule (PROTOCOL 5); the MIME type from the share, else
     `application/octet-stream`.
@@ -2243,38 +2388,65 @@ and `ReturnLaneSkewTest`; Swift `ReturnLaneVectorTests` and `ShareReceiverTests`
   a flattened PDF, the original and the notes as Markdown (from the Reader's DECISIONS.md; not yet seen on Rooted 2).
   All of those are files. Nothing goes back as `page`.
 - **Limits.** Each item is at most 9 MB before compression. A larger one is refused with v1.1's too-big sentence:
-  neither F13 nor F02 works in this direction.
+  neither F13 nor F02 works in this direction. What doesn't fit today's caps (L2: 12 frames, 60 MB) waits for the
+  next day, and the card says "Your Daylight has sent back as much as it can today. The rest goes tomorrow." So one
+  big `SEND_MULTIPLE` can't use up the household's relay allowance and stop the user's own sends to the Daylight.
 - **Headers.** `x-rk: "share"`; `from` = the Daylight's name (the pairing's `n`); `app` = `android/<versionName>`;
-  `x-to` when the user picked one device.
-- **Where it goes (6.5 Q3).** By default, to every target (L2), at once. The card's **Options** picks one device
-  instead. The Inbox setting **Ask where to send each time** (off) opens the card with the choices and **Send**, as
-  F04's no-timer cases do. Q3's answer only flips that setting's default.
-- **Devices read the return topic** with the ack-topic rules (PROTOCOL 3.2; 3.3 rule 2) while Lab and F06's Use switch
-  are on and a fresh publisher has `return`:
+  `x-to` when the user picked one device, and then the item goes on that device's own topic (L2).
+- **Where it goes (6.5 Q3).** By default, to every target (L2), at once. The card names up to three ("Sending to
+  iPhone, Mac and Chrome") and says "your {n} phones and Macs" only above three. **Options** picks one device instead.
+  The Inbox setting **Ask where to send each time** (off) opens the card with the choices and **Send**, as F04's
+  no-timer cases do. Q3's answer only flips that setting's default.
+- **Browsers join only on purpose.** Chrome becomes a device when the user first opens its From your Daylight list.
+  Until then it reads nothing and publishes nothing for F06. The web sender never becomes a device: while its From
+  your Daylight dialog is open, it reads the shared return topic, shows what is still on the relay (files for 3
+  hours, links for 12), and publishes nothing. So a browser on a work computer gets nothing unless its list is opened
+  there; a Mac that runs the Mac app gets each item once, unless Chrome's list was opened too (Chrome's F06 Use switch
+  then stops it); and the budget counts no browser the user didn't ask for. Safari has no F06 (below).
+- **Devices read their return topics** (the shared one and their own, L2) with the ack-topic rules (PROTOCOL 3.2;
+  3.3 rule 2) while Lab and F06's Use switch are on and `capState('return')` is `on`:
   - at app start, when the app comes to the front, and with every ack check;
-  - every 30 s for 2 minutes after its own device hello, while in front;
-  - while running: at most every 2 minutes (Mac, Windows);
-  - in the background: Android's 15-minute job, iOS background app refresh (scheduled while F06 is on, not only while
-    items wait) and Chrome's 15-minute `ALARM_TICK`. The web sender reads only while it is open.
+  - every 30 s while in front: for 2 minutes after any frame of its own, and for 20 minutes after an `x-want`, until
+    an item arrives;
+  - while running: every 2 minutes (Mac, through `NSBackgroundActivityScheduler` with a 120 s interval and 60 s
+    tolerance; Windows, a timer);
+  - in the background: Android's 15-minute job; iOS background app refresh, scheduled while F06 is on and, after an
+    `x-want`, with an earliest start 20 minutes later; Chrome's 15-minute `ALARM_TICK`, once it is a device.
 
   A read is a request, not a message (2.2.7).
+- **The Daylight hears devices quickly when it can.** Its return outbox reads `returnAckTopic` on a second stream
+  whenever its live connection is up (the Inbox in front, or Instant delivery on). A device's frame then reaches it at
+  once, even with the screen off, and a due re-send goes within seconds. Otherwise it reads at every pairing-lane poll
+  and in its 15-minute job, which Doze can delay while the screen is off (F06.D5 writes the times down). It also reads
+  once when the card opens with no target.
+- **On its way.** After its `x-want`, a device shows "Something from your Daylight is on its way. It can take a few
+  minutes." at the top of From your Daylight, until an item arrives or for 3 hours. On the iPhone, the 20 minutes of
+  reading in front and the background refresh after them make the re-send arrive while the user is still there with
+  Instant delivery on, and at the next opening without it (F06.13, F06.14).
 - **No push.** ntfy.sh forwards only to its own app's push service, and every publish says `Firebase: no` (PROTOCOL
   3.1). So an iPhone learns of an item when it opens, or when iOS grants a background refresh. Nothing promises
   "instant" on the iPhone.
 - **Notices.** "From your Daylight: {title}" on iPhone, Mac, Android and Windows, when an item arrives while the app
   is not in front; several are grouped as "{n} items from your Daylight". One setting, **Tell me when something
   arrives from my Daylight**, is on by default. Without permission, tapping it shows `needs-notifications`. Browsers
-  post none; their list says "({n} new)".
-- **Lab off.**
-  - On the Daylight: **Send to my phone or Mac** leaves the share menu, and v1.1's entry comes back. The return outbox
-    keeps its rows and publishes nothing; the hello says `lab: 0`. When Lab is on again, rows under 7 days old go on.
-  - On a device: one `x-rx: false` frame, then no reads and no hellos. From your Daylight is hidden and kept.
+  post none; Chrome's list says "({n} new)".
+- **Use switches and Lab off.** Each Use switch gates exactly this (LAB-PROTOCOL 2.9.6 gains the rows):
+
+  | Switch | Off means | Not gated (follows Lab alone) |
+  |---|---|---|
+  | `F06`, on a device | One `x-rx: false` frame (if the device ever published one; the web sender never does), then no reads, frames or notices; the device stops being a target. | The From your Daylight list stays, to open, save, share or remove what is there. |
+  | `F06inbox`, on the DC-1 Inbox | **Send to my phone or Mac** leaves the share menu and v1.1's entry comes back. The return outbox keeps its rows and publishes nothing. The hello carries `return-off`, so devices say `off-on-daylight`. | "Sent to your phone or Mac" stays. |
+
+  With Lab off:
+  - on the Daylight: as with `F06inbox` off, and the hello says `lab: 0`. When Lab is on again, rows under 7 days old
+    go on;
+  - on a device: as with `F06` off, and From your Daylight is hidden and kept.
 - **Handover (5.3.4).** The return lane is not handed over. While the Lab Reader receives, Daylight Share keeps its
   share entry, its return outbox and its reads of the return-ack topic (its 15-minute job runs for the return lane
-  alone), and it sends the return-only hello (change 6). Later, the Lab Reader publishes R2–R4 items on the same lane,
-  with its own `Sender` and outbox (`files/share-inbox/lane-return/`). Both learn their targets from the same device
-  hellos, and devices dedupe by id. If the Lab Reader should offer Send back itself, that is a later R task, with
-  `app` = `reader-lab/…`.
+  alone, and the return-ack stream runs while Instant delivery is on), and it sends the return-only hello (change 6).
+  Later, the Lab Reader publishes R2–R4 items on the same lane, with its own `Sender` and outbox
+  (`files/share-inbox/lane-return/`). Both learn their targets from the same device frames, and devices dedupe by id.
+  If the Lab Reader should offer Send back itself, that is a later R task, with `app` = `reader-lab/…`.
 - **What F06 needs from the Reader: nothing**, as long as the Reader's share menu opens Android's share sheet. F06.D2
   checks that on Rooted 2. If it does not, F06 still works from every other app, and asking the Reader joins 6.5 Q10.
   A **Send to my phone or Mac** item at the top of the Reader's share menu is Q10's optional request.
@@ -2283,73 +2455,93 @@ and `ReturnLaneSkewTest`; Swift `ReturnLaneVectorTests` and `ShareReceiverTests`
 
 | Part | UI and behaviour | Edge cases |
 |---|---|---|
-| Share entry | `inbox/sendback/SendBackActivity`: translucent, `excludeFromRecents`, label "Send to my phone or Mac", for `SEND` and `SEND_MULTIPLE` with `text/plain` and `*/*`. It is declared `android:enabled="false"`. `App.onRoleChanged` and every Lab or Use change enable it exactly in the Inbox role with Lab and F06 on, and then disable `ShareActivity` (`setComponentEnabledSetting`, `DONT_KILL_APP`). It is its own activity, not 4.1's `activity-alias`, so the Inbox lane never edits `sender/`. | Process death while the card is up: nothing is queued, as with F04 on Android. |
-| Card | "Sending to {targets}" with **Options** for 1.5 s; no timer in F04's cases or with **Ask where to send each time**. Options holds **Send to** (All my devices, or one device by name) and the title. The content is copied into the return outbox while the grant lives. | No target: `needs-devices`, and nothing is sent. Over 9 MB: v1.1's too-big sentence. Nothing it can use: today's "There’s nothing here Daylight Share can send." |
-| Return outbox | K7's return `Outbox`, in `files/inbox/lane-return/`. It reads `returnAckTopic` at every pairing-lane poll and, while Instant delivery is connected, every 2 minutes. | Handover: it runs on. Lab off: kept and paused. |
-| Sent to your devices | A section on `InboxScreen` (Lab on): the newest 20 rows, in `describeReturnRow`'s words, with **Retry now** on a failed row and **Remove**. | — |
-| Settings | F06's row in What's in Lab ("Send to my phone or Mac") with its Use switch, and **Ask where to send each time**. | — |
+| Share entry | `inbox/sendback/SendBackActivity`: translucent, `excludeFromRecents`, label "Send to my phone or Mac", for `SEND` and `SEND_MULTIPLE` with `text/plain` and `*/*`. It is declared `android:enabled="false"`. `inbox/sendback/ShareEntry.observe(app)` collects the role, Lab and the `F06inbox` Use switch, and enables it exactly in the Inbox role with Lab and `F06inbox` on, and then disables `ShareActivity` (`setComponentEnabledSetting`, `DONT_KILL_APP`). One line in `App.onCreate` starts it (6.3), so `onRoleChanged` and `setLab` stay as they are, and the Inbox lane never edits `sender/`. It is its own activity, not 4.1's `activity-alias`, for the same reason. | Process death while the card is up: nothing is queued, as with F04 on Android. |
+| Card | "Sending to {targets}" with **Options** for 1.5 s; no timer in F04's cases or with **Ask where to send each time**. Options holds **Send to** (Every phone and Mac, or one device by name) and the title. The content is copied into the return outbox while the grant lives. | No target: it reads `returnAckTopic` once first, so a device that said hello a moment ago counts. Still none: the `needs-devices` sentence and "It goes to the first one that shows up within a day." The item waits as "Waiting for a phone or Mac" for 24 hours and goes to the first device heard; after that it is removed. Past today's caps: "Your Daylight has sent back as much as it can today. The rest goes tomorrow." Over 9 MB: v1.1's too-big sentence. Nothing it can use: today's "There’s nothing here Daylight Share can send." |
+| Return outbox | K7's return `Outbox`, in `files/inbox/lane-return/`. Reads of `returnAckTopic`: a second stream in `inbox/Live.kt` whenever the live connection is up, so also under `InstantDeliveryService`, whose special-use description gains "and replies from your phone or Mac"; at every pairing-lane poll and in the 15-minute job; once from the card. A due re-send goes as soon as its device is heard. | Handover: the inbox stream is off (K6), and the return-ack stream runs only while Instant delivery is on. Lab or `F06inbox` off: kept and paused. |
+| Sent to your phone or Mac | A section on `InboxScreen` (Lab on): the newest 20 rows, in `describeReturnRow`'s words, with **Retry now** on a failed row and **Remove**. | — |
+| Settings | The `F06inbox` row in What's in Lab, with its Use switch, and **Ask where to send each time**. | — |
 
-**Devices: From your Daylight.**
+**Devices: From your Daylight.** One rule for actions on every device: **Open**; **Save** for a file (**Download** in
+a browser) or **Copy link** for a link; **Share** where the OS has a share sheet (iPhone, Mac, Android phone,
+Windows); and **Remove** everywhere, which deletes the item's file.
 
-| Platform | List and actions | Reads, notices |
+| Platform | The list, and how its actions are made | Reads, notices |
 |---|---|---|
-| iPhone, iPad | A section above History on `HomeView`, newest first, shown when it has items. Each row: the title, then "{rel} · {kind}". A tap offers **Open** (Quick Look for a file, Safari for a link), **Save** (a file, with `fileExporter` to Files), **Share** (`ShareLink`) and **Remove**. | Background app refresh, as above. `UNUserNotificationCenter`, thread "from-daylight". |
-| Mac | The same section in the main window; the menu-bar menu lists the 3 newest. **Open** in the default app (the listed types only, below), **Save** with `NSSavePanel` (the sandbox's `files.user-selected.read-only` becomes `read-write`, in both entitlements files), **Share** with `NSSharingServicePicker`. | Every 2 minutes while the app runs; it opens at login (F26). |
-| Android phone | A section on `SenderScreen`. **Open** (`ACTION_VIEW` through the FileProvider), **Save** (`ACTION_CREATE_DOCUMENT`), **Share** (the chooser). | The 15-minute job, through a `PhoneReturn.poll` call that K8 adds to `Work.kt`. Channel "From your Daylight", `IMPORTANCE_DEFAULT`. |
-| Windows | A section in the window. **Open** with the shell (the listed types only), **Save** (a save dialog), **Copy link** for a link. | Every 2 minutes while running; a toast. |
-| Chrome | The popup's line "From your Daylight ({n} new) ›" opens the list in `lab.html`: up to 20 items in `storage.local`. **Open** for a link (a new tab), **Download** for a file (an `<a download>` on a blob, so no new permission), **Copy link**, **Remove**. | The 15-minute tick and each popup open. No notices. |
+| iPhone, iPad | A section above History on `HomeView`, newest first, shown when it has items or the on-its-way line. Each row: the title, then "{rel} · {kind}". **Open**: Quick Look for a file, Safari for a link. **Save**: `fileExporter` to Files. **Share**: `ShareLink`. | Background app refresh, as above. `UNUserNotificationCenter`, thread "from-daylight". |
+| Mac | The same section in the main window; the menu-bar menu lists the 3 newest. **Open** in the default app (the listed types only, below). **Save** with `NSSavePanel`: the sandbox's `files.user-selected.read-only` becomes `read-write`, in both entitlements files. **Share** with `NSSharingServicePicker`. | Every 2 minutes while the app runs. The app has no login item today (F26 only checks for one), and F06 on the Mac needs it running, so A8 adds **Open at login** (`SMAppService.mainApp`, macOS 13+, the deployment target). It is offered once, when the first item arrives, and F26's check points at it. App Nap may stretch the 2 minutes while no window is open (F06.D6). |
+| Android phone | A section on `SenderScreen`. **Open**: `ACTION_VIEW` through the FileProvider (a `from-daylight/` path), the listed types only. **Save**: `ACTION_CREATE_DOCUMENT`. **Share**: the chooser. | The 15-minute job, through `SenderRepo.tick()`, which `Work.kt` already runs in the sender role (K9). Channel "From your Daylight", `IMPORTANCE_DEFAULT`. |
+| Windows | A section in the window. The app keeps its settings as JSON and has no shell, dialog or file plugin, so WIN2 adds Rust commands: `store_received`, `open_received` (the listed types, then `ShellExecuteW`), `save_received` (`IFileSaveDialog`), `share_received` (the system share sheet, through `IDataTransferManagerInterop`) and `remove_received`. | Every 2 minutes while running; a toast. It already opens at login (F26's autostart). |
+| Chrome | Before its list was opened: the popup's line "From your Daylight ›", and nothing else. After: "From your Daylight ({n} new) ›" opens the list in `lab.html`, up to 20 items. The index (titles, ids, the new count) is in `storage.local`; the file bodies are in the extension's IndexedDB, which the service worker and `lab.html` share, so a 9 MB file is never rewritten as base64. **Open** for a link (a new tab), **Download** for a file (an `<a download>` on a blob from IndexedDB, so no new permission), **Copy link**, **Remove**. | The 15-minute tick and each popup open, once it is a device. No notices. |
 | Safari | No F06: the Apple app on the same device receives. `build.mjs` leaves it out. | — |
-| Web | The same list in a dialog; items in IndexedDB (20). | Only while the page is open. |
+| Web | The same list in a dialog, items in IndexedDB (20), with the line "This page shows only what your Daylight sent in the last few hours. The Send to Daylight app gets everything." | Only while the dialog is open. It publishes nothing. |
 
 **Files from the Daylight are untrusted input** (FEATURES F06 names the Supernote path-traversal CVE).
 
 - Names pass the safe-file-name rule and are written only inside the app's own folder.
 - Browsers never open a received file in a page of their own origin, where a blob could run script next to the
   pairing. They only download it.
-- Mac and Windows **Open** only PDF, EPUB, Markdown, plain text, HTML (in the browser), images and DOCX. Any other
-  type shows "This kind of file isn't opened here. Save it, then open it yourself." and offers **Save**.
-- The store keeps the newest 100 items. **Remove** deletes the item's file.
+- Mac, Windows and the Android phone **Open** only PDF, EPUB, Markdown, plain text, HTML (in the browser), images and
+  DOCX. On Android, `ACTION_VIEW` would hand any type to whatever app claims it (an APK to the installer). Any other
+  type shows "This kind of file isn't opened here. Save it, then open it yourself." and offers **Save**. The iPhone's
+  Quick Look only shows files, so it opens every type.
+- The store keeps the newest 100 items (browsers 20).
 
 **What's in Lab** (1.4):
 
 | Feature | Name | Sentence | Apps |
 |---|---|---|---|
-| F06 | From your Daylight | What you send from your Daylight arrives here, to open, save or share. | iPhone, Mac, Android phone, Chrome, web, Windows |
-| F06 (Inbox) | Send to my phone or Mac | Send what you share on your Daylight to your phone and computer. | DC-1 Inbox |
+| `F06` | From your Daylight | What you send from your Daylight arrives here, to open, save or share. | iPhone, Mac, Android phone, Chrome, web, Windows |
+| `F06inbox` | Send to my phone or Mac | Send what you share on your Daylight to your phone or Mac. | DC-1 Inbox |
 
-Both rows have a Use switch, on by default (LAB-PROTOCOL 2.9.6 gains them). Short states: on a device, `needs-inbox`
-until a fresh hello has `return`; on the Inbox, `needs-devices` until a target is heard.
+Both rows have a Use switch, on by default. Short states: on a device, "Ready", `needs-inbox` (no fresh hello has
+`return`) or `off-on-daylight` (one has `return-off`); on the Inbox, `needs-devices` until a target is heard. A tap on
+a device's row opens From your Daylight, or shows its state's sentence.
 
-**Copy** (LAB_TEXT, added by L3; ASCII apostrophes and quotes here, ’ “ ” in the apps, as ground rule 1 says):
+**Copy** (LAB_TEXT, added by L3; ASCII apostrophes and quotes here, ’ “ ” in the apps, as ground rule 1 says).
+"Phone or Mac" is the user's own label, and every F06 string uses it (6.5 Q11 asks whether a Windows or Android
+household should read "phone or computer" instead):
 
 | LAB_TEXT id | Text | Used by |
 |---|---|---|
 | `features.F06` | From your Daylight · What you send from your Daylight arrives here, to open, save or share. | What's in Lab (name · sentence) |
-| `features.F06inbox` | Send to my phone or Mac · Send what you share on your Daylight to your phone and computer. | What's in Lab on the Inbox |
-| `use.footers.F06` | When it's off, this device doesn't get what you send from your Daylight. | Use switch, devices |
-| `use.footers.F06inbox` | When it's off, Send to my phone or Mac leaves the share menu on your Daylight. | Use switch, Inbox |
+| `features.F06inbox` | Send to my phone or Mac · Send what you share on your Daylight to your phone or Mac. | What's in Lab on the Inbox |
+| `use.footers.F06` | When it's off, this device doesn't get what you send from your Daylight. What's already here stays. | Use switch, devices |
+| `use.footers.F06inbox` | When it's off, Send to my phone or Mac leaves the share menu on your Daylight, and nothing more goes back. | Use switch, Inbox |
 | `short.needs-devices` | Waiting for your phone or Mac | Inbox |
-| `needs.needs-devices` | None of your phones or computers gets items from your Daylight yet. Open Send to Daylight on one with Lab on. | Inbox card and row |
+| `needs.needs-devices` | No phone or Mac gets items from your Daylight yet. Open Send to Daylight on one with Lab on (Daylight Share on Android), then try again. | Inbox card and row |
+| `short.off-on-daylight` | Off on your Daylight | Devices (F06, F13) |
+| `needs.off-on-daylight` | Turn on {feature} on your Daylight: Daylight Share › Settings › Lab › What's in Lab. | Devices; `{feature}` is the Inbox row's name (`features[id + "inbox"].name`) |
 | `sendBack.shareLabel` | Send to my phone or Mac | The share entry |
 | `sendBack.card` | Sending to {targets} | The card |
 | `sendBack.and` | {a} and {b} | `{targets}`, `{got}`, `{missing}` with two names |
-| `sendBack.yourDevices` | your {n} devices | The same, with three or more |
+| `sendBack.andThree` | {a}, {b} and {c} | The same, with three |
+| `sendBack.yourDevices` | your {n} phones and Macs | The same, with four or more |
+| `sendBack.sameName` | {name} ({n}) | A second device with the same name |
 | `sendBack.sendTo` | Send to | Options |
-| `sendBack.allDevices` | All my devices | Options |
+| `sendBack.allDevices` | Every phone and Mac | Options |
 | `sendBack.askEachTime` | Ask where to send each time | Inbox setting |
-| `sendBack.askEachTimeFooter` | When it's on, you choose a device before each item goes. | Inbox setting |
-| `sendBack.listHeading` | Sent to your devices | `InboxScreen` |
+| `sendBack.askEachTimeFooter` | When it's on, you choose where each item goes before it's sent. | Inbox setting |
+| `sendBack.keptADay` | It goes to the first one that shows up within a day. | Card, after `needs.needs-devices` |
+| `sendBack.tomorrow` | Your Daylight has sent back as much as it can today. The rest goes tomorrow. | Card; sentence under a row that waits |
+| `sendBack.listHeading` | Sent to your phone or Mac | `InboxScreen` |
 | `sendBack.rows.waiting` | Sent · waiting for {missing} | Row label, before any ack |
 | `sendBack.rows.partly` | On {got} ✓ · waiting for {missing} | Row label |
 | `sendBack.rows.done` | On {got} ✓ | Row label |
 | `sendBack.rows.missed` | {missing} didn't pick it up within a week. | Sentence under `done` at 7 days, and under v1.1's "Not delivered" when nobody acked |
+| `sendBack.rows.noDevice` | Waiting for a phone or Mac | Row label, no target yet |
+| `sendBack.rows.tomorrow` | Waiting · goes tomorrow | Row label, past today's caps |
 | `fromDaylight.heading` | From your Daylight | Every device |
 | `fromDaylight.headingNew` | From your Daylight ({n} new) | Chrome popup, web |
 | `fromDaylight.line` | {rel} · {kind} | Row line: `{kind}` is `fromDaylight.link` or `kindLine.document` |
 | `fromDaylight.link` | Link | Row line |
 | `fromDaylight.open` · `.save` · `.share` · `.download` · `.copyLink` · `.remove` | Open · Save · Share · Download · Copy link · Remove | Row actions |
 | `fromDaylight.empty` | Nothing yet. On your Daylight, share something and choose Send to my phone or Mac. | Empty list |
-| `fromDaylight.saveOnly` | This kind of file isn't opened here. Save it, then open it yourself. | Mac, Windows |
+| `fromDaylight.onItsWay` | Something from your Daylight is on its way. It can take a few minutes. | Top of the list, after an `x-want` |
+| `fromDaylight.saveOnly` | This kind of file isn't opened here. Save it, then open it yourself. | Mac, Windows, Android phone |
+| `fromDaylight.chromeJoined` | This browser now gets what you send from your Daylight. To stop that, turn off From your Daylight in What's in Lab. | Chrome, the first time its list opens |
+| `fromDaylight.webNote` | This page shows only what your Daylight sent in the last few hours. The Send to Daylight app gets everything. | Web dialog |
+| `fromDaylight.loginItemOffer` | Open Send to Daylight at login, so what you send from your Daylight arrives while you work. | Mac, once; button `fromDaylight.loginItemOn` |
+| `fromDaylight.loginItemOn` | Turn on | Mac |
 | `fromDaylight.notice` | From your Daylight: {title} | Notice |
 | `fromDaylight.noticeGroup` | {n} items from your Daylight | Grouped notice |
 | `fromDaylight.noticeSetting` | Tell me when something arrives from my Daylight | Setting, on by default |
@@ -2357,49 +2549,78 @@ until a fresh hello has `return`; on the Inbox, `needs-devices` until a target i
 
 A failed row on the Inbox uses v1.1's `describeRow` words for `failed` (they read right on the Daylight too), with
 **Retry now**. `deviceListText(names)` fills `{targets}`, `{got}` and `{missing}`: one name as it is, two with
-`sendBack.and`, more with `sendBack.yourDevices`. The vectors pin it.
+`sendBack.and`, three with `sendBack.andThree`, more with `sendBack.yourDevices`. The vectors pin it.
 
 **Acceptance:**
 
 - [ ] **F06.1 (iPhone, Mac)** A 5 MB PDF shared to Send to my phone or Mac on the Daylight appears in From your
-      Daylight
-  on the iPhone within a minute of opening the app, and on the Mac (running) within 3 minutes. Its SHA-256 matches
-  (FEATURES F06). In CI the same runs with the emulator's Inbox and a JS device (E2).
-- [ ] **F06.2** A shared link arrives as a link: Open opens it in the browser; Copy link and Share work. Text with no
-  link arrives as "Note - {words}.md", which the iPhone can Share and the Mac can open.
+  Daylight on the iPhone within a minute of opening the app (within 3 hours of the share), and on the Mac (running)
+  within 3 minutes. Its SHA-256 matches (FEATURES F06). In CI the same runs with the emulator's Inbox and a JS device
+  (E2).
+- [ ] **F06.2** On every device, a link arrives as a link: **Open** opens it in the browser, **Copy link** copies it,
+  and **Remove** removes it. A file can be saved (**Save** on iPhone, Mac, Android phone and Windows; **Download** in
+  Chrome and web) and removed. **Share** opens the share sheet on iPhone, Mac, Android phone and Windows. A headline +
+  link arrives as a link; a three-line passage + link (a Kindle-style quote) arrives as "Note - {words}.md", holding
+  the passage and the link; text with no link arrives as a note.
 - [ ] **F06.3** A file over 9 MB is refused on the Daylight with v1.1's too-big sentence, and nothing is published.
 - [ ] **F06.4** Names from the Daylight pass the safe-file-name vectors; a name containing "../" is saved inside the
-  app's folder. Chrome and web never open a received file in a tab. Mac and Windows open only the listed types.
+  app's folder. Chrome and web never open a received file in a tab. Mac, Windows and the Android phone open only the
+  listed types, and offer **Save** for the rest.
 - [ ] **F06.5** With Lab on, the Inbox's share sheet shows only "Send to my phone or Mac", and a phone only "Send to
-  Daylight". With Lab or F06 off, the Inbox shows v1.1's entry and its sentence, as the Lab-off baseline does.
+  Daylight". With Lab or `F06inbox` off, the Inbox shows v1.1's entry and its sentence, as the Lab-off baseline does.
 - [ ] **F06.6** With the iPhone and the Mac as targets, the Inbox row reads "Sent · waiting for iPhone and Mac", then
   "On iPhone ✓ · waiting for Mac", then "On iPhone and Mac ✓". With the Mac offline for 24 hours, it gets the item
-  within 20 minutes of coming back (5 minutes with Instant delivery on the Daylight), from a re-send with its `x-to`.
-  The iPhone neither stores nor acks that re-send.
-- [ ] **F06.7** Options › Send to › one device: only that device stores and acks the item.
-- [ ] **F06.8** With no target heard, the card shows the `needs-devices` sentence and nothing goes. A device whose F06
-  Use switch is turned off is not a target of the next item.
-- [ ] **F06.9** Lab off on a device: one `x-rx: false` frame, then no reads or hellos for 24 hours (the relay log).
-  From your Daylight is hidden, and back with Lab on. Lab off on the Inbox: the entry is gone and its rows wait; with
-  Lab on they go on.
-- [ ] **F06.10** An item that arrives while the app is not in front posts "From your Daylight: {title}" (the iPhone
-  after a background refresh, Android within 15 minutes, Mac and Windows while running). With the setting off, none.
+  from a re-send on its own topic: within 5 minutes of coming back with Instant delivery on the Daylight, and at the
+  Daylight's next 15-minute run without it (Doze can delay that run; F06.D5). The iPhone downloads nothing of that
+  re-send.
+- [ ] **F06.7** Options › Send to › one device: only that device downloads, stores and acks the item.
+- [ ] **F06.8** With no device heard, the card first reads the return-ack topic: a device hello published 10 s
+  before the card opened is found, and the item goes. With none, the card shows the `needs-devices` sentence and "It
+  goes to the first one that shows up within a day."; the row waits as "Waiting for a phone or Mac", and the first
+  device heard within 24 hours gets the item. A device whose F06 Use switch is off is not a target of the next item.
+- [ ] **F06.9** Lab off on a device: one `x-rx: false` frame, then no reads or frames for 24 hours (the relay log);
+  From your Daylight is hidden, and back with Lab on. F06's Use switch off on a device: the same frames, the list
+  still shown, and no notices. Lab or `F06inbox` off on the Inbox: the entry is gone, its rows wait, and the hello
+  says `lab: 0` or carries `return-off`; switched on again, the rows go on.
+- [ ] **F06.10** An item that arrives while the app is not in front posts "From your Daylight: {title}": on the
+  iPhone after a background refresh, on Android at its next background run (Doze can delay it), on Mac and Windows
+  while they run. With the setting off, none.
 - [ ] **F06.11** During a handover, Send to my phone or Mac still delivers, devices keep reading the return topic (the
   return-only hello), and senders show the Lab Reader's states.
 - [ ] **F06.12** A v1.0, v1.1 or W1 app on the same pairing is unaffected. A W2 device with a W1 Inbox shows F06 as
-  `needs-inbox` and reads nothing (skew suite).
+  `needs-inbox` and reads nothing. With a W2 Inbox whose `F06inbox` is off, it shows "Turn on Send to my phone or Mac
+  on your Daylight: Daylight Share › Settings › Lab › What's in Lab." and reads nothing (skew suite, `labGate`
+  vectors).
+- [ ] **F06.13 (iPhone, an expired copy)** Opened 4 hours after a 5 MB PDF was sent back, the iPhone shows
+  "Something from your Daylight is on its way. It can take a few minutes." With the app kept open, the PDF arrives
+  within 3 minutes with Instant delivery on the Daylight, and within 17 minutes without it (the Daylight's 15-minute
+  run on time). The same holds on a day when the iPhone's two ack frames are already used.
+- [ ] **F06.14 (iPhone, two short openings)** A 5 MB return file. The iPhone, which reads only when it is opened, is
+  opened for 1 minute 5 hours later and again 9 hours later, and the Daylight polls every 15 minutes. The file arrives
+  at the second opening, from the follow-up re-send (`return-lane.test.mjs` and the soak).
+- [ ] **F06.15** A `SEND_MULTIPLE` of 10 PDFs of 9 MB sends what fits within 12 frames and 60 MB, and the card says
+  "Your Daylight has sent back as much as it can today. The rest goes tomorrow."; the rest goes the next day. The
+  phone's sends to the Daylight that day still arrive (the soak). After a `413` on the Daylight, no F06 attachment goes
+  for an hour.
+- [ ] **F06.16** Chrome reads and publishes nothing for F06 until its list is first opened; then it shows "This
+  browser now gets…" once and becomes a target. The web sender never publishes on the return-ack topic. The card
+  names up to three devices and says "your 4 phones and Macs" for four.
 
 **Automated:**
 
-- JS: `send-back.test.mjs` (`sendBackItems`, `describeReturnRow`, `deviceListText`) and the `sendBack` vectors, in all
-  three languages.
-- Robolectric: `SendBackTest` (the mapping, too big, no target, Options, no timer), `ShareEntryStateTest` (component
-  states for each role, Lab and Use; F06.5), `ReturnOutboxTest`, `HandoverReturnTest`; `LabOffParityTest` keeps v1.1's
-  share entry with Lab off; on the phone, `PhoneReturnTest`.
-- Swift: `ShareReceiverTests`, `FromDaylightStoreTests` (safe names, "../"), XCUITest `FromDaylightTests` (rows; the
-  Open, Save and Share sheets appear; parity with Lab off).
-- Extension and web: `from-daylight.e2e.mjs`, with a JS return `Sender` playing the Daylight. Windows: unit and e2e
-  tests the same way.
+- JS: `send-back.test.mjs` (`sendBackItems` with both text rules, `describeReturnRow`, `deviceListText`, `capState`)
+  and the `sendBack` vectors, in all three languages.
+- Robolectric: `SendBackTest` (the mapping, too big, no target and its read, the 24-hour wait, Options, no timer, the
+  caps' words), `ShareEntryStateTest` (component states for each role, Lab and Use; F06.5), `ReturnOutboxTest` (the
+  return-ack stream, the poll and job reads, re-sends on a device's topic), `HandoverReturnTest`; `LabOffParityTest`
+  keeps v1.1's share entry with Lab off; on the phone, `PhoneReturnTest` (the store, the listed types, Copy link,
+  Remove).
+- Swift: `ShareReceiverTests`, `FromDaylightStoreTests` (safe names, "../"), `DeviceIdTests`, XCUITest
+  `FromDaylightTests` (rows; the Open, Save and Share sheets appear; Copy link and Remove; the on-its-way line; parity
+  with Lab off).
+- Extension and web: `from-daylight.e2e.mjs`, with a JS return `Sender` playing the Daylight (Chrome before and after
+  its list opens; the web dialog publishing nothing). Windows: unit and e2e tests the same way, and Rust tests of the
+  received-file commands.
 - E2: the emulator steps (task card).
 
 **Device items** (W2 round on Rooted 2, into DEVICE-CHECKS.md):
@@ -2409,9 +2630,12 @@ A failed row on the Inbox uses v1.1's `describeRow` words for `failed` (they rea
 - [ ] **F06.D2** The Reader's Share, on a PDF and on an article, opens Android's share sheet with "Send to my phone or
   Mac" in it. If not, that is written down, and 6.5 Q10's request becomes needed.
 - [ ] **F06.D3** With the iPhone locked for an hour, an item sent back posts its notice within iOS's background
-      window.
-  The delay is written down; nothing is promised.
+  window. The delay is written down; nothing is promised.
 - [ ] **F06.D4** F06.11 on Rooted 2 with the Lab Reader receiving (R1).
+- [ ] **F06.D5** The iPhone opened 4 hours after a 5 MB PDF was sent back, with the Daylight's screen off: once with
+  Instant delivery on, once with it off. When the on-its-way line showed and when the PDF arrived are written down.
+- [ ] **F06.D6 (Mac)** After a restart with **Open at login** on, an item sent back arrives with no window open; the
+  time is written down. With it off, the item arrives when the app is opened.
 
 #### F13 Big files on the same Wi-Fi
 
@@ -2424,152 +2648,227 @@ A failed row on the Inbox uses v1.1's `describeRow` words for `failed` (they rea
   carried: the Reader takes at most 8 MiB of HTML.
 - **Discovery** is the sealed hello: the cap `lan` and `x-inbox.lan` (changes 1 and 2). There is no mDNS and no
   broadcast. Many networks block multicast, Android needs a multicast lock for it, iOS a Bonjour declaration, and an
-  announcement would tell the whole network that a Daylight is there. The relay never sees the address. An address
-  from a fresh publisher (36 hours, 2.2.6) is only a candidate: the ping decides.
-- **The LAN path** (L3 writes it as LAB-PROTOCOL 2.10). Plain HTTP/1.1 to `http://{lan}`, one request per connection.
-  Tickets and answers are `lab-lan` frames, sealed like an ack but with AAD `dlshare/v1/lab-lan`.
+  announcement would tell the whole network that a Daylight is there. The relay never sees the address, and neither
+  does the Daylight server (change 9). An address from a fresh publisher (36 hours, 2.2.6) is only a candidate: the
+  ping decides.
+- **The LAN path** (L4 writes it as LAB-PROTOCOL 2.10). Plain HTTP/1.1 to `http://{lan}`, one request per connection.
+  Every request carries a ticket in `X-DLS-Ticket`: the base64 of a `lab-lan` frame, sealed like an ack but with AAD
+  `dlshare/v1/lab-lan`. Tickets and answers have kinds of their own, so one can never pass for the other, and each
+  answer echoes the ticket's fresh `c` or `r` (32 random hex).
 
-  | Request | Sent with | Answer |
+  | Request | Ticket | Answer |
   |---|---|---|
-  | `GET /dls/v1/ping` | `X-DLS-Challenge`: 32 random hex | `200`, a `lab-lan` frame `{v:1, kind:"lan-hello", c, s, max, free}`: `c` echoed; `s` the listener's session (32 hex, new at each start and at least daily); `max` 200,000,000; `free` the free space in MB, rounded down to 100 |
-  | `GET /dls/v1/have` | `X-DLS-Ticket`: base64 of a `lab-lan` frame `{v:1, kind:"lan-have", s, id}` | `200`: the sealed ack frame (AAD `ack`, `ids: [id]`) when the item is stored; else a `lab-lan` frame `{v:1, kind:"lan-have", id, parts}` that lists the parts held |
-  | `PUT /dls/v1/frame` | `X-DLS-Ticket`: base64 of `{v:1, kind:"lan-put", s, id, part, len}`; `Content-Length` = `len`; the body is the part's item frame, as on the relay | `204` the part is stored · `200` the item is complete and stored, with the sealed ack frame as the body |
+  | `GET /dls/v1/ping` | `{v:1, kind:"lan-ping", c}` | `200`, a `lab-lan` frame `{v:1, kind:"lan-hello", c, s, max, free}`: `s` the listener's session (32 hex, new at each start and at least daily); `max` 200,000,000; `free` the free space in MB, rounded down to 100 |
+  | `GET /dls/v1/have` | `{v:1, kind:"lan-have", s, id, r}` | `200`: the sealed ack frame (AAD `ack`, `ids: [id]`) when the item is stored; else a `lab-lan` frame `{v:1, kind:"lan-held", id, parts, r}` that lists the parts held |
+  | `PUT /dls/v1/frame` | `{v:1, kind:"lan-put", s, id, part, len, r}`; `Content-Length` = `len`; the body is the part's item frame, as on the relay | `204` the part is stored · `200` the item is complete and stored, with the sealed ack frame as the body |
+  | `POST /dls/v1/cancel` | `{v:1, kind:"lan-cancel", s, id, r}` | `204`: every held part of `id` is dropped |
 
-  Refusals have no body: `400` a frame that does not decrypt, a bad header, or an `id` or `part` that differs from the
-  ticket's · `401` no ticket, a bad one, or another `s`, answered before the body is read · `409` the item failed its
-  checks · `413` a `len` over 12,713,984, not read · `429` rate limited, with `Retry-After` · `503` another item is
-  being received, with `Retry-After: 30` · `507` not enough space.
-- **Delivered still needs a sealed ack** (2.2.6): the `200`'s body, or the ack the Inbox also publishes on the relay.
-  A plain `200` or `204` only moves the progress bar. An answer that does not open with the pairing key changes
-  nothing.
-- **Sending.** A ping (1 s, tried twice, so a sentence comes within 3 s); then `have`; then each part not held, in
-  order, sealed with fresh nonces and built from the file on disk (`FrameFileBuilder`'s two passes, F04). Progress
-  shows the percent, the megabytes and the time left together, and only for a transfer that takes over 10 s (FEATURES
-  "Do not copy": messages that rotate). A dropped connection resumes with `have` and never re-sends a stored part.
+  - **No ticket that opens, no answer.** A request whose ticket is missing or doesn't open with the pairing key is
+    closed without a byte, and counts as a refusal. So a scan of port 49613 learns only that a port is open, not that
+    a Daylight listens there.
+  - **Refusals** have no body: `400` a frame that does not decrypt, a bad header, or an `id` or `part` that differs
+    from the ticket's · `401` a ticket for another `s` (the listener restarted) · `409` the item failed its checks ·
+    `413` a `len` over 12,713,984 · `429` rate limited, with `Retry-After` · `503` another item is being received,
+    with `Retry-After: 30` · `507` not enough space.
+  - **How a refusal is sent.** The listener opens the ticket before it reads a byte of the body. It honours `Expect:
+    100-continue`: `100 Continue` goes only once the ticket opens, and the refusal goes instead of it otherwise. For a
+    refusal it writes the status with `Connection: close`, shuts down its output, then reads and discards the body
+    for up to 2 s or `len` bytes, and only then closes. Closing with unread data would send a TCP reset on Android and
+    Linux, and URLSession, `java.net`, WebView2 and Rust clients would then report a reset and never see the status.
+  - **Clients.** A connection reset during a `PUT` means: ping again, then `have`, with back-off (1 s doubling to
+    60 s). Never a second `PUT` at once.
+  - **Transcripts.** The `lan` vectors pin each exchange as an HTTP transcript: the request head, the answer's status
+    and headers, and how much of the body is read. `LanServerSim` (JS) and `LanServer` (Kotlin) must both reproduce
+    them, so the Swift and Windows clients, which are tested against `LanServerSim`, are tested against the Kotlin
+    server's behaviour too.
+- **Delivered still needs a sealed ack** (2.2.6): the `200`'s body, or the Inbox's ack on the relay. A `204` only
+  moves the progress bar. An answer that does not open with the pairing key, or whose `c` or `r` is not the one sent,
+  changes nothing.
+- **Sending.** A ping (1 s, tried twice, so a sentence comes within 3 s); then `have`; then each part not held, sealed
+  with fresh nonces and built from the app's copy (`FrameFileBuilder`'s two passes, F04). Progress shows the percent,
+  the megabytes and the time left together, and only for a transfer that takes over 10 s (FEATURES "Do not copy":
+  messages that rotate). A dropped connection resumes with `have` and never re-sends a stored part.
+- **What a LAN row keeps.** Every app copies the file into its own LAN spool when it is shared, and hashes the copy:
+  the iPhone and team-signed Mac extensions into the App Group's `lan-spool/`, an ad-hoc Mac extension into its own
+  container, Android and Windows into the app's data folder. The copy is what goes, so a file edited after it was
+  shared can't fail at the end, and the sandboxed Mac app (which has only `files.user-selected` access) never loses
+  the file. A `409` ends the row (`expired`, with "This file couldn't be checked on your Daylight. Share it again."),
+  never a second upload. A JS `Sender` keeps no base64 for a LAN row: the row holds `lanFile`, the spool path. Each
+  app keeps at most 5 waiting LAN rows and 1 GB of copies; a sixth big file is refused with "Up to 5 big files can
+  wait for your Wi-Fi. Send or cancel one in Waiting to send first." A copy is deleted once its row is delivered,
+  expired or cancelled.
 - **Rows.** A LAN item is an outbox row with `via: "lan"`. The relay passes (`resendDue`, `flushNetwork`) never
-  publish it, and `retry` hands it to the LAN client. It reads "Sending over your Wi-Fi…" with its progress; "Waiting
-  for your Daylight on Wi-Fi" (`failed`, error code `lan`) while the Daylight can't be reached; then `delivered` on a
-  sealed ack, or `expired` after 7 days. It is tried at app start and when the app comes to the front, every 30 s for
-  10 minutes while in front, when a hello brings a new `lan`, and in the background where the OS allows (Senders,
-  below). Its content is dropped once it is delivered or expired. With Lab off, a queued LAN row still goes when it
-  can (1.3: Lab off never changes sending), and shows v1.1's row words.
-- **Big files with Lab on**, in every app with F13 (`bigFileRoute`, L3):
+  publish it, and `retry` hands it to the LAN client. It reads:
+  - "Sending over your Wi-Fi…" with its progress;
+  - "Waiting for your Daylight on Wi-Fi" (`failed`, error code `lan`) while the Daylight can't be reached, with the
+    platform's sentence below, **Try now** and **Cancel**;
+  - "Your Daylight is taking another file. This one goes next." after a `503`, or when a connection is accepted and
+    closed at once (the listener is busy);
+  - then `delivered` on a sealed ack, or `expired` after 7 days ("Your Daylight wasn't on the same Wi-Fi within a
+    week.") or on a `409`.
+
+  It is listed in F07's "Waiting to send ({n})" with **Try now** and **Cancel**. **Cancel** removes the row and its
+  copy, and sends `lan-cancel` when a transfer has started, so the Daylight keeps nothing of it.
+- **When a waiting row tries again.** Pings are LAN requests and cost nothing on the relay, and a row uploads only
+  after a ping and `have` answer. The Daylight sends a hello only when its address changes, not when Daylight Share
+  opens, so senders keep pinging:
+
+  | Platform | Pings while a LAN row waits | Its sentence |
+  |---|---|---|
+  | iPhone, iPad | At app start and foreground, every 30 s while in front, and from background app refresh when iOS grants it (not promised) | "It goes when this app is open and your Daylight is on the same Wi-Fi, with Daylight Share open or Instant delivery on." |
+  | Mac, Windows | Every 2 minutes while the app runs, and at wake and on a network change | "It goes by itself when your Daylight is on the same Wi-Fi, with Daylight Share open or Instant delivery on." |
+  | Android phone | At app start and foreground, every 30 s while in front, the 15-minute job, and when Wi-Fi connects (the worker's unmetered-network constraint); Doze can delay the background ones | The same as the Mac's |
+  | Every app | At once on **Try now**, and when a hello brings a new `lan` | — |
+- **Big files with Lab on**, in every app with F13 (`bigFileRoute`, L4):
   1. up to 9 MB: the relay, as today;
   2. over 200 MB: "Too big to send. Over Wi-Fi, files can be up to 200 MB; this one is {mb} MB.";
   3. F13 ready (the ping answers): over the Wi-Fi, at once;
   4. else F02 ready (Wave S, once built): through the Daylight server;
-  5. else, when the Inbox has `lan`: a LAN row that waits for the Wi-Fi, not a refusal;
+  5. else, when `capState('lan')` is `on`: a LAN row that waits for the Wi-Fi, not a refusal (within the queue's
+     limits);
   6. else v1.1's too-big sentence with the F02 entry point (3.1). Its note gains **Or send it over your Wi-Fi ›**,
      which runs `labGate('F13')` and then sends, or shows F13's state.
-- **Gate.** `labGate('F13')` checks: Lab on; paired (`needs-pairing`); the cap `lan` (`needs-inbox`); local network
-  access where the OS asks for it (`needs-local-network`); the ping (`needs-same-wifi`). What's in Lab shows only the
-  cached part: `needs-inbox`, or "Ready" once the cap is there.
+- **Lab off.** A waiting or sending LAN row pauses. v1.1 has no way to send a file this big, so this is the one place
+  where Lab off changes sending (1.3). It reads as v1.1's refusal of a too-big file: `describeRow` of the row as
+  `expired` with error code `too-large` ("Not delivered" and v1.1's too-big sentence), pinned by a vector. Its copy
+  stays, and with Lab on again it waits again.
+- **Gate.** `labGate('F13')` checks: Lab on; paired (`needs-pairing`); `capState('lan')` (change 10: `handed` →
+  `lan-handed`, `off` → `off-on-daylight`, `missing` → `needs-inbox`); local network access where the OS asks for it
+  (`needs-local-network`); the ping (`needs-same-wifi`, or the busy row when the listener accepts and closes at once).
+  What's in Lab shows only the cached part: "Ready" once the cap is there, else that state. A tap on a "Ready" row
+  pings, then shows "Your Daylight is reachable on this Wi-Fi." or the state.
 
-**DC-1 Inbox: the listener** (`inbox/lan/LanListener`, on K7's `LanServer`).
+**DC-1 Inbox: the listener** (`inbox/lan/LanListener`, on K10's `LanServer`).
 
-- **When.** Lab on, F13's Use switch on, Inbox role, paired, not handed over, the active network is Wi-Fi, and the
-  Inbox screen is in front or Instant delivery is on. A transfer that has started keeps it open until it ends.
-  Otherwise the port is closed (FEATURES F13).
+- **When.** Lab on, `F13inbox` on, Inbox role, paired, not handed over, the active network is Wi-Fi, and Daylight
+  Share is in front or Instant delivery is on. A transfer that has started keeps it open until it ends. Otherwise the
+  port is closed (FEATURES F13).
 - **Where.** A `ServerSocket` bound to the Wi-Fi interface's IPv4 address only, never to `0.0.0.0`, so it can't be
   reached over mobile data, a VPN or USB. Port 49613 when it is free, else one the system picks. A new address or port
-  sends a hello, within the Lab frame cap and its 30 s spacing.
+  sends a hello at once, outside the daily Lab cap, at most 2 a day (the budget counts them), with the 30 s spacing.
 - **Limits.**
-  - Two connections at once; a third is closed at once. One item at a time (`503`).
-  - A request head of at most 8 KiB, read within 10 s. `Content-Length` is required; chunked bodies are refused. A
-    body that sends no bytes for 20 s is dropped.
+  - Two connections at once, and one per source address; another is closed at once. One item at a time (`503`). The
+    item's slot is released when no request for it has come for 60 s. Its parts stay on the spool, so its sender
+    resumes with `have` later.
+  - A request head of at most 8 KiB, read within 10 s; a head that times out counts as a refusal. `Content-Length` is
+    required; chunked bodies are refused. A body that sends no bytes for 20 s is dropped.
   - The ticket is opened before a byte of the body is read.
-  - Per source address: 10 pings a minute; after 50 refused requests (`400`, `401`, `413`, bad HTTP) in a minute,
-    `429` to everything for 10 minutes (FEATURES F13).
+  - Per source address: 10 pings a minute. After 50 refusals in a minute (`400`, `401`, `413`, a ticket that doesn't
+    open, bad HTTP, a head that times out), `429` to everything for 10 minutes (FEATURES F13).
   - `507` when storing the item would leave less than 500 MB free.
-- **Frames.** `Receiver.acceptLanFrame` (K7) runs the relay path's decrypt, reassemble (on the spool, so parts survive
-  a restart), store, remember and ack, under the receiver's lock and without touching the relay cursor. An incomplete
-  LAN item is given up 24 hours after its first part, as on the relay.
+- **Frames.** `Receiver.acceptLanFrame` (K10) runs the relay path's decrypt, reassemble (on the spool, so parts
+  survive a restart), store and remember, under the receiver's lock and without touching the relay cursor. Parts may
+  come in any order. An incomplete LAN item is given up 24 hours after its first part, as on the relay. There is no
+  separate relay ack: the `200`'s sealed ack already delivers, and the id joins the next ack frame the Inbox publishes
+  anyway (a poll's or live batch's, or the 11-hour digest), for a sender that lost the `200`.
 - **Power and Wi-Fi sleep.**
   - An idle listener holds no lock and polls nothing.
   - Only during an authenticated transfer: a `WifiManager.WifiLock` (the high-performance or low-latency mode the API
     level offers) and a partial `WakeLock`, released 30 s after the last frame, and after 15 minutes at most.
   - With the app in front and Instant delivery off, a transfer runs in a short foreground service,
     `LanTransferService` (type `dataSync`, notice "Receiving {mb} MB from {from}…"), so leaving the screen does not
-    freeze it. With Instant delivery on, it runs in `InstantDeliveryService`, whose special-use description gains the
-    listener.
+    freeze it. It starts while the app is in front, which Android allows. With Instant delivery on, it runs in
+    `InstantDeliveryService`, whose special-use description gains the listener.
   - Whether the DC-1 keeps its Wi-Fi up with the screen off is not known. F13.D3 measures it. If it does not, senders
     show "Waiting for your Daylight on Wi-Fi", and the file goes when the Inbox is next in front.
-- **Settings.** F13's Inbox row in What's in Lab, with its Use switch (6.5 Q9). Setup check gains "Big files over
-  Wi-Fi": ✓ with the address, or ! with what is missing.
-- **Lab off and handover.** The port closes, and `lan` leaves the hello (the `lab: 0` one, or the return-only handover
-  hello). LAN items already stored are handed to the Reader as usual.
+- **Settings.** The `F13inbox` row in What's in Lab, with its Use switch (6.5 Q9). Its short state is "Ready", or
+  "Not on Wi-Fi", which a tap explains: "Your Daylight isn't on Wi-Fi now, so big files can't come that way." Setup
+  check gains "Big files over Wi-Fi": ✓ "Listening at {address}", or ! with what is missing.
+- **Lab off, switch off and handover.** The port closes. `lan` leaves the hello: with Lab off, in the `lab: 0` one;
+  with `F13inbox` off, `lan-off` takes its place; during a handover, the return-only hello carries neither, and
+  senders say `lan-handed`. LAN items already stored are handed to the Reader as usual.
 
 **Senders.**
 
 | Platform | Uploads | Edge cases |
 |---|---|---|
-| iPhone, iPad | The app. Each part is a file sent by a background `URLSession` (F04's configuration), so it goes on when the app leaves the screen. `Info.plist` gains `NSLocalNetworkUsageDescription` and ATS's `NSAllowsLocalNetworking`. iOS asks for local network access at the first connection, which happens only when the user sends a big file. A denial shows up as `NWPath.UnsatisfiedReason.localNetworkDenied` on an `NWConnection` to the address → `needs-local-network`, with **Open Settings**. | **Share sheet:** the extension never connects to the LAN; whether it may use the app's permission is not known. It copies a big file into the App Group outbox as a LAN row, the card says "Waiting for your Daylight on Wi-Fi", and a notice "Open Send to Daylight to send ‘{title}’ over your Wi-Fi." opens the app, which sends it. If F13.D2 finds that a background session can't reach the LAN, parts go in the foreground under `beginBackgroundTask`, and the rest resumes at the next open (`have`). |
-| Mac | The app: the window's file picker, the menu-bar and Dock drops, and Print to Daylight. `NSAllowsLocalNetworking`. macOS 15 asks for local network access too (`needs-local-network`). | **Share › Daylight:** team-signed builds hand the file to the app through the App Group outbox. Ad-hoc builds keep their own outbox (1.1), so the card says "To send it over your Wi-Fi, drop it on the Send to Daylight icon in the menu bar." |
-| Android phone | `sender/LanUploadWorker`: expedited, `setForeground` with a progress notice in a new channel "Transfers" (`IMPORTANCE_LOW`, type `dataSync`), constraint: an unmetered network. It uses share-core's socket `LanClient`, so the network security config gains no cleartext exception: every byte on the wire is sealed. | `ShareActivity` routes big files by the six rules. |
-| Windows | The JS `LanClient` in the WebView. It reads each part from disk through a new ranged command `read_file_part(path, offset, len)`, seals it and `PUT`s it. The CSP already allows `http:`. | If F13.D4 finds that WebView2 blocks the request (mixed content, or Local Network Access), a Rust `lan_put` command does the HTTP. Parts are sealed in the WebView either way. |
-| Chrome, Safari, web | None. An https page can't reach `http://` on the LAN (mixed content). Chrome adds its private-network checks (Private Network Access, now Local Network Access), and it stops an extension service worker whose fetch takes over 30 s (FEATURES "Do not copy"). | The F02 entry point's note adds "Browsers can't reach your Daylight over Wi-Fi. The Send to Daylight app on an iPhone, Mac, Android phone or Windows PC can." Whether an extension page could do it is a spike for after W2, not built. |
+| iPhone, iPad | **The app.** After the ping and `have`, still in front (under `beginBackgroundTask` if the user leaves), it builds every remaining part file and queues them all at once on a LAN background session of its own: `com.daylight.share.lan`, `isDiscretionary` false, `httpMaximumConnectionsPerHost` 1 (the listener takes one connection per address), the App Group as shared container, one ticket per part. Parts created later, from the background, would be discretionary whatever the session says, and iOS may hold them for hours. The listener assembles parts in any order. A `401` (the listener restarted) leaves the rest for the next opening, through `have`. Each part file is deleted once sent. `Info.plist` gains `NSLocalNetworkUsageDescription`; ATS's `NSAllowsLocalNetworking` is already there. **Local network access.** iOS asks at the first connection, which happens only when the user sends a big file. Until the app has had an answer (`dls.lanAsked`), the row says "Looking for your Daylight on this Wi-Fi…" until the probe `NWConnection` leaves `.waiting` or the app is active again after the alert, then pings again at once. It never shows `needs-same-wifi` while the alert is up. A denial shows up as `NWPath.UnsatisfiedReason.localNetworkDenied` → `needs-local-network`, with **Open Settings**. | **Share sheet** (the main way big PDFs are sent: Files, Mail, Safari's downloads). F13.D6 finds whether the extension can reach the listener with the app's permission, by a direct connection or the LAN background session. If it can, the extension does what the app does, with progress on the card until every part is queued, then closes. If not, it copies the file into the spool as a LAN row; the card says "Waiting for your Daylight on Wi-Fi", and a notice "Open Send to Daylight to send ‘{title}’ over your Wi-Fi." opens the app, which sends it. |
+| Mac | **The app**: the window's file picker, the menu-bar and Dock drops, and Print to Daylight. `NSAllowsLocalNetworking` is already there. macOS 15 asks for local network access too, handled as on the iPhone. | **Share › Daylight.** Team-signed builds hand the file to the app through the App Group's spool, and the card closes. When the app isn't running, the card says "Open Send to Daylight to send it over your Wi-Fi." and the row waits for it. Ad-hoc builds (6.5 Q6) already keep the card open until an item is sent, so the card runs its own `LanClient` with progress and **Cancel**. If F13.D7 finds that the extension can't reach the listener, the card says "To send it over your Wi-Fi, drop it on the Send to Daylight icon in the menu bar." |
+| Android phone | `sender/LanUploadWorker`, on share-core's socket `LanClient`, so the network security config gains no cleartext exception: every byte on the wire is sealed. Queued from the foreground (`ShareActivity`, the app screen), it is expedited and calls `setForeground` with a notice in a new channel "Transfers" (`IMPORTANCE_LOW`): "Sending to your Daylight over Wi-Fi", then the progress line. Its `ForegroundInfo` has type `dataSync`, which with `targetSdk` 35 needs WorkManager's `SystemForegroundService` declared again with `foregroundServiceType="dataSync"` (`tools:node="merge"`), and `FOREGROUND_SERVICE_DATA_SYNC`. Retries from the background (the 15-minute job, Wi-Fi connecting) run as ordinary work without a notice: on Android 12 and later, `setForeground` from the background throws `ForegroundServiceStartNotAllowedException`. If the OS stops them, they resume through `have`. | `ShareActivity` routes big files by the six rules. |
+| Windows | The JS `LanClient` in the WebView. New Rust commands (WIN2): `lan_spool_copy(path)` copies an offered file into the spool; `read_file_part(id, offset, len)` returns raw bytes as a `tauri::ipc::Response`, as `read_file` already does (a JSON array of numbers is impractical at 12 MiB). The WebView seals each part and `PUT`s it; the CSP already allows `http:`. | If F13.D4 finds that WebView2 blocks the request (mixed content, or Local Network Access), a Rust `lan_put` command takes the sealed part as a raw `tauri::ipc::Request` body and does the HTTP. |
+| Chrome, Safari, web | None. An https page can't reach `http://` on the LAN (mixed content). Chrome adds its private-network checks (Private Network Access, now Local Network Access), and it stops an extension service worker whose fetch takes over 30 s (FEATURES "Do not copy"). | The F02 entry point's note adds "Browsers can't reach your Daylight over Wi-Fi. The Send to Daylight app on an iPhone, Mac or Windows PC can, and Daylight Share on an Android phone." Whether an extension page could do it is a spike for after W2, not built. |
 
 **Security.**
 
 - **No plaintext on the LAN.** Every body is a frame sealed with the pairing key. Tickets and answers are sealed
   (`lab-lan`). Item ids, names and titles never appear in clear in a path, a query or a header.
-- **Only key holders can store anything.** A frame that does not decrypt gets `400` and is never stored. A request
-  without a valid ticket is refused before its body is read.
-- **Replay.** A ticket is bound to the listener's session `s`, the item id, the part and the length. Replaying one
-  within the session only uploads the same sealed frame again, which the Inbox dedupes (PROTOCOL 5). After a restart,
-  old tickets get `401`. A ping answer echoes the sender's fresh challenge, so an old answer can't pose as the
-  Daylight.
-- **Denial of service.** Two connections, one item, bounded heads, bodies and timeouts, per-address limits, the ticket
-  before the body, and a port that is open only on Wi-Fi while the Inbox is open or Instant delivery is on. Someone on
-  the same Wi-Fi can still slow it down, as they can any device there. They can't store anything or learn what is
-  sent.
-- **Addresses.** A hello's address must be a private IPv4 address (change 2), so a damaged hello can't point senders
-  at the internet.
+- **Only key holders get anything.** A frame that does not decrypt gets `400` and is never stored. A request without
+  a ticket that opens gets no answer at all, before its body is read; a ping without one learns nothing.
+- **Replay and reflection.** A ticket is bound to the listener's session `s`, the item id, the part and the length.
+  Replaying one within the session only uploads the same sealed frame again, which the Inbox dedupes (PROTOCOL 5).
+  After a restart, old tickets get `401`. Tickets and answers have different kinds, and each answer echoes the
+  ticket's fresh `c` or `r`, so an old or reflected answer is ignored. A replayed `lan-cancel` only drops parts that
+  their sender had already chosen to drop.
+- **Denial of service.** Two connections and one per address; one item at a time, released after 60 s of silence;
+  bounded heads, bodies and timeouts, with head timeouts counted as refusals; per-address limits; the ticket before
+  the body; a port that is open only on Wi-Fi while the app is open or Instant delivery is on. Someone on the same
+  Wi-Fi can still slow it down, as they can any device there. They can't store anything or learn what is sent. A
+  sender whose connection is accepted and closed at once shows the busy row, not `needs-same-wifi`.
+- **Addresses.** A hello's address must be a private IPv4 address with a well-formed port (change 2), so a damaged
+  hello can't point senders at the internet.
 - **Networks that block it.** Client isolation (guest and campus Wi-Fi: FEATURES F13 cites LocalSend #850) and a
-  phone's full-tunnel VPN make the ping fail: `needs-same-wifi` within 3 s, never a hang.
+  phone's full-tunnel VPN make the ping fail: `needs-same-wifi` within 3 s, never a hang. Its sentence names both.
 
 **What's in Lab** (1.4):
 
 | Feature | Name | Sentence | Apps |
 |---|---|---|---|
-| F13 | Big files over Wi-Fi | Files over 9 MB go straight to your Daylight when it's on the same Wi-Fi. | iPhone, Mac, Android phone, Windows |
-| F13 (Inbox) | Big files over Wi-Fi | Your Daylight takes files over 9 MB from your devices on the same Wi-Fi. | DC-1 Inbox |
+| `F13` | Big files over Wi-Fi | Files over 9 MB go straight to your Daylight when it's on the same Wi-Fi. | iPhone, Mac, Android phone, Windows |
+| `F13inbox` | Big files over Wi-Fi | Your Daylight takes files over 9 MB from your devices on the same Wi-Fi, while Daylight Share is open or Instant delivery is on. | DC-1 Inbox |
 
-Senders have no Use switch for F13: it acts only where v1.1 refuses a file. The Inbox's Use switch (on by default)
-closes the port.
+Senders have no Use switch for F13: it acts only where v1.1 refuses a file, and waiting rows can be cancelled. The
+Inbox's Use switch (on by default, 6.5 Q9) gates exactly this:
 
-**Copy** (LAB_TEXT, added by L3; ASCII apostrophes and quotes here):
+| Switch | Off means | Not gated (follows Lab alone) |
+|---|---|---|
+| `F13inbox`, on the DC-1 Inbox | The port closes, and the hello carries `lan-off` instead of `lan`, so senders say `off-on-daylight`. | LAN items already stored are handed over as usual. |
+
+**Copy** (LAB_TEXT, added by L4; ASCII apostrophes and quotes here):
 
 | LAB_TEXT id | Text | Used by |
 |---|---|---|
 | `features.F13` | Big files over Wi-Fi · Files over 9 MB go straight to your Daylight when it's on the same Wi-Fi. | What's in Lab |
-| `features.F13inbox` | Big files over Wi-Fi · Your Daylight takes files over 9 MB from your devices on the same Wi-Fi. | What's in Lab on the Inbox |
+| `features.F13inbox` | Big files over Wi-Fi · Your Daylight takes files over 9 MB from your devices on the same Wi-Fi, while Daylight Share is open or Instant delivery is on. | What's in Lab on the Inbox |
 | `use.footers.F13inbox` | When it's off, your Daylight doesn't listen on your Wi-Fi, and files over 9 MB can't come that way. | Use switch, Inbox |
 | `short.needs-same-wifi` | Needs the same Wi-Fi | Senders |
-| `needs.needs-same-wifi` | Can't reach your Daylight on this Wi-Fi. Open Daylight Share on it, on the same Wi-Fi as this device. | Senders |
+| `needs.needs-same-wifi` | Can't reach your Daylight on this Wi-Fi. Check that both are on the same Wi-Fi, not a guest network or a VPN, and open Daylight Share on it. | Senders |
+| `short.lan-handed` | Not while the Lab Reader receives | Senders |
+| `needs.lan-handed` | The Lab Reader receives on your Daylight now, and it doesn't take big files over Wi-Fi. | Senders |
 | `short.needs-local-network` | Needs local network access | iPhone, Mac |
-| `needs.needs-local-network` | Needs local network access for {app}. Turn it on in {path}. | iPhone, Mac; button **Open Settings** |
+| `needs.needs-local-network` | Needs local network access for {app}. Turn it on in {path}. | iPhone, Mac |
+| `buttons.needs-local-network` | Open Settings | iPhone, Mac |
 | `localNetworkPath.iphone` | Settings › Privacy & Security › Local Network | `{path}` |
 | `localNetworkPath.mac` | System Settings › Privacy & Security › Local Network | `{path}` |
+| `short.lan-no-wifi` | Not on Wi-Fi | Inbox row |
+| `lanInbox.noWifi` | Your Daylight isn't on Wi-Fi now, so big files can't come that way. | Inbox row, on a tap |
+| `wifi.ready` | Your Daylight is reachable on this Wi-Fi. | A tap on a sender's "Ready" row |
 | `wifi.or` | Or send it over your Wi-Fi › | Under the F02 entry point's note |
-| `wifi.checking` | Looking for your Daylight on this Wi-Fi… | While the ping runs (over 1 s) |
+| `wifi.checking` | Looking for your Daylight on this Wi-Fi… | While the ping runs (over 1 s), and while iOS's prompt is up |
 | `wifi.sending` | Sending over your Wi-Fi… | Row label |
-| `wifi.progress` | {percent}% · {done} of {total} MB · {left} left | Row line, for transfers over 10 s |
+| `wifi.progress` | {percent}% · {done} of {total} MB · {left} left | Row line, for transfers over 10 s; the Android notice's text |
 | `wifi.leftMinutes` | {m} min | `{left}` |
 | `wifi.leftUnderMinute` | under a minute | `{left}` |
 | `wifi.waiting` | Waiting for your Daylight on Wi-Fi | Row label |
-| `wifi.waitingSentence` | It goes when your Daylight is on the same Wi-Fi with Daylight Share open. | Row sentence |
+| `wifi.waitingSentence` | It goes by itself when your Daylight is on the same Wi-Fi, with Daylight Share open or Instant delivery on. | Row sentence: Mac, Windows, Android phone |
+| `wifi.waitingSentenceOpenHere` | It goes when this app is open and your Daylight is on the same Wi-Fi, with Daylight Share open or Instant delivery on. | Row sentence: iPhone |
+| `wifi.busy` | Your Daylight is taking another file. This one goes next. | Row sentence after a `503` |
+| `wifi.tryNow` · `wifi.cancel` | Try now · Cancel | Waiting rows |
 | `wifi.expired` | Your Daylight wasn't on the same Wi-Fi within a week. | Under v1.1's "Not delivered" |
+| `wifi.changed` | This file couldn't be checked on your Daylight. Share it again. | Under v1.1's "Not delivered", after a `409` |
+| `wifi.queueFull` | Up to 5 big files can wait for your Wi-Fi. Send or cancel one in Waiting to send first. | Refusal of a sixth |
 | `wifi.tooBig` | Too big to send. Over Wi-Fi, files can be up to 200 MB; this one is {mb} MB. | Refusal |
 | `wifi.noSpace` | Not enough space on your Daylight for this file. | After `free` or `507` |
-| `wifi.openApp` | Open Send to Daylight to send '{title}' over your Wi-Fi. | iPhone share extension's notice |
-| `wifi.macDrop` | To send it over your Wi-Fi, drop it on the Send to Daylight icon in the menu bar. | Ad-hoc Mac share card |
-| `wifi.browserNote` | Browsers can't reach your Daylight over Wi-Fi. The Send to Daylight app on an iPhone, Mac, Android phone or Windows PC can. | Chrome, Safari, web |
+| `wifi.openApp` | Open Send to Daylight to send '{title}' over your Wi-Fi. | iPhone share extension's notice, when it can't send itself |
+| `wifi.macOpenApp` | Open Send to Daylight to send it over your Wi-Fi. | Team-signed Mac share card, app not running |
+| `wifi.macDrop` | To send it over your Wi-Fi, drop it on the Send to Daylight icon in the menu bar. | Ad-hoc Mac share card, when it can't send itself |
+| `wifi.browserNote` | Browsers can't reach your Daylight over Wi-Fi. The Send to Daylight app on an iPhone, Mac or Windows PC can, and Daylight Share on an Android phone. | Chrome, Safari, web |
 | `wifi.localNetworkUsage` | Send to Daylight sends big files straight to your Daylight when it's on the same Wi-Fi. | `NSLocalNetworkUsageDescription`, iPhone and Mac |
 | `wifi.channel` | Transfers | Android phone channel |
+| `wifi.noticeTitle` | Sending to your Daylight over Wi-Fi | Android phone notice title |
 | `wifi.receiving` | Receiving {mb} MB from {from}… | DC-1 transfer notice |
 | `setup.checks.lanListener` | Big files over Wi-Fi | DC-1 Setup check |
-| `setup.steps.lanListener` | Turn on Instant delivery, or keep Daylight Share open, so your Daylight can take big files over Wi-Fi. | DC-1 Setup check |
+| `setup.checks.lanListenerOk` | Listening at {address} | DC-1 Setup check, ✓ |
+| `setup.steps.lanListener` | Turn on Instant delivery, or keep Daylight Share open, so your Daylight can take big files over Wi-Fi. | DC-1 Setup check, ! |
 
 `timeLeftText(seconds)` fills `{left}`, and the vectors pin it.
 
@@ -2580,243 +2879,365 @@ closes the port.
   Windows, with 50 MB.
 - [ ] **F13.2** Dropping Wi-Fi mid-transfer and bringing it back resumes from `have`, without uploading a stored part
   again (bytes counted at the listener in a test; on the device round).
-- [ ] **F13.3** A frame not sealed with the pairing key gets `400`, and nothing is stored. A request with no ticket or
-      a
-  bad one gets `401` before its body is read (the test server reads at most 8 KiB). More than 50 refused requests a
-  minute from one address get `429` for 10 minutes.
+- [ ] **F13.3** A frame not sealed with the pairing key gets `400`, and nothing is stored. A request with no ticket,
+  or one that doesn't open, is closed without an answer. A ticket for an old `s` gets `401` before its body is read,
+  and a client sending a 12 MiB body sees the `401` (and a `503`'s `Retry-After`) as a status, not a reset, against
+  both `LanServerSim` and `LanServer`. More than 50 refusals a minute from one address get `429` for 10 minutes.
 - [ ] **F13.4** On another network, behind client isolation, or with the listener closed, the sender shows the
   `needs-same-wifi` sentence within 3 s and never hangs. The file waits as "Waiting for your Daylight on Wi-Fi" and
-  goes by itself once the Inbox is in front on the same Wi-Fi.
-- [ ] **F13.5** The port is closed when Instant delivery is off and the Inbox is not in front; with Lab or F13 off; on
-  mobile data; and during a handover. It is never bound to `0.0.0.0`.
-- [ ] **F13.6 (iPhone, Mac on macOS 15)** The first big send asks for local network access. After a denial, the row
-  and the note show `needs-local-network` with **Open Settings**.
-- [ ] **F13.7 (iPhone)** A 50 MB PDF shared from Files: the share card closes, the row reads "Waiting for your
-      Daylight
-  on Wi-Fi", and a notice asks to open the app. Opening it sends the file.
-- [ ] **F13.8** With Lab on and an Inbox with `lan`, a 14 MB PDF never meets the too-big screen: it goes, or waits for
-  the Wi-Fi. Without `lan`, the F02 entry point's note offers **Or send it over your Wi-Fi ›**, which shows
-  `needs-inbox`. Chrome and web show the browser line. With Lab off, every app equals its v1.1 baseline.
-- [ ] **F13.9** Only a sealed ack delivers a row. A fake listener that answers a plain `200`, or an ack sealed with
-  another key, leaves the row `sending` (unit test).
-- [ ] **F13.10** Two big files from two devices at once: the second gets `503`, waits, and goes after the first.
+  goes once Daylight Share is open on the same Wi-Fi: on a running Mac or Windows PC within 3 minutes; on the iPhone
+  within 1 minute of opening the app; on the Android phone at its next background run or when its Wi-Fi connects; on
+  every one at once after **Try now**.
+- [ ] **F13.5** The port is closed when Instant delivery is off and the Inbox is not in front; with Lab or `F13inbox`
+  off; on mobile data; and during a handover. It is never bound to `0.0.0.0`.
+- [ ] **F13.6 (iPhone, Mac on macOS 15)** The first big send asks for local network access. While the prompt is up,
+  the row shows "Looking for your Daylight on this Wi-Fi…", never `needs-same-wifi`, and the send starts within 3 s
+  of **Allow**. After a denial, the row and the note show `needs-local-network` with **Open Settings**.
+- [ ] **F13.7 (iPhone)** A 50 MB PDF shared from Files. If F13.D6 found that the extension can reach the listener,
+  the card shows progress until every part is queued, then closes, and the file arrives. If not, the card closes, the
+  row reads "Waiting for your Daylight on Wi-Fi", and a notice asks to open the app; opening it sends the file.
+- [ ] **F13.8** With Lab on and `lan` on, a 14 MB PDF never meets the too-big screen: it goes, or waits for the
+  Wi-Fi. Without `lan`, the F02 entry point's note offers **Or send it over your Wi-Fi ›**, which shows: with an Inbox
+  whose `F13inbox` is off, "Turn on Big files over Wi-Fi on your Daylight: …" (`off-on-daylight`); during a handover,
+  `lan-handed`; with a W1 Inbox, `needs-inbox` (the `labGate` vectors). Chrome and web show the browser line. With
+  Lab off, every app equals its v1.1 baseline, and a waiting LAN row reads as v1.1's too-big refusal and stays paused.
+- [ ] **F13.9** Only a sealed ack delivers a row. A fake listener that answers a plain `200`, an ack sealed with
+  another key, or an answer whose `r` is not the one sent, leaves the row `sending` (unit test).
+- [ ] **F13.10** Two big files from two devices at once: the second gets `503`, waits ("Your Daylight is taking
+  another file…"), and goes after the first. A first sender that stalls mid-transfer frees the slot after 60 s, and
+  resumes later with `have`.
 - [ ] **F13.11** A W2 sender with a W1 Inbox shows `needs-inbox` and v1.1's refusal. v1.0, v1.1 and W1 apps never use
   the LAN path (skew suite).
-- [ ] **F13.12** A hello whose `lan` is a public address, has a port under 1024, or is malformed is read as no address
-  (vectors).
+- [ ] **F13.12** A hello whose `lan` is a public address, has a port under 1024 or with a leading zero
+  (`"…:049613"`), or is malformed is read as no address (vectors).
+- [ ] **F13.13** A 250 MB file is refused with "Too big to send. Over Wi-Fi, files can be up to 200 MB; this one is
+  250 MB." A Daylight with less than 500 MB to spare gives "Not enough space on your Daylight for this file." (from
+  `free`, and from `507`). A sixth waiting file is refused with `wifi.queueFull`. **Cancel** in the middle of a
+  transfer leaves no part of it on the Daylight within 5 s, and no copy on the sender.
+- [ ] **F13.14 (Mac)** On the released ad-hoc build, Share › Daylight with a 50 MB PDF shows progress on the card,
+  and the file arrives; when the extension can't reach the listener, the card shows "To send it over your Wi-Fi, drop
+  it on the Send to Daylight icon in the menu bar." On a team-signed build with the app not running, the card shows
+  "Open Send to Daylight to send it over your Wi-Fi."
+- [ ] **F13.15 (Android phone)** A big file shared from the share sheet shows the "Transfers" notice with its
+  progress. A waiting row retried from the background on Android 14 runs without a notice and without an exception
+  (E2, API 34).
 
 **Automated:**
 
-- JS: `lan.test.mjs`: tickets and answers; `LanClient` against `LanServerSim` (resume, `401` before the body, `400`,
-  `429`, `503`, `507`, a sealed ack required); `bigFileRoute`'s six rules; the `lan` vectors in all three languages.
-- Kotlin: `LanServerTest` (pure JVM, real sockets on loopback: limits, rate limits, tickets before bodies, `have`),
-  `LanInteropTest` (the JS `LanClient` against the Kotlin `LanServer` through the node interop), `LanClientTest`.
+- JS: `lan.test.mjs`: tickets and answers (kinds; `c` and `r` echoed); `LanClient` against `LanServerSim` (resume;
+  `401` before the body, seen as a status with a 12 MiB body; `400`; `429`; `503` and the 60 s release; `507`;
+  cancel; a reset → ping and `have` with back-off, never a second `PUT` at once; a sealed ack required);
+  `bigFileRoute`'s six rules and the queue's limits; the Lab-off row words; the `lan` vectors with the HTTP
+  transcripts, in all three languages.
+- Kotlin: `LanServerTest` (pure JVM, real sockets on loopback: limits, one connection per address, rate limits, head
+  timeouts, tickets before bodies, `Expect: 100-continue`, the lingering close, a stalled first sender then a second,
+  `have`, cancel), `LanTranscriptTest` (the vectors' transcripts), `LanInteropTest` (the JS `LanClient` against the
+  Kotlin `LanServer` through the node interop), `LanClientTest`.
 - Robolectric: `LanListenerTest` (when it listens; the bound address from a fake `ConnectivityManager`; a hello on
-  change; locks only during a transfer; the foreground service), and on the phone `BigFileRouteTest` and
-  `LanUploadWorkerTest`.
-- Swift: `LanClientTests` against `LanServerSim` (run by node in CI), `BigFileRouteTests`, and an XCUITest of the
-  share card's LAN row with a stubbed client.
-- Windows: unit tests with `LanServerSim`.
+  change, outside the cap; locks only during a transfer; the foreground service; no relay ack of its own), and on the
+  phone `BigFileRouteTest` and `LanUploadWorkerTest` (`setForeground` only when queued from the foreground).
+- Swift: `LanClientTests` against `LanServerSim` (run by node in CI), the transcript vectors, `BigFileRouteTests`,
+  `LocalNetworkPromptTests` (no `needs-same-wifi` before the first answer), and XCUITests of the share card's LAN row
+  with a stubbed client (iPhone, and the ad-hoc Mac card's progress).
+- Windows: unit tests with `LanServerSim`, and Rust tests of `lan_spool_copy` and `read_file_part`.
 - E2: the emulator steps (task card).
 
 **Device items** (W2 round on Rooted 2, into DEVICE-CHECKS.md):
 
 - [ ] **F13.D1** F13.1 with the Mac mini, then the user's iPhone, on the home Wi-Fi.
-- [ ] **F13.D2 (iPhone)** A 50 MB send with the app sent to the background after 5 s: does the background session
-      reach
-  the LAN? The answer decides A7's path (background session, or the foreground fallback).
+- [ ] **F13.D2 (iPhone)** A 120 MB send with the app sent to the background after 5 s, written down as "completed in
+  N min" or "stalled at part k". It decides whether A10 keeps the queued background parts or falls back to sending in
+  the foreground, with the rest at the next opening (`have`).
 - [ ] **F13.D3** The DC-1's screen off for 10 minutes with Instant delivery on, then a 50 MB send from the Mac: it
   completes, or waits with the waiting row. `dumpsys wifi` and `dumpsys power` show the locks only during the
   transfer.
 - [ ] **F13.D4 (Windows)** A `PUT` from WebView2 to the LAN listener works, or WIN2 takes the Rust `lan_put` path.
 - [ ] **F13.D5** Rooted 2 overnight with Instant delivery on, listener open and idle, uses no more battery than
-      without
-  the listener (within 2 percentage points).
+  without the listener (within 2 percentage points).
+- [ ] **F13.D6 (iPhone)** With local network access granted to the app, can the share extension reach the listener,
+  by a direct connection and by the LAN background session? Does iOS ask again for the extension? The answer decides
+  F13.7's path in A10.
+- [ ] **F13.D7 (Mac)** The same for the Mac's share extension, ad-hoc and team-signed, on macOS 15. The answer decides
+  whether the ad-hoc card sends itself or shows the menu-bar line.
 
 #### Task cards (W2, steps 1–3)
 
 Every card follows 3.5's rules: it builds on its folder's earlier cards, keeps its CI job blocks green, updates its
 README (the Lab section, test hooks, "Still to check on a device"), shows strings exactly as `LAB_TEXT` gives them,
-and passes the Lab-off parity test (F00.2) for every app it touches. Lanes are 6.1's: share (L2, L3), core (K7), kit
-(A6, 6.1's "W2-kit"), ios (A7), mac (A8), android-app (K8 for the Inbox, K9 for the phone), ext (X2), web (B2), win
-(WIN2), e2e (E2). In `android/app`, K8 owns `inbox/` and `Work.kt`, and K9 owns `sender/` and `ui/SenderScreen.kt`; K8
-merges first (6.3).
+and passes the Lab-off parity test (F00.2) for every app it touches. Lanes are 6.1's: share (L2, L3, L4), core (K7,
+K10), kit (A6, A9), ios (A7, A10), mac (A8, A11), android-app (K8 and K11 for the Inbox, K9 for the phone), ext (X2),
+web (B2), win (WIN2), e2e (E2).
+
+- **F06 first.** Each platform's F06 card stands alone, and F13 follows in its own card, so the iPhone's and the Mac's
+  F06 never wait for the LAN client, the background-session question or the listener.
+- **`android/app`.** K8 and K11 own `inbox/` (with `inbox/Live.kt`) and `Work.kt`; K9 owns `sender/` and
+  `ui/SenderScreen.kt`. Shared files follow 6.3, and the merge order is K8, K11, K9.
+- **Device items** run in the W2 device round (6.4), once K8 (F06) and K11 (F13) are on Rooted 2. No card's "Done
+  when" waits for another lane's device build.
 
 **L2 · `share/` · W2 · return lane (JS reference)**
 
 - **Depends on:** L1.
 - **Builds:**
-  - LAB-PROTOCOL first: changes 5 and 7 above (2.4's lane, device hellos, `x-rx`, targets and presence re-sends;
-    2.2.7's table), and change 6 as a note that K8 carries out;
-  - `daylight-share.js`: `lane` on `Sender` and `Receiver`; the return `Sender`'s targets, delivery per device,
-    presence re-sends with `x-to`, the daily cap of 6 re-sent frames, giving way, and `replaces`; the return
-    `Receiver`'s `device: {dev, from}`, the `x-to` skip, batched acks under the device cap, and `hello({rx})`;
-    `applyPairingChange` removes `lane/return/*`;
-  - `daylight-lab.js`: `ReturnDevices` (heard, names, targets), `newDeviceId()`, `LabInbox`'s `framesPerDay`, and the
-    constants `RETURN_TARGETS_MAX` 8, `RETURN_TARGET_STALE_MS` 14 days, `RETURN_ACK_IDS` 60, `RETURN_ACKS_PER_DAY` 4,
-    `RETURN_ACK_GAP_MS` 30 minutes, `RETURN_IDLE_HELLO_MS` 12 hours, `RETURN_RESENDS_PER_DAY` 6 and
-    `RETURN_RESEND_GAP_MS` 12 hours;
-  - the `returnLane` vectors and the `labLedger` case of L2's Automated line;
-  - `return-lane.test.mjs`; in `lab-skew.test.mjs`, the return matrix and the W2 soak;
+  - LAB-PROTOCOL first: changes 5, 7 and 8 (2.4's lane, `returnDevTopic`, device frames, `x-rx` and `x-want`,
+    targets, presence re-sends and the follow-up, the caps, `returnParse`; 2.2.7's tables; 2.3's extras and 2.1 rule
+    3), change 6 as a note that K8 carries out, and change 9 as a note for S0;
+  - `daylight-share.js`: `lane` on `Sender` and `Receiver`; the return `Sender`'s targets, delivery per device, `due`
+    with `copyUntil` in relay times, the follow-up, per-device topics with `x-to`, the caps (frames, per device,
+    bytes, bytes on the relay, whole rows), giving way, and `replaces`; the return `Receiver`'s `device: {dev, from}`,
+    reads of both topics, `returnParse` with the `x-to` skip before dedupe, frames only after a read, the cap of 3
+    with one kept for `x-want`, and `hello({rx})`; `applyPairingChange` removes `lane/return/*`;
+  - `daylight-lab.js`: `ReturnDevices` (heard, names, the same-name rule, targets), `newDeviceId()`,
+    `returnDevTopic`, `LabInbox`'s `framesPerDay`, and the constants `RETURN_TARGETS_MAX` 8, `RETURN_TARGET_STALE_MS`
+    14 days, `RETURN_SAME_NAME_MS` 2 days, `RETURN_ACK_IDS` 60, `RETURN_DEVICE_FRAMES_PER_DAY` 3,
+    `RETURN_ACK_GAP_MS` 30 minutes, `RETURN_IDLE_HELLO_MS` 24 hours, `RETURN_WANT_READ_MS` 20 minutes,
+    `RETURN_COPY_ATTACH_MS` 3 hours, `RETURN_COPY_MSG_MS` 12 hours, `RETURN_FOLLOW_UP_MS` 185 minutes,
+    `RETURN_FRAMES_PER_DAY` 12, `RETURN_RESENDS_PER_DEVICE` 6, `RETURN_BYTES_PER_DAY` 60,000,000 and
+    `RETURN_LIVE_BYTES_MAX` 10,000,000 (the first draft's `RETURN_RESEND_GAP_MS` goes);
+  - `mock-relay.mjs`: an upload over the daily bandwidth answers `413` `41301`, as ntfy.sh does. A download over it
+    keeps `429`, which is what ntfy's code answers (not measured);
+  - the `returnLane` and `returnParse` vectors and the `labLedger` case of L2's Automated line;
+  - `return-lane.test.mjs`; in `lab-skew.test.mjs`, the return matrix, the W2 soak (real chunk sizes, 5 devices, S0
+    as 2-hour acks) and the 8-device run;
+  - `tools/probe-ntfy.mjs`: a multi-topic poll (`/{a},{b}/json?poll=1&since=…`), run by `rx-ntfy-probe.yml`, with the
+    answer written into NTFY-FACTS;
   - `daylight-send return --dump`, which R2.3 names: it runs a return `Receiver` as a device and prints what arrives.
 - **CI:** `rx-share.yml`.
-- **Done when:** L2.1–L2.7 pass, `test-vectors.json` is unchanged, and the regenerated `lab-vectors.json` differs only
+- **Done when:** L2.1–L2.9 pass, `test-vectors.json` is unchanged, and the regenerated `lab-vectors.json` differs only
   by its new sections.
 
-**L3 · `share/` · W2 · F06 and F13 references**
+**L3 · `share/` · W2 · F06 references**
 
 - **Depends on:** L2.
 - **Builds:**
-  - LAB-PROTOCOL first: changes 1–4 above, and the new 2.10, the LAN path;
-  - the caps `return` and `lan`; `x-inbox.lan` in `buildInboxInfo`, `parseLabAck` and `LabLedger` (`lanAddress()`: the
-    newest fresh publisher's), with 2.2.1's worst-case frame pinned again;
+  - LAB-PROTOCOL first: change 1 for `return` and `return-off`, change 10, and change 11's F06 rows;
+  - the caps `return` and `return-off`; `LabLedger.capState`;
+  - `sendBackItems` (with `SEND_BACK_TITLE_MAX` 120), `describeReturnRow` (with the no-device and tomorrow rows) and
+    `deviceListText` (up to three names);
+  - `labGate` for `F06` (`capState('return')`, with `off-on-daylight`) and `F06inbox` (`needs-devices`);
+  - `USE_FEATURES` gains `F06` and `F06inbox`, and `featureOrder` gains them;
+  - F06's `LAB_TEXT`, and change 10's states that F06 uses;
+  - the vectors `sendBack` (a headline + link, a passage + link, plain text, files, names), `labGate` (`on`, `off`,
+    `missing`; a W1 Inbox; a W2 Inbox with the switch off) and `labText` (the new ids, and each app's feature and
+    switch lists).
+- **CI:** `rx-share.yml`.
+- **Done when:** the vectors regenerate cleanly and `send-back.test.mjs` passes.
+
+**L4 · `share/` · W2 · F13 references (the LAN path)**
+
+- **Depends on:** L3.
+- **Builds:**
+  - LAB-PROTOCOL first: change 1 for `lan` and `lan-off`, changes 2 and 4, change 11's F13 row, and the new 2.10, the
+    LAN path (tickets, answers, refusals and how they are sent, the transcripts);
+  - `x-inbox.lan` in `buildInboxInfo`, `parseLabAck` and `LabLedger` (`lanAddress()`: the newest fresh publisher's),
+    with 2.2.1's worst-case frame pinned again; `capState('lan')` with `handed`;
   - `aadFor('lab-lan')`; `buildLanTicket`, `openLanTicket`, `buildLanAnswer`, `openLanAnswer`; `LanClient` (ping,
-    `have`, put, resume, progress) for Windows and the command line; `LanServerSim` for every lane's tests;
-  - in `Sender`: `via: "lan"` rows, which relay passes never publish (`retry` hands them to a hook), and
-    `acceptAckFrame(frame)` for the sealed ack in a LAN answer;
-  - `sendBackItems`, `describeReturnRow`, `deviceListText`, `timeLeftText` and `bigFileRoute`;
-  - `labGate` for F06 (`return`; `needs-devices` on the Inbox) and F13 (`lan`; `ctx.local` for local network access;
-    `ctx.reach` for the ping);
-  - `USE_FEATURES` gains F06 (every app) and F13 (the Inbox), and LAB-PROTOCOL 2.9.6's table gains their rows;
-  - the W2 `LAB_TEXT` (the copy tables of F06 and F13); `featureOrder` gains F06 and F13, in id order;
-  - the vectors `lan` (addresses, tickets and answers with fixed nonces, the routing rules), `sendBack`, and `labText`
-    for the new ids;
+    `have`, put, cancel, resume with back-off, progress) for Windows and the command line; `LanServerSim`, which
+    reproduces the transcripts, for every lane's tests;
+  - in `Sender`: `via: "lan"` rows that hold `lanFile` and no base64, which relay passes never publish (`retry` hands
+    them to a hook), the queue's limits, the Lab-off reading, and `acceptAckFrame(frame)` for the sealed ack in a LAN
+    answer;
+  - `bigFileRoute` and `timeLeftText`; `labGate` for `F13` and `F13inbox`;
+  - `USE_FEATURES` gains `F13inbox`, and `featureOrder` gains `F13` and `F13inbox`; F13's `LAB_TEXT`;
+  - the vectors `lan` (addresses, leading-zero ports included; tickets and answers with fixed nonces; the
+    transcripts; the routing rules; the Lab-off words), `labGate` (the `lan` cases) and `labText`;
   - the command line: `daylight-send <file> --wifi [--lan-address host:port]`.
 - **CI:** `rx-share.yml`.
-- **Done when:** the vectors regenerate cleanly, `lan.test.mjs` and `send-back.test.mjs` pass, and `daylight-send
-  big.pdf --wifi` sends a 120 MB file to `LanServerSim`, resuming after a dropped connection.
+- **Done when:** the vectors regenerate cleanly, `lan.test.mjs` passes, and `daylight-send big.pdf --wifi` sends a
+  120 MB file to `LanServerSim`, resuming after a dropped connection and after a reset.
 
-**K7 · `android/share-core` · W2 · Kotlin port**
+**K7 · `android/share-core` · W2 · Kotlin return lane and F06**
 
-- **Depends on:** K3 and L2; its F06 and F13 parts on L3.
+- **Depends on:** K3, L2, L3.
 - **Builds:**
-  - `Outbox(lane = …)` with `FileOutboxStore(dir/lane-return)`; `Receiver(lane = …, device = …)`; `ReturnDevices`;
-    delivery per device, presence re-sends, `x-to`, batched return acks and device hellos, `replaces`;
-    `LabInbox(framesPerDay = …)`;
-  - `LabInboxInfo.lan`, the caps, the ledger's `lanAddress()`;
-  - `Receiver.acceptLanFrame(frame)`: decrypt, the spool, store, remember, the ack on the relay, and the sealed ack
-    for the answer;
-  - `LanServer`, pure JVM on `java.net.ServerSocket` with no new dependency: the head parser, the ticket before the
-    body, the limits and per-address rate limits, `have`, sealed answers. `LanClient` on `java.net.Socket`;
-  - `SendBack.items`, `ReturnRowText`, `BigFileRoute`, and the `LabText` and `LabGate` additions;
+  - `Outbox(lane = …)` with `FileOutboxStore(dir/lane-return)`; `Receiver(lane = …, device = …)` reading both
+    topics; `ReturnDevices`; `returnDevTopic`; `ReturnParse`; delivery per device, `due`, the follow-up, the caps,
+    device frames and their cadence, `replaces`; `LabInbox(framesPerDay = …)`;
+  - the caps and `capState`; `SendBack.items`, `ReturnRowText`, `DeviceListText`, and the `LabText` and `LabGate`
+    additions;
   - tests: `ReturnLaneVectorsTest`, `ReturnLaneSkewTest` (the Kotlin return `Outbox` against a JS device, and the
-    Kotlin device `Receiver` against the JS return `Sender`), `LanServerTest`, `LanClientTest`, `LanInteropTest`.
-- **Done when:** `./gradlew :share-core:test` is green with the vectors, the skew suite and the LAN tests.
+    Kotlin device `Receiver` against the JS return `Sender`).
+- **Done when:** `./gradlew :share-core:test` is green with the vectors and the skew suite.
 
-**A6 · `apple/DaylightShareKit` · W2 · Swift port and shared UI**
+**K10 · `android/share-core` · W2 · Kotlin LAN path**
+
+- **Depends on:** K7, L4.
+- **Builds:**
+  - `LabInboxInfo.lan`, the caps `lan` and `lan-off`, the ledger's `lanAddress()`;
+  - `Receiver.acceptLanFrame(frame)`: decrypt, the spool, store, remember, the id for the next ack frame, and the
+    sealed ack for the answer;
+  - `LanServer`, pure JVM on `java.net.ServerSocket` with no new dependency: the head parser, the ticket before the
+    body, `Expect: 100-continue`, the lingering close, the limits (one connection per address, head timeouts),
+    per-address rate limits, the slot's 60 s release, `have`, cancel, sealed answers. `LanClient` on
+    `java.net.Socket`;
+  - `BigFileRoute`, and the `LabText` and `LabGate` additions;
+  - tests: `LanServerTest`, `LanTranscriptTest`, `LanClientTest`, `LanInteropTest`.
+- **Done when:** `./gradlew :share-core:test` is green with the LAN tests and the transcripts.
+
+**A6 · `apple/DaylightShareKit` · W2 · Swift return lane and F06 views**
 
 - **Depends on:** A3, L2, L3.
 - **Builds:**
-  - `ShareReceiver`, the kit's first receiver (today it has only a test `Reassembler`), for the return lane: the poll
-    and download rules, the cursor, dedupe, store before ack, `x-to`, acks with `x-dev` under the device cap, device
-    hellos, `x-rx`;
+  - `ShareReceiver`, the kit's first receiver (today it has only a test `Reassembler`), for the return lane: both
+    topics, the poll and download rules, the cursor, the `x-to` skip before dedupe, store before ack, device frames
+    under the cap, `x-want`, `x-rx`;
+  - `DeviceId`: minted only after `SharedStore.ready()`, in `lab-dev-id`, excluded from backup;
   - `FromDaylightStore`: files in the App Group's `from-daylight/<id>/`, an index, the newest 100, safe names;
-  - `LabInboxInfo.lan`, the caps, `lanAddress()`; `LanClient` (URLSession; background-session parts from
-    `FrameFileBuilder` with 12 MiB chunks; an `NWConnection` probe for `localNetworkDenied`); `ShareSender`'s `via:
-    lan` rows and `acceptAckFrame`; `BigFileRoute`;
-  - the `LabText` additions; `LabGate`'s states `needs-local-network` and `needs-same-wifi`;
-  - in `DaylightShareUI`: `FromDaylightSection` (rows, with Open, Save and Share hooks the apps fill),
-    `WifiProgressRow`, and `ArrivalNotices` (F06's notices, next to `FailureNotices`);
+  - the caps, `capState`, the `LabText` additions, and `LabGate`'s `off-on-daylight`;
+  - in `DaylightShareUI`: `FromDaylightSection` (rows, the on-its-way line, and the Open, Save, Copy link, Share and
+    Remove hooks that the apps fill) and `ArrivalNotices` (F06's notices, next to `FailureNotices`);
   - `apple/scripts/e2e-receiver.mjs --return`, which plays the Daylight's return `Sender`;
-  - tests: `ReturnLaneVectorTests`, `ShareReceiverTests` (against that script), `LanClientTests` (against
-    `LanServerSim`), `FromDaylightStoreTests`.
-- **Done when:** `swift test` is green with the vectors and both node interop runs.
+  - tests: `ReturnLaneVectorTests`, `ShareReceiverTests` (against that script), `FromDaylightStoreTests`,
+    `DeviceIdTests`.
+- **Done when:** `swift test` is green with the vectors and the node interop run.
 
-**K8 · `android/app` · W2 · DC-1 Inbox: Send to my phone or Mac, the return outbox, the Wi-Fi listener** (packages
-`inbox/sendback/`, `inbox/lan/`, `Work.kt`, `ui/InboxScreen.kt`)
+**A9 · `apple/DaylightShareKit` · W2 · Swift LAN path**
+
+- **Depends on:** A6, L4.
+- **Builds:**
+  - `LabInboxInfo.lan`, the caps `lan` and `lan-off`, `lanAddress()`, `capState('lan')`;
+  - `LanClient`: the ping and `have` on URLSession; `LanUploadSession`, the background session
+    `com.daylight.share.lan` (`isDiscretionary` false, one connection per host), which takes every remaining part
+    file at once from `FrameFileBuilder` with 12 MiB chunks; the reset rule; cancel;
+  - `LocalNetworkProbe` (`NWConnection`: `.waiting`, `localNetworkDenied`, `dls.lanAsked`);
+  - `ShareSender`'s `via: lan` rows with `lanFile`, the spool and its limits, and `acceptAckFrame`; `BigFileRoute`;
+  - in `DaylightShareUI`: `WifiProgressRow`, with **Try now** and **Cancel**;
+  - tests: `LanClientTests` (against `LanServerSim`), the transcript vectors, `BigFileRouteTests`,
+    `LocalNetworkPromptTests`.
+- **Done when:** `swift test` is green with the vectors and the node interop run.
+
+**K8 · `android/app` · W2 · DC-1 Inbox: Send to my phone or Mac** (packages `inbox/sendback/`, `inbox/Live.kt`,
+`Work.kt`, `ui/InboxScreen.kt`)
 
 - **Depends on:** K7, K5, K6. Pulled forward (6.2): the iPhone and the Mac need it on a real device.
 - **Builds:**
-  - F06: `SendBackActivity` and the component states; the card with Options and **Ask where to send each time**
-    (default per 6.5 Q3); the return `Outbox` in `files/inbox/lane-return/`; reads of the return-ack topic at every
-    poll and every 2 minutes while Instant delivery is connected, also during a handover; the cap `return` and the
-    return-only handover hello (change 6, in K6's `Handover`); "Sent to your devices"; the `PhoneReturn.poll` hook in
-    `Work.kt`'s sender branch for K9;
-  - F13: `inbox/lan/LanListener` as the listener section says; `LanTransferService` (`dataSync`, with
-    `FOREGROUND_SERVICE_DATA_SYNC`); `InstantDeliveryService`'s description; `x-inbox.lan`, the cap `lan` and a hello
-    on a new address; LAN items through F15's notices and the Reader hand-off like any item; the debug link's
-    `lanLoopback=1`, which also binds 127.0.0.1 in debug builds, for E2;
-  - What's in Lab rows F06 (Inbox) and F13 (Inbox) with their Use switches; Setup check's line;
-  - Robolectric: `SendBackTest`, `ShareEntryStateTest`, `ReturnOutboxTest`, `HandoverReturnTest`, `LanListenerTest`;
-    `LabOffParityTest` keeps v1.1's share entry with Lab off.
-- **Done when:** F06.3, F06.5, F06.8, F06.9 (Inbox), F13.3, F13.5 and F13.10 pass, and E2's emulator steps run.
+  - `inbox/sendback/`: `SendBackActivity`; `ShareEntry.observe(app)` and its one line in `App.onCreate` (6.3); the
+    card with Options and **Ask where to send each time** (default per 6.5 Q3); the read when no target is known, and
+    the 24-hour wait; the return `Outbox` in `files/inbox/lane-return/`; the caps' card and row words;
+  - `inbox/Live.kt`: the return-ack stream next to the inbox stream (during a handover, only with Instant delivery
+    on); reads at every poll and in the 15-minute job; `InstantDeliveryService`'s description;
+  - the caps `return` and `return-off`, and the return-only handover hello (change 6, in K6's `Handover`);
+  - "Sent to your phone or Mac"; the `F06inbox` row in What's in Lab with its Use switch;
+  - Robolectric: `SendBackTest`, `ShareEntryStateTest`, `ReturnOutboxTest`, `HandoverReturnTest`; `LabOffParityTest`
+    keeps v1.1's share entry with Lab off.
+- **Done when:** F06.3, F06.5, F06.8, F06.9 (Inbox) and F06.15 (Inbox) pass, and E2's F06 steps run.
 
-**A7 · `apple/iOS` · W2 · iPhone and iPad**
+**K11 · `android/app` · W2 · DC-1 Inbox: the Wi-Fi listener** (package `inbox/lan/`)
+
+- **Depends on:** K8, K10. Pulled forward, like K8.
+- **Builds:** `inbox/lan/LanListener` as the listener section says; `LanTransferService` (`dataSync`, with
+  `FOREGROUND_SERVICE_DATA_SYNC`); `InstantDeliveryService`'s description; `x-inbox.lan`, the caps `lan` and
+  `lan-off`, and a hello on a new address, outside the cap and at most 2 a day; LAN items through F15's notices and
+  the Reader hand-off like any item, with their ids in the next ack frame; the `F13inbox` row with its Use switch, and
+  Setup check's line; the debug link's `lanLoopback=1`, which also binds 127.0.0.1 in debug builds, for E2;
+  Robolectric `LanListenerTest`.
+- **Done when:** F13.3, F13.5 and F13.10 pass, and E2's F13 steps run.
+
+**A7 · `apple/iOS` · W2 · iPhone and iPad: From your Daylight**
 
 - **Depends on:** A6, A4.
-- **Builds:**
-  - F06: From your Daylight on `HomeView` (Quick Look, `fileExporter`, `ShareLink`); reads at launch, in front, with
-    ticks and from background app refresh (scheduled while F06 is on); the notices and their setting; the device id;
-    F06's What's in Lab row and Use switch;
-  - F13: LAN sends from the app on background sessions, or the foreground fallback if F13.D2 says so;
-    `NSLocalNetworkUsageDescription` and `NSAllowsLocalNetworking`; `needs-local-network`; the share extension's LAN
-    row and notice; **Or send it over your Wi-Fi ›** under the F02 entry point;
-  - `project.yml`: iOS targets only;
-  - XCUITests `FromDaylightTests` and `BigFileTests` (a stubbed `LanClient`), and parity with Lab off.
-- **Done when:** the iPhone's F06 and F13 items pass, and F06.D1, F13.D1 and F13.D2 are recorded.
+- **Builds:** From your Daylight on `HomeView` (Quick Look, `fileExporter`, Copy link, `ShareLink`, Remove, the
+  on-its-way line); reads at launch, in front, every 30 s for 20 minutes after an `x-want`, and from background app
+  refresh (scheduled while F06 is on, and 20 minutes after an `x-want`); the notices and their setting; F06's What's
+  in Lab row and Use switch; `project.yml`: iOS targets only; XCUITest `FromDaylightTests`, and parity with Lab off.
+- **Done when:** the iPhone's F06 items pass in CI against the JS Daylight (F06.1, F06.2, F06.4, F06.9, F06.12,
+  F06.13). F06.D1, F06.D3 and F06.D5 run in the device round.
 
-**A8 · `apple/macOS` · W2 · Mac**
+**A8 · `apple/macOS` · W2 · Mac: From your Daylight**
 
 - **Depends on:** A6, A5. Runs in parallel with A7.
-- **Builds:**
-  - F06: the window's section and the menu bar's 3 newest; **Open** (listed types only), **Save** (`NSSavePanel`;
-    `files.user-selected.read-write` in both entitlements files), **Share**; reads every 2 minutes while running; the
-    notices;
-  - F13: LAN sends from the window, the menu-bar and Dock drops, and Print to Daylight; macOS 15's local network
-    access; Share › Daylight hands big files to the app (team-signed) or shows the menu-bar line (ad-hoc);
-  - `project.yml`: macOS targets only; XCUITests and the smoke test.
-- **Done when:** the Mac's F06 and F13 items pass on the released ad-hoc build, with F13.1 on the device round (the
-  Mac mini).
+- **Builds:** the window's section and the menu bar's 3 newest; **Open** (the listed types only), **Save**
+  (`NSSavePanel`; `files.user-selected.read-write` in both entitlements files), **Copy link**, **Share**, **Remove**;
+  reads every 2 minutes through `NSBackgroundActivityScheduler`; the notices; **Open at login** in Settings
+  (`SMAppService.mainApp`), offered once when the first item arrives, with F26's login-item check pointing at it;
+  `project.yml`: macOS targets only; XCUITests and the smoke test.
+- **Done when:** the Mac's F06 items pass on the released ad-hoc build. F06.D1 and F06.D6 run in the device round.
+
+**A10 · `apple/iOS` · W2 · iPhone and iPad: big files over Wi-Fi**
+
+- **Depends on:** A7, A9.
+- **Builds:** LAN sends from the app, with every part queued at once on the LAN session (or the foreground fallback if
+  F13.D2 says so); the local network prompt as the senders table says; `NSLocalNetworkUsageDescription`;
+  `needs-local-network`; waiting rows (pings, **Try now**, **Cancel**, the queue); the share extension's path as F13.D6
+  decides (its own LAN sends, or the spool row and the notice); **Or send it over your Wi-Fi ›** under the F02 entry
+  point; XCUITest `BigFileTests` (a stubbed `LanClient`), and parity with Lab off.
+- **Done when:** the iPhone's F13 items pass in CI. F13.D1, F13.D2 and F13.D6 run in the device round.
+
+**A11 · `apple/macOS` · W2 · Mac: big files over Wi-Fi**
+
+- **Depends on:** A8, A9. Runs in parallel with A10.
+- **Builds:** LAN sends from the window, the menu-bar and Dock drops, and Print to Daylight; macOS 15's local network
+  access; waiting rows (every 2 minutes, at wake and on a network change); Share › Daylight: the team-signed hand-off,
+  with "Open Send to Daylight to send it over your Wi-Fi." when the app isn't running, and the ad-hoc card's own
+  `LanClient` with progress and **Cancel**, with the menu-bar line as its fallback (F13.D7); XCUITests.
+- **Done when:** the Mac's F13 items pass on the released ad-hoc build (F13.14 included). F13.1 and F13.D7 run in the
+  device round (the Mac mini).
 
 **X2 · `extension/` · W2 · Chrome (and Safari's share of it)**
 
-- **Depends on:** X1, L3.
-- **Builds:** F06 for Chrome: the return `Receiver` in the service worker (at the 15-minute tick and when the popup
-  opens), the device id and hellos, the list in `lab.html` and the popup's line, **Open** for links, **Download** for
-  files, **Copy link** and **Remove**; `build.mjs` leaves F06 out of Safari; F13: the browser line under the F02 entry
-  point, in Chrome and Safari; `from-daylight.e2e.mjs`, and parity.
+- **Depends on:** X1, L3; its browser line on L4.
+- **Builds:** F06 for Chrome: before the list is opened, only the popup's line; the first opening makes Chrome a
+  device (its first hello, and `fromDaylight.chromeJoined` once); then the return `Receiver` in the service worker (at
+  the 15-minute tick and when the popup opens), the device id and frames, the list in `lab.html` with its index in
+  `storage.local` and its file bodies in IndexedDB, and **Open**, **Download**, **Copy link** and **Remove**;
+  `build.mjs` leaves F06 out of Safari; F13: the browser line under the F02 entry point, in Chrome and Safari;
+  `from-daylight.e2e.mjs`, and parity.
 - **Release:** after the iPhone and Mac W2 builds (6.2).
 
 **K9 · `android/app` · W2 · Android phone** (packages `sender/`, `ui/SenderScreen.kt`)
 
-- **Depends on:** K7, K4. It merges after K8 (6.3).
-- **Builds:** F06: `sender/PhoneReturn.kt` (the reads that K8's hook calls; the store; **Open**, **Save** and
-  **Share**; the channel "From your Daylight"; the device id `labDevId`). F13: `sender/LanUploadWorker.kt` (the
-  channel "Transfers", `dataSync`), the routing in `ShareActivity`, **Or send it over your Wi-Fi ›**. Robolectric
-  `PhoneReturnTest`, `BigFileRouteTest`, `LanUploadWorkerTest`.
-- **Done when:** the Android phone's F06 and F13 items pass.
+- **Depends on:** K7, K4; its F13 part on K10. It merges after K8 and K11 (6.3).
+- **Builds:** F06 first: `sender/PhoneReturn.kt` (reads from `SenderRepo.tick()` and the app screen; the store in
+  `from-daylight/`, with its FileProvider path; **Open** for the listed types, **Save**, **Copy link**, **Share** and
+  **Remove**; the channel "From your Daylight"; the device id `labDevId`). Then F13: `sender/LanUploadWorker.kt`
+  (`setForeground` only when queued from the foreground, the `SystemForegroundService` entry, the channel
+  "Transfers", the unmetered-network constraint, the spool and its limits), the routing in `ShareActivity`, and **Or
+  send it over your Wi-Fi ›**. Robolectric `PhoneReturnTest`, `BigFileRouteTest`, `LanUploadWorkerTest`.
+- **Done when:** the Android phone's F06 and F13 items pass, and E2's background-retry step runs on API 34.
 
 **B2 · `web/` · W2**
 
 - **Depends on:** B1, X2.
-- **Builds:** F06's list while the page is open (IndexedDB, 20 items, **Download** only for files), the device id and
-  hellos; the browser line under the F02 entry point. Tests in `extension/test/*web*`.
+- **Builds:** F06's dialog: it reads the shared return topic only while open and publishes nothing; IndexedDB, 20
+  items; **Open**, **Download**, **Copy link**, **Remove**; `fromDaylight.webNote`. F13: the browser line under the
+  F02 entry point. Tests in `extension/test/*web*`.
 - **Release:** as X0.
 
 **WIN2 · `windows/` · W2**
 
-- **Depends on:** WIN1, L3.
-- **Builds:** F06: the window's section, toasts, **Open** (listed types only), **Save** (a save-dialog command),
-  **Copy link**, reads every 2 minutes while running. F13: the JS `LanClient` with `read_file_part`, and `lan_put`
-  only if F13.D4 needs it; **Or send it over your Wi-Fi ›**. Unit and e2e tests with `LanServerSim`.
+- **Depends on:** WIN1, L3, L4.
+- **Builds:**
+  - F06: the window's section and toasts; reads every 2 minutes while running; Rust commands `store_received(id,
+    name)` (a raw `tauri::ipc::Request` body, written under the app data folder), `open_received` (the type list
+    checked in Rust, then `ShellExecuteW`; the `windows` crate already has `Win32_UI_Shell`), `save_received`
+    (`IFileSaveDialog`), `share_received` (`IDataTransferManagerInterop`, with the `windows` crate features it needs)
+    and `remove_received`;
+  - F13: `lan_spool_copy`, `read_file_part` (a raw `tauri::ipc::Response`), the JS `LanClient`, and `lan_put` only if
+    F13.D4 needs it; waiting rows; **Or send it over your Wi-Fi ›**;
+  - unit and e2e tests with `LanServerSim`, and Rust tests of the new commands.
 - **Release:** as X0.
 
 **E2 · `e2e/`, `rx-e2e.yml` · W2**
 
-- **Depends on:** K8; its phone steps on K9.
+- **Depends on:** K8 for its F06 steps, K11 for its F13 steps, K9 for its phone steps.
 - **Builds:** emulator steps:
-  - F06: a root `am start` of `SendBackActivity` with a PDF, a link and a note. `e2e/sender.mjs return-dump` (a JS
-    device on the return lane) stores all three with matching SHA-256 and acks them with its `x-dev`, and the Inbox
-    row reads "On e2e ✓". A second device's hello after a forced expiry gets a re-send with its `x-to`;
+  - F06: a root `am start` of `SendBackActivity` with a PDF, a link, a note and a passage + link. `e2e/sender.mjs
+    return-dump` (a JS device on the return lane) stores all four with matching SHA-256 and acks them with its
+    `x-dev`, and the Inbox row reads "On e2e ✓". A second device's frame after a forced expiry gets a re-send on its
+    own topic, and the first device downloads nothing of it. A device hello published while the card is open is found
+    by the card's read. The 13th F06 frame of a day waits;
   - F13: `adb forward tcp:49613 tcp:49613` with the debug `lanLoopback=1`, then `daylight-send big.pdf --wifi
     --lan-address 127.0.0.1:49613` with a 120 MB PDF: the ack, then the Reader's import (`ShellReceiver count`). A
-    frame sealed with another key gets `400`; 60 bad tickets get `429`; the port is closed with the app in the
-    background and Instant delivery off;
+    frame sealed with another key gets `400`; a ticket that doesn't open gets no answer; 60 bad tickets get `429`; a
+    sender that stalls frees the slot after 60 s; the port is closed with the app in the background and Instant
+    delivery off;
+  - the phone, on the API 34 emulator: a waiting LAN row retried from the background runs without a notice and
+    without an exception;
   - the run's relay message count, checked against the soak's daily bound.
 - **Done when:** the steps pass on the emulator in `rx-e2e.yml`.
 
-The W2 device round follows 6.4 on Rooted 2 with the real ntfy.sh relay, iPhone and Mac first, and writes F06.D1–D4
-and F13.D1–D5 into DEVICE-CHECKS.md.
+The W2 device round follows 6.4 on Rooted 2 with the real ntfy.sh relay, iPhone and Mac first. It writes F06.D1–D6
+and F13.D1–D7 into DEVICE-CHECKS.md, and ends with the W2 usability pass (6.4).
 
 ### 4.2 Wave S (server lane; starts once the Worker is deployed, alongside W2)
 
@@ -2825,7 +3246,7 @@ Order: S0, then F02, then F37, F19 and F36, each on iPhone and Mac first. SV0 (W
 
 | Feature | Needs | Depends on | What it takes |
 |---|---|---|---|
-| S0 The Inbox's server lane | server | K0, the server deployed | DESIGN 5.5, with Kotlin ports of `sealBox`, `openBox` and `buildServerItemFrames` (tests):<br>• poll `itemTopic` with `openBox('item')`;<br>• ack on the server ack topic with `sealBox('ack')`, batched to at most one ack frame every 15 minutes (2.2.7);<br>• hello with `x-inbox` exactly as `buildInboxInfo` makes it for the pairing lane, `lab: 0` included;<br>• tag server items `lane = "server"`, so LabReporter records nothing for them (2.2.4).<br>After a handover (5.3.4), the server lane stays with Daylight Share, which hands server items to the main Reader, until the Lab Reader's hello carries the cap `server`. On the server side (server lane): `pollAcks` treats `x-inbox.lab === 0` as the end of presence (DESIGN 5.5 updated), and it keeps its 60-character `app` clamp, which Lab now uses too (2.2.1). An integration test puts Lab frames (`ids: []`, `x-st`, `lab: 0`) on the server ack topic in Lab mode. DESIGN 14.1's `needs-lab-inbox` text takes 1.6's. Recommended first (DESIGN 3.1), so that v1 delivery stays an exception. |
+| S0 The Inbox's server lane | server | K0, the server deployed | DESIGN 5.5, with Kotlin ports of `sealBox`, `openBox` and `buildServerItemFrames` (tests):<br>• poll `itemTopic` with `openBox('item')`;<br>• ack on the server ack topic with `sealBox('ack')`, batched to at most one ack frame every 2 hours (4.1.1's budget; it was 15 minutes in 2.2.7);<br>• hello with `x-inbox` exactly as `buildInboxInfo` makes it for the pairing lane, `lab: 0` included, but without `lan` and the caps `return`, `return-off`, `lan` and `lan-off` (4.1.1 change 9: the Worker can open this hello, and must not learn the home address);<br>• tag server items `lane = "server"`, so LabReporter records nothing for them (2.2.4).<br>After a handover (5.3.4), the server lane stays with Daylight Share, which hands server items to the main Reader, until the Lab Reader's hello carries the cap `server`. On the server side (server lane): `pollAcks` treats `x-inbox.lab === 0` as the end of presence (DESIGN 5.5 updated), and it keeps its 60-character `app` clamp, which Lab now uses too (2.2.1). An integration test puts Lab frames (`ids: []`, `x-st`, `lab: 0`) on the server ack topic in Lab mode, and checks that the server-lane hello carries no `lan` and none of those four caps. DESIGN 14.1's `needs-lab-inbox` text takes 1.6's. Recommended first (DESIGN 3.1), so that v1 delivery stays an exception. |
 | F02 Files over 9 MB | server + R2 | F04's `BackgroundPublisher` (iPhone) | `files.sendLarge` with the hosted outbox. The iPhone uploads from files with a background session; Chrome uploads from an extension page, never from the service worker. `files.tick` reads acks through the Sender's `onAckHeader` (DESIGN 17.7) instead of its own `server/hostedAckCursor`, so acks are polled once. `LabLedger.prune` keeps hosted ids, so large files show timeline states. The W1 entry point then sends at once. Second in Wave S, iPhone and Mac first: it is the DC-1 owner's first "finally". |
 | F37 Summaries with Claude | server + `ANTHROPIC_API_KEY` | W0 gate | `ai.summarize`, `explain` and `ask` UI, iPhone and Mac first (Swift port of `ai`), then the extension and web (the module as it is), then Android. The first-use notice. The AI cap editable in the server section. |
 | F19 Email-in | server + R2 + domain (Workers Paid in practice) | W0 gate | The address with Copy; Recent mail; block and unblock. |
@@ -3119,16 +3540,16 @@ Every R task ends with a device round on Rooted 2, written into DEVICE-CHECKS.md
 
 | Lane | Folders a task may edit | Tasks |
 |---|---|---|
-| share | `share/` (with `share/js/capture/`) | L0, L1, L2 |
-| kit | `apple/DaylightShareKit/` (both modules) and `apple/Shared/`, which both the iOS and the macOS targets compile (`project.yml`: `GetPage.js` and `Shared/SafariExtension`) | P0-kit, A0, A3, W2-kit |
-| ios | `apple/iOS/`, the iOS blocks of `apple/project.yml` | P0-ios, A1, A4 |
-| mac | `apple/macOS/`, the macOS blocks of `apple/project.yml` | P0-mac, A2, A5 |
-| core | `android/share-core/` | P0-core, K0, K3 |
-| android-app | `android/app/` | P0-app, K1, K4, K5, K6 |
-| ext | `extension/` | P0-ext, X0, X1 |
-| web | `web/` (its tests live in `extension/test/*web*`; that is its only edit there) | P0-web, B0, B1 |
-| win | `windows/` | P0-win, WIN0, WIN1 |
-| e2e | `e2e/` | E0, E1 |
+| share | `share/` (with `share/js/capture/`); for L2 also `tools/probe-ntfy.mjs`, which no other lane edits | L0, L1, L2, L3, L4 |
+| kit | `apple/DaylightShareKit/` (both modules) and `apple/Shared/`, which both the iOS and the macOS targets compile (`project.yml`: `GetPage.js` and `Shared/SafariExtension`) | P0-kit, A0, A3, A6, A9 |
+| ios | `apple/iOS/`, the iOS blocks of `apple/project.yml` | P0-ios, A1, A4, A7, A10 |
+| mac | `apple/macOS/`, the macOS blocks of `apple/project.yml` | P0-mac, A2, A5, A8, A11 |
+| core | `android/share-core/` | P0-core, K0, K3, K7, K10 |
+| android-app | `android/app/` | P0-app, K1, K4, K5, K6, K8, K9, K11 |
+| ext | `extension/` | P0-ext, X0, X1, X2 |
+| web | `web/` (its tests live in `extension/test/*web*`; that is its only edit there) | P0-web, B0, B1, B2 |
+| win | `windows/` | P0-win, WIN0, WIN1, WIN2 |
+| e2e | `e2e/` | E0, E1, E2 |
 | server | `server/` | SV0 (W0), the Wave S server changes (4.2) |
 | reader | the Reader repository on the Mac mini | R0–R4 |
 
@@ -3141,7 +3562,7 @@ the release step) have one owner:
 | `rx-apple.yml` | kit: `swift test` and `sync.mjs --check` on `GetPage.js` · ios: iPhone builds, XCUITests, the .ipa · mac: Mac builds, the smoke test, the zip | kit |
 | `rx-android.yml` | core: `:share-core:test` · android-app: app tests, the APKs | core |
 | `rx-extension.yml` | ext: build, tests, zips, `sync.mjs --check` · web: the web build, web tests, the Pages deploy | ext |
-| `rx-share.yml`, `rx-windows.yml`, `rx-e2e.yml`, `rx-server.yml` | one lane each: share, win, e2e, server | that lane |
+| `rx-share.yml`, `rx-ntfy-probe.yml`, `rx-windows.yml`, `rx-e2e.yml`, `rx-server.yml` | one lane each: share (both), win, e2e, server | that lane |
 
 ### 6.2 Order
 
@@ -3161,12 +3582,20 @@ Stage E (W1 apps):           A4 + A5 (after A3; first in line) · X1 (after X0, 
                              · K6 handover (after K1) · R1 (after K0, R0; with K6 when it exists)
                              · F11's share-sheet paths in A4, A5 and K4: last, after 6.5 Q1
         → device round W1 on Rooted 2 (every F01–F34 device item; R1.1–R1.6), and usability pass 2
-Stage F (W2, Wave S):        L2 (after L1) → L3 (after L2) · K7 (after K3 and L2; its F06 and F13 parts after L3)
-                             → A6 (after A3, L2, L3) → A7 + A8 (after A6 and A4 / A5; first in line)
-                               + K8, the DC-1 Inbox (after K7, K5, K6; pulled forward)
-                             → X2 (after X1, L3) · K9 (after K7, K4; merges after K8) · B2 (after B1, X2)
-                             · WIN2 (after WIN1, L3) · E2 (after K8; its phone steps after K9)
-        → device round W2 on Rooted 2 (4.1.1's F06.D1–D4 and F13.D1–D5), iPhone and Mac first
+Stage F (W2, Wave S):        L2 (after L1) → L3 (after L2) → L4 (after L3)
+                             · K7 (after K3, L3) → K10 (after K7, L4) · A6 (after A3, L3) → A9 (after A6, L4)
+                             F06 first:
+                             → A7 + A8, F06 on the iPhone and the Mac (after A6 and A4 / A5; first in line)
+                               + K8, F06 on the DC-1 Inbox (after K7, K5, K6; pulled forward)
+                             then F13:
+                             → A10 + A11, F13 on the iPhone and the Mac (after A7 / A8 and A9; first in line)
+                               + K11, F13 on the DC-1 Inbox (after K8, K10; pulled forward)
+                             then the rest:
+                             → X2 (after X1, L3; its browser line after L4) · K9 (after K7, K4; its F13 after K10;
+                               merges after K8 and K11) · B2 (after B1, X2) · WIN2 (after WIN1, L4)
+                             · E2 (F06 steps after K8, F13 steps after K11, phone steps after K9)
+        → device round W2 on Rooted 2 (4.1.1's F06.D1–D6 and F13.D1–D7), iPhone and Mac first,
+          and usability pass 3 (6.4)
                              Then the rest of 4.1 in its order, from F12 (step 4)
                              Wave S once the Worker is deployed: S0 (server-lane acks every 2 hours, 4.1.1),
                              then F02 (iPhone + Mac first), F37, F19, F36
@@ -3178,8 +3607,8 @@ Stage G (W3), then W4:       as in section 4; R2 after L2 + the senders' F06; R3
 - **Releases follow the priority.** CI publishes every iPhone and Mac build. The extension, web and Windows Lab
   builds are built and tested as soon as their cards allow, but they reach the release only after the iPhone and Mac
   builds of the same wave. Otherwise Windows, which depends only on L0, would ship Lab first.
-- **Pulled forward.** Three Inbox pieces jump the queue because the iPhone and Mac need them on real devices: K1's
-  hello and states (W0), K8's return outbox and Wi-Fi listener (W2), and S0 (the server lane, Wave S).
+- **Pulled forward.** Four Inbox pieces jump the queue because the iPhone and Mac need them on real devices: K1's
+  hello and states (W0), K8's Send to my phone or Mac and K11's Wi-Fi listener (W2), and S0 (the server lane, Wave S).
 - **What must not wait.** No task waits for a lane it does not depend on.
 
 ### 6.3 Shared files and merge order
@@ -3196,6 +3625,18 @@ Stage G (W3), then W4:       as in section 4; R2 after L2 + the senders' F06; R3
 
   K4's workers live in `sender/`, and `Work.kt` belongs to K5. K4 merges before K5. Rebasing on these files must not
   change another task's lines.
+- **`android/app` in W2: K8 and K11 (Inbox), K9 (phone).** The same rule, with these blocks. Merge order: K8, K11,
+  K9.
+  - `App.kt`: `Prefs` fields only (K8: the `F06inbox` switch as a flow and `askWhereToSend`; K9: `labDevId` and the
+    notice setting), plus one line that K8 adds to `App.onCreate`, right after `Live.start(this)`:
+    `ShareEntry.observe(this)`. `onRoleChanged` and `setLab` do not change.
+  - `AndroidManifest.xml`: K8 `SendBackActivity`; K11 `LanTransferService` and `FOREGROUND_SERVICE_DATA_SYNC`; K9
+    the `SystemForegroundService` entry with `foregroundServiceType="dataSync"` (`tools:node="merge"`). The
+    permission is declared once; K9 keeps K11's line.
+  - `res/xml/file_paths.xml`: K9's `from-daylight/` path, on its own line.
+  - `res/values/strings.xml` and `ui/SettingsScreen.kt`: one block each, rows inside `LabCard` only.
+  - `Work.kt` and `inbox/Live.kt` belong to K8 and K11. K9 needs no change there: the phone's reads run from
+    `SenderRepo.tick()`, which `Work.kt` already calls in the sender role.
 - **Capture code.** `share/js/capture/` (`clean-html.js`, Readability 0.6.0) is the one source. Each consumer keeps a
   copy:
   - the extension's build copies the files;
@@ -3213,7 +3654,7 @@ Stage G (W3), then W4:       as in section 4; R2 after L2 + the senders' F06; R3
 
 ### 6.4 Device rounds and usability passes
 
-After W0 and after W1, and after R1, R2 and R3, the Mac mini session runs the device items of that wave on Rooted 2
+After W0, W1 and W2, and after R1, R2 and R3, the Mac mini session runs the device items of that wave on Rooted 2
 with the real ntfy.sh relay:
 
 - iPhone and Mac first, then Android, Chrome, web and Windows (as available);
@@ -3233,10 +3674,21 @@ notes the time taken and any wrong turn in DEVICE-CHECKS.md:
 
 The copy review of ground rule 1 follows the W0 pass.
 
+**Usability pass (W2 round).** W2 brings two "finally" flows and about 90 new strings (4.1.1), so the user does
+four more short tasks on the iPhone and the Mac, unaided, with the Daylight next to them. The session notes the time
+taken and any wrong turn in DEVICE-CHECKS.md:
+
+1. Send an annotated PDF from the Daylight to the iPhone, and open it there.
+2. Send a 120 MB PDF from the Mac to the Daylight.
+3. Find out why a big file is waiting, and make it go.
+4. Stop this computer getting items from the Daylight.
+
+The W2 copy is reviewed after it, as ground rule 1 does for W0, and 6.5 Q11 is settled then if it is still open.
+
 ### 6.5 Decisions for the user
 
-Only Q1 holds anything back: F11's share-sheet paths. Nothing else blocks W0 or W1. Q3, Q9 and Q10 are W2's: each
-has a default that the build uses until you answer, so none of them blocks W2.
+Only Q1 holds anything back: F11's share-sheet paths. Nothing else blocks W0 or W1. Q3, Q9, Q10 and Q11 are W2's:
+each has a default that the build uses until you answer, so none of them blocks W2.
 
 1. **Excerpts before the Lab Reader (blocks F11's share-sheet paths in A4, A5 and K4).** With Documents = Ask, every
    excerpt raises a card or a notice over the Reader and waits for a tap. Choose one:
@@ -3255,7 +3707,13 @@ has a default that the build uses until you answer, so none of them blocks W2.
    it go to every phone and computer that gets items from your Daylight, or should the Daylight ask which one each
    time (FEATURES §6 Q3)?
    - **Recommended: every device, at once.** Most households have one phone and one Mac. An extra tap on every send
-     is a real cost on the tablet, and the card's Options can still pick one device.
+     is a real cost on the tablet, the card names where it goes ("Sending to iPhone and Mac"), and its Options can
+     still pick one device.
+   - What "every device" costs: a computer that runs both the Mac (or Windows) app and Chrome would get each item
+     twice, a browser on a work computer would get your annotated PDFs, and every extra device adds downloads to the
+     household's 200 MB a day on ntfy.sh (a 9 MB file to three devices uses 36 MB). So the plan counts Chrome as a
+     device only after you open its From your Daylight list once, and the web page never; and a daily cap keeps
+     Send back from using up what your own sends to the Daylight need (4.1.1).
    - "Ask each time" is the Inbox setting "Ask where to send each time" turned on by default. Both answers are the
      same build with a different default (4.1.1, F06).
    - Until you answer: every device.
@@ -3294,6 +3752,11 @@ has a default that the build uses until you answer, so none of them blocks W2.
     session also be asked for (d) a "Send to my phone or Mac" item at the top of the Reader's share menu, proved first
     in the Lab Reader? If F06.D2 finds that the Reader's Share doesn't open the share sheet, this request is needed to
     send back from the Reader. Until you answer: not asked.
+11. **The words "phone or Mac" (F06, W2).** Your label for Send back is "Send to my phone or Mac", and every F06
+    string uses the same words, for example "Waiting for your phone or Mac" and "Every phone and Mac" (4.1.1). In a
+    home with an Android phone or a Windows PC, "Mac" may read oddly. Keep your words everywhere, or say "phone or
+    computer" in every F06 string, the share-menu label included? Until you answer: "phone or Mac". The W2 usability
+    pass (6.4) asks again if it is still open.
 
 ---
 
@@ -3359,6 +3822,55 @@ last column says what was chosen and why, in one line.
 ### 7.3 Later sections
 
 - **4.1.1 Wave 2 in detail (Oct 23, 2026).** Drafted and reviewed against 2.2.7, 2.4 and 5.3.4, FEATURES F06 and F13,
-  PROTOCOL, LAB-PROTOCOL, NTFY-FACTS, server DESIGN 5 and the built code. What it changes in section 2 is listed there
-  for L2 and L3 to write into LAB-PROTOCOL first. Its user questions are 6.5 Q3 (now with a recommendation), Q9 and
-  Q10, and none of them blocks W2.
+  PROTOCOL, LAB-PROTOCOL, NTFY-FACTS, server DESIGN 5 and the built code. Then revised after a product, protocol and
+  platform review of 40 points (7.4). What it changes in sections 1 and 2 is listed there for L2, L3 and L4 to write
+  into LAB-PROTOCOL first. Its user questions are 6.5 Q3 (with a recommendation and its costs), Q9, Q10 and Q11, and
+  none of them blocks W2.
+
+### 7.4 Review of 4.1.1 (Oct 23, 2026)
+
+Every point was accepted. Where the plan chose another way than the one suggested, the last column says why, in one
+line.
+
+| # | Point (section, severity) | Decision | What changed, or why not as suggested |
+|---|---|---|---|
+| 1 | A waiting Wi-Fi row doesn't go when the copy says (F13 rows, copy, F13.4; product, major) | Accepted | Pings while a row waits (Mac and Windows every 2 min, Android job and Wi-Fi connect, iPhone at foreground and background refresh), **Try now**, an iPhone sentence of its own, F13.4 split per platform with times. |
+| 2 | `needs-inbox` shown when the Inbox is up to date but the feature is off (1.6, F06, F13; product, major) | Accepted | Caps `return-off` and `lan-off` rather than guessing from `app` versions; `capState`; states `off-on-daylight` and `lan-handed`; `labGate` vectors; F06.12 and F13.8. |
+| 3 | The iPhone's expired-file flow (L2, F06; product, major) | Accepted | `x-want` with a kept third frame a day; 20 min of reads in front and a background refresh; `fromDaylight.onItsWay`; F06.13. Reading lasts 20 min, not 15, to cover the Daylight's 15-minute run. |
+| 4 | F06 has no byte or item bound (budget, F06; product, major) | Accepted | Daily caps of 12 frames (not 15, so 5 devices fit 150 messages) and 60 MB (the worst pairing-lane day plus F06 is 193 MB); "goes tomorrow" words; an hour's pause after a `413`; F06.15. |
+| 5 | "Every device" hides its costs (6.5 Q3, F06; product, major) | Accepted | Chrome is a target only after its list is opened, the web page never; up to three names on the card; Q3 lists duplicates, a work browser and bandwidth. |
+| 6 | Share-sheet big files on iPhone and ad-hoc Mac (F13; product, major) | Accepted | F13.D6 and F13.D7; the extension sends itself when it can; the ad-hoc card runs its own `LanClient` with progress; F13.7 and F13.14. |
+| 7 | Row actions differ by platform (F06; product, minor) | Accepted | One action rule for every device; Windows gets Share; F06.2 names the platforms. |
+| 8 | What the F06 and F13 Use switches gate (F06, F13, 2.9.6; product, minor) | Accepted | Gating tables for `F06`, `F06inbox`, `F13inbox`; per-role ids in `USE_FEATURES`, so senders never show an F13 switch and the APK's keys differ (change 11). |
+| 9 | Mixed terms and wrong app names (copy; product, minor) | Accepted | "Phone or Mac" in every F06 string; the Android app named in `needs-devices` and the browser note; the F13 sentences name "Daylight Share open or Instant delivery on"; `needs-same-wifi` names guest Wi-Fi and VPN. Whether to say "computer" is 6.5 Q11. |
+| 10 | Strings without ids; `features.F06inbox` lookup (copy; product, minor) | Accepted | Ids for the same-name suffix, the button, the Setup check line, the Android notice, the Inbox row states and a Ready tap. `F06inbox` and `F13inbox` are feature ids of their own in `featureOrder`, so no lookup rule is needed beyond `{feature}` in `off-on-daylight`. |
+| 11 | LAN queue storage, cancel, Lab-off words, refusals (F13; product, minor) | Accepted | 5 rows and 1 GB per app; the queue lists them with **Cancel** (and `lan-cancel`); with Lab off they pause and read as v1.1's too-big refusal; F13.13. |
+| 12 | A quote + link loses the quote (F06; product, minor) | Accepted | Over one line or 120 characters, the text goes as a note holding the passage and the link; `sendBack` vectors for both. |
+| 13 | First use after `needs-devices` (F06 Inbox; product, minor) | Accepted | The card reads the return-ack topic once; with no target the item waits a day for the first device; F06.8. "It can take a few minutes" was not needed once the card reads. |
+| 14 | No usability pass for W2 (6.4; product, minor) | Accepted | A W2 pass with the four suggested tasks, then the W2 copy review. |
+| 15 | `due()` contradicts L2.4 (L2; protocol, blocker) | Accepted | One window per row type (3 h or 12 h), relay times on both sides, renamed constants, vectors at 2.9, 3.1, 11.9 and 12.1 h. The per-device share is 6 re-sent frames a day, not a 12-hour rule, because the follow-up needs a second copy within 3 hours. |
+| 16 | The budget counts messages only (2.2.7, soak; protocol, major) | Accepted in part | A bandwidth table, 10 MB of F06 on the relay at most, re-sends on a topic per device instead of `x-to` on the shared one, a real-size soak with 413 for bandwidth. The soak checks that every pairing-lane item arrives with no third `413`, not that no `413` happens: a phone can't see the Daylight's bytes, so that can't be promised. Its daily bound is the table's 193 MB, not 150, because F06's 60 MB counts in full. |
+| 17 | Expired re-sends don't converge for open-only readers (L2, F06; protocol, major) | Accepted | The live return-ack stream on the Daylight, 20 min of reads and a background refresh after `x-want`, one follow-up copy 185 min later; F06.14 is the suggested two-openings case. |
+| 18 | The total assumes 3 devices (budget; protocol, major) | Accepted | Sized for 5 devices at 3 frames a day (idle hello every 24 h), the web sender never a target, Chrome only on purpose, S0 as 2-hour acks in the soak, F06 capped; the total is 149, with +3 per extra device stated. |
+| 19 | Change list misses 2.3 and 2.1 rule 3; no parse algorithm (L2; protocol, major) | Accepted | Change 8; `returnParse` with junk vectors in three languages; the `x-to` skip before dedupe; whole rows or none; ports without a leading zero. |
+| 20 | Refusals with unread bodies cause resets (F13; protocol, major) | Accepted | The lingering close, `Expect: 100-continue`, the client's reset rule, and HTTP transcripts that `LanServerSim` and `LanServer` both reproduce. A JVM run of the Swift tests was not chosen: transcripts test the same thing without a cross-lane CI job. |
+| 21 | A queued LAN row's content (F13; protocol, minor) | Accepted, another way | Every platform copies the file into its spool, the Mac and Windows too: the sandboxed Mac app has no bookmark entitlement, and a stable copy can't change after sharing. A `409` ends the row with a sentence. |
+| 22 | When the one-item slot is released (F13; protocol, minor) | Accepted | Released after 60 s with no request for the item; a `LanServerTest` and F13.10 case. |
+| 23 | LAN hardening (F13; protocol, minor) | Accepted | A sealed `lan-ping` ticket and no answer without one; answer kinds of their own echoing `c` or `r`; one connection per address; head timeouts as refusals; the busy row. |
+| 24 | LAN relay acks and address hellos (budget, F13; protocol, minor) | Accepted | No separate relay ack (the id joins the next ack frame); up to 2 address hellos a day outside the cap, counted in the Lab row, which drops to 18 so the total holds. |
+| 25 | The server-lane hello would carry the home address (4.2 S0; protocol, minor) | Accepted | Change 9, the S0 row and its integration test. |
+| 26 | `due()` mixes clocks; a hello before a read (L2; protocol, minor) | Accepted | `copyUntil` from the publish answer's relay time; device frames only right after a read. `x-read` was not added: with both rules it isn't needed. |
+| 27 | Device ids: first-launch race and backups (L2; protocol, minor) | Accepted | Minted after `SharedStore.ready()`, in a file excluded from backup; `DeviceIdTests`; a same-name rule retires an old id after 2 days of silence. |
+| 28 | Nothing wakes the DC-1 for device hellos (F06 Inbox; platform, major) | Accepted | The return-ack topic on a second live stream; the 2-minute timer goes; device reads after `x-want`; F06.D5; F06.6 and F06.10 reworded. |
+| 29 | Background parts stall on the iPhone (F13; platform, major) | Accepted | Every part built in the foreground and queued at once on a LAN session (not discretionary, one connection); F13.D2 is now a 120 MB send written down as done or stalled. |
+| 30 | `setForeground` from the background; the manifest entry (F13 Android; platform, major) | Accepted | Foreground only when queued from the foreground; the `SystemForegroundService` entry and the permission in K9; E2's API 34 step. |
+| 31 | The Mac app has no open-at-login (F06 Mac; platform, major) | Accepted | **Open at login** with `SMAppService` in A8, offered once; `NSBackgroundActivityScheduler`; `wifi.macOpenApp`; F06.D6. |
+| 32 | Browsers as targets; per-device fairness; budget per device count (L2, F06; platform, major) | Accepted | The web sender publishes nothing and Chrome joins on purpose (rather than an `x-rx: "open"` value); at most 6 re-sent frames a day per device; the budget states its device count. |
+| 33 | `x-to` saves no bandwidth; the 20 MB at a time (L2, budget; platform, minor) | Accepted, another way | A topic per device rather than a hint in the message text: a device can't check an HMAC of `x-dev` and the id before it knows the id, and its own topic needs no new field. The bandwidth bullet and an L2.7 case for a `413` during a re-send. |
+| 34 | iOS's local network alert reads as `needs-same-wifi` (F13 iPhone; platform, minor) | Accepted | "Looking for…" until the first answer, then an immediate ping; F13.6 checks it. |
+| 35 | A waiting row on the iPhone (F13; platform, minor) | Accepted | As point 1: the iPhone's own sentence and times, background refresh tried but not promised. |
+| 36 | F06 waits for F13 on the critical path (task cards, 6.2; platform, minor) | Accepted | L3/L4, K7/K10, A6/A9, A7/A10, A8/A11 and K8/K11 split; device items in the W2 round; 6.2 orders F06 first. |
+| 37 | K8 has to edit `App.kt` and `sender/` (task cards, 6.1, 6.3; platform, minor) | Accepted | `ShareEntry.observe` started by one allowed line; the phone's reads run from `SenderRepo.tick()`, so no hook in `Work.kt`; W2 tasks in 6.1; K8, K11 and K9's blocks in 6.3. |
+| 38 | Windows needs new commands (WIN2; platform, minor) | Accepted | The commands listed in the Devices table and WIN2, with raw-bytes IPC. |
+| 39 | Android opens any type (F06; platform, minor) | Accepted | The same type list on the Android phone, with **Save** for the rest. |
+| 40 | Chrome stores files as base64 in `storage.local` (F06 Chrome; platform, minor) | Accepted | File bodies in the extension's IndexedDB; only the index in `storage.local`. |
