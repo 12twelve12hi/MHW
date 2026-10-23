@@ -143,9 +143,9 @@ test("'each' url items only for hosts that resolve, in public DNS, to public add
 
 test('past 400 MB of D1: new feed entries, baselines and mail rows pause, and /v1/status says why', async () => {
   const web = new Map([['feeds.example', () => new Response(rss(3), { headers: { 'Content-Type': 'application/rss+xml' } })]]);
-  const t = await setup({ web });
+  const t = await setup({ web, clock: ticking(NOON) }); // the mail and today's counts on one UTC day
   try {
-    const T = Date.now();
+    const T = t.now();
     await t.cron(T); // the hourly cleanup measures D1; set the size after it
     let st = (await t.api('GET', '/v1/status')).json;
     assert.equal(st.storage.paused, false);
@@ -194,14 +194,13 @@ test('rows read stay bounded: the email caps with 20,000 mail rows kept, and the
 });
 
 test('a mail flood: rows only for the first 2 × the daily cap, the rest only counted; today’s counts stay right', async () => {
-  const t = await setup({ knobs: { mailPerDay: 4, mailPerSender: 100, mailPerDomain: 100 } });
+  const t = await setup({ knobs: { mailPerDay: 4, mailPerSender: 100, mailPerDomain: 100 }, clock: ticking(NOON) }); // one UTC day
   try {
     for (let i = 0; i < 14; i++) await t.email(mime({ headers: [CF_AUTH('pass')], from: 'flood@x.example', subject: `f${i}`, text: 'x' }), { from: 'flood@x.example' });
     const rows = await t.rows('SELECT state, reason FROM mail ORDER BY received');
     assert.equal(rows.length, 8, 'rows for 2 × 4 messages');
     assert.deepEqual(rows.map((r) => r.state), ['queued', 'queued', 'queued', 'queued', 'dropped', 'dropped', 'dropped', 'dropped']);
-    const day = new Date().toISOString().slice(0, 10);
-    assert.equal((await t.rows("SELECT n FROM usage WHERE kind = 'email_in' AND day = ?", day))[0].n, 14);
+    assert.deepEqual(await t.rows("SELECT day, n FROM usage WHERE kind = 'email_in'"), [{ day: utcDay(NOON), n: 14 }]);
     assert.deepEqual((await t.api('GET', '/v1/email')).json.today, { received: 14, delivered: 0, dropped: 10 });
   } finally { await t.close(); }
 });

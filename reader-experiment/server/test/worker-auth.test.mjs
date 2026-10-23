@@ -1,7 +1,7 @@
 // The Worker in workerd (Miniflare): authentication and request handling order (DESIGN.md 3.3, 3.4, 10.1-10.3).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { setup, SERVER } from './helpers.mjs';
+import { setup, SERVER, inOneLimiterMinute } from './helpers.mjs';
 
 let t;
 before(async () => { t = await setup(); });
@@ -117,15 +117,29 @@ test('lock: every authenticated request answers 423 and hosted frames 410 until 
 });
 
 test('after 30 failures a minute from one address, the answer is 429 with no further work', async () => {
-  let last;
-  for (let i = 0; i < 32; i++) last = await t.api('GET', '/v1/status', { token: 'e'.repeat(64), headers: { 'CF-Connecting-IP': '203.0.113.9' } });
-  assert.equal(last.status, 429);
+  // Each run within one minute of the limiter (it counts per real minute); a fresh address when the minute turned.
+  const answers = await inOneLimiterMinute(['203.0.113.9', '203.0.113.19', '203.0.113.29'], async (ip) => {
+    const all = [];
+    for (let i = 0; i < 32; i++) all.push(await t.api('GET', '/v1/status', { token: 'e'.repeat(64), headers: { 'CF-Connecting-IP': ip } }));
+    return all;
+  });
+  assert.deepEqual(answers.map((r) => r.status), [...Array(30).fill(401), 429, 429], 'thirty 401s, then 429 from the 31st');
+  const last = answers[31];
   assert.equal(last.json.error.code, 'RATE_LIMITED');
   assert.equal(last.headers.get('retry-after'), '60');
   const other = await t.api('GET', '/v1/status', { token: 'e'.repeat(64), headers: { 'CF-Connecting-IP': '203.0.113.10' } });
   assert.equal(other.status, 401, 'counted per address');
-  for (let i = 0; i < 31; i++) await t.dispatch(`${SERVER}/f/${'9'.repeat(32)}/0`, { headers: { 'CF-Connecting-IP': '203.0.113.11' } });
-  assert.equal((await t.dispatch(`${SERVER}/o/${'9'.repeat(32)}/0`, { headers: { 'CF-Connecting-IP': '203.0.113.11' } })).status, 429, 'unknown hosted ids count too');
+  // Unknown ids under /f/ and /o/ alike: fifteen of each are the 30 failures, then both answer 429.
+  const hosted = await inOneLimiterMinute(['203.0.113.11', '203.0.113.21', '203.0.113.31'], async (ip) => {
+    const all = [];
+    for (let i = 0; i < 32; i++) {
+      const r = await t.dispatch(`${SERVER}/${i % 2 ? 'o' : 'f'}/${'9'.repeat(32)}/0`, { headers: { 'CF-Connecting-IP': ip } });
+      await r.arrayBuffer();
+      all.push(r.status);
+    }
+    return all;
+  });
+  assert.deepEqual(hosted, [...Array(30).fill(404), 429, 429], 'unknown hosted ids count too');
 });
 
 test('without a Server code, or with a pairing code in its place, the server is not configured', async () => {

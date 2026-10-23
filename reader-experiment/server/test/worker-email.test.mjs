@@ -2,10 +2,11 @@
 // email() handler's drops and caps (never bounces), processing on the Cron, and the email endpoints.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { setup, SERVER, mime, CF_AUTH } from './helpers.mjs';
+import { setup, SERVER, mime, CF_AUTH, NOON, ticking, utcDay } from './helpers.mjs';
 
 let t;
-before(async () => { t = await setup({ knobs: { mailPerSender: 3, mailPerDomain: 5, mailPerDay: 12 } }); });
+// The per-day caps and "today's counts" count every mail this file sends: one UTC day, whatever the time of the run.
+before(async () => { t = await setup({ knobs: { mailPerSender: 3, mailPerDomain: 5, mailPerDay: 12 }, clock: ticking(NOON) }); });
 after(async () => { await t?.close(); });
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
@@ -214,6 +215,7 @@ test('the email endpoints: address, block list, today’s counts, unblock, recen
   assert.equal(info.addressChanged, null);
   assert.deepEqual(info.blocked.map((b) => b.pattern), ['@spam.example']);
   assert.ok(info.today.received >= 10 && info.today.dropped >= 3 && info.today.delivered >= 1);
+  assert.deepEqual((await t.rows("SELECT day FROM usage WHERE kind = 'email_in'")).map((r) => r.day), [utcDay(NOON)], 'every mail on one day');
   assert.equal(info.state, 'ready');
   assert.equal((await t.api('POST', '/v1/email/block', { json: { pattern: 'not a pattern' } })).status, 400);
   assert.equal((await t.api('POST', '/v1/email/unblock', { json: { pattern: '@SPAM.example' } })).status, 204);

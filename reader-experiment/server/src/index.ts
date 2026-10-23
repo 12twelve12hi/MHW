@@ -82,12 +82,16 @@ function match(method: string, path: string): { route: Route; p: string[] } | nu
 
 let lastCron: CronReport | null = null;
 let lastEmail: { d1: number; rowsRead: number } | null = null;
+/** Test bundle only: the time the next email() takes (set by /__test/email-now, used once); 0 = the real time. */
+let emailNow = 0;
 
 /** Test-only routes that run workerd-only code (HTMLRewriter, postal-mime) for unit tests. Not in deploy bundles. */
 async function testRoute(ctx: Ctx, req: Request, path: string): Promise<Response> {
   if (__TESTING__) {
     if (path === '/__test/last-cron') return json(ctx.rid, 200, lastCron ?? {});
     if (path === '/__test/last-email') return json(ctx.rid, 200, lastEmail ?? {});
+    // email() has no request to carry X-DLS-Test-Now, so the harness sets its time here before each message.
+    if (path === '/__test/email-now') { emailNow = ctx.now; return json(ctx.rid, 200, { now: emailNow }); }
     const body = new Uint8Array(await req.arrayBuffer());
     if (path === '/__test/sanitize') {
       const j = JSON.parse(new TextDecoder().decode(body));
@@ -203,7 +207,9 @@ export default {
   async email(message: ForwardableEmailMessage, env: Env, ectx: ExecutionContext): Promise<void> {
     let id: Identity | null = null;
     try { id = await identity(env); } catch { id = null; }
-    const ctx = makeCtx(env, Date.now(), (p) => ectx.waitUntil(p));
+    let now = Date.now();
+    if (__TESTING__ && emailNow) { now = emailNow; emailNow = 0; }
+    const ctx = makeCtx(env, now, (p) => ectx.waitUntil(p));
     try {
       await receiveEmail(ctx, id, message);
     } catch (e) {

@@ -13,7 +13,7 @@ import path from 'node:path';
 import * as ds from '../../share/js/daylight-share.js';
 import * as srv from '../client/daylight-server.js';
 import { buildInboxInfo } from '../../share/js/daylight-lab.js';
-import { setup, RELAY_ORIGIN, ROOT } from './helpers.mjs';
+import { setup, RELAY_ORIGIN, ROOT, inOneLimiterMinute } from './helpers.mjs';
 import { planSetup, writeSetup, cfD1 } from '../scripts/setup.mjs';
 import { smoke, announce } from '../scripts/derive.mjs';
 
@@ -203,10 +203,14 @@ test('POST /v1/setup: only with a waiting link for this Worker, the right token 
     const body = await ok.json();
     assert.deepEqual({ ...body, published: undefined }, { server: ORIGIN, api: srv.SERVER_API, fingerprint: t.values.fingerprint, delivery: 'lab', published: undefined });
     assert.equal(body.published, 200);
-    // Thirty wrong tokens a minute from one address, then 429 with no further work.
-    let last;
-    for (let i = 0; i < 31; i++) last = await post('e'.repeat(64), code, { 'CF-Connecting-IP': '203.0.113.9' });
-    assert.equal(last.status, 429);
+    // Thirty wrong tokens a minute from one address, then 429 with no further work (within one minute of the limiter,
+    // which counts per real minute: a fresh address when the minute turned during the run).
+    const answers = await inOneLimiterMinute(['203.0.113.9', '203.0.113.19', '203.0.113.29'], async (ip) => {
+      const all = [];
+      for (let i = 0; i < 31; i++) { const r = await post('e'.repeat(64), code, { 'CF-Connecting-IP': ip }); await r.arrayBuffer(); all.push(r.status); }
+      return all;
+    });
+    assert.deepEqual(answers, [...Array(30).fill(401), 429]);
     // With the secret DAYLIGHT_SERVER_CODE the setup link is never used.
     await t.restart({ DAYLIGHT_SERVER_CODE: t.serverCode });
     assert.equal((await post(token, code)).status, 404);

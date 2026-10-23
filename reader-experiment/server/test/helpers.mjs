@@ -56,6 +56,22 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  */
 export const NOON = Date.parse('2026-10-20T12:00:00Z');
 export const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+/**
+ * Runs `loop(ip)`, a run of failures from one address against the FAILS limit (30 a minute), so that it falls inside
+ * one window of Miniflare's limiter. That window is the real clock's minute inside workerd (Math.floor(Date.now() /
+ * 60000)), which neither X-DLS-Test-Now nor setup({ clock }) moves: a run that crosses hh:mm:00 starts counting again
+ * and ends under the limit. When the minute turned during a run, the loop runs again from the next address in `ips`
+ * (an empty count). -> what the last run returned.
+ */
+export async function inOneLimiterMinute(ips, loop) {
+  for (const ip of ips) {
+    const minute = Math.floor(Date.now() / 60_000);
+    const result = await loop(ip);
+    if (Math.floor(Date.now() / 60_000) === minute) return result;
+  }
+  throw new Error(`the minute turned during each of ${ips.length} runs`);
+}
+
 /** A clock that starts at `start` and runs at real speed, for setup({ clock }). */
 export function ticking(start) {
   const t0 = Date.now();
@@ -65,8 +81,9 @@ export function ticking(start) {
 /**
  * Starts a Worker. Options: delivery 'lab' | 'v1', r2, apiKey, emailDomain, plan, knobs (TEST_KNOBS), vars (extra
  * bindings), web (Map host -> handler for outbound fetches), secret (16 bytes), clock (a function -> ms: the Worker's
- * time for every request that names none, the client's and the Receiver's included, and for cron() without one; by
- * default the real time). The email() handler always takes the real time.
+ * time for every request that names none, the client's and the Receiver's included, and for cron() and email() without
+ * one; by default the real time). email() has no request header to carry it: the harness sets the time of the next
+ * message through /__test/email-now first.
  */
 export async function setup(opts = {}) {
   ensureBundle();
@@ -182,8 +199,13 @@ export async function setup(opts = {}) {
     return last.json();
   }
 
-  async function email(raw, { from = 'news@example.com', to = null } = {}) {
+  /** Delivers a mail to email(); its time is `now`, else the setup's clock, else the real time. */
+  async function email(raw, { from = 'news@example.com', to = null, now: at = clock ? clock() : null } = {}) {
     const rcpt = to ?? `daylight-${values.emailToken}@${emailDomain}`;
+    if (at) {
+      const set = await mf.dispatchFetch(`${serverUrl}/__test/email-now`, { headers: { 'X-DLS-Test-Now': String(at) } });
+      if ((await set.json()).now !== at) throw new Error('the test bundle did not take the email() time');
+    }
     const r = await dispatch(`${serverUrl}/cdn-cgi/local/email?from=${encodeURIComponent(from)}&to=${encodeURIComponent(rcpt)}&format=json`, { method: 'POST', body: raw });
     return r.json();
   }
