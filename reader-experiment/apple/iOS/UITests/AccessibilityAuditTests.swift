@@ -7,6 +7,8 @@ final class AccessibilityAuditTests: XCTestCase {
     /// Issues allowed on `screen`, each with why; everything else fails. A navigation bar's button (the system draws it
     /// and caps its size), and Dynamic Type reports on the texts `DynamicTypeWaivers` names for the screen (the audit
     /// loses them at the largest size; `TruncationAuditTests.testEveryTextGrowsWithTheTextSize` measures each growing).
+    /// A contrast report on a text whose own pixels measure at least 7:1 (`MeasuredContrast`, as on the Mac's Lab
+    /// pages): the audit reported a history row's black sentence on white now and then.
     @available(iOS 17.0, *)
     static func allowed(on screen: String) -> (XCUIAccessibilityAuditIssue) -> String? {
         { issue in
@@ -32,6 +34,13 @@ final class AccessibilityAuditTests: XCTestCase {
                 let shown = CGRect(x: screen.minX, y: top, width: screen.width, height: screen.maxY - top)
                 if !shown.insetBy(dx: -1, dy: -1).contains(element.frame) {
                     return "an element the list has scrolled partly under the navigation bar or off the screen"
+                }
+                // A text whose own pixels pass WCAG's AAA level (MeasuredContrast): both numbers are printed.
+                if element.elementType == .staticText, let m = MeasuredContrast.of(element) {
+                    print("AUDIT ios contrast report on “\(element.label.prefix(60))”: its pixels measure \(m.summary)")
+                    if m.ratio >= MeasuredContrast.floor {
+                        return "its own pixels measure \(m.summary), above WCAG's 7:1"
+                    }
                 }
             }
             return nil

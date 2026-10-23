@@ -511,7 +511,10 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     reports on an element the list has scrolled partly under the navigation bar or off the screen, contrast and
     clipping reports that come without an element while a history row's text shows partly under the navigation bar
     or past the screen's edge (a row's words are one element, so the audit cannot point at the text; the allowance
-    names the texts, `UITestSupport.auditHere`), a navigation-bar
+    names the texts, `UITestSupport.auditHere`), a contrast report on a text whose own pixels measure at least 7:1
+    (WCAG AAA; `iOS/UITests/MeasuredContrast.swift`, as on the Mac's Lab pages, both numbers printed: the audit
+    reported a history row's sentence, black on white, as failing now and then, at 11 pt and at 13 pt, in four runs
+    with passing runs between; grey text measures far below 7:1 and still fails), a navigation-bar
     button's capped text size, and Dynamic
     Type reports on exactly the texts (and buttons, by their words) `iOS/UITests/DynamicTypeWaivers.swift` names for the
     screen (today *Nothing sent yet.* on the empty Home; in Settings, which now starts with the Lab section, the device
@@ -521,8 +524,7 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
     Dynamic Type out on purpose: Comfort holds text between xxLarge and accessibility3 (the F27 table). What the
     audits found and the apps now do: secondary text and section headers at 72% of the primary colour (the primary
     colour on the Mac), a history row's site at 12 pt on the Mac too (a short 10 pt text only "nearly passed" there), a row's
-    sentence in the primary colour (small text at 72% failed on the iPhone now and then), at 13 pt on the iPhone (at
-    11 pt one sentence still failed now and then), a tint of #0058CC and a destructive red of #C01010 (both at least 4.5:1, lighter in dark
+    sentence in the primary colour (small text at 72% failed on the iPhone now and then), a tint of #0058CC and a destructive red of #C01010 (both at least 4.5:1, lighter in dark
     mode), no greyed-out buttons, text fields that grow to more lines, row text that the row sizes, the navigation
     title kept in the bar, a name on every switch, a history row's *Retry now* / *Try again* at the window's control
     size (never small), and on the iPhone each history row's words as one element (below). An audit with an issue
