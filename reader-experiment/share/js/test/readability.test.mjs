@@ -456,6 +456,26 @@ const RULES = [
   ['a video in it', box('class="key-points"', LI, '<video src="https://video.example.net/ferries.mp4" controls></video>'), box('class="key-points"')],
   ['a form in a box its heading names: not a bare list either', `<div class="key-points-box"><h2>Key points, every Friday</h2><ul>${LI}</ul><form action="/signup"><input type="email" name="email"></form></div>`, `<div class="key-points-box"><h2>Key points, every Friday</h2><ul>${LI}</ul></div>`],
   ['links in a box its heading names: not a bare list either', box('class="key-points"', LI, `<p><a href="/fares">${LINK}</a></p>`), box('class="key-points"', LI, `<p>${LINK}</p>`)],
+  // each furniture tag and role, around the box and in it, and in the heading that names a bare list
+  ['a furniture tag around it: a <nav>', `${BODY}<nav>${BOX}</nav>`, `${BODY}<div>${BOX}</div>`],
+  // (an <aside> or <div> whose first child is the box would be named by its heading, and be a box itself)
+  ['a furniture tag around it: an <aside>', `${BODY}<aside><p>From the operator</p>${BOX}</aside>`, `${BODY}<div><p>From the operator</p>${BOX}</div>`],
+  ['a furniture tag around it: a <form>', `${BODY}<form action="/fares">${BOX}</form>`, `${BODY}<div>${BOX}</div>`],
+  ['a furniture role around it', `${BODY}<div role="complementary"><p>From the operator</p>${BOX}</div>`, `${BODY}<div><p>From the operator</p>${BOX}</div>`],
+  ['a furniture tag in it: a <nav>', box('class="key-points"', LI, '<nav>More about the ferry company</nav>'), box('class="key-points"', LI, '<div>More about the ferry company</div>')],
+  ['a furniture role in it', box('class="key-points"', LI, '<div role="search">Search the new timetable</div>'), box('class="key-points"', LI, '<div>Search the new timetable</div>')],
+  ['furniture in the heading that names a bare list', `<h3>Key takeaways <span class="sponsored">Sponsored</span></h3><ul>${LI}</ul>`, `<h3>Key takeaways <span class="label">From the operator</span></h3><ul>${LI}</ul>`],
+  // a <dl>'s items are its <dd>s, and a heading one level down names a box
+  ['a <dl> with one <dd>', '<div class="key-points"><h2>Key points</h2><dl><dt>Fares</dt><dd>Rise by five per cent from January.</dd></dl></div>',
+    '<div class="key-points"><h2>Key points</h2><dl><dt>Fares</dt><dd>Rise by five per cent from January.</dd><dt>Children</dt><dd>Under twelve travel free all year.</dd></dl></div>'],
+  ['its heading two levels down (one level down names it)', `<div class="card"><div><div><h2>Key points</h2></div></div><ul>${LI}</ul></div>`, `<div class="card"><div><h2>Key points</h2></div><ul>${LI}</ul></div>`],
+  // each form control, outside a form, and each kind of media
+  ['an input in it, outside a form', box('class="key-points"', LI, '<input type="search" name="q" placeholder="Search the fares">'), box('class="key-points"')],
+  ['a select in it', box('class="key-points"', LI, '<select name="route"><option>All routes</option><option>Island ferry</option></select>'), box('class="key-points"')],
+  ['a textarea in it', box('class="key-points"', LI, '<textarea name="question">Ask about the new fares</textarea>'), box('class="key-points"')],
+  ['audio in it', box('class="key-points"', LI, '<audio src="https://audio.example.net/ferries.mp3" controls></audio>'), box('class="key-points"')],
+  ['an embed in it', box('class="key-points"', LI, '<embed src="https://video.example.net/ferries.swf" type="application/x-shockwave-flash">'), box('class="key-points"')],
+  ['an object in it', box('class="key-points"', LI, '<object data="https://video.example.net/ferries.svg" type="image/svg+xml"></object>'), box('class="key-points"')],
 ];
 
 for (const [rule, out, plain] of RULES) {
@@ -466,10 +486,101 @@ for (const [rule, out, plain] of RULES) {
   });
 }
 
-test('prepareForReadability: nothing moves outside an <article> or <main>, inside the text already, or on the page\'s own document', needsDom, () => {
+/** A paragraph of article text that starts with a word of its own (where() finds it): `${mark}: ...`. */
+const para = (mark) => `<p>${mark}: the operator said the change, which follows a review of every route, would take effect in January, and that passengers would be told before each timetable change, with notices, letters and a public meeting.</p>`;
+const paras = (mark, n) => Array.from({ length: n }, (_, i) => para(`${mark} ${['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight'][i]}`)).join('');
+/** Where each text is in a Clean article: in this order, every one of them there. */
+const assertOrder = (got, texts, what) => {
+  const at = texts.map((text) => where(got, text));
+  assert.ok(at.every((n, i) => n >= 0 && (i === 0 || n > at[i - 1])), `${what}: ${texts.map((t, i) => `${t} at ${at[i]}`).join(', ')}`);
+};
+
+/**
+ * A box with paragraphs of the article between it and the body stays where it is: moved past them, it would come out
+ * of order. [the page, its article, the texts Readability alone keeps, in page order]. On the first two Readability
+ * alone keeps the box in its place, and so must Clean article; on the third Readability drops a "Key points" box that
+ * has an introduction between it and the body, as it would without the step (the step never reorders: README).
+ */
+const KEPT_APART = [
+  ['an explainer: "In brief" (a paragraph and a list), then Background (two paragraphs), then Details (six)',
+    `${H1}<section><h2>In brief</h2>${para('Asterwick')}<ul>${LI}</ul></section><section><h2>Background</h2>${paras('Briarholm', 2)}</section><section><h2>Details</h2>${paras('Cedarmont', 6)}</section>`,
+    ['Asterwick', 'Fares rise by five per cent', 'Briarholm one', 'Briarholm two', 'Cedarmont one', 'Cedarmont six']],
+  ['a report: "Summary" (six paragraphs and a list), then Methods (two), then Results (three)',
+    `${H1}<section><h2>Summary</h2>${paras('Asterwick', 6)}<ul>${LI}</ul></section><section><h2>Methods</h2>${paras('Briarholm', 2)}</section><section><h2>Results</h2>${paras('Cedarmont', 3)}</section>`,
+    ['Asterwick one', 'Asterwick six', 'Fares rise by five per cent', 'Briarholm one', 'Cedarmont one', 'Cedarmont three']],
+  ['"Key points", then an introduction (three paragraphs), then the body (six)',
+    `${H1}${BOX}<div class="intro">${paras('Briarholm', 3)}</div><div class="body">${paras('Cedarmont', 6)}</div>`,
+    ['Briarholm one', 'Briarholm three', 'Cedarmont one', 'Cedarmont six']],
+  ['the body (six paragraphs), then notes (two), then "Key points"',
+    `${H1}<div class="body">${paras('Cedarmont', 6)}</div><div class="notes">${paras('Dunmore', 2)}</div>${BOX}`,
+    ['Cedarmont one', 'Cedarmont six', 'Dunmore one', 'Dunmore two']],
+];
+
+for (const [what, inside, order] of KEPT_APART) {
+  test(`prepareForReadability: a box with article text between it and the body stays where it is: ${what}`, needsDom, () => {
+    const html = pageWith(inside);
+    const alone = cleanArticle(html, { prepare: false });
+    assertOrder(alone, order, `${what}: Readability alone`);
+    const got = cleanArticle(html);
+    assert.equal(got.moved, 0, what);
+    assert.equal(got.html, alone.html, `${what}: the same article as Readability's alone`);
+  });
+}
+
+test('prepareForReadability: an <aside> box with article text between it and the body becomes a <div> in its place', needsDom, () => {
+  const html = pageWith(KEPT_APART[0][1].replace('<section><h2>In brief</h2>', '<aside class="in-brief"><h2>In brief</h2>').replace('</ul></section>', '</ul></aside>'));
+  assert.equal(where(cleanArticle(html, { prepare: false }), 'Asterwick'), -1, 'Readability alone drops every <aside>');
+  const got = cleanArticle(html);
+  assert.equal(got.moved, 1);
+  assertOrder(got, KEPT_APART[0][2], 'In brief, Background, Details');
+  assert.ok(!got.html.includes('<aside'));
+});
+
+test('prepareForReadability: a heading, a short paragraph, furniture or another box between a box and the body do not keep it apart', needsDom, () => {
+  const AD = '<div class="ad-slot"><p>Book a winter break on the islands, with the ferry and two nights in a hotel, from forty pounds.</p></div>';
+  for (const [what, between] of [
+    ['a heading', '<h2>What the new fares mean for passengers on every route</h2>'],
+    ['a paragraph under 25 characters', '<p>Updated at 14:05 today</p>'],
+    ['an advertisement', AD],
+  ]) {
+    const got = cleanArticle(pageWith(`${H1}${BOX}${between}${BODY}`));
+    assert.equal(got.moved, 1, what);
+    assertOrder(got, ['Key points', 'Children under twelve travel free all year', PARAGRAPHS[0], PARAGRAPHS[5]], what);
+  }
+  // two boxes, each with a paragraph of its own: the second's paragraph does not keep the first apart
+  const intro = '<p>What the operator announced on Monday:</p>';
+  const first = BOX.replace('<ul>', `${intro}<ul>`);
+  const second = first.replace('key-points', 'at-a-glance').replace('Key points', 'At a glance').replace('Fares rise by five per cent from January', 'Season tickets rise by three per cent');
+  const two = cleanArticle(pageWith(`<header>${H1}${first}</header>${second}${BODY}`));
+  assert.equal(two.moved, 2);
+  assertOrder(two, ['Key points', 'Fares rise by five per cent', 'At a glance', 'Season tickets rise by three per cent', PARAGRAPHS[0]], 'the first box, the second, the text');
+});
+
+test('prepareForReadability: a box that holds the article\'s body is that text: it stays, and its paragraphs keep other boxes apart', needsDom, () => {
+  // "Highlights" with eight paragraphs and a list, then notes: the box is the article's text
+  const most = pageWith(`${H1}<section class="highlights"><h2>Highlights</h2>${paras('Asterwick', 8)}<ul>${LI}</ul></section><section><h2>Notes</h2>${paras('Briarholm', 2)}</section>`);
+  const got = cleanArticle(most);
+  assert.equal(got.moved, 0);
+  assert.equal(got.html, cleanArticle(most, { prepare: false }).html);
+  assertOrder(got, ['Asterwick one', 'Asterwick eight', 'Fares rise by five per cent', 'Briarholm one'], 'Highlights, then Notes');
+  // the same box as an <aside>: its paragraphs score as a <div>'s would, and it becomes a <div> where it is (Readability
+  // drops an <aside> in the element it keeps)
+  const aside = most.replace('<section class="highlights">', '<aside class="highlights">').replace('</ul></section>', '</ul></aside>');
+  const { document } = parseHTML(aside);
+  assert.equal(prepareForReadability(document), 1);
+  assert.equal(document.querySelector('.highlights').localName, 'div');
+  assert.equal(document.querySelector('.highlights').parentNode.localName, 'article', 'in its place');
+  assertOrder(cleanArticle(aside), ['Asterwick one', 'Asterwick eight', 'Fares rise by five per cent', 'Briarholm one'], 'as an <aside>');
+  // "Key points", then a "Summary" section whose introduction comes before the body it holds: Key points stays
+  const held = `${H1}${BOX}<section class="summary"><h2>Summary</h2>${para('Briarholm')}<ul>${LI.replace(/Fares/g, 'Prices').replace(/Children/g, 'Pupils')}</ul><div class="text">${paras('Cedarmont', 6)}</div></section>`;
+  assert.equal(prepareForReadability(parseHTML(pageWith(held)).document), 0);
+});
+
+test('prepareForReadability: nothing moves outside an <article> or <main>, inside the text already, with no text to move to, or on the page\'s own document', needsDom, () => {
   for (const [what, html] of [
     ['no article or main', pageWith(`<h1>Ferry fares</h1>${BOX}${BODY}`, 'div').replace(/<\/?main>/g, '')],
     ['already in the text', pageWith(`<h1>Ferry fares</h1>${BODY.replace('</p><p>', `</p>${BOX}<p>`)}`)],
+    ['no paragraph in the article to move it to', pageWith(`<h1>Ferry fares</h1>${BOX}<p>Updated at 14:05 today</p>`)],
   ]) {
     const got = cleanArticle(html);
     assert.equal(got.moved, 0, what);

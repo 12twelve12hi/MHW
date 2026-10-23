@@ -96,9 +96,11 @@ function cleanHtml(root) {
 // Readability scores paragraphs, never list items, and keeps the best-scoring element of the page with those of its
 // siblings that score well or are paragraphs. So a summary box beside the article's text, such as a live page's "Key
 // points" (a heading and a list), goes, though it is the article's own text. This moves each summary box into the
-// element that holds the article's paragraphs: to its start when the box comes before it, to its end when after, so
-// the reading order stays (boxes keep their order too). -> the number of boxes it moved or made a <div> (0, changing
-// nothing, when given the page's own document or no document).
+// element that holds the article's paragraphs (the body, below): to its start when the box comes before it, to its end
+// when after (boxes keep their order too). It moves a box only when no paragraph of the article lies between the box
+// and the body, so the box goes next to the text it was next to and the reading order stays the page's; with article
+// text between them it stays where it is, and Readability keeps or drops it as it would without this step. -> the
+// number of boxes it moved or made a <div> (0, changing nothing, when given the page's own document or no document).
 //
 // A summary box is a <div>, <section>, <aside> (made a <div>, as Readability drops every <aside>), <ul>, <ol> or <dl>:
 // - inside an <article> or <main> (or role="article" or "main"): the box's article;
@@ -123,11 +125,15 @@ function cleanHtml(root) {
 //   - it holds a form control, an iframe, a video, audio, an embed or an object;
 //   - it is inside a named box turned down by these rules: a list in a newsletter box is not a bare list named by
 //     the box's heading.
-// The element that holds the article's paragraphs is found as Readability scores: each <p> of 25 characters or more in
-// the box's article, outside summary boxes and furniture, scores 1, plus 1 per comma-separated part, plus 1 per 100
-// characters (3 at most), and adds that to its parent, half of it to its grandparent and a sixth, a ninth and a twelfth
-// to the three elements above (none above the article); the best-scoring element wins. A box already inside that
-// element, or around it, stays where it is (an <aside> one still becomes a <div>).
+// The body, the element that holds the article's paragraphs, is found as Readability scores: each <p> of 25 characters
+// or more in the box's article, outside furniture (a summary box's own paragraphs count, as they do for Readability),
+// scores 1, plus 1 per comma-separated part, plus 1 per 100 characters (3 at most), and adds that to its parent, half of
+// it to its grandparent and a sixth, a ninth and a twelfth to the three elements above (none above the article); the
+// best-scoring element wins. A box that holds the body is the article's text, not a box: it stays where it is (an
+// <aside> one becomes a <div>), and its paragraphs are article text. The article text a box does not move past is these
+// paragraphs, outside the boxes: headings, shorter paragraphs and furniture between a box and the body do not keep it
+// apart. A box in the body, or with article text between it and the body, stays where it is (an <aside> one still
+// becomes a <div>, in its place).
 
 function prepareForReadability(doc) {
   if (!doc || !doc.body || typeof doc.querySelectorAll !== 'function') return 0;
@@ -257,15 +263,18 @@ function prepareForReadability(doc) {
   }
   if (!boxes.length) return 0;
 
-  var bodies = [];
-  var bodyOf = function (root) {
-    for (var b = 0; b < bodies.length; b++) if (bodies[b].root === root) return bodies[b].body;
+  // per article: its body and the paragraphs that scored, in page order (an <aside> box's own are not furniture)
+  var texts = [];
+  var textIn = function (root) {
+    for (var b = 0; b < texts.length; b++) if (texts[b].root === root) return texts[b];
     var scores = new Map();
     var best = null;
+    var paragraphs = [];
     var ps = root.querySelectorAll('p');
     for (var p = 0; p < ps.length; p++) {
       var t = textOf(ps[p]);
-      if (t.length < 25 || inBox(ps[p]) || inFurniture(ps[p], root, false)) continue;
+      if (t.length < 25 || (!inBox(ps[p]) && inFurniture(ps[p], root, false))) continue;
+      paragraphs.push(ps[p]);
       var score = 1 + t.split(COMMAS).length + Math.min(Math.floor(t.length / 100), 3);
       var n = ps[p].parentNode;
       for (var level = 0; isElement(n) && level < 5; level++) {
@@ -275,16 +284,8 @@ function prepareForReadability(doc) {
       }
     }
     scores.forEach(function (s, el) { if (!best || s > scores.get(best)) best = el; });
-    bodies.push({ root: root, body: best });
-    return best;
-  };
-  // whether b comes after a in the document, neither holding the other (compareDocumentPosition, without relying on
-  // every DOM getting it right across branches)
-  var follows = function (a, b) {
-    var child = a;
-    while (child.parentNode && !child.parentNode.contains(b)) child = child.parentNode;
-    for (var n = child.nextSibling; n; n = n.nextSibling) if (n === b || (isElement(n) && n.contains(b))) return true;
-    return false;
+    texts.push({ root: root, body: best, paragraphs: paragraphs });
+    return texts[texts.length - 1];
   };
   var asDiv = function (el) {
     var div = el.ownerDocument.createElement('div');
@@ -297,7 +298,32 @@ function prepareForReadability(doc) {
     return div;
   };
 
+  // A box that holds its article's body is that article's text, not a box: it stays where it is (an <aside> one
+  // becomes a <div>), and its paragraphs are article text. Every article is scored first, with every box.
   var changed = 0;
+  for (var s = 0; s < boxes.length; s++) textIn(boxes[s].root);
+  boxes = boxes.filter(function (b) {
+    var body = textIn(b.root).body;
+    if (!body || !b.el.contains(body)) return !!body;
+    if (tagOf(b.el) === 'aside') { asDiv(b.el); changed++; }
+    return false;
+  });
+  // whether b comes after a in the document, neither holding the other (compareDocumentPosition, without relying on
+  // every DOM getting it right across branches)
+  var follows = function (a, b) {
+    var child = a;
+    while (child.parentNode && !child.parentNode.contains(b)) child = child.parentNode;
+    for (var n = child.nextSibling; n; n = n.nextSibling) if (n === b || (isElement(n) && n.contains(b))) return true;
+    return false;
+  };
+  // whether a paragraph of the article's text, outside the boxes, lies after a and before b
+  var textBetween = function (a, b, paragraphs) {
+    for (var i = 0; i < paragraphs.length; i++) {
+      if (!inBox(paragraphs[i]) && follows(a, paragraphs[i]) && follows(paragraphs[i], b)) return true;
+    }
+    return false;
+  };
+
   var starts = []; // per body, the last node moved to its start: the next one goes after it
   var lastAtStart = function (body) {
     for (var b = 0; b < starts.length; b++) if (starts[b].body === body) return starts[b];
@@ -306,13 +332,15 @@ function prepareForReadability(doc) {
   };
   for (var k = 0; k < boxes.length; k++) {
     var box = boxes[k];
-    var body = bodyOf(box.root);
-    if (!body || box.el.contains(body)) continue;
+    var article = textIn(box.root);
+    var body = article.body;
     var inside = body.contains(box.el);
     var after = !inside && !follows(box.el, body);
+    // in the body already, or article text between it and the body (moving it would put it out of order): it stays
+    var stays = inside || textBetween(after ? body : box.el, after ? box.el : body, article.paragraphs);
     if (tagOf(box.el) === 'aside') box.el = asDiv(box.el);
-    else if (inside) continue;
-    if (!inside) {
+    else if (stays) continue;
+    if (!stays) {
       var nodes = box.lead ? [box.lead, box.el] : [box.el];
       var start = lastAtStart(body);
       for (var m = 0; m < nodes.length; m++) {

@@ -199,7 +199,10 @@ stays pinned and unpatched; `clean-html.js` now has `prepareForReadability(clone
 clone before Readability. It moves each summary box inside the article (key points, summaries, highlights, takeaways,
 "at a glance" lists, named so by class, id, aria-label or heading, and holding a list) into the element that holds the
 article's paragraphs, at its start when the box comes before it and at its end when after, and makes an `<aside>`
-box a `<div>`. It leaves alone what is not the article: anything in or named as navigation, related links, a
+box a `<div>`. It moves a box only when no paragraph of the article lies between the box and that element, so the
+reading order stays the page's: with article text between them the box stays where it is (an `<aside>` one made a
+`<div>` in place), and Readability keeps or drops it as it would alone. A box that holds the article's paragraphs
+itself is the article's text and stays as it is. It leaves alone what is not the article: anything in or named as navigation, related links, a
 newsletter, an advertisement or other furniture, a box with such an element or name inside it (an "Advertisement"
 label), a box that is mostly links or whose items are links or teasers, a box with a form, an iframe or media, and
 anything inside a box it turned down (so the list in a newsletter box does not come in on its own, named by the box's
@@ -210,9 +213,18 @@ after the review round below). Four more fixtures (`fixtures/articles/decoys/`) 
 summaries that are navigation, related links, a newsletter, an advertisement, a weather box, other news and teasers
 for other stories: each stays out, the test shows each would be kept if it were a plain summary box, and variants of
 them with one marker left (the newsletter's form alone, an iframe in its place, the advertisement's label alone...)
-stay out too. Each rule that keeps a box out also has a small page with and without it, so no rule goes untested.
+stay out too. Each rule that keeps a box out, and each tag, role, form control and kind of media the rules name, also
+has a small page with and without it, so no rule goes untested.
 Review round (Oct 23): a list in a box turned down for its form or its links was rescued as a bare list under the
-box's heading, and an "Advertisement" label inside a box was not looked at; both are fixed.
+box's heading, and an "Advertisement" label inside a box was not looked at; both are fixed. Review round 2 (Oct 23):
+a box that came before the element holding the article's paragraphs went to that element's start even with other
+article text between them, and a box's own paragraphs were left out when finding that element, so pages Readability
+alone keeps in order came out of order (an explainer's In brief, Background, Details as Background, In brief, Details;
+a report's Summary, Methods, Results as Methods, Summary, Results). Both are fixed, and tests pin those two pages, a box
+after the text with notes between, and that headings, short paragraphs, furniture and other boxes between a box and
+the text do not hold it back. One layout stays Readability's: "Key points", then an introduction of paragraphs, then
+the body. The box stays where it is and Readability drops it, as it would without the step (moved to the body, it
+would come after the introduction).
 
 **Clean article's call order (F10).** The extension's `captureArticle` (`extension/src/inject.js`) and
 `apple/Shared/ShareExtension/GetPage.js` are to run, in the page, on one clone:
