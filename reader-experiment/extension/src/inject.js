@@ -84,15 +84,23 @@ export function captureSelection() {
 
 /**
  * Clean article (Lab, F10): Mozilla Readability on a clone of the document (Readability.js and clean-html.js injected
- * first), its article HTML cleaned by cleanHtml in an inert document. -> {url, title, contentType, articleTitle, byline,
- * site, content, words} | {…, empty: true, words: 0} (nothing to extract) | {…, error}
+ * first), its article HTML cleaned by cleanHtml in an inert document. Before Readability parses the clone,
+ * clean-html.js's prepareForReadability moves the page's summary boxes ("Key points", a heading and a list beside the
+ * article's text) into the text, where Readability keeps them (F10.1; share/README.md, "Clean article's call order").
+ * -> {url, title, contentType, articleTitle, byline, site, content, words} | {…, empty: true, words: 0} (nothing to
+ * extract) | {…, error}
  */
 export function captureArticle() {
   const out = { url: String(location.href), title: String(document.title || ''), contentType: String(document.contentType || '') };
   if (out.contentType === 'application/pdf') return out;
-  if (typeof Readability !== 'function' || typeof cleanHtml !== 'function') { out.error = 'Readability is not loaded'; return out; }
+  if (typeof Readability !== 'function' || typeof cleanHtml !== 'function' || typeof prepareForReadability !== 'function') { // eslint-disable-line no-undef
+    out.error = 'Readability is not loaded';
+    return out;
+  }
   try {
-    const article = new Readability(document.cloneNode(true)).parse(); // eslint-disable-line no-undef
+    const clone = document.cloneNode(true);
+    prepareForReadability(clone); // eslint-disable-line no-undef
+    const article = new Readability(clone).parse(); // eslint-disable-line no-undef
     if (!article || !article.content) { out.empty = true; out.words = 0; return out; }
     const doc = document.implementation.createHTMLDocument('');
     doc.body.innerHTML = article.content;

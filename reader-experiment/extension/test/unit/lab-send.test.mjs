@@ -230,6 +230,7 @@ test('F10: Clean article (x-cap "clean"); under 150 words the popup asks, Send a
     const r = await s.msg({ type: 'sendTab', tabId: tab, mode: 'clean' });
     assert.equal(r.row.status, 'sent');
     assert.deepEqual(s.fb.tabFiles(tab), ['Readability.js', 'clean-html.js']);
+    assert.deepEqual(s.fb.tabParsed(tab), [1], 'Readability parsed a clone prepareForReadability had run on once (F10.1)');
     const [item] = await s.receive();
     assert.deepEqual([item.header.kind, item.header.title, item.extras['x-cap']], ['page', 'Long', 'clean']);
     const html = new TextDecoder().decode(item.content);

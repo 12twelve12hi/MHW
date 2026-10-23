@@ -13,7 +13,8 @@
 //          Send, nothing before Send (F04.5); a PDF that needs its site's permission: the popup asks (Allow, Send the
 //          link)
 //   F07    offline: "Waiting for connection" and the queue with Cancel; back online it goes (F07.1, F07.2)
-//   F10    Send as (the modes, Selection by itself), Clean article with Readability, the thin-page question (F10.2),
+//   F10    Send as (the modes, Selection by itself), Clean article with Readability (a live page's "Key points" box kept,
+//          F10.1: prepareForReadability runs first), the thin-page question (F10.2),
 //          the mode kept for the site across a restart (F10.3), Review renders a 1 MB page within 1 s and sends the
 //          edited title (F10.4), and says what the popup says (offline: "Waiting for connection"); F10's Use switch
 //          off: no Send as, and a selection still goes (Send as excerpt, LAB-PROTOCOL 2.9.6)
@@ -46,6 +47,8 @@ const { LAB_TEXT } = L;
 const OUT = path.join(path.dirname(new URL(import.meta.url).pathname), '..', '..', 'test-results', 'lab-w1');
 const MIN = 60000;
 const HUGE_PDF = makePdf({ pages: 2, fillerBytes: 14_000_000 });
+/** F10.1's news pages (the share lane's fixtures): each page's HTML and the body Clean article must keep (<name>.txt). */
+const NEWS = new URL('../../../share/js/test/fixtures/articles/news/', import.meta.url);
 
 let relay, site, ctx, sw, extId, profile;
 
@@ -173,6 +176,8 @@ ${Array.from({ length: 8 }, (_, i) => `<p>Paragraph ${i}: ${words(60)}.</p>`).jo
   site.routes.set('/brief.html', { type: 'text/html; charset=utf-8', body: html(`<article><h1>Brief</h1><p>${words(40)}.</p></article>`, 'Brief') });
   site.routes.set('/mega.html', { type: 'text/html; charset=utf-8', body: html(`<article><h1>Mega</h1>${Array.from({ length: 2000 }, (_, i) => `<p>Line ${i}: ${words(70, 'word')}</p>`).join('')}</article>`, 'Mega page') });
   site.routes.set('/files/huge.pdf', { type: 'application/pdf', body: Buffer.from(HUGE_PDF) });
+  // F10.1: the share lane's live page with a "Key points" box (share/js/test/fixtures/articles/news/).
+  site.routes.set('/storm-warning-live.html', { type: 'text/html; charset=utf-8', body: fs.readFileSync(new URL('storm-warning-live.html', NEWS)) });
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'dls-w1-'));
   await launch();
   await labDefaultWritten(sw);
@@ -441,6 +446,40 @@ test('F10, F11: Send as switches to Selection by itself; Send selection is one e
   await popup.close();
   await brief.page.close();
   await again.page.close();
+  await unpair();
+});
+
+test('F10.1: Clean article keeps a live page’s “Key points” box, first, as on the page (prepareForReadability before Readability)', { timeout: 90000 }, async () => {
+  const day = await newPairing();
+  const { page, id } = await openTab(`${site.url}/storm-warning-live.html`);
+  const popup = await openPopup(id);
+  await popup.click('.send-as-btn');
+  await popup.getByRole('radio', { name: LAB_TEXT.sendAs.menu.clean }).check();
+  assert.equal(await popup.textContent('.send-as-btn'), 'Send as: Clean article ▾');
+  await popup.click('#send-page');
+  await popup.waitForFunction(() => /^Sent/.test(document.querySelector('#status').textContent), null, { timeout: 30000 });
+  const [item] = await day.receive(1);
+  assert.deepEqual([item.header.kind, item.extras['x-cap']], ['page', 'clean']);
+  const html = new TextDecoder().decode(item.content);
+  assert.match(html, /<meta name="dl:capture" content="clean">/);
+  const flat = (s) => s.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  const text = flat(html.slice(html.indexOf('<body>')));
+  const at = (s) => text.indexOf(flat(s));
+  // The whole body, the box included, in the page's order: the box's heading, its list, then the newest entry.
+  const body = fs.readFileSync(new URL('storm-warning-live.txt', NEWS), 'utf8').split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  assert.deepEqual(body.filter((p) => at(p) < 0), [], 'F10.1: every paragraph of the body is kept');
+  assert.ok(at('Key points') >= 0, 'the Key points box is kept');
+  assert.ok(at('Key points') < at('An amber warning for wind covers the whole coast'), 'its heading, then its list');
+  assert.ok(at('Gusts of up to 120 kilometres') < at('14:05 Schools to close early'), 'the list, then the newest entry');
+  for (const gone of ['All live coverage from our newsroom', 'Check before you travel', 'Coastline Today is an independent regional news service']) {
+    assert.ok(at(gone) < 0, `F10.1: “${gone}” (navigation, sidebar, footer) is dropped`);
+  }
+  // Readability alone (the build's copy, in the page) drops the box: this page tests the step before it.
+  await page.addScriptTag({ path: path.join(b.dir, 'Readability.js') });
+  const alone = await page.evaluate(() => new Readability(document.cloneNode(true)).parse().textContent); // eslint-disable-line no-undef
+  assert.ok(!flat(alone).includes('Key points') && flat(alone).includes('14:05 Schools to close early'), 'Readability alone drops the Key points');
+  await popup.close();
+  await page.close();
   await unpair();
 });
 

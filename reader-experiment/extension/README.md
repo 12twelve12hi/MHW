@@ -210,7 +210,9 @@ What Lab adds to sending (LAB-PLAN 3.3). With Lab off none of it shows or runs, 
   Selection. It switches to Selection by itself when text is selected, a PDF tab sends the file, and otherwise it starts
   with the mode last used on that site (`lab/sendAs`, the 500 most recent sites). **Clean article** runs Mozilla
   Readability 0.6.0 (copied from `share/js/capture/` too) on a copy of the page and sends the article as a page marked
-  `x-cap: "clean"`; under 150 words it asks *This page looks thin (n words). Send the full page instead?*
+  `x-cap: "clean"`; on that copy, `clean-html.js`'s `prepareForReadability` first moves the page's summary boxes ("Key
+  points" and the like, a heading and a list beside the article's text) into the text, where Readability keeps them
+  (F10.1; `inject.js` `captureArticle`, in the order `share/README.md` gives); under 150 words it asks *This page looks thin (n words). Send the full page instead?*
   (**Send full page**, **Send anyway**); a menu, a shortcut or the card can't ask, so they send the full page then.
   **Review before sending** (What's in Lab › Send as) opens `review.html`: the page with JavaScript off and in greys,
   its word count and size, and its title to edit, with **Send** and **Cancel**; after **Send** it says what the popup
@@ -354,7 +356,7 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   and off, Send as's default and the mode kept per site, the clean article's page, the badge mark, who gets no
   countdown, the queue, the omnibox's typed address `typedUrl`, and `textLinkItem` for text that may hold a link: the
   clipboard's and the omnibox's); `core.js` sends with them (`labSendTab`: the capture through
-  `clean-html.js`, Clean article through `Readability.js`, both injected with `scripting.executeScript({files})` before
+  `clean-html.js`, Clean article through `prepareForReadability` and `Readability.js`, both files injected with `scripting.executeScript({files})` before
   the capture; `labSendSelection`; `normaliseShare` on every link and page address; `Sender.send(…, {defer})` offline,
   the `dls-offline` alarm and `flushNetwork`; the countdown, `scheduleSend` and `cancelScheduled`; Review's
   `lab/review`; the badge from the most recent row; menus, commands and the omnibox), and `lab.js` keeps the Use
@@ -371,7 +373,8 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
   capture code: `executeScript({files})`, a page's `selection` and `article`) and `test/e2e/lab-w1.e2e.mjs`
   (Chromium, the real capture code and Readability: the one-time note; F03.1 and F03.2 on a page shown only with a
   login cookie; the timeline with a Lab Daylight and a v1.1 one; F02e.1 with a 14 MB PDF; Send as, Selection by
-  itself, Send selection, Clean article, the thin question and the mode kept across a browser restart; Review of a 1 MB
+  itself, Send selection, Clean article, the share lane's `storm-warning-live` page with its Key points box kept, first,
+  where Readability alone drops it, the thin question and the mode kept across a browser restart; Review of a 1 MB
   page within 1 s, and its result line offline; Send as excerpt with Send as's Use switch off; the card, Options and
   Comfort, and the card's popup asking for a PDF's site; offline with `context.setOffline`; Paste and send; the menu entries,
   commands and the omnibox; the Use switches and the features' settings; Setup check with the test article; axe,

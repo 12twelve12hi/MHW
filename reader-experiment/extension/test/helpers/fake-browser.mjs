@@ -4,9 +4,10 @@
 //
 // Lab's capture code (executeScript({files: ['clean-html.js', 'Readability.js']})) has stand-ins here, since the stubbed
 // page has no DOM: cleanHtml drops <script> elements (JSON-LD aside) and on* attributes from the page's HTML and marks
-// the result (data-fake-clean), and Readability answers the page's `article` ({title, byline, siteName, content,
-// textContent}, or null). The real code runs in Chromium (test/e2e). A page's `selection` ({text, html}) is what
-// window.getSelection() holds, and `text` its visible text.
+// the result (data-fake-clean), prepareForReadability marks the clone it is given (prepared: the number of calls), and
+// Readability answers the page's `article` ({title, byline, siteName, content, textContent}, or null) and keeps, in
+// the tab's `parsed`, how many times the clone it parsed had been prepared. The real code runs in Chromium
+// (test/e2e). A page's `selection` ({text, html}) is what window.getSelection() holds, and `text` its visible text.
 
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 
@@ -62,7 +63,7 @@ export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenu
     const page = t.page;
     if (page.scriptable === false) throw new Error('Cannot access contents of the page. Extension manifest must request permission to access the respective host.');
     const isPdf = page.contentType === 'application/pdf';
-    const keys = ['document', 'location', '__daylightPdf', 'FileReader', 'fetch', 'window', 'cleanHtml', 'Readability'];
+    const keys = ['document', 'location', '__daylightPdf', 'FileReader', 'fetch', 'window', 'cleanHtml', 'prepareForReadability', 'Readability'];
     const saved = Object.fromEntries(keys.map((k) => [k, globalThis[k]]));
     const outer = isPdf ? '<html><head></head><body><embed type="application/pdf" src="about:blank"></body></html>' : page.html;
     globalThis.location = { href: page.url };
@@ -100,8 +101,15 @@ export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenu
     globalThis.__daylightPdf = t.world.pdf;
     globalThis.FileReader = FakeFileReader;
     globalThis.fetch = page.fetch ?? realFetch;
-    if (t.world.cleanHtml) globalThis.cleanHtml = fakeCleanHtml;
-    if (t.world.readability) globalThis.Readability = function Readability() { this.parse = () => clone(page.article ?? null); };
+    if (t.world.cleanHtml) {
+      globalThis.cleanHtml = fakeCleanHtml;
+      globalThis.prepareForReadability = (doc) => { doc.prepared = (doc.prepared ?? 0) + 1; return 0; };
+    }
+    if (t.world.readability) {
+      globalThis.Readability = function Readability(doc) {
+        this.parse = () => { t.parsed.push(doc?.prepared ?? 0); return clone(page.article ?? null); };
+      };
+    }
     try {
       const result = await func(...clone(args));
       t.world.pdf = globalThis.__daylightPdf;
@@ -224,12 +232,14 @@ export function fakeBrowser({ os = 'mac', version = '1.2.3', native, contextMenu
     /** page: {url, title, html?, contentType?, scriptable?, links?, fetch?, docTitle?} -> tab id */
     addTab(page, { active = true, title } = {}) {
       const id = nextTab++;
-      tabs.set(id, { tab: { id, url: page.url, title: title ?? page.title ?? page.url, active }, page, world: {}, calls: [], files: [] });
+      tabs.set(id, { tab: { id, url: page.url, title: title ?? page.title ?? page.url, active }, page, world: {}, calls: [], files: [], parsed: [] });
       if (active) activeTab = id;
       return id;
     },
     tabCalls: (id) => tabs.get(id).calls,
     tabFiles: (id) => tabs.get(id).files,
+    /** For each Readability parse in the tab, how many times prepareForReadability had run on the clone it parsed. */
+    tabParsed: (id) => tabs.get(id).parsed,
     /** Changes a tab's page (its selection, its article, …). */
     setPage: (id, patch) => Object.assign(tabs.get(id).page, patch),
     grant: (origin) => granted.add(origin),
