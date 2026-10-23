@@ -109,19 +109,28 @@ export function withoutLabParam(href) {
 
 /**
  * Smart intake's reading (F16) of a link from any entry point while Lab is on: the Link field, the page's address
- * (?url=, ?text=, the Shortcut's and the bookmarklet's fragment) and the share target. What is in `url` was typed or
- * shared, so it goes to normaliseShare as text, with `text` (a share's text) after it: normaliseShare finds the URL by
- * its own text rules (F16 step 1: trailing . , ; : ! ? and quotes, and an unbalanced ) or ], are not part of it), never
- * v1.1's findUrl, and an address on its own follows them too ("https://example.com/a/b." is https://example.com/a/b).
- * An address on its own gets https:// first when it is "example.com/story" (typedUrl, as the plain page reads it). When
- * a share has its own text beside an address on its own, the address is the URL (as the text rules read it) and the
- * text gives the title, so a text that repeats the address doesn't put it in the title. clean: false keeps the URL as
- * found (F16's Use switch off, or the form's copy of a share). -> normaliseShare's {kind, url, title, excerpt, orig}
+ * (?url=, ?text=, the Shortcut's and the bookmarklet's fragment) and the share target. `url` is read one of two ways:
+ * - given: true, an address given as one (the bookmarklet's url=, which is the page's location.href; ?url= and the
+ *   fragment's url=…&title=…, a script's or a link's; the share target's url field, the sharing app's page address).
+ *   When it is a web address on its own (typedUrl: the web URL rule, or https:// added to "example.com/story" as the
+ *   plain page reads it), it is normaliseShare's `url` (F16 step 1: `url` when it passes the web URL rule), so it goes
+ *   exactly as given ("https://en.wikipedia.org/wiki/Washington,_D.C." keeps its full stop), as with Lab off and as
+ *   the extension's page and link sends; `text` (a share's text) then gives the title.
+ * - given: false, what was typed or appended (the Link field; the Shortcut's url=, which ends its link and holds what
+ *   the share sheet gave). It goes to normaliseShare as text, with `text` after it: normaliseShare finds the URL by its
+ *   own text rules (F16 step 1: trailing . , ; : ! ? and quotes, and an unbalanced ) or ], are not part of it), never
+ *   v1.1's findUrl, and an address on its own follows them too ("https://example.com/a/b." is https://example.com/a/b),
+ *   as ?text= and Paste and send read it. When there is a share's text beside an address on its own, the address is the
+ *   URL (as the text rules read it) and the text gives the title, so a text that repeats it doesn't make the title.
+ * A given `url` that is not an address on its own ("See (https://…).", “https://…”) is shared text too.
+ * clean: false keeps the URL as found or given (F16's Use switch off, or the form's copy of a share).
+ * -> normaliseShare's {kind, url, title, excerpt, orig}
  */
-function intake({ url = '', text = '', title = '' } = {}, clean = true) {
+function intake({ url = '', text = '', title = '', given = false } = {}, clean = true) {
   const typed = typedUrl(url);
   const shared = String(text ?? '');
   const subject = String(title ?? '');
+  if (given && typed) return normaliseShare({ url: typed, text: shared, subject, clean });
   const found = typed && shared.trim() ? findShareUrl(typed) : null;
   if (found) return normaliseShare({ url: found.url, text: shared, subject, clean });
   return normaliseShare({ text: [typed ?? String(url ?? '').trim(), shared].filter(Boolean).join(' '), subject, clean });
@@ -129,37 +138,46 @@ function intake({ url = '', text = '', title = '' } = {}, clean = true) {
 
 /**
  * A link as Lab sends it (F16, every entry point while Lab is on): `url`, `text` and `title` go through normaliseShare
- * (intake above), which unwraps redirectors and drops tracking unless F16's Use switch is off; the link as shared goes
- * as x-orig when it changed. Headline + link shares stay links, with the headline as the title. -> the url item for
- * Sender.send, or null when there is no web address (a note: the web sender sends no text, F11 is not one of its
- * features).
+ * (intake above; `given` says `url` is an address given as one, not typed: false for the Link field unless it still
+ * holds the address a share gave, labShareFields), which unwraps redirectors and drops tracking unless F16's Use switch
+ * is off; the link as shared goes as x-orig when it changed. Headline + link shares stay links, with the headline as
+ * the title. -> the url item for Sender.send, or null when there is no web address (a note: the web sender sends no
+ * text, F11 is not one of its features).
  */
-export function labLinkItem({ url = '', text = '', title = '' } = {}, settings = {}) {
-  const n = intake({ url, text, title }, labUseOn(settings, 'F16'));
+export function labLinkItem({ url = '', text = '', title = '', given = false } = {}, settings = {}) {
+  const n = intake({ url, text, title, given }, labUseOn(settings, 'F16'));
   if (n.kind !== 'link' || !n.url) return null;
   const item = { kind: 'url', url: n.url, title: n.title && n.title !== n.url ? n.title : '' };
   if (n.orig) item.extras = { 'x-orig': n.orig };
   return item;
 }
 
+/** A share's input to intake: its address and text as they came; its url= given as one unless the Shortcut appended it. */
+const shareInput = (share) => ({
+  url: share?.raw?.url ?? '', text: share?.text ?? '', title: share?.raw?.title ?? '', given: !share?.raw?.appended,
+});
+
 /**
  * A share (web-logic.js shareFromParams or shareFromEntry: the page's address, the Shortcut, the bookmarklet, the share
- * target) as Lab sends it (F16): its address and text exactly as they came, through labLinkItem. -> the url item, or
- * null when it holds no web address.
+ * target) as Lab sends it (F16): its address and text exactly as they came, through labLinkItem; the bookmarklet's,
+ * ?url='s and the share target's address as given, the Shortcut's as shared text. -> the url item, or null when it
+ * holds no web address.
  */
 export function labShareItem(share, settings = {}) {
-  return labLinkItem({ url: share?.raw?.url ?? '', text: share?.text ?? '', title: share?.raw?.title ?? '' }, settings);
+  return labLinkItem(shareInput(share), settings);
 }
 
 /**
  * The Link and Title fields for a share the page doesn't send at once (no autosend), with Lab on: the URL as smart
- * intake found it, before cleaning, and its title. Sending the form then cleans it and keeps x-orig, so it goes exactly
- * as labShareItem would send it. -> {url, title} ('' when there is no web address)
+ * intake found it, before cleaning, and its title; given: true when that URL is the share's address as given (app.js
+ * then sends the Link field as given while it still holds it). Sending the form then cleans it and keeps x-orig, so it
+ * goes exactly as labShareItem would send it. -> {url, title, given} ('' and false when there is no web address)
  */
 export function labShareFields(share) {
-  const n = intake({ url: share?.raw?.url ?? '', text: share?.text ?? '', title: share?.raw?.title ?? '' }, false);
-  if (n.kind !== 'link' || !n.url) return { url: '', title: '' };
-  return { url: n.url, title: n.title && n.title !== n.url ? n.title : '' };
+  const input = shareInput(share);
+  const n = intake(input, false);
+  if (n.kind !== 'link' || !n.url) return { url: '', title: '', given: false };
+  return { url: n.url, title: n.title && n.title !== n.url ? n.title : '', given: input.given && !!typedUrl(input.url) };
 }
 
 /**

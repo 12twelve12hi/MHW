@@ -284,13 +284,22 @@ async function sendItem(item) {
 }
 
 /**
- * A typed link (the Link field). With Lab on it goes through smart intake (F16, labLinkItem): an address on its own is
- * the link; words around it make it shared text, whose URL normaliseShare finds itself; redirectors unwrapped, tracking
- * dropped (unless F16's Use switch is off), the link as typed in x-orig.
+ * The address a share put in the Link field when it was given as one (labShareFields' given: the bookmarklet's, ?url='s,
+ * the share target's url), or ''. While the field still holds it, Send sends it as given, as the share would have;
+ * typed over, or once the form is cleared after a send, the field is typed text again.
+ */
+let givenUrl = '';
+
+/**
+ * A typed link (the Link field). With Lab on it goes through smart intake (F16, labLinkItem) as text, by
+ * normaliseShare's text rules (an address on its own loses a full stop or stray bracket after it; words around it make
+ * it shared text, whose URL normaliseShare finds itself), unless it is still the address a share gave (givenUrl);
+ * redirectors unwrapped, tracking dropped (unless F16's Use switch is off), the link as typed in x-orig.
  */
 async function sendLink(url, title) {
   if (labOn()) {
-    const item = labLinkItem({ url, title }, labPage.model.settings);
+    const given = !!givenUrl && String(url ?? '').trim() === givenUrl;
+    const item = labLinkItem({ url, title, given }, labPage.model.settings);
     if (!item) throw new ds.ShareError('url', NOT_A_WEB_ADDRESS);
     return sendItem(item);
   }
@@ -358,7 +367,7 @@ async function onSendUrl(ev) {
   const sent = await withBusy('Sending…', async () => [await sendLink($('url').value, $('title').value)]);
   // A link on its way is cleared from the form; so is one Lab keeps to send once back online (F07).
   const going = (r) => r.status !== 'failed' && r.status !== 'expired';
-  if (sent.length && (going(sent[0]) || (labOn() && isWaitingRow(sent[0]) && !sent[0].attempts))) { $('url').value = ''; $('title').value = ''; }
+  if (sent.length && (going(sent[0]) || (labOn() && isWaitingRow(sent[0]) && !sent[0].attempts))) { $('url').value = ''; $('title').value = ''; givenUrl = ''; }
 }
 
 async function sendFiles(list) {
@@ -662,6 +671,7 @@ async function handleAddress() {
   if (params.pair) await pairFromParam(params.pair);
   if (!share) return;
   const fields = shareFields(share);
+  givenUrl = fields.given ? fields.url : '';
   if (!pairing) {
     if (params.autosend || params.share) pendingShare = share;
     if (fields.url) $('url').value = fields.url;
@@ -673,7 +683,7 @@ async function handleAddress() {
   $('title').value = fields.title || '';
   if (params.autosend || params.share) {
     const sent = await sendShare(share);
-    if (sent.length && sent.every((r) => r.status === 'sent' || r.status === 'delivered')) { $('url').value = ''; $('title').value = ''; }
+    if (sent.length && sent.every((r) => r.status === 'sent' || r.status === 'delivered')) { $('url').value = ''; $('title').value = ''; givenUrl = ''; }
   }
 }
 

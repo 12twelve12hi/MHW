@@ -139,13 +139,18 @@ the page says what the popup says):
   bookmarklet or Paste and send) goes through `normaliseShare`: redirect wrappers (Google AMP, Facebook, LinkedIn, …)
   unwrapped, tracking parameters (`utm_*`, `fbclid`, …) removed, a headline + link share kept as a link with the
   headline as its title; the link as shared goes along as `x-orig`. With its **Use** switch off, links go exactly as
-  shared. What is typed or shared reaches `normaliseShare` whole, as text: a share's text (`?text=`, the share sheet's),
-  what the Shortcut shares, `?url=`, and the Link field, so smart intake finds the link by its own rules (parentheses
-  kept, quotes, brackets and trailing punctuation left out) and never the plain page's reading first. An address on
-  its own goes the same way: `example.com/story` gets `https://` first (`typedUrl`), and `https://example.com/a/b.`
-  sends `https://example.com/a/b`; beside a share's own text, the address is the link and the text its title. A share
-  the page doesn't send at once fills **Link** with the address as found and **Title** with its title, so **Send**
-  sends what the share would have. A share with no web address in it says what the plain page says (*That isn’t a web
+  shared. What is typed or shared as text reaches `normaliseShare` whole, as text: a share's text (`?text=`, `#text=`,
+  the share sheet's), the Link field, and what the Shortcut appends after its link's last `&url=`, so smart intake
+  finds the link by its own rules (parentheses kept, quotes, brackets and trailing punctuation left out) and never the
+  plain page's reading first. An address on its own there goes the same way: `example.com/story` gets `https://` first
+  (`typedUrl`), and `https://example.com/a/b.` sends `https://example.com/a/b`; beside a share's own text, the address
+  is the link and the text its title. An address given as one is `normaliseShare`'s `url` and goes as given (F16 step
+  1), as with Lab off: the bookmarklet's `url=…&title=…` (the page's own address, so
+  `https://en.wikipedia.org/wiki/Washington,_D.C.` keeps its full stop), `?url=` and the fragment's `url=` followed by
+  more (a script's or a link's), and the share target's `url` (the sharing app's page address); one that is not a web
+  address on its own is shared text. A share the page doesn't send at once fills **Link** with the address as found or
+  given and **Title** with its title, and **Send** sends what the share would have (a given address as given, while
+  **Link** still holds it). A share with no web address in it says what the plain page says (*That isn’t a web
   address. …*) and fills **Link** with what it read, as v1.1 does. With Lab off the page reads shares as v1.1 does.
 - **Send copied link** (F33): **Paste and send** under **Send link** reads the clipboard only when clicked (the browser
   asks the first time), then asks *Send {host}?* (**Send**, **Cancel**), or says *No link on the clipboard.* Gone with
@@ -252,17 +257,19 @@ off, light and dark, Comfort off and on; nothing clipped at 360 px; notes at 200
 baselines `../extension/test/e2e/lab-off-baseline/web-*.yml` (re-recorded only with a non-Lab change). Wave 1's are
 `../extension/test/unit/web-lab-w1.test.mjs` (node: smart intake against the `normalise.json` vectors, every
 text-only case, and each address in it on its own, through each of the page's entry points (`?text=`, `#text=`,
-`?url=`, the share target, the Link field, the Shortcut) as `app.js` reads them, the activity log's HTTP status, Paste and
-send's reading, the bookmarklet run and read back, the Use switches, the timeline's data, F07's passes against the mock
+`?url=`, `#url=…&title=`, the share target's text and url, the Link field, the Shortcut) as `app.js` reads them (text
+by the text rules, an address given as one as given), a share filled into the form and sent from it, the activity
+log's HTTP status, Paste and send's reading, the bookmarklet run and read back (an address ending in `.` or `!` sent
+exactly, Lab on as off), the Use switches, the timeline's data, F07's passes against the mock
 relay with ntfy.sh's limits (70 links in three passes with no 429, 18 MB of attachments a pass), Background Sync's run
 and the bundled `sw-lab.js`, Setup check, the activity log and redacted diagnostics) and
 `../extension/test/e2e/web-lab-w1.e2e.mjs` (Chromium, with Lab Daylights from `daylight-lab.js`: the timeline's rows
 and announcements, offline and back online, Background Sync with the page closed (dispatched through DevTools), clean
 links, every text-only `normalise.json` case shared with `?text=`, words around a link in the Link field, a share
 filled into the form, the share sheet's text, an address with a full stop or stray bracket after it in the Link field
-and from the Shortcut, a Shortcut with no web address (v1.1's sentence and the Link field, Lab on as off), a 429 in the
-activity log, Paste and send, the bookmarklet run on
-another page, Setup check's test article, and Lab off). The plain page's
+and from the Shortcut, one with a full stop given with `?url=` (sent as given, also from the form), a Shortcut with no
+web address (v1.1's sentence and the Link field, Lab on as off), a 429 in the activity log, Paste and send, the
+bookmarklet run on another page (one whose address ends in a full stop too), Setup check's test article, and Lab off). The plain page's
 flows (`web.e2e.mjs`) run with Lab off, and again with Lab on (`web-lab-on.e2e.mjs`).
 
 **Lab release gate** (LAB-PLAN 6.2): a web Lab build waits for the iPhone and Mac builds of its wave before it reaches

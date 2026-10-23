@@ -6,8 +6,11 @@
 //   F16  every link through smart intake: the normalise.json vectors as the page sends them, x-orig, the Use switch;
 //        every text-only case, and each address in it on its own, through each of the page's entry points (?text=,
 //        #text=, ?url=, the share target, the Link field, the Shortcut), read as app.js reads them (web-logic.js
-//        shareFromParams, shareFromEntry): as text, by F16's text rules
-//   F33  Paste and send's reading of the clipboard; F09 the bookmarklet, read back by the page
+//        shareFromParams, shareFromEntry): what is typed or shared as text, by F16's text rules (?text=, #text=, the
+//        share sheet's text, the Link field, the Shortcut); an address given as one as given (F16 step 1: ?url=, the
+//        share target's url, the bookmarklet)
+//   F33  Paste and send's reading of the clipboard; F09 the bookmarklet, read back by the page, sends the page's
+//        address exactly (a full stop at its end too)
 //   F01  the timeline's data; What's in Lab's rows with their states and Use switches (6.5 Q5)
 //   F07  rows waiting for a connection leave only in capped passes while Lab is on (WebSender, flushPass, flushDue):
 //        70 links in three passes with no 429; attachments capped at 18 MB a pass; Background Sync's run (syncFlush)
@@ -147,13 +150,24 @@ function checkItem(item, want, what) {
  */
 function addressesIn(c) {
   const words = c.input.text.split(/\s+/).filter((w) => /https?:\/\//i.test(w) && w !== c.input.text.trim());
-  return [...new Set(words)].map((text) => {
-    const n = L.normaliseShare({ text, clean: c.input.clean !== false });
-    return { text, want: n.kind === 'link' && n.url ? { kind: 'url', url: n.url, title: n.title && n.title !== n.url ? n.title : '', extras: n.orig ? { 'x-orig': n.orig } : {} } : null };
-  });
+  return [...new Set(words)].map((text) => ({ text, want: itemOf(L.normaliseShare({ text, clean: c.input.clean !== false })) }));
 }
 
-test('F16: every text-only case of normalise.json, and each address in it on its own, through each of the page’s entry points, reaches normaliseShare as text (B1)', () => {
+/** normaliseShare's reading as the web sender's item, or null for no link. */
+const itemOf = (n) => (n.kind === 'link' && n.url
+  ? { kind: 'url', url: n.url, title: n.title && n.title !== n.url ? n.title : '', extras: n.orig ? { 'x-orig': n.orig } : {} }
+  : null);
+
+/**
+ * What an address given as one (?url=, the share target's url, the bookmarklet) sends: when the text is a web address on
+ * its own (typedUrl), normaliseShare's `url` as given (F16 step 1, no text rules); anything else is shared text, `want`.
+ */
+function givenWant(text, subject, clean, want) {
+  const u = WG.typedUrl(text);
+  return u ? itemOf(L.normaliseShare({ url: u, subject, clean })) : want;
+}
+
+test('F16: every text-only case of normalise.json, and each address in it on its own, through each of the page’s entry points: typed or shared text by the text rules, an address given as one as given (B1)', () => {
   assert.equal(TEXT_CASES.length, 39);
   const pairing = 'daylightshare://pair?c=ABCDEFGHJKMNPQRSTVWXYZ234567&r=https%3A%2F%2Fntfy.sh';
   let alone = 0;
@@ -165,19 +179,23 @@ test('F16: every text-only case of normalise.json, and each address in it on its
       const name = typed.text === i.text ? c.name : `${c.name}: ${JSON.stringify(typed.text)} on its own`;
       if (typed.text !== i.text) alone++;
       const subject = typed.subject ? `&title=${enc(typed.subject)}` : '';
+      const given = givenWant(typed.text, typed.subject, i.clean !== false, want);
       // The page's address: ?text= (an installed app's share target with GET, a link) and #text=, as app.js reads it;
-      // and ?url=, a link's or an automation's (SEND-API.md).
-      for (const [via, search, hash] of [
-        ['?text=', `?autosend=1&text=${enc(typed.text)}${subject}`, ''],
-        ['#text=', '', `#autosend=1&text=${enc(typed.text)}${subject}`],
-        ['?url=', `?autosend=1&url=${enc(typed.text)}${subject}`, ''],
+      // and ?url=, a link's or an automation's (SEND-API.md), and the fragment's url=…&title=…: an address given as one.
+      for (const [via, search, hash, wanted] of [
+        ['?text=', `?autosend=1&text=${enc(typed.text)}${subject}`, '', want],
+        ['#text=', '', `#autosend=1&text=${enc(typed.text)}${subject}`, want],
+        ['?url=', `?autosend=1&url=${enc(typed.text)}${subject}`, '', given],
+        ['#url=…&title=', '', `#url=${enc(typed.text)}&title=${enc(typed.subject)}&autosend=1`, given],
       ]) {
         const params = WG.readParams(search, hash);
         assert.equal(params.autosend, true);
-        checkItem(WL.labShareItem(WG.shareFromParams(params), settings), want, `${name} (${via})`);
+        checkItem(WL.labShareItem(WG.shareFromParams(params), settings), wanted, `${name} (${via})`);
       }
-      // Android's share sheet: sw.js keeps the POSTed {title, text, url}; Chrome on Android shares a link as text.
+      // Android's share sheet: sw.js keeps the POSTed {title, text, url}; Chrome on Android shares a link as text, and a
+      // page shared with navigator.share() gives its address as url.
       checkItem(WL.labShareItem(WG.shareFromEntry({ title: typed.subject, text: typed.text, url: '' }), settings), want, `${name} (share target)`);
+      checkItem(WL.labShareItem(WG.shareFromEntry({ title: typed.subject, text: '', url: typed.text }), settings), given, `${name} (share target's url)`);
       // The Link field, with the text typed or pasted into it (and a subject in Title).
       checkItem(WL.labLinkItem({ url: typed.text, title: typed.subject }, settings), want, `${name} (Link field)`);
       // The Shortcut: its link ends in "&url=" and the shared text is appended, URL-encoded (SHORTCUT.md). It carries
@@ -189,7 +207,10 @@ test('F16: every text-only case of normalise.json, and each address in it on its
   }
   assert.ok(alone >= 25, `${alone} addresses on their own`);
   // An address on its own with sentence punctuation or a stray bracket after it, typed in the Link field or shared by
-  // the Shortcut, as ?text= and Paste and send read it; Lab off is v1.1's reading, unchanged (the address as given).
+  // the Shortcut, as ?text= and Paste and send read it; given as one (?url=, the fragment's url=…&title=, the share
+  // target's url), it goes as given, as Lab off sends it (v1.1's reading, unchanged).
+  const prefix = WG.shortcutPrefix('https://h.example/send/', pairing);
+  const viaShortcut = (shared) => WG.shareFromParams(WG.readParams('', prefix.slice(prefix.indexOf('#')) + enc(shared)));
   for (const [typed, url] of [
     ['https://example.com/a/b.', 'https://example.com/a/b'],
     ['https://en.wikipedia.org/wiki/Foo_(bar)).', 'https://en.wikipedia.org/wiki/Foo_(bar)'],
@@ -197,16 +218,29 @@ test('F16: every text-only case of normalise.json, and each address in it on its
     ['example.com/a/b.', 'https://example.com/a/b'],
   ]) {
     assert.equal(WL.labLinkItem({ url: typed }).url, url, `${typed} (Link field)`);
-    const prefix = WG.shortcutPrefix('https://h.example/send/', pairing);
-    const shortcut = WG.shareFromParams(WG.readParams('', prefix.slice(prefix.indexOf('#')) + enc(typed)));
+    const shortcut = viaShortcut(typed);
+    assert.equal(shortcut.raw.appended, true, `${typed}: the Shortcut appended it`);
     assert.equal(WL.labShareItem(shortcut).url, url, `${typed} (Shortcut)`);
     assert.equal(WL.labShareFields(shortcut).url, url, `${typed} (the Link field filled from the Shortcut)`);
-    assert.equal(WG.normalizeUserUrl(typed), ds.webUrl(typed) ?? `https://${typed}`, `${typed}: Lab off`);
+    assert.equal(WL.labShareFields(shortcut).given, false, `${typed}: the Shortcut's is not an address given as one`);
+    const asGiven = WG.typedUrl(typed);
+    assert.equal(asGiven, ds.webUrl(typed) ?? `https://${typed}`);
+    for (const [via, share] of [
+      ['?url=', WG.shareFromParams(WG.readParams(`?autosend=1&url=${enc(typed)}`, ''))],
+      ['#url=…&title=', WG.shareFromParams(WG.readParams('', `#url=${enc(typed)}&title=&autosend=1`))],
+      ['share target url', WG.shareFromEntry({ url: typed, text: '', title: '' })],
+    ]) {
+      assert.deepEqual(WL.labShareItem(share), { kind: 'url', url: asGiven, title: '' }, `${typed} (${via})`);
+      assert.deepEqual(WL.labShareFields(share), { url: asGiven, title: '', given: true }, `${typed} (${via}): the Link field`);
+    }
+    assert.equal(WG.normalizeUserUrl(typed), asGiven, `${typed}: Lab off`);
   }
-  // A share with an address and its own text beside it: the address by the text rules, the title from the text, also
-  // when the text repeats the address.
-  assert.deepEqual(WL.labShareItem(WG.shareFromEntry({ url: 'https://example.com/a/b.', text: 'Headline https://example.com/a/b.', title: '' })),
+  // A share with an address and its own text beside it: the Shortcut's (appended) by the text rules, the share
+  // target's url as given; the title from the text, also when the text repeats the address.
+  assert.deepEqual(WL.labShareItem(WG.shareFromParams(WG.readParams('', `#autosend=1&text=${enc('Headline https://example.com/a/b.')}&url=${enc('https://example.com/a/b.')}`))),
     { kind: 'url', url: 'https://example.com/a/b', title: 'Headline' });
+  assert.deepEqual(WL.labShareItem(WG.shareFromEntry({ url: 'https://example.com/a/b.', text: 'Headline https://example.com/a/b.', title: '' })),
+    { kind: 'url', url: 'https://example.com/a/b.', title: 'Headline' });
   assert.deepEqual(WL.labShareItem(WG.shareFromEntry({ url: 'https://example.com/a?utm_source=x', text: 'Headline', title: '' })),
     { kind: 'url', url: 'https://example.com/a', title: 'Headline', extras: { 'x-orig': 'https://example.com/a?utm_source=x' } });
   // B1's four, through ?text=: the parentheses, the curly quotes, single curly quotes and », and the brackets.
@@ -222,10 +256,12 @@ test('F16: every text-only case of normalise.json, and each address in it on its
     assert.equal(share.url, ds.findUrl(text), text);
   }
   assert.equal(WG.shareFromParams(WG.readParams(`?text=${enc('See (https://en.wikipedia.org/wiki/Foo_(bar)).')}`, '')).url, 'https://en.wikipedia.org/wiki/Foo_(bar', 'v1.1 with Lab off');
-  // A link on its own with nothing to trim keeps every character: the bookmarklet's address (and title), a typed
-  // "example.com/story" (https:// added).
+  // A link on its own stays the link as given: the bookmarklet's address (and title), ?url='s "example.com/story"
+  // (https:// added, as the plain page reads it).
   assert.deepEqual(WL.labShareItem(WG.shareFromParams(WG.readParams('', `#autosend=1&url=${enc('https://example.com/a_(b)?utm_source=x')}&title=${enc('A (b)')}`))),
     { kind: 'url', url: 'https://example.com/a_(b)', title: 'A (b)', extras: { 'x-orig': 'https://example.com/a_(b)?utm_source=x' } });
+  assert.deepEqual(WL.labShareItem(WG.shareFromParams(WG.readParams('', `#autosend=1&url=${enc('https://en.wikipedia.org/wiki/U.S.')}&title=${enc('U.S.')}`))),
+    { kind: 'url', url: 'https://en.wikipedia.org/wiki/U.S.', title: 'U.S.' });
   assert.deepEqual(WL.labShareItem(WG.shareFromParams(WG.readParams('?url=example.com/story', ''))), { kind: 'url', url: 'https://example.com/story', title: '' });
   // typedUrl: an address on its own, never one found inside text.
   assert.equal(WG.typedUrl(' https://a.org/x '), 'https://a.org/x');
@@ -236,16 +272,38 @@ test('F16: every text-only case of normalise.json, and each address in it on its
 });
 
 test('F16: a share the page doesn’t send at once fills the Link field with the URL as found and its title; sending the form sends what the share would have', () => {
+  const pairing = 'daylightshare://pair?c=ABCDEFGHJKMNPQRSTVWXYZ234567&r=https%3A%2F%2Fntfy.sh';
+  const prefix = WG.shortcutPrefix('https://h.example/send/', pairing).replace('autosend=1&', '');
+  let given = 0;
   for (const c of TEXT_CASES) {
     const i = c.input;
     const settings = i.clean === false ? { labUse: { F16: false } } : {};
-    const share = WG.shareFromParams(WG.readParams(`?text=${enc(i.text)}${i.subject ? `&title=${enc(i.subject)}` : ''}`, ''));
-    const fields = WL.labShareFields(share);
-    const direct = WL.labShareItem(share, settings);
-    if (!direct) { assert.deepEqual(fields, { url: '', title: '' }, c.name); continue; }
-    assert.equal(ds.webUrl(fields.url), fields.url, c.name);
-    assert.deepEqual(WL.labLinkItem({ url: fields.url, title: fields.title }, settings), direct, c.name);
+    const subject = i.subject ? `&title=${enc(i.subject)}` : '';
+    for (const text of [i.text, ...addressesIn(c).map((a) => a.text)]) {
+      for (const [via, share] of [
+        ['?text=', WG.shareFromParams(WG.readParams(`?text=${enc(text)}${subject}`, ''))],
+        ['?url=', WG.shareFromParams(WG.readParams(`?url=${enc(text)}${subject}`, ''))],
+        ['Shortcut', WG.shareFromParams(WG.readParams('', prefix.slice(prefix.indexOf('#')) + enc(text)))],
+      ]) {
+        const what = `${c.name}: ${JSON.stringify(text)} (${via})`;
+        const fields = WL.labShareFields(share);
+        const direct = WL.labShareItem(share, settings);
+        if (!direct) { assert.deepEqual(fields, { url: '', title: '', given: false }, what); continue; }
+        assert.equal(ds.webUrl(fields.url), fields.url, what);
+        // app.js sends the Link field as given while it holds the address a share gave as one (givenUrl).
+        assert.equal(fields.given, via === '?url=' && !!WG.typedUrl(text), what);
+        if (fields.given) given++;
+        assert.deepEqual(WL.labLinkItem({ url: fields.url, title: fields.title, given: fields.given }, settings), direct, what);
+      }
+    }
   }
+  assert.ok(given >= 25, `${given} addresses given as one`);
+  // The bookmarklet's address, given as one, ending in a full stop: the Link field holds it as given, and so it goes.
+  const share = WG.shareFromParams(WG.readParams('', `#url=${enc('https://en.wikipedia.org/wiki/Washington,_D.C.')}&title=${enc('Washington, D.C.')}`));
+  assert.deepEqual(WL.labShareFields(share), { url: 'https://en.wikipedia.org/wiki/Washington,_D.C.', title: 'Washington, D.C.', given: true });
+  assert.deepEqual(WL.labLinkItem({ url: 'https://en.wikipedia.org/wiki/Washington,_D.C.', title: 'Washington, D.C.', given: true }), WL.labShareItem(share));
+  // Typed over (no longer the share's address), the Link field is typed text again.
+  assert.equal(WL.labLinkItem({ url: 'https://en.wikipedia.org/wiki/Washington,_D.C.' }).url, 'https://en.wikipedia.org/wiki/Washington,_D.C');
 });
 
 test('F33: Paste and send reads a link in copied text, cleaned, with the host its question names; anything else is no link', () => {
@@ -271,6 +329,22 @@ test('F09: the bookmarklet opens the page with the address and title in the frag
   const u = new URL(ctx.location.href);
   assert.equal(`${u.origin}${u.pathname}`, 'https://12twelve12hi.github.io/MHW/send/');
   assert.deepEqual(WG.readParams(u.search, u.hash), { url: 'https://example.com/story?a=1&b=2#part', title: 'A story & more', autosend: true });
+  // Lab on, it sends the page's address exactly, as Lab off does: one that ends in a full stop or "!" keeps it, with no
+  // x-orig (F16 step 1: url when it passes the web URL rule; the text rules are for typed or shared text).
+  for (const [href, title] of [
+    ['https://en.wikipedia.org/wiki/Washington,_D.C.', 'Washington, D.C. - Wikipedia'],
+    ['https://en.wikipedia.org/wiki/U.S.', 'United States - Wikipedia'],
+    ['https://en.wikipedia.org/wiki/Yahoo!', 'Yahoo! - Wikipedia'],
+    ['https://en.wikipedia.org/wiki/Foo_(bar)', 'Foo (bar)'],
+  ]) {
+    const run = { location: { href }, document: { title } };
+    vm.runInNewContext(code.slice('javascript:'.length), run);
+    const to = new URL(run.location.href);
+    const share = WG.shareFromParams(WG.readParams(to.search, to.hash));
+    assert.equal(share.raw.appended, undefined, `${href}: the bookmarklet's url= is given as one`);
+    assert.deepEqual(WL.labShareItem(share), { kind: 'url', url: href, title }, `${href}: Lab on`);
+    assert.equal(share.url, href, `${href}: Lab off`);
+  }
 });
 
 // --- What's in Lab, the Use switches, the timeline (F01, 6.5 Q5) ----------------------------------------------------------

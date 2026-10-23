@@ -9,7 +9,8 @@ const W = await w.load('web-logic.js');
 
 test('readParams merges the query and the fragment (fragment wins)', () => {
   const p = W.readParams('?url=https%3A%2F%2Fa.org%2Fx%3Fy%3D1&title=Hi&autosend=1', '#pair=ABCD&url=https%3A%2F%2Fb.org');
-  assert.deepEqual(p, { url: 'https://b.org', title: 'Hi', autosend: true, pair: 'ABCD' });
+  // url= ends the fragment, as the Shortcut's link does: appended (Lab's smart intake reads it as shared text).
+  assert.deepEqual(p, { url: 'https://b.org', title: 'Hi', autosend: true, pair: 'ABCD', appended: true });
   assert.equal(W.readParams('', '').autosend, false);
   assert.equal(W.hasShareParams(W.readParams('', '')), false);
   assert.equal(W.hasShareParams(W.readParams('?text=hello', '')), true);
@@ -23,8 +24,11 @@ test('a Shortcut link survives an address that was appended without encoding', (
   assert.equal(W.readParams('', pre + 'https://a.org/x?q=%26').url, 'https://a.org/x?q=&', 'decoded once when it decodes');
   assert.equal(W.readParams('', pre + 'https://a.org/a%20b').url, 'https://a.org/a%20b', 'kept raw when decoding breaks it');
   assert.equal(W.readParams('', pre + 'https://a.org/x#frag').url, 'https://a.org/x#frag');
+  assert.equal(W.readParams('', pre + 'https://a.org/x').appended, true);
+  assert.equal(W.readParams('', `${pre}just%20words`).appended, true, 'appended, whatever it holds');
   const later = W.readParams('', `#url=${encodeURIComponent('https://a.org/x?y=1')}&title=Hi&autosend=1`);
-  assert.deepEqual([later.url, later.title, later.autosend], ['https://a.org/x?y=1', 'Hi', true]);
+  assert.deepEqual([later.url, later.title, later.autosend, later.appended], ['https://a.org/x?y=1', 'Hi', true, undefined]);
+  assert.equal(W.readParams('?url=https%3A%2F%2Fa.org%2Fx', '').appended, undefined, '?url= is never appended');
 });
 
 test('sharedLink finds the address and a title in shared text', () => {

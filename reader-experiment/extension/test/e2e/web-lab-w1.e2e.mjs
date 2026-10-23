@@ -9,10 +9,12 @@
 //   F16  a typed link loses its tracking and carries the link as typed in x-orig; F16's Use switch off sends it as typed;
 //        every text-only case of normalise.json shared with ?text= arrives as the vectors say, and so do words around a
 //        link in the Link field, a share the page fills the form with, and the share sheet's text (B1); an address on
-//        its own in the Link field or from the Shortcut by the same text rules; a Shortcut with no web address says
-//        v1.1's sentence and fills the Link field, Lab on as off; Lab off is v1.1
+//        its own in the Link field or from the Shortcut by the same text rules; one given as one (?url=) as given,
+//        also when the form holds it and Send sends it; a Shortcut with no web address says v1.1's sentence and fills
+//        the Link field, Lab on as off; Lab off is v1.1
 //   F33  Paste and send: "Send {host}?", Send and Cancel; "No link on the clipboard."; gone with its Use switch off
-//   F09  the bookmarklet, dragged or copied from Shortcuts and automation, sends the page it runs on
+//   F09  the bookmarklet, dragged or copied from Shortcuts and automation, sends the page it runs on, its address
+//        exactly (one ending in a full stop too)
 //   F26  Setup check: the lines, the test article followed to "In your Reader", the activity log, Copy diagnostics; the
 //        browser's install offer kept but never cancelled; needs-pairing in LAB_TEXT's words after another tab unpairs
 //   F00.3  W1's rows in What's in Lab: their short states, and the sentence under a tapped one (needs-pairing,
@@ -413,7 +415,7 @@ test('F16: every text-only case of normalise.json shared with ?text= arrives as 
   } finally { await ctx.close(); }
 });
 
-test('F16: an address typed or shared on its own follows the text rules (Link field, Shortcut); a Shortcut with no web address says v1.1’s sentence and fills the Link field, Lab on as off', { timeout: 120000 }, async () => {
+test('F16: an address typed or shared on its own follows the text rules (Link field, Shortcut); one given as one (?url=) goes as given, from the form too; a Shortcut with no web address says v1.1’s sentence and fills the Link field, Lab on as off', { timeout: 120000 }, async () => {
   const NOT_A_WEB_ADDRESS = 'That isn’t a web address. It should look like https://example.com/story.';
   const enc = encodeURIComponent;
   const { ctx, page, pairing, secret } = await openPaired();
@@ -445,6 +447,23 @@ test('F16: an address typed or shared on its own follows the text rules (Link fi
     await open(shortcut('https://en.wikipedia.org/wiki/Foo_(bar)).'));
     item = await next('Shortcut');
     assert.equal(item.header.url, 'https://en.wikipedia.org/wiki/Foo_(bar)');
+    // An address given as one (?url=, a script's or a link's) goes as given (F16 step 1): its full stop is part of it.
+    await open(`${site.url}/?autosend=1&url=${enc('https://en.wikipedia.org/wiki/U.S.')}`);
+    item = await next('?url=');
+    assert.deepEqual([item.header.url, item.extras ?? {}], ['https://en.wikipedia.org/wiki/U.S.', {}]);
+    // Without autosend it fills the form with the address as given, and Send sends it so; typed over, the Link field is
+    // typed text again.
+    await page.goto(`${site.url}/?url=${enc('https://en.wikipedia.org/wiki/Washington,_D.C.')}&title=${enc('Washington, D.C.')}`);
+    await ready(page);
+    await page.waitForFunction(() => document.querySelector('#url').value !== '');
+    assert.equal(await page.inputValue('#url'), 'https://en.wikipedia.org/wiki/Washington,_D.C.');
+    assert.equal(await page.inputValue('#title'), 'Washington, D.C.');
+    await page.click('#send-url');
+    item = await next('the form, filled from ?url=');
+    assert.deepEqual([item.header.url, item.header.title, item.extras ?? {}], ['https://en.wikipedia.org/wiki/Washington,_D.C.', 'Washington, D.C.', {}]);
+    await sendLink(page, 'https://en.wikipedia.org/wiki/Washington,_D.C.');
+    item = await next('the Link field, typed');
+    assert.equal(item.header.url, 'https://en.wikipedia.org/wiki/Washington,_D.C');
     // A Shortcut with words and no web address: v1.1's sentence, and the words in the Link field to correct; nothing sent.
     const sent = await outbox();
     const said = {};
@@ -502,7 +521,7 @@ test('F33: Paste and send shows the host and sends on Send; no link says so; Can
 
 // --- F09 ----------------------------------------------------------------------------------------------------------------
 
-test('F09: Shortcuts and automation gives the bookmarklet; run on a page, it sends that page with its title', { timeout: 90000 }, async () => {
+test('F09: Shortcuts and automation gives the bookmarklet; run on a page, it sends that page with its title, its address exactly', { timeout: 90000 }, async () => {
   const { ctx, page, pairing } = await openPaired();
   try {
     await openWhats(page);
@@ -534,6 +553,22 @@ test('F09: Shortcuts and automation gives the bookmarklet; run on a page, it sen
     assert.equal(item.header.url, `${relay.url}/__mock/state`);
     assert.equal(item.header.title, 'A page to keep');
     assert.equal(new URL(other.url()).hash, '', 'a reload doesn’t send it again');
+
+    // Lab on, a page whose address ends in a full stop ("…/wiki/Washington,_D.C."): it goes exactly, with no x-orig, as
+    // with Lab off (F16 step 1: the bookmarklet's url= is the page's address, given as one, not shared text).
+    const dotted = `${relay.url}/__mock/state?wiki=Washington,_D.C.`;
+    const third = await ctx.newPage();
+    await third.goto(dotted);
+    assert.equal(await third.evaluate(() => location.href), dotted);
+    await third.evaluate((c) => { document.title = 'Washington, D.C.'; window.eval(c.slice('javascript:'.length)); }, code);
+    await third.waitForURL((u) => u.origin === site.url);
+    await ready(third);
+    await third.waitForFunction(() => document.querySelector('#status').textContent.startsWith('Sent'));
+    const got = await receiveAll(pairing, 2);
+    const last = got.find((i) => i.header.title === 'Washington, D.C.');
+    assert.ok(last, 'the page ending in a full stop arrived');
+    assert.equal(last.header.url, dotted);
+    assert.deepEqual(last.extras ?? {}, {});
   } finally { await ctx.close(); }
 });
 

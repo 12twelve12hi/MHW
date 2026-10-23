@@ -19,21 +19,27 @@ export function readParams(search = '', hash = '') {
     for (const k of KEYS) if (p.has(k)) out[k] = p.get(k);
   }
   const tail = trailingUrl(hash.replace(/^#/, ''));
-  if (tail) out.url = tail;
+  if (tail) {
+    out.appended = true;
+    if (tail.url) out.url = tail.url;
+  }
   out.autosend = /^(1|true|yes)$/i.test(out.autosend ?? '');
   return out;
 }
 
 /**
  * The Shortcut link ends in "&url=" and the shared address is appended, encoded or not (a raw "&" or "+" would
- * break URLSearchParams). When url= is the last parameter, everything after it is the address.
+ * break URLSearchParams). When url= is the fragment's last parameter, everything after it is what was appended:
+ * -> {url} (the address, or null when it is not one on its own), or null when url= is not last (the bookmarklet's
+ * "url=…&title=…", the fragment form "#url=…&title=…&autosend=1") or there is none. readParams marks such a share
+ * `appended`, which Lab's smart intake reads as shared text (web-lab.js).
  */
 function trailingUrl(fragment) {
   const m = /(?:^|&)url=([^]*)$/.exec(fragment);
   if (!m || /&(title|text|pair|autosend|share)=/.test(m[1])) return null;
   let decoded = null;
   try { decoded = decodeURIComponent(m[1]); } catch { /* not encoded */ }
-  return webUrl(decoded) ?? webUrl(m[1]);
+  return { url: webUrl(decoded) ?? webUrl(m[1]) };
 }
 
 export const hasShareParams = (p) => !!(p.pair || p.url || p.text || p.title || p.share || p.autosend);
@@ -42,12 +48,15 @@ export const hasShareParams = (p) => !!(p.pair || p.url || p.text || p.title || 
  * A share as the page reads it: from its address (readParams: ?url=, ?text=, ?title=, the Shortcut's and the
  * bookmarklet's fragment) or from the share target (sw.js's stored {url, text, title}). -> {url, title} (v1.1's reading,
  * sharedLink: what the page sends with Lab off and fills the form with), text (the share's text) and raw ({url, title}
- * exactly as they came): with Lab on, smart intake reads raw and text itself (web-lab.js labShareItem, F16), so it
- * finds the URL in shared text by its own rules, never by sharedLink's.
+ * exactly as they came, and appended: true when url is what the Shortcut appended to its link, readParams' `appended`):
+ * with Lab on, smart intake reads raw and text itself (web-lab.js labShareItem, F16), so it finds the URL in shared text
+ * by its own rules, never by sharedLink's.
  */
 export function shareFromParams(params = {}) {
   const link = sharedLink(params);
-  return { url: link.url ?? params.url ?? '', title: link.title, text: params.text ?? '', raw: { url: params.url ?? '', title: params.title ?? '' } };
+  const raw = { url: params.url ?? '', title: params.title ?? '' };
+  if (params.appended) raw.appended = true;
+  return { url: link.url ?? params.url ?? '', title: link.title, text: params.text ?? '', raw };
 }
 
 /** The share target's share (sw.js keeps {url, text, title, files}), read as shareFromParams reads an address's. */
@@ -84,8 +93,9 @@ export function normalizeUserUrl(input) {
 /**
  * Lab (F16): an address typed or given on its own, and nothing else: the input when it passes the web URL rule, or
  * https:// added to "example.com/story". Unlike normalizeUserUrl it never looks for a URL inside text. Smart intake
- * (web-lab.js) still hands what it returns to normaliseShare as text, as it hands anything else, so the text rules
- * (parentheses, quotes, trailing punctuation) apply to it too. -> a web URL, or null.
+ * (web-lab.js) gives what it returns to normaliseShare as its `url` when the address was given as one (the bookmarklet,
+ * ?url=, the share target's url), and as text when it was typed or appended (the Link field, the Shortcut), so the text
+ * rules (parentheses, quotes, trailing punctuation) apply to those. -> a web URL, or null.
  */
 export function typedUrl(input) {
   const s = String(input ?? '').trim();
