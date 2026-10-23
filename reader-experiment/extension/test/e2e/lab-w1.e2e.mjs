@@ -747,7 +747,7 @@ test('F33: Paste and send shows the copied link’s host before anything is sent
 
 // --- F34 ---------------------------------------------------------------------------------------------------------------
 
-test('F34: each menu entry sends its kind; the commands are listed; “dl example.com/story” sends the link', { timeout: 90000 }, async () => {
+test('F34: each menu entry sends its kind; the commands are listed; “dl example.com/story” sends the link, a typed full stop or stray bracket left out', { timeout: 90000 }, async () => {
   const day = await newPairing();
   const { page, id } = await openTab(`${site.url}/long-read.html`);
   const tab = { id, url: `${site.url}/long-read.html`, title: 'The long read – News' };
@@ -765,6 +765,11 @@ test('F34: each menu entry sends its kind; the commands are listed; “dl exampl
   const r = await sw.evaluate(() => globalThis.sendToDaylight.onOmnibox('example.com/story'));
   assert.equal(r.row.url, 'https://example.com/story');
   assert.equal((await day.receive(1))[0].header.url, 'https://example.com/story');
+  // An address typed with a full stop or a stray bracket after it: smart intake's text rules leave them out (F16).
+  await sw.evaluate(() => globalThis.sendToDaylight.onOmnibox('https://en.wikipedia.org/wiki/Foo_(bar)).'));
+  assert.equal((await day.receive(1))[0].header.url, 'https://en.wikipedia.org/wiki/Foo_(bar)');
+  await sw.evaluate(() => globalThis.sendToDaylight.onOmnibox('example.com/a/b.'));
+  assert.equal((await day.receive(1))[0].header.url, 'https://example.com/a/b');
   // Lab off: the omnibox opens lab.html with the Lab-off sentence.
   await storageSet({ settings: { lab: false, labNoteShown: true, from: 'W1 Chrome' } });
   const [off] = await Promise.all([ctx.waitForEvent('page'), sw.evaluate(() => globalThis.sendToDaylight.onOmnibox('example.com/story'))]);

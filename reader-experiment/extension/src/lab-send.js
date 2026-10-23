@@ -5,7 +5,7 @@
 //   F04  share in place: who gets the countdown and who gets the choices and Send (noCountdown)
 //   F07  the rows waiting for a connection (waitingRows, queueRows)
 //   F10  Send as: the four modes, the default by context, the mode remembered per site, the clean article's page
-//   F16  text that may hold a link, through smart intake (textLinkItem: F33's copied text, the omnibox)
+//   F16  text that may hold a link, through smart intake (textLinkItem: F33's copied text; typedLinkItem: the omnibox)
 //   F34  the right-click menu entries with Lab on and off (menuEntries), and the omnibox's typed address (typedUrl)
 
 import { webUrl } from './daylight-share.js';
@@ -160,9 +160,8 @@ export function wantsStates(rows, states = {}, now = Date.now()) {
 
 /**
  * F34's omnibox: an address typed on its own: the input when it passes the web URL rule, or https:// added to
- * "example.com/story" (as the web sender reads one). It never looks for a URL inside text: anything else is shared
- * text, which goes to smart intake (textLinkItem: normaliseShare finds the URL by F16's own rules). -> a web URL, or
- * null.
+ * "example.com/story" (as the web sender reads one). It never looks for a URL inside text, and it is never sent as it
+ * is: typedLinkItem hands it to smart intake as text, as it hands anything else typed. -> a web URL, or null.
  */
 export function typedUrl(input) {
   const s = String(input ?? '').trim();
@@ -182,4 +181,15 @@ export function textLinkItem(text, settings = {}) {
   const item = { kind: 'url', url: n.url, title: n.title && n.title !== n.url ? n.title : '' };
   if (n.orig) item.extras = { 'x-orig': n.orig };
   return item;
+}
+
+/**
+ * What a person typed (F34's omnibox), through smart intake (F16) the same way as copied or shared text: an address
+ * typed on its own gets https:// first ("example.com/story", typedUrl), then the whole goes to normaliseShare as text
+ * (textLinkItem). So a typed address follows F16's text rules too: a trailing . , ; : ! ? or quote is not part of the
+ * URL, nor is a ) or ] left unbalanced ("https://example.com/a/b." sends https://example.com/a/b). settings: the
+ * extension's settings (labUseOn). -> the url item, or null when there is no link.
+ */
+export function typedLinkItem(input, settings = {}) {
+  return textLinkItem(typedUrl(input) ?? String(input ?? ''), settings);
 }

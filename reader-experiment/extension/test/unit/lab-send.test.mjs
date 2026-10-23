@@ -153,6 +153,23 @@ test('lab-send.js: the omnibox’s address, the clean article page, who gets no 
   assert.deepEqual(LS.textLinkItem('He said “https://example.com/q”'), { kind: 'url', url: 'https://example.com/q', title: 'He said' });
   assert.deepEqual(LS.textLinkItem('https://a.example/x?utm_source=z', { lab: true, labUse: { F16: false } }), { kind: 'url', url: 'https://a.example/x?utm_source=z', title: '' });
   assert.equal(LS.textLinkItem('just words'), null);
+  // What is typed goes to smart intake as text, an address on its own too (F16's text rules: trailing punctuation and
+  // an unbalanced bracket are not part of the URL), with https:// added first to "example.com/…".
+  for (const [typed, url] of [
+    ['https://example.com/a/b.', 'https://example.com/a/b'],
+    ['https://en.wikipedia.org/wiki/Foo_(bar)).', 'https://en.wikipedia.org/wiki/Foo_(bar)'],
+    ['https://example.com/wow!?', 'https://example.com/wow'],
+    ['https://example.com/x]', 'https://example.com/x'],
+    ['https://example.com/q”', 'https://example.com/q'],
+    ['example.com/a/b.', 'https://example.com/a/b'],
+    ['example.com/story?utm_source=x', 'https://example.com/story'],
+  ]) {
+    assert.equal(LS.typedLinkItem(typed)?.url, url, typed);
+    assert.deepEqual(LS.typedLinkItem(typed), LS.textLinkItem(LS.typedUrl(typed)), typed);
+  }
+  assert.deepEqual(LS.typedLinkItem('read https://a.example/x?utm_source=z now'), LS.textLinkItem('read https://a.example/x?utm_source=z now'));
+  assert.equal(LS.typedLinkItem('just words'), null);
+  assert.equal(LS.typedLinkItem(''), null);
   assert.equal(LS.cleanArticleHtml({ title: 'A <b>title</b>', url: 'https://a.example/p?q="1"', byline: 'Ann', site: 'A & B', content: '<p>Body</p>' }),
     '<!doctype html><html><head><meta charset="utf-8"><title>A &lt;b&gt;title&lt;/b&gt;</title><base href="https://a.example/p?q=&quot;1&quot;">'
     + '<meta name="dl:capture" content="clean"></head><body><article><h1>A &lt;b&gt;title&lt;/b&gt;</h1><p>Ann · A &amp; B</p><p>Body</p></article></body></html>');
@@ -688,7 +705,22 @@ test('F33: Paste and send sends the link in copied text, cleaned; no link says s
   } finally { await s.close(); }
 });
 
-test('F16: the omnibox and Paste and send give shared text whole to normaliseShare: every text-only case of normalise.json', async () => {
+/**
+ * Each text-only case of normalise.json as typed or copied: its text, and each word of it that holds an address, on
+ * its own ("https://example.com/a/b." from "Look at this: https://example.com/a/b."). The text has the vector's
+ * expectation; a word on its own has normaliseShare's for that word as text (F16's text rules, as Paste and send and
+ * ?text= apply them). -> [{text, expect: {url, title, orig} | null (no link), vector}]
+ */
+function typedInputs(c) {
+  const out = [{ text: c.input.text, expect: c.expect.url ? c.expect : null, vector: true }];
+  for (const word of new Set(c.input.text.split(/\s+/).filter((w) => /https?:\/\//i.test(w) && w !== c.input.text.trim()))) {
+    const n = L.normaliseShare({ text: word, clean: c.input.clean !== false });
+    out.push({ text: word, expect: n.kind === 'link' && n.url ? n : null, vector: false });
+  }
+  return out;
+}
+
+test('F16: the omnibox and Paste and send give what was typed or copied to normaliseShare as text: every text-only case of normalise.json, and each address in it on its own', async () => {
   // The text-only cases: shared text with no URL of its own, which is all these two entry points carry. They have no
   // subject and no selection (a selection is the menu's, F11), so for a case with either the vector pins the URL and
   // x-orig, and the title is the text's own.
@@ -696,31 +728,46 @@ test('F16: the omnibox and Paste and send give shared text whole to normaliseSha
   assert.equal(cases.length, 39);
   const s = await setup();
   try {
-    let links = 0;
+    let links = 0, words = 0;
     for (const c of cases) {
       const i = c.input;
       await s.msg({ type: 'labSetUse', feature: 'F16', on: i.clean !== false });
-      for (const [via, send] of [
-        ['omnibox', () => s.app.onOmnibox(i.text)],
-        ['Paste and send', () => s.msg({ type: 'labSendCopied', text: i.text })],
-      ]) {
-        const what = `${c.name} (${via})`;
-        const r = await send();
-        if (!c.expect.url) {
-          assert.deepEqual(r, { noLink: true }, what);
-          assert.deepEqual(await s.receive(), [], what);
-          continue;
+      for (const typed of typedInputs(c)) {
+        if (!typed.vector) words++;
+        for (const [via, send] of [
+          ['omnibox', () => s.app.onOmnibox(typed.text)],
+          ['Paste and send', () => s.msg({ type: 'labSendCopied', text: typed.text })],
+        ]) {
+          const what = `${c.name}: ${JSON.stringify(typed.text)} (${via})`;
+          const want = typed.expect;
+          const r = await send();
+          if (!want) {
+            assert.deepEqual(r, { noLink: true }, what);
+            assert.deepEqual(await s.receive(), [], what);
+            continue;
+          }
+          assert.ok(r?.row, what);
+          const [item] = await s.receive();
+          assert.equal(item.header.kind, 'url', what);
+          assert.equal(item.header.url, want.url, what);
+          assert.deepEqual(item.extras ?? {}, want.orig ? { 'x-orig': want.orig } : {}, what);
+          if (!typed.vector || (!i.subject && !i.source)) assert.equal(item.header.title ?? '', want.title && want.title !== want.url ? want.title : '', what);
+          links++;
         }
-        assert.ok(r?.row, what);
-        const [item] = await s.receive();
-        assert.equal(item.header.kind, 'url', what);
-        assert.equal(item.header.url, c.expect.url, what);
-        assert.deepEqual(item.extras ?? {}, c.expect.orig ? { 'x-orig': c.expect.orig } : {}, what);
-        if (!i.subject && !i.source) assert.equal(item.header.title ?? '', c.expect.title && c.expect.title !== c.expect.url ? c.expect.title : '', what);
-        links++;
       }
     }
-    assert.equal(links, 2 * cases.filter((c) => c.expect.url).length);
+    assert.ok(words >= 25, `${words} addresses on their own`);
+    assert.equal(links, 2 * cases.reduce((n, c) => n + typedInputs(c).filter((t) => t.expect).length, 0));
+    // A bare address with sentence punctuation or brackets after it, typed into the omnibox: as Paste and send reads it.
+    for (const [typed, url] of [
+      ['https://example.com/a/b.', 'https://example.com/a/b'],
+      ['https://en.wikipedia.org/wiki/Foo_(bar)).', 'https://en.wikipedia.org/wiki/Foo_(bar)'],
+      ['example.com/a/b.', 'https://example.com/a/b'],
+    ]) {
+      await s.app.onOmnibox(typed);
+      const [item] = await s.receive();
+      assert.equal(item.header.url, url, typed);
+    }
     // B1's four: the parentheses, curly quotes, single curly quotes and », and brackets come out as the vectors say.
     for (const [text, url] of [
       ['See (https://en.wikipedia.org/wiki/Foo_(bar)).', 'https://en.wikipedia.org/wiki/Foo_(bar)'],

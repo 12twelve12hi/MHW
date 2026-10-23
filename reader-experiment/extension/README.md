@@ -225,10 +225,11 @@ What Lab adds to sending (LAB-PLAN 3.3). With Lab off none of it shows or runs, 
   and the date, `x-cap: "excerpt"`), never the whole article. The first one says once: *Excerpts wait for a tap on your
   Daylight for now.* Only these explicit paths make excerpts (LAB-DECISIONS Q1).
 - **Clean links** (F16). Links and page addresses lose tracking parameters and redirect wrappers (`normaliseShare`);
-  the address as shared goes along as `x-orig`. Text with words around a link (Paste and send's clipboard, or
-  `dl see (https://…).` in the address bar) goes to `normaliseShare` whole, so it finds the link by its own rules
-  (parentheses, quotes, brackets and trailing punctuation left out) and the words are the title; only an address typed
-  on its own (`typedUrl`: a web address, or `example.com/story`) is taken as it is.
+  the address as shared goes along as `x-orig`. What is typed or copied (Paste and send's clipboard, or
+  `dl see (https://…).` in the address bar) goes to `normaliseShare` whole, as text, so it finds the link by its own
+  rules (parentheses, quotes, brackets and trailing punctuation left out) and the words are the title. An address typed
+  on its own goes the same way (`typedLinkItem`): `example.com/story` gets `https://` first (`typedUrl`), and
+  `dl https://example.com/a/b.` sends `https://example.com/a/b`.
 - **Setup check** (F26), What's in Lab › Setup check: ✓ or ! for the pairing, the toolbar button (Chrome), the keyboard
   shortcut (Chrome) and site access (Safari, which asks on each site until it may read pages there; **Allow** asks
   Safari, whose prompt says how far. Chrome has no such line: it reads only the tab you chose, and asks for one site at
@@ -355,7 +356,7 @@ node scripts/make-icons.mjs                            # re-render the PNG icons
 - **Lab, Wave 1** (LAB-PLAN 3.3, card X1): `src/lab-send.js` holds the rules as pure functions (the menus with Lab on
   and off, Send as's default and the mode kept per site, the clean article's page, the badge mark, who gets no
   countdown, the queue, the omnibox's typed address `typedUrl`, and `textLinkItem` for text that may hold a link: the
-  clipboard's and the omnibox's); `core.js` sends with them (`labSendTab`: the capture through
+  clipboard's, and through `typedLinkItem` the omnibox's); `core.js` sends with them (`labSendTab`: the capture through
   `clean-html.js`, Clean article through `prepareForReadability` and `Readability.js`, both files injected with `scripting.executeScript({files})` before
   the capture; `labSendSelection`; `normaliseShare` on every link and page address; `Sender.send(…, {defer})` offline,
   the `dls-offline` alarm and `flushNetwork`; the countdown, `scheduleSend` and `cancelScheduled`; Review's

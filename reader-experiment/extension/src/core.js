@@ -11,7 +11,7 @@ import {
 } from './logic.js';
 import {
   MENU_IDS, PDF_LINK_PATTERNS as LINK_PDF_PATTERNS, COMMANDS, menuEntries, defaultMode, rememberMode, cleanArticleHtml,
-  THIN_WORDS, COUNTDOWN_MS, FLUSH_GAP_MS, ALARM_OFFLINE as OFFLINE_ALARM, badgeMark, wantsStates, waitingForConnection, typedUrl, textLinkItem, clickToSend,
+  THIN_WORDS, COUNTDOWN_MS, FLUSH_GAP_MS, ALARM_OFFLINE as OFFLINE_ALARM, badgeMark, wantsStates, waitingForConnection, typedLinkItem, textLinkItem, clickToSend,
   noCountdown, siteOf,
 } from './lab-send.js';
 
@@ -1042,10 +1042,10 @@ export function createApp({
   }
 
   /**
-   * Chrome's omnibox (F34): "dl example.com/story" sends that link (typedUrl, then normaliseShare through sendUrl);
-   * anything else typed is text, which goes to normaliseShare whole (textLinkItem, F16), so "dl see (https://…)." finds
-   * the URL by smart intake's rules and the words around it are the title. With Lab off it opens lab.html with the
-   * Lab-off sentence; a text with no web address sends nothing and shows "!".
+   * Chrome's omnibox (F34): what was typed goes to normaliseShare as text (typedLinkItem, F16), as copied text does:
+   * "dl example.com/story" sends that link (https:// added first), "dl https://example.com/a/b." sends it without the
+   * full stop, and "dl see (https://…)." finds the URL by smart intake's rules with the words around it as the title.
+   * With Lab off it opens lab.html with the Lab-off sentence; a text with no web address sends nothing and shows "!".
    */
   async function onOmnibox(text) {
     try {
@@ -1055,9 +1055,7 @@ export function createApp({
         return { labOff: true };
       }
       if (!(await getPairing())) { await openPairing(); return { paired: false }; }
-      const url = typedUrl(text);
-      if (url) return await withBadge(() => sendUrl(url, ''));
-      const item = textLinkItem(text, c.s);
+      const item = typedLinkItem(text, c.s);
       if (!item) { await badge.show(LAB_TEXT.badge.error); return { noLink: true }; }
       return await withBadge(() => sendItem(item, undefined, { lab: c }));
     } catch (e) {
