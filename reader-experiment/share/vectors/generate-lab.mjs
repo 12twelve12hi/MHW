@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import * as ds from '../js/daylight-share.js';
 import * as lab from '../js/daylight-lab.js';
 import { buildW1 } from './lab-w1-cases.mjs';
+import { buildW2 } from './lab-w2-cases.mjs';
 
 const h = (s) => createHash('sha256').update(s).digest();
 const secretFrom = (label) => new Uint8Array(h(label).subarray(0, 16));
@@ -273,6 +274,9 @@ const ledgerCases = [
   ['lab 0 from the only publisher ends Lab at once', [[hello(A, capsA), T], [off(A), T + 2]], NOW],
   ['handover 5.3.4: Daylight Share hands over to the Lab Reader', [[hello(A, capsA), T - 60], [states(E(id1, 'handed', T - 50)), T - 50], [off(A), T - 30], [hello(R, capsR), T - 20], [states(E(id2, 'reader', T - 10)), T - 10]], NOW],
   ['handover back: the Lab Reader stops, Daylight Share receives again', [[hello(R, capsR), T - 60], [off(R), T - 30], [hello(A, capsA), T - 20]], NOW],
+  // W2 (L2; LAB-PROTOCOL 2.4.14): during a handover Daylight Share says lab 1, poll null, caps ["return"] (not lab 0),
+  // so senders keep the Lab Reader's receive caps and phones keep reading the return topics.
+  ['handover with the return-only hello (W2)', [[hello(A, capsA), T - 60], [I({ 'x-inbox': { lab: 1, app: A, caps: ['return'], poll: null, live: false } }), T - 30], [hello(R, capsR), T - 20]], NOW],
   ['a poll later than its relay time is clamped', [[hello(A, capsA, { poll: '2026-10-20T09:00:00.000Z' }), T]], NOW],
   ['heard later than the newest poll', [[hello(A, capsA, { poll: '2026-10-20T07:00:00.000Z' }), T - 100], [ack(id2), T]], NOW],
   ['states without x-inbox are kept; no Lab', [[states(E(id1, 'reader', T)), T]], NOW],
@@ -298,6 +302,9 @@ for (const [name, steps, now] of ledgerCases) {
   });
 }
 const L = (name) => labLedger.find((c) => c.name === name).expect;
+assert.deepEqual(L('handover with the return-only hello (W2)').caps, ['quiet', 'reader-doc', 'reader-link', 'return', 'st']);
+assert.equal(L('handover with the return-only hello (W2)').hasCap.tap, false, 'Daylight Share claims no receive cap');
+assert.equal(L('handover with the return-only hello (W2)').publishers.android.poll, null);
 assert.equal(L('equal rank with a later t replaces').states[id1].s, 'inbox');
 assert.equal(L('a lower rank is ignored').states[id1].s, 'reader');
 assert.equal(L('held after waiting, then a re-announced waiting').states[id1].s, 'held');
@@ -630,6 +637,7 @@ const constants = Object.fromEntries(['LAB_LEVEL', 'MAX_ST_PER_FRAME', 'MAX_ST_R
   'DIAGNOSTICS_EVENTS', 'TEST_URL_PREFIX', 'EXCERPT_TAGS', 'EXCERPT_AS_P', 'EXCERPT_DROP', 'TRACKING_PARAMS',
   'TRACKING_BY_SITE'].map((k) => [k, lab[k]]));
 
+const w2 = await buildW2();
 const out = {
   protocol: 'Daylight Share Lab (reader-experiment/share/LAB-PROTOCOL.md) on protocol v1, revision 1.1',
   generatedBy: 'reader-experiment/share/vectors/generate-lab.mjs',
@@ -653,6 +661,8 @@ const out = {
   ],
   constants, labTopics, labFrames, labParse, labLedger, labGate, labHeaderExtras, labRowText, labText, v1Safety,
   labExcerpt: w1.labExcerpt, diagnostics: w1.diagnostics, testArticle: w1.testArticle,
+  // W2 (L2): the return lane (LAB-PROTOCOL 2.4). Each section carries its own notes.
+  returnParse: w2.returnParse, returnLane: w2.returnLane,
 };
 writeFileSync(new URL('./lab-vectors.json', import.meta.url), JSON.stringify(out, null, 2) + '\n');
 writeFileSync(new URL('./normalise.json', import.meta.url), JSON.stringify(w1.normalise, null, 2) + '\n');
@@ -661,4 +671,8 @@ console.log(`wrote lab-vectors.json: ${labFrames.length} labFrames, ${labParse.l
   + `${Object.keys(labText.strings).length} strings and ${messages.length} messages, ${v1Safety.length} v1Safety, `
   + `${w1.labExcerpt.items.length} excerpt items, ${w1.labExcerpt.sanitize.length} sanitize, ${w1.labExcerpt.classify.length} classify, `
   + `${w1.diagnostics.redact.length} redact`);
+console.log(`wrote returnParse: ${w2.returnParse.items.length} items, ${w2.returnParse.acks.length} acks; returnLane: `
+  + `${w2.returnLane.due.length} due, ${w2.returnLane.settle.length} settle, ${w2.returnLane.devices.length} devices, `
+  + `${w2.returnLane.budget.length} budget, ${w2.returnLane.cadence.length} cadence; worst device frame ${w2.returnLane.worstAck.headerBytes}/`
+  + `${w2.returnLane.worstAck.frameLength}/${w2.returnLane.worstAck.base64Length}`);
 console.log(`wrote normalise.json: ${w1.normalise.cases.length} cases, ${w1.normalise.xOrigFrames.length} xOrigFrames, ${w1.normalise.appleNews.length} appleNews`);

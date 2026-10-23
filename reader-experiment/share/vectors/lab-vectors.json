@@ -3262,6 +3262,69 @@
       }
     },
     {
+      "name": "handover with the return-only hello (W2)",
+      "steps": [
+        {
+          "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[],\"sent\":\"2026-10-20T08:00:00.000Z\",\"from\":\"Daylight\",\"x-inbox\":{\"lab\":1,\"app\":\"android/1.5.0\",\"caps\":[\"st\",\"tap\",\"reader-link\"],\"poll\":\"2026-10-20T07:59:58.000Z\",\"live\":false}}",
+          "time": 1792483138
+        },
+        {
+          "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[],\"sent\":\"2026-10-20T08:00:00.000Z\",\"from\":\"Daylight\",\"x-inbox\":{\"lab\":1,\"app\":\"android/1.5.0\",\"caps\":[\"return\"],\"poll\":null,\"live\":false}}",
+          "time": 1792483168
+        },
+        {
+          "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[],\"sent\":\"2026-10-20T08:00:00.000Z\",\"from\":\"Daylight\",\"x-inbox\":{\"lab\":1,\"app\":\"reader-lab/0.27.900\",\"caps\":[\"st\",\"reader-link\",\"reader-doc\",\"quiet\"],\"poll\":\"2026-10-20T07:59:58.000Z\",\"live\":false}}",
+          "time": 1792483178
+        }
+      ],
+      "now": 1792483258000,
+      "expect": {
+        "states": {},
+        "inboxLab": true,
+        "caps": [
+          "quiet",
+          "reader-doc",
+          "reader-link",
+          "return",
+          "st"
+        ],
+        "hasCap": {
+          "st": true,
+          "tap": false,
+          "reader-link": true,
+          "cap-kind": false,
+          "reader-doc": true,
+          "quiet": true
+        },
+        "checkedIn": 1792483178000,
+        "publishers": {
+          "android": {
+            "lab": 1,
+            "app": "android/1.5.0",
+            "caps": [
+              "return"
+            ],
+            "poll": null,
+            "live": false,
+            "at": 1792483168000
+          },
+          "reader-lab": {
+            "lab": 1,
+            "app": "reader-lab/0.27.900",
+            "caps": [
+              "st",
+              "reader-link",
+              "reader-doc",
+              "quiet"
+            ],
+            "poll": 1792483178000,
+            "live": false,
+            "at": 1792483178000
+          }
+        }
+      }
+    },
+    {
       "name": "a poll later than its relay time is clamped",
       "steps": [
         {
@@ -8966,5 +9029,4547 @@
         }
       }
     }
-  ]
+  ],
+  "returnParse": {
+    "notes": [
+      "returnParse (LAB-PROTOCOL 2.4.5): parse headerJson with the platform JSON parser. items: returnItemExtras(header) must equal expect ({rk, to}: rk is share, marks, queue, reading or \"unknown\"; to is null for no x-to key, the device id, or \"invalid\"). acks: returnAck(header) must equal expect (null, or {ids, dev, from, rx, want}: ids are the valid item ids among the first 60 elements, in order with repeats; dev null unless 16 lowercase hex digits; from cleanName(from) when a string, else \"\"; rx false only for false; want true only for true)."
+    ],
+    "items": [
+      {
+        "name": "share, no x-to: every device",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"url\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"x-rk\":\"share\"}",
+        "expect": {
+          "rk": "share",
+          "to": null
+        }
+      },
+      {
+        "name": "x-to of this device",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"url\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"x-rk\":\"share\",\"x-to\":\"0f1e2d3c4b5a6978\"}",
+        "expect": {
+          "rk": "share",
+          "to": "0f1e2d3c4b5a6978"
+        }
+      },
+      {
+        "name": "x-to of 15 digits: invalid",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"url\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"x-rk\":\"share\",\"x-to\":\"f1e2d3c4b5a6978\"}",
+        "expect": {
+          "rk": "share",
+          "to": "invalid"
+        }
+      },
+      {
+        "name": "x-to of 17 digits: invalid",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"url\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"x-rk\":\"share\",\"x-to\":\"0f1e2d3c4b5a69780\"}",
+        "expect": {
+          "rk": "share",
+          "to": "invalid"
+        }
+      },
+      {
+        "name": "x-to in upper case: invalid",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"url\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"x-rk\":\"share\",\"x-to\":\"A1B2C3D4E5F60718\"}",
+        "expect": {
+          "rk": "share",
+          "to": "invalid"
+        }
+      },
+      {
+        "name": "x-to a number: invalid",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"url\",\"url\":\"https://example.com/x\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"x-rk\":\"share\",\"x-to\":1234567890123456}",
+        "expect": {
+          "rk": "share",
+          "to": "invalid"
+        }
+      },
+      {
+        "name": "x-to null: invalid (present, not a device)",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"url\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"x-rk\":\"share\",\"x-to\":null}",
+        "expect": {
+          "rk": "share",
+          "to": "invalid"
+        }
+      },
+      {
+        "name": "x-to empty: invalid",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"url\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"x-rk\":\"share\",\"x-to\":\"\"}",
+        "expect": {
+          "rk": "share",
+          "to": "invalid"
+        }
+      },
+      {
+        "name": "x-to with spaces: invalid",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"url\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"x-rk\":\"share\",\"x-to\":\" 0f1e2d3c4b5a6978\"}",
+        "expect": {
+          "rk": "share",
+          "to": "invalid"
+        }
+      },
+      {
+        "name": "x-rk unknown: unknown",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"url\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"x-rk\":\"notes\"}",
+        "expect": {
+          "rk": "unknown",
+          "to": null
+        }
+      },
+      {
+        "name": "x-rk absent: unknown",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"url\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\"}",
+        "expect": {
+          "rk": "unknown",
+          "to": null
+        }
+      },
+      {
+        "name": "x-rk in upper case: unknown",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"url\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"x-rk\":\"SHARE\"}",
+        "expect": {
+          "rk": "unknown",
+          "to": null
+        }
+      },
+      {
+        "name": "x-rk a number: unknown",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"url\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"x-rk\":1}",
+        "expect": {
+          "rk": "unknown",
+          "to": null
+        }
+      },
+      {
+        "name": "x-rk marks",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"file\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"x-rk\":\"marks\"}",
+        "expect": {
+          "rk": "marks",
+          "to": null
+        }
+      },
+      {
+        "name": "x-rk queue",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"file\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"x-rk\":\"queue\"}",
+        "expect": {
+          "rk": "queue",
+          "to": null
+        }
+      },
+      {
+        "name": "x-rk reading",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"file\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"x-rk\":\"reading\"}",
+        "expect": {
+          "rk": "reading",
+          "to": null
+        }
+      },
+      {
+        "name": "a later part: x-to read here too",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"file\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"part\":2,\"parts\":3,\"x-rk\":\"share\",\"x-to\":\"a1b2c3d4e5f60718\"}",
+        "expect": {
+          "rk": "share",
+          "to": "a1b2c3d4e5f60718"
+        }
+      },
+      {
+        "name": "not an object: an array",
+        "headerJson": "[{\"x-rk\":\"share\"}]",
+        "expect": {
+          "rk": "unknown",
+          "to": "invalid"
+        }
+      },
+      {
+        "name": "not an object: a string",
+        "headerJson": "\"x-rk\"",
+        "expect": {
+          "rk": "unknown",
+          "to": "invalid"
+        }
+      },
+      {
+        "name": "not an object: null",
+        "headerJson": "null",
+        "expect": {
+          "rk": "unknown",
+          "to": "invalid"
+        }
+      }
+    ],
+    "acks": [
+      {
+        "name": "a device frame",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a6978\"}",
+        "expect": {
+          "ids": [
+            "d703bc84a6f33dd08ff8a77582865ae5",
+            "85fdb8a9c0178fe325ad9b3735d87b73"
+          ],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "Anjan’s iPhone",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "a hello: ids []",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a6978\"}",
+        "expect": {
+          "ids": [],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "Anjan’s iPhone",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "x-want true",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a6978\",\"x-want\":true}",
+        "expect": {
+          "ids": [
+            "d703bc84a6f33dd08ff8a77582865ae5",
+            "85fdb8a9c0178fe325ad9b3735d87b73"
+          ],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "Anjan’s iPhone",
+          "rx": true,
+          "want": true
+        }
+      },
+      {
+        "name": "x-want 1: false",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a6978\",\"x-want\":1}",
+        "expect": {
+          "ids": [
+            "d703bc84a6f33dd08ff8a77582865ae5",
+            "85fdb8a9c0178fe325ad9b3735d87b73"
+          ],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "Anjan’s iPhone",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "x-want \"true\": false",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a6978\",\"x-want\":\"true\"}",
+        "expect": {
+          "ids": [
+            "d703bc84a6f33dd08ff8a77582865ae5",
+            "85fdb8a9c0178fe325ad9b3735d87b73"
+          ],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "Anjan’s iPhone",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "x-rx false",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a6978\",\"x-rx\":false}",
+        "expect": {
+          "ids": [
+            "d703bc84a6f33dd08ff8a77582865ae5",
+            "85fdb8a9c0178fe325ad9b3735d87b73"
+          ],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "Anjan’s iPhone",
+          "rx": false,
+          "want": false
+        }
+      },
+      {
+        "name": "x-rx 0: true",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a6978\",\"x-rx\":0}",
+        "expect": {
+          "ids": [
+            "d703bc84a6f33dd08ff8a77582865ae5",
+            "85fdb8a9c0178fe325ad9b3735d87b73"
+          ],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "Anjan’s iPhone",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "x-rx \"false\": true",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a6978\",\"x-rx\":\"false\"}",
+        "expect": {
+          "ids": [
+            "d703bc84a6f33dd08ff8a77582865ae5",
+            "85fdb8a9c0178fe325ad9b3735d87b73"
+          ],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "Anjan’s iPhone",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "x-rx null: true",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a6978\",\"x-rx\":null}",
+        "expect": {
+          "ids": [
+            "d703bc84a6f33dd08ff8a77582865ae5",
+            "85fdb8a9c0178fe325ad9b3735d87b73"
+          ],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "Anjan’s iPhone",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "61 ids: the first 60 read",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"a656d09efaf4f90beeb260ff15283d7f\",\"6c11376514b55dadd0201b0c1ef126f5\",\"5ee25389fe6f8af177a93bb7af2804f3\",\"f6db95a87902901178889d0b41704120\",\"6219be3b4c68004ac8e03c6a59e1f437\",\"0f79afe2aeb7ec0adcfd4577a6e1fb6c\",\"fae9df04dd351741df23e702a8a847da\",\"3f9b29dfa23767da14058623d228715f\",\"142610f039ff27a1353006e4c97d7200\",\"db50bc3666184b885d486d2a0a634369\",\"5c3766727ed2e9c4b67bdd93a9523de6\",\"b13dc34a1d926d383e9f1ecc36b5206d\",\"f61cbd089fb1070c0c752225d292bca9\",\"02b1124747c68ca9761421e408558768\",\"653cf57f2a8e8e832ece71459554bd1f\",\"53a6322a8597c0e8bd97d24cfcddfa8f\",\"a4d9dfc05c1a8353aebbec1e08365086\",\"146b50a62158aa7ced0c3b9b863093e3\",\"4d25120c8b5f8487e21f86631b9154e8\",\"00c83500d3b83b9d8d0c0b3ef81acfd0\",\"13fcfe818f9ac145b46f3cab809e22c2\",\"a3e89c74f4a3dfda7545aeb3efddb83c\",\"e5ce9eb7dec1f8fea947193e513a812b\",\"76f7c521980fea5c0f07ec37c779a5e2\",\"6353efa7f39e77ffb01bb170d80588b6\",\"bbd4ec5a1c1d04d16f741528c04906fa\",\"0e1c07f192e362f11d0d177ecd51bcd7\",\"ca72358da36af02940df62b2656998c9\",\"d4b9200d078b0902003424f3349e36ea\",\"21b856d600e7f83588bfff07395a6573\",\"b73be1d9f1c714c7dfe9258b5357ecaf\",\"09a0363c3dd40fbfe8f3e10a416f04d3\",\"14fd4dc3b71f545a84272183e01378cd\",\"6b01cf8888cbaa45348ebe9b4a94b386\",\"747489fa6bee885a6853cf6bc987c8af\",\"ca08d5c51bb1f81fbc19186d21de8c2c\",\"125e82942e0a6c6b513983d30203212d\",\"027dbad6642744317327afb17f8d4a6e\",\"5cc6b204c7e7742e8c95623ad7bb8e6c\",\"e01f49330c4067044418c79dd55dcd3f\",\"a1d1c8a969e9fd0bc56567f313771308\",\"37f92c78a7dcdeb9ab60246d8dbfe894\",\"ac0ce6e822a14d69600fee4fe0ea287b\",\"5afaec9c8577dbece05134a953a73a41\",\"113693bfd133773d0347838920f5ee11\",\"4df08bb85cf261e42c15d21afeede91c\",\"1d7f2fe5a0cd39e160fba5f6f44729fd\",\"69059156374509897d88111038b2e3da\",\"ad1e22d9ccba8b601ebfd6960746a604\",\"59d9f5fef1ad6bb42da59d1578624d25\",\"d43352ade885d8e98d0d28179dda0cbb\",\"42280576c15231274b377c302ed6f6f5\",\"4413b74cec58bb7697d728cf2c8bbe5c\",\"0c0ec322b6d2d0c2027960d483c4db67\",\"e745b9eb59342282ecf538f29eb281f5\",\"cf1dc1ae10cba2f96de1111285d4d9b8\",\"0b17ec99d6b25f1392b37b685439e6d6\",\"faffaa48f2c787a67bf48d6ed3211ce1\",\"7b38721dd0316057b8723c3328497de8\",\"26705c82ea8b72344c7401d5115eafd8\",\"af94216c44d2106c1ef8cfb6af475e95\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a6978\"}",
+        "expect": {
+          "ids": [
+            "a656d09efaf4f90beeb260ff15283d7f",
+            "6c11376514b55dadd0201b0c1ef126f5",
+            "5ee25389fe6f8af177a93bb7af2804f3",
+            "f6db95a87902901178889d0b41704120",
+            "6219be3b4c68004ac8e03c6a59e1f437",
+            "0f79afe2aeb7ec0adcfd4577a6e1fb6c",
+            "fae9df04dd351741df23e702a8a847da",
+            "3f9b29dfa23767da14058623d228715f",
+            "142610f039ff27a1353006e4c97d7200",
+            "db50bc3666184b885d486d2a0a634369",
+            "5c3766727ed2e9c4b67bdd93a9523de6",
+            "b13dc34a1d926d383e9f1ecc36b5206d",
+            "f61cbd089fb1070c0c752225d292bca9",
+            "02b1124747c68ca9761421e408558768",
+            "653cf57f2a8e8e832ece71459554bd1f",
+            "53a6322a8597c0e8bd97d24cfcddfa8f",
+            "a4d9dfc05c1a8353aebbec1e08365086",
+            "146b50a62158aa7ced0c3b9b863093e3",
+            "4d25120c8b5f8487e21f86631b9154e8",
+            "00c83500d3b83b9d8d0c0b3ef81acfd0",
+            "13fcfe818f9ac145b46f3cab809e22c2",
+            "a3e89c74f4a3dfda7545aeb3efddb83c",
+            "e5ce9eb7dec1f8fea947193e513a812b",
+            "76f7c521980fea5c0f07ec37c779a5e2",
+            "6353efa7f39e77ffb01bb170d80588b6",
+            "bbd4ec5a1c1d04d16f741528c04906fa",
+            "0e1c07f192e362f11d0d177ecd51bcd7",
+            "ca72358da36af02940df62b2656998c9",
+            "d4b9200d078b0902003424f3349e36ea",
+            "21b856d600e7f83588bfff07395a6573",
+            "b73be1d9f1c714c7dfe9258b5357ecaf",
+            "09a0363c3dd40fbfe8f3e10a416f04d3",
+            "14fd4dc3b71f545a84272183e01378cd",
+            "6b01cf8888cbaa45348ebe9b4a94b386",
+            "747489fa6bee885a6853cf6bc987c8af",
+            "ca08d5c51bb1f81fbc19186d21de8c2c",
+            "125e82942e0a6c6b513983d30203212d",
+            "027dbad6642744317327afb17f8d4a6e",
+            "5cc6b204c7e7742e8c95623ad7bb8e6c",
+            "e01f49330c4067044418c79dd55dcd3f",
+            "a1d1c8a969e9fd0bc56567f313771308",
+            "37f92c78a7dcdeb9ab60246d8dbfe894",
+            "ac0ce6e822a14d69600fee4fe0ea287b",
+            "5afaec9c8577dbece05134a953a73a41",
+            "113693bfd133773d0347838920f5ee11",
+            "4df08bb85cf261e42c15d21afeede91c",
+            "1d7f2fe5a0cd39e160fba5f6f44729fd",
+            "69059156374509897d88111038b2e3da",
+            "ad1e22d9ccba8b601ebfd6960746a604",
+            "59d9f5fef1ad6bb42da59d1578624d25",
+            "d43352ade885d8e98d0d28179dda0cbb",
+            "42280576c15231274b377c302ed6f6f5",
+            "4413b74cec58bb7697d728cf2c8bbe5c",
+            "0c0ec322b6d2d0c2027960d483c4db67",
+            "e745b9eb59342282ecf538f29eb281f5",
+            "cf1dc1ae10cba2f96de1111285d4d9b8",
+            "0b17ec99d6b25f1392b37b685439e6d6",
+            "faffaa48f2c787a67bf48d6ed3211ce1",
+            "7b38721dd0316057b8723c3328497de8",
+            "26705c82ea8b72344c7401d5115eafd8"
+          ],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "Anjan’s iPhone",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "junk among the first 60 elements: the valid ones of those 60",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"junk\",5,null,\"a656d09efaf4f90beeb260ff15283d7f\",\"6c11376514b55dadd0201b0c1ef126f5\",\"5ee25389fe6f8af177a93bb7af2804f3\",\"f6db95a87902901178889d0b41704120\",\"6219be3b4c68004ac8e03c6a59e1f437\",\"0f79afe2aeb7ec0adcfd4577a6e1fb6c\",\"fae9df04dd351741df23e702a8a847da\",\"3f9b29dfa23767da14058623d228715f\",\"142610f039ff27a1353006e4c97d7200\",\"db50bc3666184b885d486d2a0a634369\",\"5c3766727ed2e9c4b67bdd93a9523de6\",\"b13dc34a1d926d383e9f1ecc36b5206d\",\"f61cbd089fb1070c0c752225d292bca9\",\"02b1124747c68ca9761421e408558768\",\"653cf57f2a8e8e832ece71459554bd1f\",\"53a6322a8597c0e8bd97d24cfcddfa8f\",\"a4d9dfc05c1a8353aebbec1e08365086\",\"146b50a62158aa7ced0c3b9b863093e3\",\"4d25120c8b5f8487e21f86631b9154e8\",\"00c83500d3b83b9d8d0c0b3ef81acfd0\",\"13fcfe818f9ac145b46f3cab809e22c2\",\"a3e89c74f4a3dfda7545aeb3efddb83c\",\"e5ce9eb7dec1f8fea947193e513a812b\",\"76f7c521980fea5c0f07ec37c779a5e2\",\"6353efa7f39e77ffb01bb170d80588b6\",\"bbd4ec5a1c1d04d16f741528c04906fa\",\"0e1c07f192e362f11d0d177ecd51bcd7\",\"ca72358da36af02940df62b2656998c9\",\"d4b9200d078b0902003424f3349e36ea\",\"21b856d600e7f83588bfff07395a6573\",\"b73be1d9f1c714c7dfe9258b5357ecaf\",\"09a0363c3dd40fbfe8f3e10a416f04d3\",\"14fd4dc3b71f545a84272183e01378cd\",\"6b01cf8888cbaa45348ebe9b4a94b386\",\"747489fa6bee885a6853cf6bc987c8af\",\"ca08d5c51bb1f81fbc19186d21de8c2c\",\"125e82942e0a6c6b513983d30203212d\",\"027dbad6642744317327afb17f8d4a6e\",\"5cc6b204c7e7742e8c95623ad7bb8e6c\",\"e01f49330c4067044418c79dd55dcd3f\",\"a1d1c8a969e9fd0bc56567f313771308\",\"37f92c78a7dcdeb9ab60246d8dbfe894\",\"ac0ce6e822a14d69600fee4fe0ea287b\",\"5afaec9c8577dbece05134a953a73a41\",\"113693bfd133773d0347838920f5ee11\",\"4df08bb85cf261e42c15d21afeede91c\",\"1d7f2fe5a0cd39e160fba5f6f44729fd\",\"69059156374509897d88111038b2e3da\",\"ad1e22d9ccba8b601ebfd6960746a604\",\"59d9f5fef1ad6bb42da59d1578624d25\",\"d43352ade885d8e98d0d28179dda0cbb\",\"42280576c15231274b377c302ed6f6f5\",\"4413b74cec58bb7697d728cf2c8bbe5c\",\"0c0ec322b6d2d0c2027960d483c4db67\",\"e745b9eb59342282ecf538f29eb281f5\",\"cf1dc1ae10cba2f96de1111285d4d9b8\",\"0b17ec99d6b25f1392b37b685439e6d6\",\"faffaa48f2c787a67bf48d6ed3211ce1\",\"7b38721dd0316057b8723c3328497de8\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a6978\"}",
+        "expect": {
+          "ids": [
+            "a656d09efaf4f90beeb260ff15283d7f",
+            "6c11376514b55dadd0201b0c1ef126f5",
+            "5ee25389fe6f8af177a93bb7af2804f3",
+            "f6db95a87902901178889d0b41704120",
+            "6219be3b4c68004ac8e03c6a59e1f437",
+            "0f79afe2aeb7ec0adcfd4577a6e1fb6c",
+            "fae9df04dd351741df23e702a8a847da",
+            "3f9b29dfa23767da14058623d228715f",
+            "142610f039ff27a1353006e4c97d7200",
+            "db50bc3666184b885d486d2a0a634369",
+            "5c3766727ed2e9c4b67bdd93a9523de6",
+            "b13dc34a1d926d383e9f1ecc36b5206d",
+            "f61cbd089fb1070c0c752225d292bca9",
+            "02b1124747c68ca9761421e408558768",
+            "653cf57f2a8e8e832ece71459554bd1f",
+            "53a6322a8597c0e8bd97d24cfcddfa8f",
+            "a4d9dfc05c1a8353aebbec1e08365086",
+            "146b50a62158aa7ced0c3b9b863093e3",
+            "4d25120c8b5f8487e21f86631b9154e8",
+            "00c83500d3b83b9d8d0c0b3ef81acfd0",
+            "13fcfe818f9ac145b46f3cab809e22c2",
+            "a3e89c74f4a3dfda7545aeb3efddb83c",
+            "e5ce9eb7dec1f8fea947193e513a812b",
+            "76f7c521980fea5c0f07ec37c779a5e2",
+            "6353efa7f39e77ffb01bb170d80588b6",
+            "bbd4ec5a1c1d04d16f741528c04906fa",
+            "0e1c07f192e362f11d0d177ecd51bcd7",
+            "ca72358da36af02940df62b2656998c9",
+            "d4b9200d078b0902003424f3349e36ea",
+            "21b856d600e7f83588bfff07395a6573",
+            "b73be1d9f1c714c7dfe9258b5357ecaf",
+            "09a0363c3dd40fbfe8f3e10a416f04d3",
+            "14fd4dc3b71f545a84272183e01378cd",
+            "6b01cf8888cbaa45348ebe9b4a94b386",
+            "747489fa6bee885a6853cf6bc987c8af",
+            "ca08d5c51bb1f81fbc19186d21de8c2c",
+            "125e82942e0a6c6b513983d30203212d",
+            "027dbad6642744317327afb17f8d4a6e",
+            "5cc6b204c7e7742e8c95623ad7bb8e6c",
+            "e01f49330c4067044418c79dd55dcd3f",
+            "a1d1c8a969e9fd0bc56567f313771308",
+            "37f92c78a7dcdeb9ab60246d8dbfe894",
+            "ac0ce6e822a14d69600fee4fe0ea287b",
+            "5afaec9c8577dbece05134a953a73a41",
+            "113693bfd133773d0347838920f5ee11",
+            "4df08bb85cf261e42c15d21afeede91c",
+            "1d7f2fe5a0cd39e160fba5f6f44729fd",
+            "69059156374509897d88111038b2e3da",
+            "ad1e22d9ccba8b601ebfd6960746a604",
+            "59d9f5fef1ad6bb42da59d1578624d25",
+            "d43352ade885d8e98d0d28179dda0cbb",
+            "42280576c15231274b377c302ed6f6f5",
+            "4413b74cec58bb7697d728cf2c8bbe5c",
+            "0c0ec322b6d2d0c2027960d483c4db67",
+            "e745b9eb59342282ecf538f29eb281f5",
+            "cf1dc1ae10cba2f96de1111285d4d9b8",
+            "0b17ec99d6b25f1392b37b685439e6d6"
+          ],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "Anjan’s iPhone",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "ids that are not strings",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[1,true,null,{\"i\":\"d703bc84a6f33dd08ff8a77582865ae5\"},[\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"3dc49aac722c3a735b0157e88ab0ad6a\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"x-dev\":\"0f1e2d3c4b5a6978\"}",
+        "expect": {
+          "ids": [
+            "3dc49aac722c3a735b0157e88ab0ad6a"
+          ],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "ids in upper case or of the wrong length",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"D703BC84A6F33DD08FF8A77582865AE5\",\"5fdb8a9c0178fe325ad9b3735d87b73\",\"3dc49aac722c3a735b0157e88ab0ad6a0\",\"d8b2ba8531e7a9afff4366acb1dcbcd9\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a6978\"}",
+        "expect": {
+          "ids": [
+            "d8b2ba8531e7a9afff4366acb1dcbcd9"
+          ],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "Anjan’s iPhone",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "repeats of an id are kept, in order",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a6978\"}",
+        "expect": {
+          "ids": [
+            "d703bc84a6f33dd08ff8a77582865ae5",
+            "d703bc84a6f33dd08ff8a77582865ae5",
+            "85fdb8a9c0178fe325ad9b3735d87b73"
+          ],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "Anjan’s iPhone",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "x-dev of 15 digits: no device",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"f1e2d3c4b5a6978\"}",
+        "expect": {
+          "ids": [
+            "d703bc84a6f33dd08ff8a77582865ae5",
+            "85fdb8a9c0178fe325ad9b3735d87b73"
+          ],
+          "dev": null,
+          "from": "Anjan’s iPhone",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "x-dev of 17 digits: no device",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a69780\"}",
+        "expect": {
+          "ids": [
+            "d703bc84a6f33dd08ff8a77582865ae5",
+            "85fdb8a9c0178fe325ad9b3735d87b73"
+          ],
+          "dev": null,
+          "from": "Anjan’s iPhone",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "x-dev in upper case: no device",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"A1B2C3D4E5F60718\"}",
+        "expect": {
+          "ids": [
+            "d703bc84a6f33dd08ff8a77582865ae5",
+            "85fdb8a9c0178fe325ad9b3735d87b73"
+          ],
+          "dev": null,
+          "from": "Anjan’s iPhone",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "x-dev a number: no device",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[],\"sent\":\"2026-10-23T08:00:00.000Z\",\"x-dev\":1234567890123456}",
+        "expect": {
+          "ids": [],
+          "dev": null,
+          "from": "",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "x-dev absent: no device",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Mac\"}",
+        "expect": {
+          "ids": [
+            "d703bc84a6f33dd08ff8a77582865ae5"
+          ],
+          "dev": null,
+          "from": "Mac",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "from not a string: \"\"",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":42,\"x-dev\":\"0f1e2d3c4b5a6978\"}",
+        "expect": {
+          "ids": [
+            "d703bc84a6f33dd08ff8a77582865ae5",
+            "85fdb8a9c0178fe325ad9b3735d87b73"
+          ],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "from with control characters and runs of spaces: cleaned",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"  Anjan’s\\u0007  Mac\\n\\n \",\"x-dev\":\"0f1e2d3c4b5a6978\"}",
+        "expect": {
+          "ids": [
+            "d703bc84a6f33dd08ff8a77582865ae5",
+            "85fdb8a9c0178fe325ad9b3735d87b73"
+          ],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "Anjan’s Mac",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "from of 70 characters: the first 60",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM\",\"x-dev\":\"0f1e2d3c4b5a6978\"}",
+        "expect": {
+          "ids": [
+            "d703bc84a6f33dd08ff8a77582865ae5",
+            "85fdb8a9c0178fe325ad9b3735d87b73"
+          ],
+          "dev": "0f1e2d3c4b5a6978",
+          "from": "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM",
+          "rx": true,
+          "want": false
+        }
+      },
+      {
+        "name": "kind not ack: null",
+        "headerJson": "{\"v\":1,\"kind\":\"item\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a6978\"}",
+        "expect": null
+      },
+      {
+        "name": "ids not an array: null",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":\"d703bc84a6f33dd08ff8a77582865ae5\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a6978\"}",
+        "expect": null
+      },
+      {
+        "name": "ids missing: null",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"x-dev\":\"0f1e2d3c4b5a6978\"}",
+        "expect": null
+      },
+      {
+        "name": "not an object: null",
+        "headerJson": "[1,2]",
+        "expect": null
+      }
+    ]
+  },
+  "returnLane": {
+    "notes": [
+      "returnLane (LAB-PROTOCOL 2.4; W2, L2). Times: `time` and `heard` are relay times (time in Unix seconds, heard in ms); `now`, `created`, `got` and `followUps` are the Daylight's (or the device's) clock in ms; `copies` are relay times in ms (copyUntil). Device ids are 16 lowercase hex digits.",
+      "constants: the return lane's constants (2.4) and LAB_FRAMES_PER_DAY_RETURN (2.2.4).",
+      "topics: for each secret, returnTopic, returnAckTopic and returnDevTopic(dev) = \"dls-\" + the first 32 hex digits of SHA-256(\"dlshare/v1/lab-return-dev\" + 0x00 + secret + the 16 ASCII bytes of dev); refusedDevs are refused (an error \"device\"). frames: seal headerJson with the pairing key of vector-secret-1, nonceHex and `purpose`: it must equal frameBase64, and fail to open (an error \"frame\") with each of refusedPurposes; the device frame is what buildReturnAckFrame({ids, dev, from, sent}) writes. worstAck: the longest device frame (60 ids, 60 lone surrogates in from, x-rx false and x-want true): headerBytes, frameLength and base64Length pin its size, and it is small; a builder refuses 61 ids and a device id that is not 16 lowercase hex digits.",
+      "keys: the JS storage keys (outbox/<id> for any row id) each lane's Sender and Receiver hold after the same exchange; the pairing lane's are v1.1's, and the two lanes share none. Kotlin and Swift keep the return lane in a lane-return/ folder next to the outbox instead.",
+      "due: returnDue(row, dev, heard, now) must equal expect. The cases come twice: with the Daylight's clock right, and 5 hours ahead (now and followUps move, relay times do not): the answers are the same.",
+      "settle: settleReturnRow(row, now, settled) with settled(dev) true for the ids in `settled` must equal expect (null: unchanged; else {status, missing}).",
+      "devices: feed each step's ack (a returnAck result) with its relay time (s) to ReturnDevices.record in order, then read the view at `now`: devices (every kept device by first heard: dev, from, first, heard, rx, want, retired, current, n), names (the current devices with n: 1, 2, ... per from, in the order first heard), targets (the current devices with rx, newest heard first, at most 8) and settled per device.",
+      "budget: run the steps on a new budget ({day: \"\", frames: 0, bytes: 0, resends: {}, live: [], limitUntil: 0}): check -> returnBudgetCheck(budget, attempt, now) must equal expect (\"ok\", \"yield\", \"cap\" or \"relay\"); charge -> chargeReturnBudget(budget, frame, now), limit -> limitReturnBudget(budget, status, now), bytes -> noteReturnBudgetBytes(budget, bytes, now): the budget must then equal expect.",
+      "cadence: a device's frames (2.4.4), from a new state. hello: helloDue = true and off = false. read: deviceAfterRead(state, {ids, stored, expired}), then deviceFrameDue(state, now); when it gives a reason, the frame carries the first 60 of pending and x-want for \"want\", and goes: deviceFramePublished(state, {now, time, ids, want}). limit: limitUntil = max(limitUntil, now + 1 h) for a 429 or 413. off: when the device ever published (firstHello), one frame with x-rx false and the first 60 of pending, past the cap (deviceFramePublished with rx false); then off = true either way. expect: {frame: null or {reason, ids, want}, state} after the step."
+    ],
+    "constants": {
+      "RETURN_KINDS": [
+        "share",
+        "marks",
+        "queue",
+        "reading"
+      ],
+      "RETURN_KINDS_W2": [
+        "share"
+      ],
+      "RETURN_TARGETS_MAX": 8,
+      "RETURN_TARGET_STALE_MS": 1209600000,
+      "RETURN_SAME_NAME_MS": 172800000,
+      "RETURN_DEVICES_KEPT": 32,
+      "RETURN_ACK_IDS": 60,
+      "RETURN_PENDING_ACKS_MAX": 500,
+      "RETURN_DEVICE_FRAMES_PER_DAY": 3,
+      "RETURN_ACK_GAP_MS": 1800000,
+      "RETURN_IDLE_HELLO_MS": 86400000,
+      "RETURN_WANT_READ_MS": 1200000,
+      "RETURN_COPY_ATTACH_MS": 10800000,
+      "RETURN_COPY_MSG_MS": 43200000,
+      "RETURN_FOLLOW_UP_MS": 11100000,
+      "RETURN_FRAMES_PER_DAY": 12,
+      "RETURN_RESENDS_PER_DEVICE": 6,
+      "RETURN_BYTES_PER_DAY": 60000000,
+      "RETURN_LIVE_BYTES_MAX": 10000000,
+      "RETURN_YIELD_MS": 3600000,
+      "RETURN_NO_DEVICE_MS": 86400000,
+      "RETURN_EXPIRY_MS": 604800000,
+      "RETURN_POLL_COMBINED": true,
+      "LAB_FRAMES_PER_DAY_RETURN": 18
+    },
+    "topics": [
+      {
+        "label": "vector-secret-1",
+        "secretHex": "27018efa6c00e0fec24d663e1119f9a1",
+        "returnTopic": "dls-b8c52a335ad8f640bbddd32d1d1cb572",
+        "returnAckTopic": "dls-a0ee13db5b5536a3adbc82fe2485f9aa",
+        "devTopics": {
+          "0f1e2d3c4b5a6978": "dls-0dd7ad6c0d62466d2b9a5209f47e79f6",
+          "a1b2c3d4e5f60718": "dls-a80b1d3eb0b4f0733a2c2df41b1cc381",
+          "0000000000000000": "dls-eb4a2e0f061bf31a58add33fce412233",
+          "ffffffffffffffff": "dls-d7f0503041e09e83880a8029cd4568dd"
+        }
+      },
+      {
+        "label": "all-zero",
+        "secretHex": "00000000000000000000000000000000",
+        "returnTopic": "dls-5c821665d780a7a6dab3d9569f8f947d",
+        "returnAckTopic": "dls-5d0ed325aba79bdd96612b3cdd9c64c4",
+        "devTopics": {
+          "0f1e2d3c4b5a6978": "dls-93543a139b0226b9de6c4d1127972548",
+          "a1b2c3d4e5f60718": "dls-30ad11568bebcc3d27897940a640d5af",
+          "0000000000000000": "dls-79ac78ab600d40ce4b3eb9548ff231c0",
+          "ffffffffffffffff": "dls-2200b0c7356eb85705194e7221d45829"
+        }
+      }
+    ],
+    "refusedDevs": [
+      "0F1E2D3C4B5A6978",
+      "f1e2d3c4b5a6978",
+      "0f1e2d3c4b5a69780",
+      "",
+      "gggggggggggggggg"
+    ],
+    "frames": [
+      {
+        "name": "an item for every device, on returnTopic",
+        "purpose": "lab-return",
+        "nonceHex": "a65abfdfbb76ca8f1b73c5cb",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"url\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"title\":\"Shared on the Daylight\",\"x-rk\":\"share\"}",
+        "frameBase64": "RExTMaZav9+7dsqPG3PFyw6GU+Wf890DAMo8OykWmVwy1ow4BnxAO6NT3HireGMnRM4KssMuUI98gl9dtWw+FopilcatDxreN7pOCdkLEzK9gb2evF8O5t0xqr3OF4W2RLLRSe1B8oQB5QcW+sieX9Kj4Ud09hXYPkkDRGU8nv87pTG6sqSUgDDjPGtMe4cv3Qb86/CjOmIyVdygen2GhX0B1rA6QQg6uxbCehUTUwt7sx5zB6ZUt1zwFZ/ICdeaG4gyS/K/dQALWNxZGF1FOejWLlbULZY+BVvztioOBwYLD86cWkZ8tpaS+DR04DQ39D8=",
+        "refusedPurposes": [
+          "inbox",
+          "ack",
+          "lab-return-ack",
+          "lab-return-dev"
+        ]
+      },
+      {
+        "name": "an item for one device, on its own topic",
+        "purpose": "lab-return-dev",
+        "nonceHex": "989f70db70a1a3dbe1bad6e1",
+        "headerJson": "{\"v\":1,\"id\":\"1aafc1512a2175a0a14e9a09985db3f7\",\"kind\":\"url\",\"url\":\"https://example.com/from-the-daylight\",\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Daylight\",\"title\":\"Shared on the Daylight\",\"x-rk\":\"share\",\"x-to\":\"0f1e2d3c4b5a6978\"}",
+        "frameBase64": "RExTMZifcNtwoaPb4brW4easRtxfM+thrFYqUxfhNg+CUNqovOwggiq78LkSXy3OIlOgSswE0M1fLDY6q4GBEpiAkj9pPBHDtnzPVGuSQmFDyH5COcfnUQgTZN3fSj4HtmZqv8fr/IRj6Cu9iLn7T0Sr2JCIpW3O8SDiraJTZGxwAgbcNpV6W7wUNk2XxVQas6ECI810zGfGZ9LA/y8/DIumlHpxR4Usdbd2cL3ijISn194pYAfQBUgxLBqBCkN6IdItGEpT7D+CITKXx3jv4lKBy/VyUOrA4rWfGECQ/ejulsOxQYkz9daJ2aUqovG7W2wteTcxhMYHOZ877RL/fQdFp5tCFxwX3v0dfg==",
+        "refusedPurposes": [
+          "inbox",
+          "ack",
+          "lab-return",
+          "lab-return-ack"
+        ]
+      },
+      {
+        "name": "a device frame on returnAckTopic",
+        "purpose": "lab-return-ack",
+        "nonceHex": "eb707d189a81533fdd1ca9cb",
+        "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"d703bc84a6f33dd08ff8a77582865ae5\",\"85fdb8a9c0178fe325ad9b3735d87b73\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"Anjan’s iPhone\",\"x-dev\":\"0f1e2d3c4b5a6978\"}",
+        "frameBase64": "RExTMetwfRiagVM/3RypyzUZ/lWn8otqq1FL2CJ8Xxt2DuvCmHYlpLUO0YA559ZbUKRw9Mi0+PaauJzm7dzhUZ64I5XLcXYpRNxgmwHwsvrVVw2C3T9kIaXXzlijiHBJDA/tsOv3+vQRLF4Qqb6lXXzNMpMhDmlHio4pj4U0BKc29zNDL3+0leWHuxAA8XYE4uFq3N3CrQ21L+FRyO9WpcrkS2C2yc9+0TkyCqKwgNSiouItq8ELwo1oXI0KwSwpLS2jXhd/fS04ZTvNG4rfXElHuOIEuQbAGafd4Ws=",
+        "refusedPurposes": [
+          "inbox",
+          "ack",
+          "lab-return",
+          "lab-return-dev"
+        ]
+      }
+    ],
+    "worstAck": {
+      "loneSurrogates": true,
+      "nonceHex": "3edcb8c07711ff736d7bceed",
+      "headerJson": "{\"v\":1,\"kind\":\"ack\",\"ids\":[\"a656d09efaf4f90beeb260ff15283d7f\",\"6c11376514b55dadd0201b0c1ef126f5\",\"5ee25389fe6f8af177a93bb7af2804f3\",\"f6db95a87902901178889d0b41704120\",\"6219be3b4c68004ac8e03c6a59e1f437\",\"0f79afe2aeb7ec0adcfd4577a6e1fb6c\",\"fae9df04dd351741df23e702a8a847da\",\"3f9b29dfa23767da14058623d228715f\",\"142610f039ff27a1353006e4c97d7200\",\"db50bc3666184b885d486d2a0a634369\",\"5c3766727ed2e9c4b67bdd93a9523de6\",\"b13dc34a1d926d383e9f1ecc36b5206d\",\"f61cbd089fb1070c0c752225d292bca9\",\"02b1124747c68ca9761421e408558768\",\"653cf57f2a8e8e832ece71459554bd1f\",\"53a6322a8597c0e8bd97d24cfcddfa8f\",\"a4d9dfc05c1a8353aebbec1e08365086\",\"146b50a62158aa7ced0c3b9b863093e3\",\"4d25120c8b5f8487e21f86631b9154e8\",\"00c83500d3b83b9d8d0c0b3ef81acfd0\",\"13fcfe818f9ac145b46f3cab809e22c2\",\"a3e89c74f4a3dfda7545aeb3efddb83c\",\"e5ce9eb7dec1f8fea947193e513a812b\",\"76f7c521980fea5c0f07ec37c779a5e2\",\"6353efa7f39e77ffb01bb170d80588b6\",\"bbd4ec5a1c1d04d16f741528c04906fa\",\"0e1c07f192e362f11d0d177ecd51bcd7\",\"ca72358da36af02940df62b2656998c9\",\"d4b9200d078b0902003424f3349e36ea\",\"21b856d600e7f83588bfff07395a6573\",\"b73be1d9f1c714c7dfe9258b5357ecaf\",\"09a0363c3dd40fbfe8f3e10a416f04d3\",\"14fd4dc3b71f545a84272183e01378cd\",\"6b01cf8888cbaa45348ebe9b4a94b386\",\"747489fa6bee885a6853cf6bc987c8af\",\"ca08d5c51bb1f81fbc19186d21de8c2c\",\"125e82942e0a6c6b513983d30203212d\",\"027dbad6642744317327afb17f8d4a6e\",\"5cc6b204c7e7742e8c95623ad7bb8e6c\",\"e01f49330c4067044418c79dd55dcd3f\",\"a1d1c8a969e9fd0bc56567f313771308\",\"37f92c78a7dcdeb9ab60246d8dbfe894\",\"ac0ce6e822a14d69600fee4fe0ea287b\",\"5afaec9c8577dbece05134a953a73a41\",\"113693bfd133773d0347838920f5ee11\",\"4df08bb85cf261e42c15d21afeede91c\",\"1d7f2fe5a0cd39e160fba5f6f44729fd\",\"69059156374509897d88111038b2e3da\",\"ad1e22d9ccba8b601ebfd6960746a604\",\"59d9f5fef1ad6bb42da59d1578624d25\",\"d43352ade885d8e98d0d28179dda0cbb\",\"42280576c15231274b377c302ed6f6f5\",\"4413b74cec58bb7697d728cf2c8bbe5c\",\"0c0ec322b6d2d0c2027960d483c4db67\",\"e745b9eb59342282ecf538f29eb281f5\",\"cf1dc1ae10cba2f96de1111285d4d9b8\",\"0b17ec99d6b25f1392b37b685439e6d6\",\"faffaa48f2c787a67bf48d6ed3211ce1\",\"7b38721dd0316057b8723c3328497de8\",\"26705c82ea8b72344c7401d5115eafd8\"],\"sent\":\"2026-10-23T08:00:00.000Z\",\"from\":\"\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\\ud800\",\"x-dev\":\"0f1e2d3c4b5a6978\",\"x-rx\":false,\"x-want\":true}",
+      "headerBytes": 2586,
+      "frameLength": 2622,
+      "base64Length": 3496,
+      "small": true,
+      "frameBase64": "RExTMT7cuMB3Ef9zbXvO7Td76Rf/Q6G7PBr4RxBX8neTaiVh8cCVyFXJ3EPBREBvaN6r3iHwpqDA/E73FziJ7eLEw9ymiHfiiDXZX6sEIbexwggHP7xpRfcAFS5FVXs1b+wYV7Negt2oIFPjj7FlFRBFxh+Ib60J6p0PGH5wls2/9XOIHH/N4WjtsusUK1gcK9UV0hbG81iTxDooiI1LN5qqdqfz3DsgHaBT2t5NiBVDVRmLbEQiYp8PtXw2E1VDNBwjnp4QaSjQo/jYqCHUDfJdDHH/roHFHiK1RBhB9yWsMwaIoVLoYPo8nZZ5xjJV1nR3uLiFRGjGokSymoncGpIGqyPk2VDTbyjaA7bIi9H7z6wsIF2/sAOm4uWbijilIIdx+BO/fkC43hdqc/BoYFFd0GwEwwp/UfNXKxE1whZqg/ypk5xUfEYJKt8pkcDW4VsLuoU1HTHWHbnFNoNv8MwaZYgHhDEl1oP6YQAltnykLzTZODnm5NW1FxJJCFCe1VbEEhNqw9Nd1/huErJxhdc6OoCdT9IpM28Kd3zG4us7Vv4ID8MxgO1nblUPV9IZoOGHEB+5T0ybG5ab0W3JYjDvmPju4OxWh0kReh8SNeMF4MTewsuA3qgIrZt6eJVeTD1JUxf6RY0IQ3HnnJFfrTCxElomZvLbJ8XxbFGcnSO4uF5eXXNBcr6qRnS5Xgjma29jXO2qetBpYaf5rDiQwZMUHCd2QyFLq3s+rvSEomtAzax3UqRDlRMsw5HCxQign8uK3ttgEg9Hxgj75AyqNPR+JGR7n7dryLLXNQAEUbdILROzKPeFtGx0YrdCoQv7ZlrkPUcNjZrDbS/ZLUb7g3edGQIzqMF6Bex3L/HD4Si9o9Hpa47CSLhElY/Ec371A6CNDoR1YyZiq26QUkgddDuOJeQIRIwAKlQJ27EJGXU+fa4WlixrRqCAitxFsCBiaaf729fOqr7USlfmVBF2N1HeOaWNM1ISBP2WMjtKkM7dSwa6ijB/aPZjmmUFFENNjZcFX+rDZMzU88pb/U5ZkXNvUzCmtFiehJoL2m+cbCNxWRNa9HEOxiy7iW+U0oeey8T0KvQXNwm3gcoKiMWndM3ASfGG2ZyFC0uwRS5ejF8Hhwomc1wB4EE71oaTszOVRoXnjO9pbVJGDFqqm2sCfge/zo5JT4XfiA0uMzAK7x+MeosDLRkgMKe9RYOoF94s8dE9W7/7ra4beYvUtlLDITSsqHKdrXeyQ7IGAGN93brxzEIRG4Z2kXQwZ8R/7u4OunTbmYGDYX60xdsfSIyYcGYxV4TbsuuaxnLt2U4HYxi9dg4/U1MaQxJD4mi1zOHS4e4ssuhrYYBAMxnFwU1YO84IoBg7KyyvyPDYusy1GhRs6iPHTJGTWnOe7wmtf5WfuwRHvnR2H5Zjyanb9tW6Mrn2ryrY0weYO4CO2g76cBcmV+oievj+QR+gtFgHudeRN6gLPwORbQ+nDzMVJ77znVQVXMMNlg5hj6YXt8pUrvuws/zrd08KqGquPPwQ9AY+JqdoeG+adO9UnuuySCH14fIjVUdbyAXi4q+fuGoTyjOqGa2xNwHTy6eU78D49ZChsh+3IYHV1hfoI1x6+7wgZIM5kdIwVOvOzytd+5Vxk/eiqg9b3nMEMXY+0XhYNVkiVgNdStJXcB9OLHzcX6obI6jzRfUs4QzQImyEO4qq1mHp4ij2NPZcwHJ9ux0iUN6SArAGbQNbPoKI5EoZc3M40SLSoqQBgJvY1sWi1VdWRlx5gCBaB6VGBELnajqngpFpk9NLQTaPoQBtl0E6sv8GZYzZgjv9Mwr/KT0PG5Vz+vdCgDMUPnD/PV7BD9AJT+EAJkkrGTL/fmv1hzBK2qKyPQX0i4kxuWYzuiBM/+EpdyN1xOw+D2ajC9jMo8AwiufGKSYkDdSeg/24wxNmMa2aJOIIARX6nxMdwjiXArP/yxAN/9luMZM/ug4pyOIpXJIKxne3INKRmKLnCNNbkbGWU+e5LJHybA23vdgoglpayDHWsNsRfoIgiS5fvjdgbDT3ahYcI++ZNZXY74wsDelW2/0LbsLswraN8wcduG8Vp8Rm668wtfQbHlPGV/WJgBJ7GJxqJcaXguzK8M6YOlSvKZzZcygDvGQhry2qUFXITN5hqM0zOkYROnEA+RWiHhvauPWF2VzI/c1fPayB/ODHgbERfoPFwI8z/LJkCT+dJcRKYsWW0bEjHyTlw8Wmfv/PSdwwZU2oUHW1A0cFSUvX4PV9dlxRdNPAzxDC0wySoX6ZzNv+i7Ch7Rf1VMeNUzsJgJXkkPdYMB3CpTVji4/+PW/jt9KrV25ZcGuWrWACyAQNwcGQ9SepKhtyDc5btSGRk5ZbAyCjgeK7TnaZPEBS6Ll8DQQO5Z011t2id4dx3zEPhKnQY+XuRXl8ARkkZvYWoG04r6K1M+b/zPX6Zm6UoiYcbGFO+AHQF16/UH6tn7try3k0R3E6A1kV5xKc/9IHpfRksMmhKJo4V5+SEmJ+ycLtrYLub9VA03Z10/NCSf2a/7fWuPb63WnjWoAiIgeRH+xqLcAk7mVlyeaOhzFrngh5Dw8YE8wPgyMSQVjV7pMkSiHDFkXkAxwVRLLvo54uMo6im79dllppcMUCZ63Cr/i2vqsHG7f/62rkxrKfEb8FCm55dFl2/E+COE/W6ODeWnUOwLUemL9QoVXCmE5VPe5hLV4Tryz6/ooZzD5gEUDBmLm2GkehrN0q8E4jSaWCy2Nxk03roh9cyUDBo7u1IJ5SGpKQ2Y1QRzhv3Jo9Y24U+TrGO7CIULcK6w0auRBPedPs/P6NbklnDs77XNZSQO5bVzrH8I+k2UuGVTYMVuWi+QY4dqH17jTQT80B2V6OVUoq8IUINZ03+3phDXdeCUhIbwTt9VkfdQPzbM0GqhWDKtJWbc+sxZrN7D0nDVhnN/ZNtHKDWJg7Vc4Lm37JU3pDNT5520mRtD69/vq+fjrycAWJ5HeNttCqDo2I6tTbz7ltn3RGnK6f9K3yQ3OdgNI8ARHZbIrYQl57t5x77SylXicrvC64pvYEQ57XMFT7F7tDrbxscbwVv+Tjzl2jPF4ZZPp/v7/VUmtiAHOJCM9DDAevgm7v5cfvZZu7x247SulODbVqLABsiCR5FGOmItYbBfW3gWHZ4GEWrj2vD+TtBWhqOiIGLh9OMmcxZPv8UEVMnLmUD3mOHekazTaFMKeyUxP1pc7jdgUwcb8DpcfnT4JIp3idNhTVj+H2pbxTKaCPdelJmD1QKs3k5V4lnqOjfrq01KQ+nclzi9nK5uGfty6m8HNpgHkaxLUy4BGXyninB3PTOJxOaJr88ZavE0X0eoMmfjcfCbKNfJWks7dNv84KiNsenHqfp02Yflvg097UjABYJtWkgoRmwaoNqC6vJzjc2jp56RGx3yRShO7bMPj+6U+8Exe5VKyHUzFWL97Knb+6FbIGUbvFjWRXVyqBufYAwSeA/Y7IQfvy"
+    },
+    "keys": {
+      "pairing": {
+        "sender": [
+          "ackSince",
+          "outbox"
+        ],
+        "receiver": [
+          "inboxSince",
+          "incomplete",
+          "seenItems",
+          "seenMsgs"
+        ]
+      },
+      "return": {
+        "sender": [
+          "lane/return/ackSince",
+          "lane/return/budget",
+          "lane/return/devices",
+          "lane/return/outbox"
+        ],
+        "receiver": [
+          "lane/return/devId",
+          "lane/return/device",
+          "lane/return/inboxSince",
+          "lane/return/incomplete",
+          "lane/return/seenItems",
+          "lane/return/seenMsgs"
+        ]
+      }
+    },
+    "due": [
+      {
+        "name": "attachment row: heard 2.9 h after the copy’s first frame",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792753200000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792752840000,
+        "now": 1792752900000,
+        "expect": false
+      },
+      {
+        "name": "attachment row: heard 3.1 h after it",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792753200000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792753560000,
+        "now": 1792753620000,
+        "expect": true
+      },
+      {
+        "name": "attachment row: heard exactly at copyUntil",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792753200000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792753200000,
+        "now": 1792753260000,
+        "expect": false
+      },
+      {
+        "name": "attachment row: heard 1 ms after copyUntil",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792753200000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792753200001,
+        "now": 1792753260000,
+        "expect": true
+      },
+      {
+        "name": "message row: heard 11.9 h after it",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792785600000,
+            "a1b2c3d4e5f60718": 1792785600000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792785240000,
+        "now": 1792785300000,
+        "expect": false
+      },
+      {
+        "name": "message row: heard 12.1 h after it",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792785600000,
+            "a1b2c3d4e5f60718": 1792785600000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792785960000,
+        "now": 1792786020000,
+        "expect": true
+      },
+      {
+        "name": "message row: heard exactly at copyUntil",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792785600000,
+            "a1b2c3d4e5f60718": 1792785600000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792785600000,
+        "now": 1792785660000,
+        "expect": false
+      },
+      {
+        "name": "never heard",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792753200000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": null,
+        "now": 1792850400000,
+        "expect": false
+      },
+      {
+        "name": "acked: never due",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {
+            "a1b2c3d4e5f60718": 1792746000000
+          },
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792753200000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792760400000,
+        "now": 1792760400000,
+        "expect": false
+      },
+      {
+        "name": "not a target",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792753200000
+          },
+          "followUps": {}
+        },
+        "dev": "00000000000000ff",
+        "heard": 1792760400000,
+        "now": 1792760400000,
+        "expect": false
+      },
+      {
+        "name": "no copy for it yet (the first publish has not gone)",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {},
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792760400000,
+        "now": 1792760400000,
+        "expect": false
+      },
+      {
+        "name": "follow-up: 1 ms before 185 minutes after the re-send",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792767600000
+          },
+          "followUps": {
+            "a1b2c3d4e5f60718": 1792767900000
+          }
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792756800000,
+        "now": 1792767899999,
+        "expect": false
+      },
+      {
+        "name": "follow-up: at 185 minutes after the re-send",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792767600000
+          },
+          "followUps": {
+            "a1b2c3d4e5f60718": 1792767900000
+          }
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792756800000,
+        "now": 1792767900000,
+        "expect": true
+      },
+      {
+        "name": "follow-up: after an ack, none",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {
+            "a1b2c3d4e5f60718": 1792767840000
+          },
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792767600000
+          },
+          "followUps": {
+            "a1b2c3d4e5f60718": 1792767900000
+          }
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792756800000,
+        "now": 1792767900000,
+        "expect": false
+      },
+      {
+        "name": "attachment row: heard 2.9 h after the copy’s first frame, the Daylight 5 h ahead",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792753200000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792752840000,
+        "now": 1792770900000,
+        "expect": false
+      },
+      {
+        "name": "attachment row: heard 3.1 h after it, the Daylight 5 h ahead",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792753200000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792753560000,
+        "now": 1792771620000,
+        "expect": true
+      },
+      {
+        "name": "attachment row: heard exactly at copyUntil, the Daylight 5 h ahead",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792753200000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792753200000,
+        "now": 1792771260000,
+        "expect": false
+      },
+      {
+        "name": "attachment row: heard 1 ms after copyUntil, the Daylight 5 h ahead",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792753200000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792753200001,
+        "now": 1792771260000,
+        "expect": true
+      },
+      {
+        "name": "message row: heard 11.9 h after it, the Daylight 5 h ahead",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792785600000,
+            "a1b2c3d4e5f60718": 1792785600000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792785240000,
+        "now": 1792803300000,
+        "expect": false
+      },
+      {
+        "name": "message row: heard 12.1 h after it, the Daylight 5 h ahead",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792785600000,
+            "a1b2c3d4e5f60718": 1792785600000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792785960000,
+        "now": 1792804020000,
+        "expect": true
+      },
+      {
+        "name": "message row: heard exactly at copyUntil, the Daylight 5 h ahead",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792785600000,
+            "a1b2c3d4e5f60718": 1792785600000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792785600000,
+        "now": 1792803660000,
+        "expect": false
+      },
+      {
+        "name": "never heard, the Daylight 5 h ahead",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792753200000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": null,
+        "now": 1792868400000,
+        "expect": false
+      },
+      {
+        "name": "acked: never due, the Daylight 5 h ahead",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {
+            "a1b2c3d4e5f60718": 1792764000000
+          },
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792753200000
+          },
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792760400000,
+        "now": 1792778400000,
+        "expect": false
+      },
+      {
+        "name": "not a target, the Daylight 5 h ahead",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792753200000
+          },
+          "followUps": {}
+        },
+        "dev": "00000000000000ff",
+        "heard": 1792760400000,
+        "now": 1792778400000,
+        "expect": false
+      },
+      {
+        "name": "no copy for it yet (the first publish has not gone), the Daylight 5 h ahead",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {},
+          "followUps": {}
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792760400000,
+        "now": 1792778400000,
+        "expect": false
+      },
+      {
+        "name": "follow-up: 1 ms before 185 minutes after the re-send, the Daylight 5 h ahead",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792767600000
+          },
+          "followUps": {
+            "a1b2c3d4e5f60718": 1792785900000
+          }
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792756800000,
+        "now": 1792785899999,
+        "expect": false
+      },
+      {
+        "name": "follow-up: at 185 minutes after the re-send, the Daylight 5 h ahead",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {},
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792767600000
+          },
+          "followUps": {
+            "a1b2c3d4e5f60718": 1792785900000
+          }
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792756800000,
+        "now": 1792785900000,
+        "expect": true
+      },
+      {
+        "name": "follow-up: after an ack, none, the Daylight 5 h ahead",
+        "row": {
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {
+            "a1b2c3d4e5f60718": 1792785840000
+          },
+          "copies": {
+            "0f1e2d3c4b5a6978": 1792753200000,
+            "a1b2c3d4e5f60718": 1792767600000
+          },
+          "followUps": {
+            "a1b2c3d4e5f60718": 1792785900000
+          }
+        },
+        "dev": "a1b2c3d4e5f60718",
+        "heard": 1792756800000,
+        "now": 1792785900000,
+        "expect": false
+      }
+    ],
+    "settle": [
+      {
+        "name": "nobody acked yet",
+        "row": {
+          "status": "sent",
+          "errorCode": "",
+          "created": 1792742400000,
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {}
+        },
+        "settled": [],
+        "now": 1792746000000,
+        "expect": null
+      },
+      {
+        "name": "the iPhone acked: the Mac still open",
+        "row": {
+          "status": "sent",
+          "errorCode": "",
+          "created": 1792742400000,
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {
+            "0f1e2d3c4b5a6978": 1792742460000
+          }
+        },
+        "settled": [],
+        "now": 1792746000000,
+        "expect": null
+      },
+      {
+        "name": "both acked: delivered",
+        "row": {
+          "status": "sent",
+          "errorCode": "",
+          "created": 1792742400000,
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {
+            "0f1e2d3c4b5a6978": 1792742460000,
+            "a1b2c3d4e5f60718": 1792742520000
+          }
+        },
+        "settled": [],
+        "now": 1792746000000,
+        "expect": {
+          "status": "delivered",
+          "missing": []
+        }
+      },
+      {
+        "name": "the iPhone acked, the Mac said x-rx: false: delivered",
+        "row": {
+          "status": "sent",
+          "errorCode": "",
+          "created": 1792742400000,
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {
+            "0f1e2d3c4b5a6978": 1792742460000
+          }
+        },
+        "settled": [
+          "a1b2c3d4e5f60718"
+        ],
+        "now": 1792746000000,
+        "expect": {
+          "status": "delivered",
+          "missing": []
+        }
+      },
+      {
+        "name": "every target said x-rx: false, nobody acked: expired",
+        "row": {
+          "status": "sent",
+          "errorCode": "",
+          "created": 1792742400000,
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {}
+        },
+        "settled": [
+          "0f1e2d3c4b5a6978",
+          "a1b2c3d4e5f60718"
+        ],
+        "now": 1792746000000,
+        "expect": {
+          "status": "expired",
+          "missing": []
+        }
+      },
+      {
+        "name": "7 days old, the iPhone acked: delivered, the Mac missing",
+        "row": {
+          "status": "sent",
+          "errorCode": "",
+          "created": 1792742400000,
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {
+            "0f1e2d3c4b5a6978": 1792742460000
+          }
+        },
+        "settled": [],
+        "now": 1793347200001,
+        "expect": {
+          "status": "delivered",
+          "missing": [
+            "a1b2c3d4e5f60718"
+          ]
+        }
+      },
+      {
+        "name": "exactly 7 days old: unchanged",
+        "row": {
+          "status": "sent",
+          "errorCode": "",
+          "created": 1792742400000,
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {
+            "0f1e2d3c4b5a6978": 1792742460000
+          }
+        },
+        "settled": [],
+        "now": 1793347200000,
+        "expect": null
+      },
+      {
+        "name": "7 days old, nobody acked: expired, both missing",
+        "row": {
+          "status": "sent",
+          "errorCode": "",
+          "created": 1792742400000,
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {}
+        },
+        "settled": [],
+        "now": 1793347200001,
+        "expect": {
+          "status": "expired",
+          "missing": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ]
+        }
+      },
+      {
+        "name": "a first publish that never went, 7 days old: expired",
+        "row": {
+          "status": "failed",
+          "errorCode": "network",
+          "created": 1792742400000,
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {}
+        },
+        "settled": [],
+        "now": 1793347200001,
+        "expect": {
+          "status": "expired",
+          "missing": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ]
+        }
+      },
+      {
+        "name": "a first publish that never went, every target opted out: unchanged until it goes",
+        "row": {
+          "status": "failed",
+          "errorCode": "cap",
+          "created": 1792742400000,
+          "to": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "got": {}
+        },
+        "settled": [
+          "0f1e2d3c4b5a6978",
+          "a1b2c3d4e5f60718"
+        ],
+        "now": 1792746000000,
+        "expect": null
+      },
+      {
+        "name": "no device yet: unchanged",
+        "row": {
+          "status": "failed",
+          "errorCode": "no-device",
+          "created": 1792742400000,
+          "to": [],
+          "got": {}
+        },
+        "settled": [],
+        "now": 1792915200000,
+        "expect": null
+      }
+    ],
+    "devices": [
+      {
+        "name": "two devices: targets newest first",
+        "steps": [
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742400
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "a1b2c3d4e5f60718",
+              "from": "Mac",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742460
+          }
+        ],
+        "now": 1792746000000,
+        "expect": {
+          "devices": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "first": 1792742400000,
+              "heard": 1792742400000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            },
+            {
+              "dev": "a1b2c3d4e5f60718",
+              "from": "Mac",
+              "first": 1792742460000,
+              "heard": 1792742460000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            }
+          ],
+          "names": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "n": 1
+            },
+            {
+              "dev": "a1b2c3d4e5f60718",
+              "from": "Mac",
+              "n": 1
+            }
+          ],
+          "targets": [
+            "a1b2c3d4e5f60718",
+            "0f1e2d3c4b5a6978"
+          ],
+          "settled": {
+            "0f1e2d3c4b5a6978": false,
+            "a1b2c3d4e5f60718": false
+          }
+        }
+      },
+      {
+        "name": "the same name twice: iPhone and iPhone (2), in the order first heard",
+        "steps": [
+          {
+            "ack": {
+              "ids": [],
+              "dev": "a1b2c3d4e5f60718",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742400
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742460
+          }
+        ],
+        "now": 1792746000000,
+        "expect": {
+          "devices": [
+            {
+              "dev": "a1b2c3d4e5f60718",
+              "from": "iPhone",
+              "first": 1792742400000,
+              "heard": 1792742400000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            },
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "first": 1792742460000,
+              "heard": 1792742460000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 2
+            }
+          ],
+          "names": [
+            {
+              "dev": "a1b2c3d4e5f60718",
+              "from": "iPhone",
+              "n": 1
+            },
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "n": 2
+            }
+          ],
+          "targets": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "settled": {
+            "a1b2c3d4e5f60718": false,
+            "0f1e2d3c4b5a6978": false
+          }
+        }
+      },
+      {
+        "name": "x-rx: false: no longer a target, settled",
+        "steps": [
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742400
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "a1b2c3d4e5f60718",
+              "from": "Mac",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742460
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "a1b2c3d4e5f60718",
+              "from": "Mac",
+              "rx": false,
+              "want": false
+            },
+            "time": 1792742520
+          }
+        ],
+        "now": 1792746000000,
+        "expect": {
+          "devices": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "first": 1792742400000,
+              "heard": 1792742400000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            },
+            {
+              "dev": "a1b2c3d4e5f60718",
+              "from": "Mac",
+              "first": 1792742460000,
+              "heard": 1792742520000,
+              "rx": false,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            }
+          ],
+          "names": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "n": 1
+            },
+            {
+              "dev": "a1b2c3d4e5f60718",
+              "from": "Mac",
+              "n": 1
+            }
+          ],
+          "targets": [
+            "0f1e2d3c4b5a6978"
+          ],
+          "settled": {
+            "0f1e2d3c4b5a6978": false,
+            "a1b2c3d4e5f60718": true
+          }
+        }
+      },
+      {
+        "name": "x-rx: false, then heard again: a target again",
+        "steps": [
+          {
+            "ack": {
+              "ids": [],
+              "dev": "a1b2c3d4e5f60718",
+              "from": "Mac",
+              "rx": false,
+              "want": false
+            },
+            "time": 1792742400
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "a1b2c3d4e5f60718",
+              "from": "Mac",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742460
+          }
+        ],
+        "now": 1792746000000,
+        "expect": {
+          "devices": [
+            {
+              "dev": "a1b2c3d4e5f60718",
+              "from": "Mac",
+              "first": 1792742400000,
+              "heard": 1792742460000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            }
+          ],
+          "names": [
+            {
+              "dev": "a1b2c3d4e5f60718",
+              "from": "Mac",
+              "n": 1
+            }
+          ],
+          "targets": [
+            "a1b2c3d4e5f60718"
+          ],
+          "settled": {
+            "a1b2c3d4e5f60718": false
+          }
+        }
+      },
+      {
+        "name": "heard exactly 14 days ago: still a target",
+        "steps": [
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742400
+          }
+        ],
+        "now": 1793952000000,
+        "expect": {
+          "devices": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "first": 1792742400000,
+              "heard": 1792742400000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            }
+          ],
+          "names": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "n": 1
+            }
+          ],
+          "targets": [
+            "0f1e2d3c4b5a6978"
+          ],
+          "settled": {
+            "0f1e2d3c4b5a6978": false
+          }
+        }
+      },
+      {
+        "name": "heard 14 days and 1 ms ago: stale",
+        "steps": [
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742400
+          }
+        ],
+        "now": 1793952000001,
+        "expect": {
+          "devices": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "first": 1792742400000,
+              "heard": 1792742400000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": false,
+              "n": 0
+            }
+          ],
+          "names": [],
+          "targets": [],
+          "settled": {
+            "0f1e2d3c4b5a6978": false
+          }
+        }
+      },
+      {
+        "name": "reinstalled: a new id with the old name, the old silent for exactly 2 days",
+        "steps": [
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742400
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "a1b2c3d4e5f60718",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792746000
+          }
+        ],
+        "now": 1792918800000,
+        "expect": {
+          "devices": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "first": 1792742400000,
+              "heard": 1792742400000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            },
+            {
+              "dev": "a1b2c3d4e5f60718",
+              "from": "iPhone",
+              "first": 1792746000000,
+              "heard": 1792746000000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 2
+            }
+          ],
+          "names": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "n": 1
+            },
+            {
+              "dev": "a1b2c3d4e5f60718",
+              "from": "iPhone",
+              "n": 2
+            }
+          ],
+          "targets": [
+            "a1b2c3d4e5f60718",
+            "0f1e2d3c4b5a6978"
+          ],
+          "settled": {
+            "0f1e2d3c4b5a6978": false,
+            "a1b2c3d4e5f60718": false
+          }
+        }
+      },
+      {
+        "name": "reinstalled: the old silent for 2 days and 1 ms: retired",
+        "steps": [
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742400
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "a1b2c3d4e5f60718",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792746000
+          }
+        ],
+        "now": 1792918800001,
+        "expect": {
+          "devices": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "first": 1792742400000,
+              "heard": 1792742400000,
+              "rx": true,
+              "want": 0,
+              "retired": true,
+              "current": false,
+              "n": 0
+            },
+            {
+              "dev": "a1b2c3d4e5f60718",
+              "from": "iPhone",
+              "first": 1792746000000,
+              "heard": 1792746000000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            }
+          ],
+          "names": [
+            {
+              "dev": "a1b2c3d4e5f60718",
+              "from": "iPhone",
+              "n": 1
+            }
+          ],
+          "targets": [
+            "a1b2c3d4e5f60718"
+          ],
+          "settled": {
+            "0f1e2d3c4b5a6978": true,
+            "a1b2c3d4e5f60718": false
+          }
+        }
+      },
+      {
+        "name": "reinstalled, then the old one heard again: back",
+        "steps": [
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742400
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "a1b2c3d4e5f60718",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792746000
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1793001600
+          }
+        ],
+        "now": 1793005200000,
+        "expect": {
+          "devices": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "first": 1792742400000,
+              "heard": 1793001600000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            },
+            {
+              "dev": "a1b2c3d4e5f60718",
+              "from": "iPhone",
+              "first": 1792746000000,
+              "heard": 1792746000000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 2
+            }
+          ],
+          "names": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "n": 1
+            },
+            {
+              "dev": "a1b2c3d4e5f60718",
+              "from": "iPhone",
+              "n": 2
+            }
+          ],
+          "targets": [
+            "0f1e2d3c4b5a6978",
+            "a1b2c3d4e5f60718"
+          ],
+          "settled": {
+            "0f1e2d3c4b5a6978": false,
+            "a1b2c3d4e5f60718": false
+          }
+        }
+      },
+      {
+        "name": "nine devices: the newest 8 are targets",
+        "steps": [
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0000000000000000",
+              "from": "Device 0",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742400
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0000000000000001",
+              "from": "Device 1",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742460
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0000000000000002",
+              "from": "Device 2",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742520
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0000000000000003",
+              "from": "Device 3",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742580
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0000000000000004",
+              "from": "Device 4",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742640
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0000000000000005",
+              "from": "Device 5",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742700
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0000000000000006",
+              "from": "Device 6",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742760
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0000000000000007",
+              "from": "Device 7",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742820
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0000000000000008",
+              "from": "Device 8",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742880
+          }
+        ],
+        "now": 1792746000000,
+        "expect": {
+          "devices": [
+            {
+              "dev": "0000000000000000",
+              "from": "Device 0",
+              "first": 1792742400000,
+              "heard": 1792742400000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            },
+            {
+              "dev": "0000000000000001",
+              "from": "Device 1",
+              "first": 1792742460000,
+              "heard": 1792742460000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            },
+            {
+              "dev": "0000000000000002",
+              "from": "Device 2",
+              "first": 1792742520000,
+              "heard": 1792742520000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            },
+            {
+              "dev": "0000000000000003",
+              "from": "Device 3",
+              "first": 1792742580000,
+              "heard": 1792742580000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            },
+            {
+              "dev": "0000000000000004",
+              "from": "Device 4",
+              "first": 1792742640000,
+              "heard": 1792742640000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            },
+            {
+              "dev": "0000000000000005",
+              "from": "Device 5",
+              "first": 1792742700000,
+              "heard": 1792742700000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            },
+            {
+              "dev": "0000000000000006",
+              "from": "Device 6",
+              "first": 1792742760000,
+              "heard": 1792742760000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            },
+            {
+              "dev": "0000000000000007",
+              "from": "Device 7",
+              "first": 1792742820000,
+              "heard": 1792742820000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            },
+            {
+              "dev": "0000000000000008",
+              "from": "Device 8",
+              "first": 1792742880000,
+              "heard": 1792742880000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            }
+          ],
+          "names": [
+            {
+              "dev": "0000000000000000",
+              "from": "Device 0",
+              "n": 1
+            },
+            {
+              "dev": "0000000000000001",
+              "from": "Device 1",
+              "n": 1
+            },
+            {
+              "dev": "0000000000000002",
+              "from": "Device 2",
+              "n": 1
+            },
+            {
+              "dev": "0000000000000003",
+              "from": "Device 3",
+              "n": 1
+            },
+            {
+              "dev": "0000000000000004",
+              "from": "Device 4",
+              "n": 1
+            },
+            {
+              "dev": "0000000000000005",
+              "from": "Device 5",
+              "n": 1
+            },
+            {
+              "dev": "0000000000000006",
+              "from": "Device 6",
+              "n": 1
+            },
+            {
+              "dev": "0000000000000007",
+              "from": "Device 7",
+              "n": 1
+            },
+            {
+              "dev": "0000000000000008",
+              "from": "Device 8",
+              "n": 1
+            }
+          ],
+          "targets": [
+            "0000000000000008",
+            "0000000000000007",
+            "0000000000000006",
+            "0000000000000005",
+            "0000000000000004",
+            "0000000000000003",
+            "0000000000000002",
+            "0000000000000001"
+          ],
+          "settled": {
+            "0000000000000000": false,
+            "0000000000000001": false,
+            "0000000000000002": false,
+            "0000000000000003": false,
+            "0000000000000004": false,
+            "0000000000000005": false,
+            "0000000000000006": false,
+            "0000000000000007": false,
+            "0000000000000008": false
+          }
+        }
+      },
+      {
+        "name": "a frame without a device id counts for no device",
+        "steps": [
+          {
+            "ack": {
+              "ids": [],
+              "dev": null,
+              "from": "Ghost",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742400
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0F1E2D3C4B5A6978",
+              "from": "Ghost",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742401
+          }
+        ],
+        "now": 1792746000000,
+        "expect": {
+          "devices": [],
+          "names": [],
+          "targets": [],
+          "settled": {
+            "0F1E2D3C4B5A6978": false
+          }
+        }
+      },
+      {
+        "name": "an empty from keeps the name before",
+        "steps": [
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742400
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742460
+          }
+        ],
+        "now": 1792746000000,
+        "expect": {
+          "devices": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "first": 1792742400000,
+              "heard": 1792742460000,
+              "rx": true,
+              "want": 0,
+              "retired": false,
+              "current": true,
+              "n": 1
+            }
+          ],
+          "names": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "n": 1
+            }
+          ],
+          "targets": [
+            "0f1e2d3c4b5a6978"
+          ],
+          "settled": {
+            "0f1e2d3c4b5a6978": false
+          }
+        }
+      },
+      {
+        "name": "an older frame (a re-listed message): first and want only",
+        "steps": [
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792743000
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "Old name",
+              "rx": false,
+              "want": true
+            },
+            "time": 1792742400
+          }
+        ],
+        "now": 1792746000000,
+        "expect": {
+          "devices": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "first": 1792742400000,
+              "heard": 1792743000000,
+              "rx": true,
+              "want": 1792742400000,
+              "retired": false,
+              "current": true,
+              "n": 1
+            }
+          ],
+          "names": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "n": 1
+            }
+          ],
+          "targets": [
+            "0f1e2d3c4b5a6978"
+          ],
+          "settled": {
+            "0f1e2d3c4b5a6978": false
+          }
+        }
+      },
+      {
+        "name": "x-want: want is that frame’s time",
+        "steps": [
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792742400
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "rx": true,
+              "want": true
+            },
+            "time": 1792742700
+          },
+          {
+            "ack": {
+              "ids": [],
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "rx": true,
+              "want": false
+            },
+            "time": 1792743000
+          }
+        ],
+        "now": 1792746000000,
+        "expect": {
+          "devices": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "first": 1792742400000,
+              "heard": 1792743000000,
+              "rx": true,
+              "want": 1792742700000,
+              "retired": false,
+              "current": true,
+              "n": 1
+            }
+          ],
+          "names": [
+            {
+              "dev": "0f1e2d3c4b5a6978",
+              "from": "iPhone",
+              "n": 1
+            }
+          ],
+          "targets": [
+            "0f1e2d3c4b5a6978"
+          ],
+          "settled": {
+            "0f1e2d3c4b5a6978": false
+          }
+        }
+      }
+    ],
+    "budget": [
+      {
+        "name": "twelve message frames, then the 13th waits",
+        "steps": [
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 3
+            },
+            "now": 1792746000000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 1,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 3
+            },
+            "now": 1792746060000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 2,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 3
+            },
+            "now": 1792746120000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 3,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 3
+            },
+            "now": 1792746180000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 4,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 3
+            },
+            "now": 1792746240000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 5,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 3
+            },
+            "now": 1792746300000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 6,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 3
+            },
+            "now": 1792746360000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 7,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 3
+            },
+            "now": 1792746420000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 8,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 3
+            },
+            "now": 1792746480000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 9,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 3
+            },
+            "now": 1792746540000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 10,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 3
+            },
+            "now": 1792746600000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 11,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 3
+            },
+            "now": 1792746660000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 12,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 1,
+              "attachmentBytes": 0,
+              "downloaders": 3
+            },
+            "now": 1792749600000,
+            "expect": "cap"
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 1,
+              "attachmentBytes": 0,
+              "downloaders": 3
+            },
+            "now": 1792800000000,
+            "expect": "ok"
+          }
+        ]
+      },
+      {
+        "name": "a 5-part row with 4 frames left today waits whole",
+        "steps": [
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 1
+            },
+            "now": 1792746000000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 1,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 1
+            },
+            "now": 1792746060000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 2,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 1
+            },
+            "now": 1792746120000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 3,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 1
+            },
+            "now": 1792746180000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 4,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 1
+            },
+            "now": 1792746240000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 5,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 1
+            },
+            "now": 1792746300000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 6,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 1
+            },
+            "now": 1792746360000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 7,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 1
+            },
+            "now": 1792746420000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 8,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 5,
+              "attachmentBytes": 0,
+              "downloaders": 1
+            },
+            "now": 1792749600000,
+            "expect": "cap"
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 4,
+              "attachmentBytes": 0,
+              "downloaders": 1
+            },
+            "now": 1792749600000,
+            "expect": "ok"
+          }
+        ]
+      },
+      {
+        "name": "a device’s 7th re-sent frame waits; another device’s still goes",
+        "steps": [
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 1,
+              "resendFor": "0f1e2d3c4b5a6978"
+            },
+            "now": 1792746000000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 1,
+              "bytes": 0,
+              "resends": {
+                "0f1e2d3c4b5a6978": 1
+              },
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 1,
+              "resendFor": "0f1e2d3c4b5a6978"
+            },
+            "now": 1792746060000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 2,
+              "bytes": 0,
+              "resends": {
+                "0f1e2d3c4b5a6978": 2
+              },
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 1,
+              "resendFor": "0f1e2d3c4b5a6978"
+            },
+            "now": 1792746120000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 3,
+              "bytes": 0,
+              "resends": {
+                "0f1e2d3c4b5a6978": 3
+              },
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 1,
+              "resendFor": "0f1e2d3c4b5a6978"
+            },
+            "now": 1792746180000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 4,
+              "bytes": 0,
+              "resends": {
+                "0f1e2d3c4b5a6978": 4
+              },
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 1,
+              "resendFor": "0f1e2d3c4b5a6978"
+            },
+            "now": 1792746240000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 5,
+              "bytes": 0,
+              "resends": {
+                "0f1e2d3c4b5a6978": 5
+              },
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 0,
+              "downloaders": 1,
+              "resendFor": "0f1e2d3c4b5a6978"
+            },
+            "now": 1792746300000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 6,
+              "bytes": 0,
+              "resends": {
+                "0f1e2d3c4b5a6978": 6
+              },
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 1,
+              "attachmentBytes": 0,
+              "downloaders": 1,
+              "resendFor": "0f1e2d3c4b5a6978"
+            },
+            "now": 1792749600000,
+            "expect": "cap"
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 1,
+              "attachmentBytes": 0,
+              "downloaders": 1,
+              "resendFor": "a1b2c3d4e5f60718"
+            },
+            "now": 1792749600000,
+            "expect": "ok"
+          }
+        ]
+      },
+      {
+        "name": "bytes: an attachment counts once plus once per downloader; past 60 MB it waits",
+        "steps": [
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 1900000,
+              "downloaders": 5
+            },
+            "now": 1792746000000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 1,
+              "bytes": 11400000,
+              "resends": {},
+              "live": [
+                {
+                  "bytes": 1900000,
+                  "until": 1792756800000
+                }
+              ],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 1900000,
+              "downloaders": 5
+            },
+            "now": 1792756800000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 2,
+              "bytes": 22800000,
+              "resends": {},
+              "live": [
+                {
+                  "bytes": 1900000,
+                  "until": 1792767600000
+                }
+              ],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 1900000,
+              "downloaders": 5
+            },
+            "now": 1792767600000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 3,
+              "bytes": 34200000,
+              "resends": {},
+              "live": [
+                {
+                  "bytes": 1900000,
+                  "until": 1792778400000
+                }
+              ],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 1900000,
+              "downloaders": 5
+            },
+            "now": 1792778400000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 4,
+              "bytes": 45600000,
+              "resends": {},
+              "live": [
+                {
+                  "bytes": 1900000,
+                  "until": 1792789200000
+                }
+              ],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "charge",
+            "frame": {
+              "attachment": 1900000,
+              "downloaders": 5
+            },
+            "now": 1792789200000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 5,
+              "bytes": 57000000,
+              "resends": {},
+              "live": [
+                {
+                  "bytes": 1900000,
+                  "until": 1792800000000
+                }
+              ],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 1,
+              "attachmentBytes": 1900000,
+              "downloaders": 5
+            },
+            "now": 1792792800000,
+            "expect": "cap"
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 1,
+              "attachmentBytes": 500000,
+              "downloaders": 5
+            },
+            "now": 1792792800000,
+            "expect": "ok"
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 1,
+              "attachmentBytes": 1400000,
+              "downloaders": 1
+            },
+            "now": 1792792800000,
+            "expect": "ok"
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 1,
+              "attachmentBytes": 1400000,
+              "downloaders": 5
+            },
+            "now": 1792792800000,
+            "expect": "cap"
+          }
+        ]
+      },
+      {
+        "name": "bytes on the relay: an attachment row waits past 10 MB, and goes 3 hours later",
+        "steps": [
+          {
+            "op": "bytes",
+            "bytes": 5700000,
+            "now": 1792746000000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 0,
+              "bytes": 0,
+              "resends": {},
+              "live": [
+                {
+                  "bytes": 5700000,
+                  "until": 1792756800000
+                }
+              ],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 3,
+              "attachmentBytes": 5700000,
+              "downloaders": 1
+            },
+            "now": 1792746060000,
+            "expect": "relay"
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 2,
+              "attachmentBytes": 3800000,
+              "downloaders": 1
+            },
+            "now": 1792746060000,
+            "expect": "ok"
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 1,
+              "attachmentBytes": 0,
+              "downloaders": 1
+            },
+            "now": 1792746060000,
+            "expect": "ok"
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 3,
+              "attachmentBytes": 5700000,
+              "downloaders": 1
+            },
+            "now": 1792756800000,
+            "expect": "ok"
+          }
+        ]
+      },
+      {
+        "name": "the largest row, 9 MB, fits on its own",
+        "steps": [
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 5,
+              "attachmentBytes": 9000180,
+              "downloaders": 5
+            },
+            "now": 1792746000000,
+            "expect": "ok"
+          }
+        ]
+      },
+      {
+        "name": "giving way: a 413 holds everything for an hour",
+        "steps": [
+          {
+            "op": "limit",
+            "status": 413,
+            "now": 1792746000000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 0,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 1792749600000
+            }
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 1,
+              "attachmentBytes": 0,
+              "downloaders": 1
+            },
+            "now": 1792749599999,
+            "expect": "yield"
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 1,
+              "attachmentBytes": 1000000,
+              "downloaders": 1
+            },
+            "now": 1792749599999,
+            "expect": "yield"
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 1,
+              "attachmentBytes": 1000000,
+              "downloaders": 1
+            },
+            "now": 1792749600000,
+            "expect": "ok"
+          }
+        ]
+      },
+      {
+        "name": "giving way: a 429 too; another status changes nothing",
+        "steps": [
+          {
+            "op": "limit",
+            "status": 500,
+            "now": 1792746000000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 0,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 0
+            }
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 1,
+              "attachmentBytes": 0,
+              "downloaders": 1
+            },
+            "now": 1792746060000,
+            "expect": "ok"
+          },
+          {
+            "op": "limit",
+            "status": 429,
+            "now": 1792746060000,
+            "expect": {
+              "day": "2026-10-23",
+              "frames": 0,
+              "bytes": 0,
+              "resends": {},
+              "live": [],
+              "limitUntil": 1792749660000
+            }
+          },
+          {
+            "op": "check",
+            "attempt": {
+              "frames": 1,
+              "attachmentBytes": 0,
+              "downloaders": 1
+            },
+            "now": 1792746120000,
+            "expect": "yield"
+          }
+        ]
+      }
+    ],
+    "cadence": [
+      {
+        "name": "first hello, then acks 30 minutes apart, then the cap of 2 for acks",
+        "steps": [
+          {
+            "op": "hello",
+            "now": 1792738800000,
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "",
+                "count": 0,
+                "lastFrameAt": 0,
+                "firstHello": 0,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": true,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792738800000,
+            "time": 1792738800,
+            "expect": {
+              "frame": {
+                "reason": "first",
+                "ids": [],
+                "want": false
+              },
+              "state": {
+                "day": "2026-10-23",
+                "count": 1,
+                "lastFrameAt": 1792738800000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792739400000,
+            "ids": [
+              "84e85589c7ee004f51398637b7b11f52"
+            ],
+            "time": 1792739400,
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "2026-10-23",
+                "count": 1,
+                "lastFrameAt": 1792738800000,
+                "firstHello": 1792738800000,
+                "pending": [
+                  "84e85589c7ee004f51398637b7b11f52"
+                ],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792740599999,
+            "ids": [
+              "18b5ed2bc3d3ffd0e13b3110c21d9929"
+            ],
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "2026-10-23",
+                "count": 1,
+                "lastFrameAt": 1792738800000,
+                "firstHello": 1792738800000,
+                "pending": [
+                  "84e85589c7ee004f51398637b7b11f52",
+                  "18b5ed2bc3d3ffd0e13b3110c21d9929"
+                ],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792740600000,
+            "ids": [
+              "ffe403c70db3c49b0a95b627f7e66dd8"
+            ],
+            "time": 1792740600,
+            "expect": {
+              "frame": {
+                "reason": "acks",
+                "ids": [
+                  "84e85589c7ee004f51398637b7b11f52",
+                  "18b5ed2bc3d3ffd0e13b3110c21d9929",
+                  "ffe403c70db3c49b0a95b627f7e66dd8"
+                ],
+                "want": false
+              },
+              "state": {
+                "day": "2026-10-23",
+                "count": 2,
+                "lastFrameAt": 1792740600000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792746000000,
+            "ids": [
+              "648053b570e4afae06794feeb0874c56"
+            ],
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "2026-10-23",
+                "count": 2,
+                "lastFrameAt": 1792740600000,
+                "firstHello": 1792738800000,
+                "pending": [
+                  "648053b570e4afae06794feeb0874c56"
+                ],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "the third frame of the day is kept for x-want",
+        "steps": [
+          {
+            "op": "read",
+            "now": 1792738800000,
+            "ids": [
+              "84e85589c7ee004f51398637b7b11f52"
+            ],
+            "time": 1792738800,
+            "expect": {
+              "frame": {
+                "reason": "acks",
+                "ids": [
+                  "84e85589c7ee004f51398637b7b11f52"
+                ],
+                "want": false
+              },
+              "state": {
+                "day": "2026-10-23",
+                "count": 1,
+                "lastFrameAt": 1792738800000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792742400000,
+            "ids": [
+              "18b5ed2bc3d3ffd0e13b3110c21d9929"
+            ],
+            "time": 1792742400,
+            "expect": {
+              "frame": {
+                "reason": "acks",
+                "ids": [
+                  "18b5ed2bc3d3ffd0e13b3110c21d9929"
+                ],
+                "want": false
+              },
+              "state": {
+                "day": "2026-10-23",
+                "count": 2,
+                "lastFrameAt": 1792742400000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792746000000,
+            "ids": [
+              "ffe403c70db3c49b0a95b627f7e66dd8"
+            ],
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "2026-10-23",
+                "count": 2,
+                "lastFrameAt": 1792742400000,
+                "firstHello": 1792738800000,
+                "pending": [
+                  "ffe403c70db3c49b0a95b627f7e66dd8"
+                ],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792753200000,
+            "expired": {
+              "shared": 1792749600
+            },
+            "time": 1792753200,
+            "expect": {
+              "frame": {
+                "reason": "want",
+                "ids": [
+                  "ffe403c70db3c49b0a95b627f7e66dd8"
+                ],
+                "want": true
+              },
+              "state": {
+                "day": "2026-10-23",
+                "count": 3,
+                "lastFrameAt": 1792753200000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792756800000,
+            "expired": {
+              "dev": 1792755000
+            },
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "2026-10-23",
+                "count": 3,
+                "lastFrameAt": 1792753200000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {
+                  "dev": 1792755000
+                },
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792800001000,
+            "time": 1792800001,
+            "expect": {
+              "frame": {
+                "reason": "want",
+                "ids": [],
+                "want": true
+              },
+              "state": {
+                "day": "2026-10-24",
+                "count": 1,
+                "lastFrameAt": 1792800001000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "x-want only for an expired copy newer than the first frame and than what was stored; a newer item clears it",
+        "steps": [
+          {
+            "op": "read",
+            "now": 1792738800000,
+            "expired": {
+              "shared": 1792735200
+            },
+            "time": 1792738800,
+            "expect": {
+              "frame": {
+                "reason": "idle",
+                "ids": [],
+                "want": false
+              },
+              "state": {
+                "day": "2026-10-23",
+                "count": 1,
+                "lastFrameAt": 1792738800000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792738920000,
+            "expired": {
+              "shared": 1792738200
+            },
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "2026-10-23",
+                "count": 1,
+                "lastFrameAt": 1792738800000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792742400000,
+            "ids": [
+              "84e85589c7ee004f51398637b7b11f52"
+            ],
+            "stored": {
+              "shared": 1792741800
+            },
+            "expired": {
+              "shared": 1792740800
+            },
+            "time": 1792742400,
+            "expect": {
+              "frame": {
+                "reason": "acks",
+                "ids": [
+                  "84e85589c7ee004f51398637b7b11f52"
+                ],
+                "want": false
+              },
+              "state": {
+                "day": "2026-10-23",
+                "count": 2,
+                "lastFrameAt": 1792742400000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {
+                  "shared": 1792741800
+                },
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "limit",
+            "status": 413,
+            "now": 1792742460000,
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "2026-10-23",
+                "count": 2,
+                "lastFrameAt": 1792742400000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {
+                  "shared": 1792741800
+                },
+                "helloDue": false,
+                "limitUntil": 1792746060000,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792742520000,
+            "expired": {
+              "shared": 1792742800
+            },
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "2026-10-23",
+                "count": 2,
+                "lastFrameAt": 1792742400000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {
+                  "shared": 1792742800
+                },
+                "storedAt": {
+                  "shared": 1792741800
+                },
+                "helloDue": false,
+                "limitUntil": 1792746060000,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792742580000,
+            "ids": [
+              "18b5ed2bc3d3ffd0e13b3110c21d9929"
+            ],
+            "stored": {
+              "shared": 1792743800
+            },
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "2026-10-23",
+                "count": 2,
+                "lastFrameAt": 1792742400000,
+                "firstHello": 1792738800000,
+                "pending": [
+                  "18b5ed2bc3d3ffd0e13b3110c21d9929"
+                ],
+                "want": {},
+                "storedAt": {
+                  "shared": 1792743800
+                },
+                "helloDue": false,
+                "limitUntil": 1792746060000,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792746120000,
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "2026-10-23",
+                "count": 2,
+                "lastFrameAt": 1792742400000,
+                "firstHello": 1792738800000,
+                "pending": [
+                  "18b5ed2bc3d3ffd0e13b3110c21d9929"
+                ],
+                "want": {},
+                "storedAt": {
+                  "shared": 1792743800
+                },
+                "helloDue": false,
+                "limitUntil": 1792746060000,
+                "off": false
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "the idle hello after 24 hours",
+        "steps": [
+          {
+            "op": "read",
+            "now": 1792738800000,
+            "time": 1792738800,
+            "expect": {
+              "frame": {
+                "reason": "idle",
+                "ids": [],
+                "want": false
+              },
+              "state": {
+                "day": "2026-10-23",
+                "count": 1,
+                "lastFrameAt": 1792738800000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792825199999,
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "2026-10-23",
+                "count": 1,
+                "lastFrameAt": 1792738800000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792825200000,
+            "time": 1792825200,
+            "expect": {
+              "frame": {
+                "reason": "idle",
+                "ids": [],
+                "want": false
+              },
+              "state": {
+                "day": "2026-10-24",
+                "count": 1,
+                "lastFrameAt": 1792825200000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "giving way for an hour after a 429; x-want waits too",
+        "steps": [
+          {
+            "op": "read",
+            "now": 1792738800000,
+            "time": 1792738800,
+            "expect": {
+              "frame": {
+                "reason": "idle",
+                "ids": [],
+                "want": false
+              },
+              "state": {
+                "day": "2026-10-23",
+                "count": 1,
+                "lastFrameAt": 1792738800000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "limit",
+            "status": 429,
+            "now": 1792741200000,
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "2026-10-23",
+                "count": 1,
+                "lastFrameAt": 1792738800000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 1792744800000,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792741260000,
+            "ids": [
+              "84e85589c7ee004f51398637b7b11f52"
+            ],
+            "expired": {
+              "dev": 1792739400
+            },
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "2026-10-23",
+                "count": 1,
+                "lastFrameAt": 1792738800000,
+                "firstHello": 1792738800000,
+                "pending": [
+                  "84e85589c7ee004f51398637b7b11f52"
+                ],
+                "want": {
+                  "dev": 1792739400
+                },
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 1792744800000,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792744800000,
+            "time": 1792744800,
+            "expect": {
+              "frame": {
+                "reason": "want",
+                "ids": [
+                  "84e85589c7ee004f51398637b7b11f52"
+                ],
+                "want": true
+              },
+              "state": {
+                "day": "2026-10-23",
+                "count": 2,
+                "lastFrameAt": 1792744800000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 1792744800000,
+                "off": false
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "x-rx: false: one frame past the cap, then nothing until the next hello",
+        "steps": [
+          {
+            "op": "read",
+            "now": 1792738800000,
+            "ids": [
+              "84e85589c7ee004f51398637b7b11f52"
+            ],
+            "time": 1792738800,
+            "expect": {
+              "frame": {
+                "reason": "acks",
+                "ids": [
+                  "84e85589c7ee004f51398637b7b11f52"
+                ],
+                "want": false
+              },
+              "state": {
+                "day": "2026-10-23",
+                "count": 1,
+                "lastFrameAt": 1792738800000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792742400000,
+            "ids": [
+              "18b5ed2bc3d3ffd0e13b3110c21d9929"
+            ],
+            "time": 1792742400,
+            "expect": {
+              "frame": {
+                "reason": "acks",
+                "ids": [
+                  "18b5ed2bc3d3ffd0e13b3110c21d9929"
+                ],
+                "want": false
+              },
+              "state": {
+                "day": "2026-10-23",
+                "count": 2,
+                "lastFrameAt": 1792742400000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792746000000,
+            "ids": [
+              "ffe403c70db3c49b0a95b627f7e66dd8"
+            ],
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "2026-10-23",
+                "count": 2,
+                "lastFrameAt": 1792742400000,
+                "firstHello": 1792738800000,
+                "pending": [
+                  "ffe403c70db3c49b0a95b627f7e66dd8"
+                ],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "off",
+            "now": 1792749600000,
+            "time": 1792749600,
+            "expect": {
+              "frame": {
+                "reason": "off",
+                "ids": [
+                  "ffe403c70db3c49b0a95b627f7e66dd8"
+                ],
+                "want": false
+              },
+              "state": {
+                "day": "2026-10-23",
+                "count": 3,
+                "lastFrameAt": 1792749600000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": true
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792846800000,
+            "ids": [
+              "648053b570e4afae06794feeb0874c56"
+            ],
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "2026-10-23",
+                "count": 3,
+                "lastFrameAt": 1792749600000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": true
+              }
+            }
+          },
+          {
+            "op": "hello",
+            "now": 1792850400000,
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "2026-10-23",
+                "count": 3,
+                "lastFrameAt": 1792749600000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": true,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792850400000,
+            "time": 1792850400,
+            "expect": {
+              "frame": {
+                "reason": "first",
+                "ids": [],
+                "want": false
+              },
+              "state": {
+                "day": "2026-10-24",
+                "count": 1,
+                "lastFrameAt": 1792850400000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "x-rx: false from a device that never published: no frame",
+        "steps": [
+          {
+            "op": "off",
+            "now": 1792738800000,
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "",
+                "count": 0,
+                "lastFrameAt": 0,
+                "firstHello": 0,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": true
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792742400000,
+            "ids": [
+              "84e85589c7ee004f51398637b7b11f52"
+            ],
+            "expect": {
+              "frame": null,
+              "state": {
+                "day": "",
+                "count": 0,
+                "lastFrameAt": 0,
+                "firstHello": 0,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": true
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "70 pending acks: 60 in a frame, 10 wait",
+        "steps": [
+          {
+            "op": "read",
+            "now": 1792738800000,
+            "ids": [
+              "c63e4f3233d9fb7fc3ddd5bae76251a0",
+              "28dc335cd4f17303656fe720c088b62d",
+              "f2309e8f544bd6684b2734f3c6b2629b",
+              "92a5713f9e0dc337a0b633dbdbf16a6e",
+              "ad9f47819a7b93274139d93d502a1621",
+              "0001864cc5dc7ca189146317b96600b1",
+              "a2310e14a747c44e15ba8fdf6ac3da55",
+              "ebb065326a852ea00d48aaf093019e53",
+              "8a68dac124a9bc9d74b70efad414f620",
+              "7530992b6861212e02ecce6ec54c0766",
+              "643958e9c6f18e84ca9f9dcd8c2b49aa",
+              "a42e31c57e8d2826a322810d59d2f39a",
+              "2704c3ce71e5291095816114645a3b3f",
+              "5ca2ee6ad6750bd685398f9a1d25d17c",
+              "05193d51aa0b1cd48fd63b8e812c4595",
+              "1994c762ab0aa3e894b0cecbf25d5e43",
+              "c027300a8aaf39cab56f2a878a782b97",
+              "6750cf9cd6d2519306d9f61f982372af",
+              "1cfefb5c569f12a1b5e6e79d9ba0b927",
+              "277d80ccba372518805f8bb4ad5a3291",
+              "53a0200993d8d9fc15d23c9e6714e093",
+              "34a24473e356b4412542d913f89c3984",
+              "d77415bc63766f385b383882b72b1fdd",
+              "52625fdba6870e6e4fb52ad30a7f9b83",
+              "0e8c75b400078be4f299aa100034c373",
+              "56affbb89faa811acd5de54b586ce4d4",
+              "19cc0a4ca778bd249d066bace7b040a3",
+              "d7c2d163559fb40b150db4e3cf1cb722",
+              "b6a31d87ace3b3f537a1ce60918a73f5",
+              "c8c482881c89e47a374a232c0306cb86",
+              "a2eeaf8aec60536bca2db3cb76a924de",
+              "a84a346cee7dbbdfd86f0613ce947e6f",
+              "8d224155fcc0f28d189dd6603b7e685e",
+              "794c1bafc16a8bcd0d3611be16111430",
+              "c1a461d2948b384f0b1806701d01897b",
+              "f9a0ca07ab052d2bf692faf25762c32e",
+              "db12e4cc5c56353c41b2b4680f7aaaac",
+              "1d2136bf2390089b27ffc7681b6f32ab",
+              "e8b37b010d62ae504dfae3f59e1eab81",
+              "ca2f8ea79eda36a9eff2aae1f3beadaa",
+              "6d8056c9fb412fa2e90fcd63ad45588e",
+              "a5fa8f1aa43959a9017de88bbfec1108",
+              "54890a872b8857c7e713743b06f85b90",
+              "f320f56754c08666cd12a35df367b6c9",
+              "8fac3f7090a29dd5c0536b5a09d37563",
+              "bffa3990a733cd8fe9ade16f56198346",
+              "945469e81d3fbcad379997bc3eaac9c8",
+              "7ca91ab357af4d322f2c261a70e80256",
+              "e99027fc184d5b7ee15aed9ced1bb45f",
+              "7017f5092c8e577e3e22e5e4fc8181ed",
+              "57933ea66fd9efc10d92332e698fd027",
+              "a1adc4d55cad73e3d2215c6ca308bfb2",
+              "f0b05210eeaf57a2b008d57280efc67b",
+              "8dd1722a9636bcd6c9325522f10245e6",
+              "ed8391bf9f861b875c62ff9a32d1ddc7",
+              "68fc4acc1be2da7ab876ee8f790bd2b7",
+              "4a8534b1886178f4dc9b973f5634873d",
+              "9edf387f02f52c234f602b8a349101b1",
+              "170c91a6b0a5c3436dad9fbdd230c43f",
+              "0411e5b3c0957f075f69a2de4e54499f",
+              "64ab9e649d738f5e3eb6af52394fdd64",
+              "641d1548bf67123bac427a3bf4975db6",
+              "53cbf1722ea19760cdd1ac3a821bffa7",
+              "5e9b0ff8a058c3cadfd99c4d79f731a4",
+              "e4feee6a14a736699b406ab53ce2914d",
+              "96856c7931f114213529c8f2d37f6590",
+              "8a1bc143e94da0f50a3f9d9e342dc347",
+              "4a6a6c0fc9494bc18fb499b8810b9345",
+              "44b1b5cc279dab669b414069f15aed33",
+              "7d82da8c7762c0aade03b08e7d330d47"
+            ],
+            "time": 1792738800,
+            "expect": {
+              "frame": {
+                "reason": "acks",
+                "ids": [
+                  "c63e4f3233d9fb7fc3ddd5bae76251a0",
+                  "28dc335cd4f17303656fe720c088b62d",
+                  "f2309e8f544bd6684b2734f3c6b2629b",
+                  "92a5713f9e0dc337a0b633dbdbf16a6e",
+                  "ad9f47819a7b93274139d93d502a1621",
+                  "0001864cc5dc7ca189146317b96600b1",
+                  "a2310e14a747c44e15ba8fdf6ac3da55",
+                  "ebb065326a852ea00d48aaf093019e53",
+                  "8a68dac124a9bc9d74b70efad414f620",
+                  "7530992b6861212e02ecce6ec54c0766",
+                  "643958e9c6f18e84ca9f9dcd8c2b49aa",
+                  "a42e31c57e8d2826a322810d59d2f39a",
+                  "2704c3ce71e5291095816114645a3b3f",
+                  "5ca2ee6ad6750bd685398f9a1d25d17c",
+                  "05193d51aa0b1cd48fd63b8e812c4595",
+                  "1994c762ab0aa3e894b0cecbf25d5e43",
+                  "c027300a8aaf39cab56f2a878a782b97",
+                  "6750cf9cd6d2519306d9f61f982372af",
+                  "1cfefb5c569f12a1b5e6e79d9ba0b927",
+                  "277d80ccba372518805f8bb4ad5a3291",
+                  "53a0200993d8d9fc15d23c9e6714e093",
+                  "34a24473e356b4412542d913f89c3984",
+                  "d77415bc63766f385b383882b72b1fdd",
+                  "52625fdba6870e6e4fb52ad30a7f9b83",
+                  "0e8c75b400078be4f299aa100034c373",
+                  "56affbb89faa811acd5de54b586ce4d4",
+                  "19cc0a4ca778bd249d066bace7b040a3",
+                  "d7c2d163559fb40b150db4e3cf1cb722",
+                  "b6a31d87ace3b3f537a1ce60918a73f5",
+                  "c8c482881c89e47a374a232c0306cb86",
+                  "a2eeaf8aec60536bca2db3cb76a924de",
+                  "a84a346cee7dbbdfd86f0613ce947e6f",
+                  "8d224155fcc0f28d189dd6603b7e685e",
+                  "794c1bafc16a8bcd0d3611be16111430",
+                  "c1a461d2948b384f0b1806701d01897b",
+                  "f9a0ca07ab052d2bf692faf25762c32e",
+                  "db12e4cc5c56353c41b2b4680f7aaaac",
+                  "1d2136bf2390089b27ffc7681b6f32ab",
+                  "e8b37b010d62ae504dfae3f59e1eab81",
+                  "ca2f8ea79eda36a9eff2aae1f3beadaa",
+                  "6d8056c9fb412fa2e90fcd63ad45588e",
+                  "a5fa8f1aa43959a9017de88bbfec1108",
+                  "54890a872b8857c7e713743b06f85b90",
+                  "f320f56754c08666cd12a35df367b6c9",
+                  "8fac3f7090a29dd5c0536b5a09d37563",
+                  "bffa3990a733cd8fe9ade16f56198346",
+                  "945469e81d3fbcad379997bc3eaac9c8",
+                  "7ca91ab357af4d322f2c261a70e80256",
+                  "e99027fc184d5b7ee15aed9ced1bb45f",
+                  "7017f5092c8e577e3e22e5e4fc8181ed",
+                  "57933ea66fd9efc10d92332e698fd027",
+                  "a1adc4d55cad73e3d2215c6ca308bfb2",
+                  "f0b05210eeaf57a2b008d57280efc67b",
+                  "8dd1722a9636bcd6c9325522f10245e6",
+                  "ed8391bf9f861b875c62ff9a32d1ddc7",
+                  "68fc4acc1be2da7ab876ee8f790bd2b7",
+                  "4a8534b1886178f4dc9b973f5634873d",
+                  "9edf387f02f52c234f602b8a349101b1",
+                  "170c91a6b0a5c3436dad9fbdd230c43f",
+                  "0411e5b3c0957f075f69a2de4e54499f"
+                ],
+                "want": false
+              },
+              "state": {
+                "day": "2026-10-23",
+                "count": 1,
+                "lastFrameAt": 1792738800000,
+                "firstHello": 1792738800000,
+                "pending": [
+                  "64ab9e649d738f5e3eb6af52394fdd64",
+                  "641d1548bf67123bac427a3bf4975db6",
+                  "53cbf1722ea19760cdd1ac3a821bffa7",
+                  "5e9b0ff8a058c3cadfd99c4d79f731a4",
+                  "e4feee6a14a736699b406ab53ce2914d",
+                  "96856c7931f114213529c8f2d37f6590",
+                  "8a1bc143e94da0f50a3f9d9e342dc347",
+                  "4a6a6c0fc9494bc18fb499b8810b9345",
+                  "44b1b5cc279dab669b414069f15aed33",
+                  "7d82da8c7762c0aade03b08e7d330d47"
+                ],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          },
+          {
+            "op": "read",
+            "now": 1792740600000,
+            "time": 1792740600,
+            "expect": {
+              "frame": {
+                "reason": "acks",
+                "ids": [
+                  "64ab9e649d738f5e3eb6af52394fdd64",
+                  "641d1548bf67123bac427a3bf4975db6",
+                  "53cbf1722ea19760cdd1ac3a821bffa7",
+                  "5e9b0ff8a058c3cadfd99c4d79f731a4",
+                  "e4feee6a14a736699b406ab53ce2914d",
+                  "96856c7931f114213529c8f2d37f6590",
+                  "8a1bc143e94da0f50a3f9d9e342dc347",
+                  "4a6a6c0fc9494bc18fb499b8810b9345",
+                  "44b1b5cc279dab669b414069f15aed33",
+                  "7d82da8c7762c0aade03b08e7d330d47"
+                ],
+                "want": false
+              },
+              "state": {
+                "day": "2026-10-23",
+                "count": 2,
+                "lastFrameAt": 1792740600000,
+                "firstHello": 1792738800000,
+                "pending": [],
+                "want": {},
+                "storedAt": {},
+                "helloDue": false,
+                "limitUntil": 0,
+                "off": false
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
 }
