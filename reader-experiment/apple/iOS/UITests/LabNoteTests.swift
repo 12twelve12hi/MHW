@@ -142,6 +142,38 @@ final class LabNoteTests: XCTestCase {
         XCTAssertEqual(LabUI.pasteOnHome(app), expected, "Copy did not put the Server code on the clipboard")
     }
 
+    /// Set up with a link (2.6 "Setup link", steps 2 and 3): Set up (here the field's Return) sends nothing and asks
+    /// "Use this Daylight server?" with the address of the link itself (server-vectors.json › setupLinks); another link
+    /// in the field withdraws the question, since Use it sends only the link it asked about; the same link asks again.
+    /// Use it is not tapped: the vectors' address is a workers.dev name.
+    @MainActor
+    func testTheSetupLinkAsksWithItsOwnAddress() throws {
+        continueAfterFailure = true
+        let setup = try XCTUnwrap(LabUI.serverVectors["setupLinks"] as? [String: Any])
+        let link = try XCTUnwrap(setup["link"] as? String)
+        let server = try XCTUnwrap(setup["server"] as? String)
+        let host = try XCTUnwrap(URL(string: server)?.host)
+        let title = LabUI.string("serverSection.setupConfirmTitle")
+        let body = LabUI.string("serverSection.setupConfirmBody").replacingOccurrences(of: "{host}", with: host)
+        let app = LabUI.launch(relay: try LabUI.onlineRelay())
+        LabUI.openServerSection(app)
+        let field = LabUI.element(LabUI.setupField, in: app)
+        XCTAssertTrue(LabUI.scrollTo(field, in: app), "the section shows no setup link field")
+        field.tap()
+        field.typeText(link + "\n")
+        let question = LabUI.text(title, in: app)
+        XCTAssertTrue(question.waitForExistence(timeout: 5), "Set up did not ask “\(title)”")
+        XCTAssertTrue(LabUI.text(body, in: app).exists, "the question does not name the link's own address: \(body)")
+        UITestSupport.screenshot(app, "ios-lab-setup-question", in: self)
+        // A tap puts the cursor in the link: "x" there makes another link, and the delete right after it takes it out.
+        field.tap()
+        field.typeText("x")
+        LabUI.waitUntil(question, exists: false, timeout: 5)
+        field.typeText(XCUIKeyboardKey.delete.rawValue + "\n")
+        XCTAssertTrue(question.waitForExistence(timeout: 5), "the same link did not ask again")
+        XCTAssertTrue(LabUI.text(body, in: app).exists, "the question again does not name the link's own address")
+    }
+
     /// F17.2: a sender that never heard a hello shows "Delivered ✓" (not the Lab timeline's "On your Daylight ✓") and,
     /// in What's in Lab, the needs-inbox header line.
     @MainActor

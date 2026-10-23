@@ -67,6 +67,7 @@ enum LabUI {
     static let note = "lab-note"
     static let serverCode = "lab-server-code"
     static let copyServerCode = "lab-server-copy"
+    static let setupField = "lab-setup-field"
     static func feature(_ id: String) -> String { "lab-feature-\(id)" }
 
     /// The first element with this identifier, whatever its type.

@@ -24,6 +24,7 @@ enum LabUI {
     static let noteID = "lab-note"
     static let serverCodeID = "lab-server-code"
     static let copyServerCodeID = "lab-server-copy"
+    static let setupFieldID = "lab-setup-field"
     static func featureID(_ id: String) -> String { "lab-feature-\(id)" }
 
     /// The Back button of the pages the Lab section opens (`MacLabPage.back`), their title (`MacLabPage.titleID`) and
@@ -682,6 +683,49 @@ final class LabServerNoteTests: XCTestCase {
         XCTAssertTrue(LabUI.waitFor(try LabUI.text("serverSection.stepsHeading"), in: sheet), "no setup steps with no server")
         UITestSupport.screenshot(app, "mac-lab-server-section", in: self)
         LabUI.goBack(in: sheet, leaving: LabUI.serverCodeID)
+        app.terminate()
+    }
+
+    /// Set up with a link (2.6 "Setup link", steps 2 and 3), as on the iPhone: Return in the field (Set up) sends nothing
+    /// and asks "Use this Daylight server?" with the address of the link itself (server-vectors.json › setupLinks), said
+    /// to VoiceOver; another link in the field withdraws the question, since Use it sends only the link it asked about;
+    /// the same link asks again. Use it is not clicked: the vectors' address is a workers.dev name.
+    @MainActor
+    func testTheSetupLinkAsksWithItsOwnAddress() throws {
+        continueAfterFailure = true
+        let relay = try LabUI.relay("DLS_LAB_RELAY")
+        let setup = try XCTUnwrap(try LabUI.json("server/vectors/server-vectors.json")["setupLinks"] as? [String: Any])
+        let link = try XCTUnwrap(setup["link"] as? String)
+        let server = try XCTUnwrap(setup["server"] as? String)
+        let host = try XCTUnwrap(URL(string: server)?.host)
+        let title = try LabUI.text("serverSection.setupConfirmTitle")
+        let body = try LabUI.text("serverSection.setupConfirmBody").replacingOccurrences(of: "{host}", with: host)
+        let app = LabUI.launch(lab: true, paired: true, relay: relay, announcements: true)
+        let sheet = LabUI.openSettings(app, paired: true)
+        LabUI.open(LabUI.serverRowID, in: sheet)
+        XCTAssertTrue(LabUI.element(LabUI.serverCodeID, in: sheet).waitForExistence(timeout: 15),
+                      "the Daylight server section did not load")
+        let field = LabUI.element(LabUI.setupFieldID, in: sheet)
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "the section has no setup link field: \(LabUI.said(sheet))")
+        field.click()
+        field.typeText(link + XCUIKeyboardKey.return.rawValue)
+        XCTAssertTrue(LabUI.waitFor(title, in: sheet, timeout: 5), "Set up did not ask “\(title)”: \(LabUI.said(sheet))")
+        XCTAssertTrue(LabUI.waitFor(body, in: sheet, timeout: 2),
+                      "the question does not name the link's own address: \(LabUI.said(sheet))")
+        XCTAssertTrue(LabUI.waitForAnnouncement(body, in: app), "the question was not said to VoiceOver: \(LabUI.announcements(app))")
+        UITestSupport.screenshot(app, "mac-lab-setup-question", in: self)
+        // A click puts the caret in the link (or the field selects it all): "x" makes another link either way.
+        field.click()
+        field.typeText("x")
+        let deadline = Date().addingTimeInterval(5)
+        while ((try? LabUI.texts(sheet)) ?? []).contains(title) && Date() < deadline { Thread.sleep(forTimeInterval: 0.25) }
+        XCTAssertFalse(((try? LabUI.texts(sheet)) ?? []).contains(title),
+                       "another link in the field did not withdraw the question: \(LabUI.said(sheet))")
+        field.click()
+        field.typeKey("a", modifierFlags: .command)
+        field.typeText(link + XCUIKeyboardKey.return.rawValue)
+        XCTAssertTrue(LabUI.waitFor(title, in: sheet, timeout: 5), "the same link did not ask again: \(LabUI.said(sheet))")
+        XCTAssertTrue(LabUI.waitFor(body, in: sheet, timeout: 2), "the question again does not name the link's own address")
         app.terminate()
     }
 

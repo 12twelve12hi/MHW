@@ -135,6 +135,11 @@ switch and the Daylight server's setup, and changes nothing about sending yet. W
   steps, the **Server code** with **Copy** (the `daylightserver://` link form when the relay isn't ntfy.sh), the
   optional *Server address* and the deploy's re-run help. Every word is LAB_TEXT's (`share/js/daylight-lab.js`) or the
   server module's, through `DaylightShareUI` (`LabSettingsSection`, `WhatsInLabView`, `ServerSettingsView`).
+- **Set up with a link** sends nothing until you say so: *Set up* (or Return in the field) reads the link on the phone
+  and asks *Use this Daylight server?* with the link's own address (*daylight-….workers.dev will get this pairing’s
+  Server code. …*); only **Use it** sends this pairing's Server code, to that address. Another link in the field takes
+  the question away, so it never names one address while another would be used (the kit's `SetupLinkQuestion`;
+  `LabNoteTests.testTheSetupLinkAsksWithItsOwnAddress` on the iPhone, `LabServerNoteTests` on the Mac).
 - **No one-time note** in this build: `LabBuild.LAB_NOTE_ENABLED` (`iOS/App/SendToDaylightApp.swift`) is false
   until the app has F01 or F04 (LAB-PLAN 1.2). Home's note slot (`LabNoteSection`) shows nothing until then.
 - With Lab off, every screen is the last non-Lab build's (the Lab-off baselines, below), but for the switch itself.
@@ -165,7 +170,8 @@ the kit's views (`DaylightShareKit/README.md`); `macOS/App/MacLab.swift` puts th
   its own, so the line; the App Group, no line.
 - **Daylight server**: the section where setup happens (LAB-PLAN 2.6): the state's long text, *Set up with a link*, the
   steps while there is no server, the server's host and fingerprint, the delivery mode, this pairing's **Server code**
-  with **Copy**, the Lab Inbox and AI lines, the optional Server address and the re-run help.
+  with **Copy**, the Lab Inbox and AI lines, the optional Server address and the re-run help. *Set up with a link* asks
+  *Use this Daylight server?* with the link's own address before anything is sent, as on the iPhone.
 - **The Share menu card** of an ad-hoc build is an app of its own (LAB-PLAN 1.1): under its pairing form its settings
   start with its **own Lab switch**, on by default, then Comfort (the kit's `ShareExtensionView`). W0 puts nothing
   under it: no Lab feature acts in the Share menu before F04 (W1). With the App Group it follows the app's switch and
@@ -191,7 +197,8 @@ How it is checked, in the `mac` job of `rx-apple.yml`:
   Copy Server code, and the Daylight server section's Server code, which equal `server/vectors` › `derived`, F00.3,
   F00.5, F00.6; on a relay that never answers: *Checking your Daylight server…* under the row, then OFFLINE, both said
   to VoiceOver in that order, at least 4.5 s after the click started and at most 8 s after *Checking…* was seen, the
-  iPhone's two clocks, F00.6) and
+  iPhone's two clocks, F00.6; *Set up with a link*: Return asks *Use this Daylight server?* with the vectors' setup
+  link's own address, said to VoiceOver, and another link in the field takes the question away, 2.6) and
   `LabAccessibilityAuditTests` (the audit of Settings with Lab on, What's in Lab with and without a note and the
   Daylight server section, Comfort off and on, F27.2; the Share menu card, not one of F27.2's screens, is measured by
   the truncation audit). The job starts the two relays these need (`$DLS_LAB_RELAY`, `$DLS_SILENT_RELAY`). The Mac
@@ -224,16 +231,45 @@ How it is checked, in the `mac` job of `rx-apple.yml`:
   `AppModelTests.testLabOffAndOnAgainKeepsTheServerPin` turns Lab off and on with a pinned server, and
   `DaylightServerTests` keeps the pin across a re-pairing and Unpair.)
 
-The Mac's items for the W0 device round on Rooted 2 (LAB-PLAN 6.2, 6.4; their results go into DEVICE-CHECKS.md, which
-does not list them yet):
+The Mac's items for the W0 device round are under [Still to check on a device](#still-to-check-on-a-device).
+
+## Still to check on a device
+
+What CI cannot see: a real iPhone, iPad or Mac screen with VoiceOver, and a real DC-1. These are the Wave 0 items for
+the device round on Rooted 2 with the real ntfy.sh relay (LAB-PLAN 6.2, 6.4). Their results go into DEVICE-CHECKS.md,
+which does not list them yet; whoever owns that file adds them before the round.
+
+**iPhone and iPad** (the released .ipa, sideloaded):
+
+- F17.4: with the app open, turning Lab on in Daylight Share on the Daylight makes What's in Lab's first line read
+  *Your Daylight: Lab on · checked in …* within one ack check.
+- F00.1: the update from the last non-Lab build (the P0 close-out's .ipa) has Lab on, no one-time note, the pairing
+  and the history; the share sheet follows the app's switch (Lab off in the app, the share sheet is v1.1's).
+- F00.7: on the real phone, nothing spells out setup (no secret's name, no needs-setup sentence) before a tap.
+- F00.3 and F27.3: with VoiceOver on, a tap on *Summaries with Claude* reads its one sentence out; pair → send →
+  delivered announces each state change.
+- iPad: Settings › Lab, What's in Lab and Daylight server work at every split width (one-third, half, two-thirds).
+
+**Mac** (the released ad-hoc zip):
 
 - F17.4 on the Mac: with the app open, turning Lab on in Daylight Share on the Daylight makes What's in Lab's first
-  line read *Your Daylight: Lab on · checked in …* within one ack check;
+  line read *Your Daylight: Lab on · checked in …* within one ack check.
 - F00.1 and F00.7 on the real Mac: the update from the last non-Lab build has Lab on, no note, the pairing and the
-  history; nothing spells out setup before a click;
+  history; nothing spells out setup before a click.
 - VoiceOver's order on a Lab page (What's in Lab, Daylight server): the navigation stack keeps Settings in the
-  accessibility tree under a page, and VoiceOver must not reach Settings' hidden controls from there;
+  accessibility tree under a page, and VoiceOver must not reach Settings' hidden controls from there.
 - F27.3: a VoiceOver run of pair → send → delivered announces each state change.
+- The Share menu card's own Lab switch (ad-hoc build): on by default, and turning it off leaves the card as v1.1's.
+
+**Once the Daylight server is deployed** (LOOSE-ENDS: the Cloudflare secrets), on the iPhone or the Mac: paste the
+deploy's setup link in Lab settings › Daylight server › *Set up with a link*. The question names the link's own
+address; *Use it* says *Setting up…*, then the done line; the section reads *Ready* with the server's host and
+fingerprint, and the other Apple device finds the server on its own. Then re-pair with another Daylight:
+the old server is locked first, and the follow-up shows the new Server code and the re-run help (2.6 "Re-pairing").
+
+**Once the Developer ID secrets exist** (README › Signing): the signed Mac app replaces the ad-hoc one and keeps the
+pairing, the history, Comfort, the Lab switch, the Lab ledger and the server pin (`SharedStore.migrate`); Share ›
+Daylight then uses the app's pairing and Lab switch, and What's in Lab no longer ends with the ad-hoc line.
 
 ## Install on a Mac
 
