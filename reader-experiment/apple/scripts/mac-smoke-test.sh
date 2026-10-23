@@ -11,11 +11,14 @@
 # main thread, and Lab's fields (LAB-PLAN 1.7): `lab`, the Daylight's `caps` and each item's state, `labStates`.
 #
 # Lab, on the build that is released (LAB-PLAN F00, F17; card A2):
-# - Lab is on at the first start (F00.1), and the receiver is a Lab Daylight (e2e-receiver.mjs --lab): the app's ledger
-#   hears its hello and the link's state, "reader" (F17), while the history still says "Delivered ✓" (W0).
-# - F00.4: an item shared while the relay cannot be reached waits; Lab is turned off (-DLSLab 0, a relaunch); the relay
-#   comes back: the item is sent and delivered, with Lab off. The pairing and the history are still there, and the
-#   ledger keeps learning with Lab off (1.3): turned on again, Lab has the item's state at once.
+# - Lab is on at the first start (F00.1), and the first receiver is a v1.1 Daylight (e2e-receiver.mjs without --lab,
+#   protocol 1.1's Receiver): with Lab on, the app shows exactly v1.1's rows to a Daylight that is not Lab (LAB-PLAN 0.3,
+#   2.1 rule 5, F17.1): "Delivered ✓", no capabilities and no Lab state for the link.
+# - F00.4, with a Lab Daylight (e2e-receiver.mjs --lab): an item shared while the relay cannot be reached waits; Lab is
+#   turned off (-DLSLab 0, a relaunch); the relay comes back: the item is sent and delivered, with Lab off ("Delivered
+#   ✓", v1.1's words, whatever Lab's timeline says). The pairing and the history are still there, and the ledger keeps
+#   learning with Lab off (1.3): it hears the Daylight's hello (its caps) and the item's state, "reader" (F17); turned on
+#   again, Lab has them at once.
 #
 # private: the ad-hoc build (and the signing dry run, whose self-signed certificate carries no Team ID): the app keeps
 #          its own storage, with no App Group, so nothing can bring up the privacy prompt.
@@ -117,32 +120,26 @@ pluginkit -m -A -D -v 2>/dev/null | grep -i daylight || echo "::warning::plugink
 # 3. Paired and sent (the relay has it).
 node scripts/ci-app-status.mjs row "$STATUS" "$SENT_URL" sent,delivered 30
 shot "$NAME-sent" || true
-# The receiver is a Lab Daylight (LabInboxSim): after its acks it says hello and sends the link's state, "reader".
-node scripts/e2e-receiver.mjs "http://127.0.0.1:$RELAY_PORT" "$CODE" --lab | tee "build/$NAME-received.json"
+# The receiver is a v1.1 Daylight (protocol 1.1's Receiver, no Lab): it acks, and says nothing on the ack topic besides.
+node scripts/e2e-receiver.mjs "http://127.0.0.1:$RELAY_PORT" "$CODE" | tee "build/$NAME-received.json"
 grep -q "\"url\":\"$SENT_URL\"" "build/$NAME-received.json" \
   || { echo "::error::the link sent by the Mac app did not reach the JS receiver"; exit 1; }
 # 4. The receiver acked it: the history shows "Delivered ✓" (the app checks again ~30 s after sending, and every minute
-#    while something waits).
+#    while something waits). ci-app-status.mjs checks the words: a v1.1 Daylight's delivered row reads exactly so with
+#    Lab on, in every wave (F17.1).
 node scripts/ci-app-status.mjs row "$STATUS" "$SENT_URL" delivered 120
 shot "$NAME-delivered" || true
 # 5. Pairing, sending and reading the ack never touched storage on the main thread either.
 node scripts/ci-app-status.mjs main-thread "$STATUS"
-# 6. Lab (F00.1, F17, 1.7): on at the first start, with the status file's Lab fields; the ledger heard the Lab
-#    Daylight's hello (its caps) and the link's state. The hello and the state came right after the ack, so the app read
-#    them with it; if it read the ack alone, a relaunch reads the ack topic again.
-lab_wait "the status file has Lab's fields, and Lab is on at the first start" 10 \
-  's.lab === true && Array.isArray(s.caps) && s.labStates !== null && typeof s.labStates === "object"'
+# 6. Lab with a v1.1 Daylight (F00.1, F17.1, F17.2, 1.7): on at the first start, with the status file's Lab fields; the
+#    ack topic held the ack alone, so the ledger knows no capabilities and no state for the link, and the row reads
+#    "Delivered ✓".
 SENT_ROW=$(row_js "$SENT_URL")
-HEARD="s.caps.includes(\"st\") && (() => { const r = $SENT_ROW; return !!r && (s.labStates[r.id] || {}).s === \"reader\"; })()"
-if ! lab_wait "the ledger heard the Lab Daylight's hello and the link's state (reader)" 60 "$HEARD"; then
-  echo "::warning::not heard with the ack: opening the app again, which reads the ack topic again"
-  relaunch
-  lab_wait "the ledger heard the Lab Daylight's hello and the link's state (reader), after a relaunch" 90 "$HEARD"
-fi
-node scripts/ci-app-status.mjs row "$STATUS" "$SENT_URL" delivered 5
-# 7. F00.4: queued while the relay cannot be reached, Lab turned off, the relay back: the item is sent, with Lab off,
-#    and the pairing, the history and the ledger are kept. A pairing on its own relay (port $OFFLINE_PORT), on which
-#    nothing listens yet.
+lab_wait "Lab is on at the first start; a v1.1 Daylight gave no capabilities and no Lab state, and the row reads Delivered ✓" 10 \
+  "s.lab === true && Array.isArray(s.caps) && s.caps.length === 0 && s.labStates !== null && typeof s.labStates === \"object\" && (() => { const r = $SENT_ROW; return !!r && r.status === \"delivered\" && r.label === \"Delivered ✓\" && !(r.id in s.labStates); })()"
+# 7. F00.4, with a Lab Daylight: queued while the relay cannot be reached, Lab turned off, the relay back: the item is
+#    sent, with Lab off, and the pairing, the history and the ledger are kept. A pairing on its own relay (port
+#    $OFFLINE_PORT), on which nothing listens yet.
 OFFLINE_LINK=$(node scripts/ci-pairing-link.mjs "http://127.0.0.1:$OFFLINE_PORT" "CI Mac Daylight offline")
 OFFLINE_CODE=$(echo "$OFFLINE_LINK" | sed -E 's/.*[?&]c=([A-Z2-7]+).*/\1/')
 QUEUED_URL="https://example.com/queued-while-offline"
@@ -157,16 +154,26 @@ OFFLINE_RELAY=$!
 for _ in $(seq 1 20); do curl -fsS "http://127.0.0.1:$OFFLINE_PORT/v1/health" > /dev/null 2>&1 && break; sleep 0.5; done
 # The app tries again by itself (2 minutes after a first failure; it checks every minute while something waits).
 node scripts/ci-app-status.mjs row "$STATUS" "$QUEUED_URL" sent,delivered 240
+# This receiver is a Lab Daylight (LabInboxSim): after its acks it says hello and sends the item's state, "reader".
 node scripts/e2e-receiver.mjs "http://127.0.0.1:$OFFLINE_PORT" "$OFFLINE_CODE" --lab | tee "build/$NAME-received-offline.json"
 grep -q "\"url\":\"$QUEUED_URL\"" "build/$NAME-received-offline.json" \
   || { echo "::error::the item queued while offline did not reach the JS receiver after Lab was turned off"; exit 1; }
+# Delivered with Lab off: v1.1's "Delivered ✓" (ci-app-status.mjs checks the words).
 node scripts/ci-app-status.mjs row "$STATUS" "$QUEUED_URL" delivered 120
-lab_wait "with Lab off: delivered, still paired, and the ledger still learns (1.3)" 60 \
-  "s.lab === false && s.paired === true && (() => { const r = $QUEUED_ROW; return !!r && (s.labStates[r.id] || {}).s === \"reader\"; })()"
+# The ledger still learns with Lab off (1.3): the Lab Daylight's hello (its caps) and the item's state. They came right
+# after the ack, so the app read them with it; if it read the ack alone, a relaunch (Lab still off) reads the ack topic
+# again.
+HEARD="s.lab === false && s.paired === true && s.caps.includes(\"st\") && (() => { const r = $QUEUED_ROW; return !!r && (s.labStates[r.id] || {}).s === \"reader\"; })()"
+if ! lab_wait "with Lab off: delivered, still paired, and the ledger heard the Lab Daylight's hello and the item's state (reader)" 60 "$HEARD"; then
+  echo "::warning::not heard with the ack: opening the app again (Lab off), which reads the ack topic again"
+  relaunch
+  lab_wait "with Lab off: the ledger heard the Lab Daylight's hello and the item's state (reader), after a relaunch" 90 "$HEARD"
+fi
+node scripts/ci-app-status.mjs row "$STATUS" "$QUEUED_URL" delivered 5
 shot "$NAME-lab-off" || true
 relaunch -DLSLab 1
-lab_wait "Lab on again: the pairing, the history and the item's state are there at once" 10 \
-  "s.lab === true && s.paired === true && (() => { const r = $QUEUED_ROW; return !!r && r.status === \"delivered\" && (s.labStates[r.id] || {}).s === \"reader\"; })()"
+lab_wait "Lab on again: the pairing, the history, the Daylight's caps and the item's state are there at once" 10 \
+  "s.lab === true && s.paired === true && s.caps.includes(\"st\") && (() => { const r = $QUEUED_ROW; return !!r && r.status === \"delivered\" && (s.labStates[r.id] || {}).s === \"reader\"; })()"
 node scripts/ci-app-status.mjs main-thread "$STATUS"
 kill "$OFFLINE_RELAY" 2>/dev/null || true
 if [ "$STORAGE" = private ] && [ -e "$HOME/Library/Group Containers/group.com.daylight.share" ]; then

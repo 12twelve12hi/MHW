@@ -423,9 +423,11 @@ jobs:
       # audit hosted in the app (F27.4). A Debug build, signed ad hoc so the test runner may drive it; the app runs on
       # its own empty storage (with -DLSSampleHistory for the history).
       # Lab (F00, F17; macOS/UITests/LabTests.swift): the first start (F00.1, F00.7), the switch, What's in Lab's notes
-      # (F00.3), F17.2, the Share menu card's own Lab switch, and the audits of every Lab screen. Two relays for them:
-      # a mock ntfy relay with no Daylight server on it ($DLS_LAB_RELAY: needs-server, the Server code, F00.5 and F00.6)
-      # and one that takes connections and never answers ($DLS_SILENT_RELAY: OFFLINE at 5 s, F00.6).
+      # (F00.3) and what VoiceOver is told of them (-DLSShowAnnouncements), each Lab page's title shown once, F17.2, the
+      # Share menu card's own Lab switch, and the audits of every Lab screen. Two relays for them: a mock ntfy relay with
+      # no Daylight server on it ($DLS_LAB_RELAY: needs-server, the Server code, F00.5 and F00.6) and one that takes
+      # connections and never answers ($DLS_SILENT_RELAY: OFFLINE at 5 s, F00.6); the pairing link's own relay,
+      # 127.0.0.1:9, refuses every connection (no network: OFFLINE, F00.6).
       # Tests are not re-run: each of those test classes must pass first time and none may be skipped (macOS older than
       # 14 skips the audits), which ci-test-summary.sh checks.
       - name: Mac UI tests and truncation audit (F27.2, F27.4, F00, F17.2)

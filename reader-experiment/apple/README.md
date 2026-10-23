@@ -149,7 +149,9 @@ the kit's views (`DaylightShareKit/README.md`); `macOS/App/MacLab.swift` puts th
   and **Daylight server ›**, subtitled *Optional · {short state}* (*Optional · Pair first*, *Optional · Not set up*,
   …). With Lab off only the switch shows; nothing is deleted, and Comfort stays as it was. Settings sits in a
   navigation stack for these rows; each page they open has its own **Back** button (⌘[) and title, since a Mac sheet
-  has no toolbar for them.
+  before macOS 15 has no toolbar for them. macOS 15 shows the navigation title in a strip at the top of the sheet,
+  which made the title show twice: there the page takes its title out of the toolbar and hides the strip
+  (`SystemTitleHidden`), so it shows once on every version.
 - **What’s in Lab**: the Daylight's Lab state first (*Needs Lab on your Daylight* until a Lab hello arrives, then *Your
   Daylight: Lab on · checked in …*), then *With your Daylight server (optional)*: the server's short state and the four
   server features (Files over 9 MB, Summaries with Claude, Email-in address, Feeds and daily digest). Nothing spells out
@@ -179,10 +181,14 @@ How it is checked, in the `mac` job of `rx-apple.yml`:
   update too, with the pairing and history kept, F00.1; no screen reachable without a click on a Lab feature names a
   secret or shows a needs-setup sentence, F00.7; the switch hides and brings back its rows and leaves Comfort, F27.6),
   `LabNoteTests` (a Daylight that never said hello: *Delivered ✓* rows and *Needs Lab on your Daylight*, F17.2; not
-  paired: *Pair first* and its sentence under the clicked row, F00.3; the Share menu card's own switch),
-  `LabServerNoteTests` (with no server on a mock relay: *Not set up*, the needs-server sentence and Copy Server code,
-  and the Daylight server section's Server code, which equal `server/vectors` › `derived`, F00.3, F00.5, F00.6; on a
-  relay that never answers: *Checking your Daylight server…*, then OFFLINE at 5 s, F00.6) and
+  paired: *Pair first* and its sentence under the clicked row, said to VoiceOver, F00.3; no network, a relay that
+  refuses every connection: *Can’t reach the server* and the OFFLINE sentence within the gate's 5 s, said to
+  VoiceOver, F00.6; the Share menu card's own switch),
+  `LabServerNoteTests` (with no server on a mock relay: *Not set up*, the needs-server sentence, said to VoiceOver, and
+  Copy Server code, and the Daylight server section's Server code, which equal `server/vectors` › `derived`, F00.3,
+  F00.5, F00.6; on a relay that never answers: *Checking your Daylight server…* under the row, then OFFLINE, both said
+  to VoiceOver in that order, at least 4.5 s after the click started and at most 8 s after *Checking…* was seen, the
+  iPhone's two clocks, F00.6) and
   `LabAccessibilityAuditTests` (the audit of Settings with Lab on, What's in Lab with and without a note and the
   Daylight server section, Comfort off and on, F27.2; the Share menu card, not one of F27.2's screens, is measured by
   the truncation audit). The job starts the two relays these need (`$DLS_LAB_RELAY`, `$DLS_SILENT_RELAY`). The Mac
@@ -191,21 +197,32 @@ How it is checked, in the `mac` job of `rx-apple.yml`:
   scrolled partly or wholly out of view. On the Lab pages alone it also allows a contrast report on a text whose own
   pixels measure at least 7:1 (WCAG AAA; `MeasuredContrast`, both numbers printed): the audit reported the first
   setup step, black on white (about 17:1), in three runs while every other text of that size and colour passed. Grey
-  text measures far below 7:1 and still fails;
+  text measures far below 7:1 and still fails. Sentences come from the vectors: LAB_TEXT's, and the server module's
+  OFFLINE text from `server/vectors` (`serverState`). What VoiceOver is told is read from the main window, where a
+  Debug build launched with `-DLSShowAnnouncements` lists each announcement (`macOS/App/AnnouncementLog.swift`; the
+  kit's macOS branch still posts it); the iPhone's file (`-DLSAnnounceLog`) cannot work on the Mac, whose sandboxed
+  app writes only in its container, which the test runner may not read without macOS's "access data from other
+  apps" prompt. Each Lab page shows its title once (`LabUI.checkTitleShowsOnce`), and Back counts only once the
+  page's Back button, title and own rows have left the tree (the navigation stack keeps Settings in the tree under a
+  page, so Settings' Lab switch proves nothing);
 - `LabOffParityTests` (F00.2): with Lab off, Settings and the Share menu card equal their P0 baselines, the Lab switch
   row aside;
 - the truncation audit (F27.4) measures Settings with Lab on, What's in Lab and the Daylight server section too, and
   `testWhatsInLabEndsWithTheAdHocLineOnlyWithoutAnAppGroup` renders What's in Lab on its own storage (the line) and on
   a team's App Group (no line);
 - the smoke test on the zip that is released (`scripts/mac-smoke-test.sh`, also on the Developer ID build): Lab is on
-  at the first start, with `lab`, `caps` and `labStates` in `debug-status.json`; a Lab Daylight
-  (`e2e-receiver.mjs --lab`) is heard, its caps and the link's state (*reader*), with the history still saying
-  *Delivered ✓*; and F00.4: a link shared while the relay cannot be reached waits, Lab is turned off (`-DLSLab 0`), the
-  relay comes back and the link is sent and delivered with Lab off, still paired, the ledger still learning, and with
-  Lab on again its state is there at once. (No Daylight server runs in CI, so the server pin's part of F00.4 is the
-  kit's `DaylightServerTests`.)
+  at the first start, with `lab`, `caps` and `labStates` in `debug-status.json`. The first Daylight is a v1.1 one
+  (`e2e-receiver.mjs` without `--lab`): with Lab on, the link reads *Delivered ✓*, and the ledger has no caps and no
+  state for it (LAB-PLAN 0.3, 2.1 rule 5, F17.1: Lab's states only when both sides run Lab; this stays true when W1's
+  timeline comes). Then F00.4 with a Lab Daylight (`--lab`): a link shared while the relay cannot be reached waits, Lab
+  is turned off (`-DLSLab 0`), the relay comes back and the link is sent and delivered with Lab off (*Delivered ✓*),
+  still paired, the ledger still learning (the Daylight's hello and caps, the link's state *reader*), and with Lab on
+  again they are there at once. (No Daylight server runs in CI, so the server pin's part of F00.4 is the kit's
+  `DaylightServerTests`.)
 
-F17.4 (a real Daylight turning Lab on) is a device check (DEVICE-CHECKS.md, the W0 round on Rooted 2).
+F17.4 (a real Daylight turning Lab on) is a device check (DEVICE-CHECKS.md, the W0 round on Rooted 2). So is
+VoiceOver's order on a Lab page (What's in Lab, Daylight server) at the W0 device round: the navigation stack keeps
+Settings in the accessibility tree under a page, and VoiceOver must not reach Settings' hidden controls from there.
 
 ## Install on a Mac
 
@@ -480,6 +497,7 @@ Launch arguments for testing and debugging (only whoever starts the app can pass
 | `-DLSSampleHistory [n,…]` | Debug builds only, and only with `-DLSTestStorage`: once the launch's pairing is in place, the history holds the sample rows (or only those numbered after it, 1 the newest: `-DLSSampleHistory 3,4`) (`HistorySample`: a row in every state, newest first — *Sending…*; *Waiting to send* with *Retry now*; *Not delivered* as too large; *Delivered ✓*; *Sent · waiting for your Daylight* a day on; *Not delivered* within a week, with *Try again*), and the app reads no acks and re-sends nothing, so each row stays in its state. For the UI tests' walks and audits. |
 | `-DLSLab 0\|1` | Turns Lab off or on before the first render, and saves it (LAB-PLAN 1.7; `LabSettings.launchValue`). The share card samples (`-DLSShareCard`) take it too. The Lab-off walks pass `-DLSLab 0`; without it a start on `-DLSTestStorage` is a first start, Lab on. The iPhone smoke test checks the status file's `lab`, `caps` and `labStates` on a fresh install (Lab on) and again launched with `-DLSLab 0`. |
 | `-DLSAnnounceLog <path>` | iPhone, Debug builds only: every VoiceOver announcement is also appended to that file, one per line (`LabBuild.logAnnouncements`), so the UI tests can check that a needs-setup note is said (LAB-PLAN F00.3). |
+| `-DLSShowAnnouncements` | Mac, Debug builds only: every VoiceOver announcement is also listed at the foot of the main window, one text each (identifier `dls-announced`; `AnnouncementLog`), so the UI tests can check that a needs-setup note is said (LAB-PLAN F00.3). The announcement is posted as always. |
 | `-DLSShareCard <name>` | Debug builds only: shows the share card (`ShareExtensionView`) in one of its states in place of the window, with sample words and its own empty storage, for the UI tests' walk: `reading`, `sent`, `sent-note`, `result-note`, `needs-pairing` (a card without an App Group, with its own Comfort switch) or `confirm-pairing` (`ShareCardSample`). |
 
 ### UI tests, the truncation audit and the Lab-off baselines
