@@ -236,8 +236,8 @@ The Mac's items for the W0 device round are under [Still to check on a device](#
 ## Still to check on a device
 
 What CI cannot see: a real iPhone, iPad or Mac screen with VoiceOver, and a real DC-1. These are the Wave 0 items for
-the device round on Rooted 2 with the real ntfy.sh relay (LAB-PLAN 6.2, 6.4). Their results go into DEVICE-CHECKS.md,
-which does not list them yet; whoever owns that file adds them before the round.
+the device round on Rooted 2 with the real ntfy.sh relay (LAB-PLAN 6.2, 6.4). DEVICE-CHECKS.md's round 4 checklist
+takes its Apple items from this list (where they differ, this list wins), and the round's results go there.
 
 **iPhone and iPad** (the released .ipa, sideloaded):
 
