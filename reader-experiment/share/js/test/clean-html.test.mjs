@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, copyFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import vm from 'node:vm';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -160,4 +161,8 @@ test('clean-html.js is a classic script: no import or export, so GetPage.js can 
   const src = readFileSync(path.join(CAPTURE, 'clean-html.js'), 'utf8');
   assert.ok(!/^\s*(import|export)\b/m.test(src));
   assert.doesNotThrow(() => new Function(src)); // eslint-disable-line no-new-func
+  // run as a page runs it: the only globals it adds are its two functions
+  const page = vm.createContext({});
+  vm.runInContext(src, page);
+  assert.deepEqual(Object.keys(page).sort(), ['cleanHtml', 'prepareForReadability']);
 });

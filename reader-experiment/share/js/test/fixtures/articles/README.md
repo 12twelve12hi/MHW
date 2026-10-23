@@ -2,6 +2,7 @@
 
 The pages `../../readability.test.mjs` runs Clean article on (LAB-PLAN F10.1: "On Readability's test pages plus ten news
 fixtures, Clean article keeps at least 90% of the expected body text and drops navigation and footers").
+`decoys/` holds three more pages, for the step Clean article runs before Readability.
 
 ## `readability/`: Mozilla Readability's own test pages
 
@@ -38,9 +39,29 @@ Convention: everything that is not the article sits in `nav`, the page's own `bo
 `form`, `.comments` or `.cookie-banner`. The test checks that none of those regions holds text from the body. Every
 line of their text with 3 words or more must be missing from the clean article.
 
-Known results (Oct 22):
+Known results (Oct 23):
 
-- `storm-warning-live` keeps 87% of its body. Readability drops the live page's "Key points" box, a heading and a list
-  next to the entries. The test reports this as a todo and pins what the page keeps now.
+- Every page keeps 100% of its body.
+- `storm-warning-live` has a "Key points" box, a heading and a list next to the live entries. Readability alone drops
+  it (87% of the body). `prepareForReadability` (`share/js/capture/clean-html.js`), which Clean article runs on the
+  clone before Readability, moves it to the start of the entries, so it is kept, first, as on the page. It moves
+  nothing on the other nine pages: their Clean article is exactly Readability's, and the test checks that.
 - `lumen-leaf-ereader` has an advertisement inside the article's text. Readability keeps that advertisement's text.
   F10.1 asks only for navigation and footers to go, so the test does not count it.
+
+## `decoys/`: three pages whose summary-like boxes are not the article
+
+Written for this test in the same way and under the same convention as `news/` (made-up publications, places, people
+and events). Each article has its body, `<name>.txt`, and beside it, as `storm-warning-live`'s Key points are, boxes
+named or titled like summaries that hold a list but are not the article's text. `prepareForReadability` must leave
+each where it is, so Readability drops it:
+
+- `harbour-bridge-repairs`: navigation, an "At a glance" box with `role="navigation"` whose items are links to parts of
+  the page, and related links, a "Highlights" box whose items are links to other stories;
+- `market-hall-newsletter`: a newsletter, a "Key points, every Friday" box named `key-points-signup` with a sign-up
+  form;
+- `river-festival-sponsored`: an advertisement, a "Takeaways" box named `takeaways ad-slot`, labelled Advertisement.
+
+The test checks that Clean article keeps the body and none of each box's lines, and that the same boxes, once turned
+into plain summary boxes (no role, a `key-points` class, no links or forms), are moved and kept: so each page tests
+what keeps its boxes out, not its markup.

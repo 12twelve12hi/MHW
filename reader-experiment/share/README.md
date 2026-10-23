@@ -186,14 +186,45 @@ unchanged. Apps log a row's event as `activityEvent({type, id, kind, status, htt
 the log's last column stays "-". `lab-vectors.json` › `diagnostics.rowHttp` pins 15 sequences (each failure kind,
 the in-call retries, Retry now, a later failure, and both passes' 429 and 413 rules) with their activity lines.
 
-**F10.1's automated check** (`js/test/readability.test.mjs`). Clean article as the extension's `captureArticle`
-runs it (Readability 0.6.0 on a clone, then `clean-html.js` on its article) on 20 of Readability's own test pages and
-ten news-style pages written for the test (`js/test/fixtures/articles/`). Words are counted with repeats. On every
-Readability page it keeps 100% of the expected body and adds nothing. Nine of the ten news pages keep 100% of their
-body with the navigation, header, footer, asides, forms, comments and cookie notice gone. The tenth,
-`storm-warning-live`, keeps 87%: Readability drops a live page's "Key points" box (a heading and a list beside the
-entries). Its 90% check runs as a todo, so `node --test` lists it, and a strict test pins what it keeps now. An
-advertisement placed inside the article's own text keeps its text (`lumen-leaf-ereader`).
+**F10.1's automated check** (`js/test/readability.test.mjs`). Clean article as its callers run it (below:
+`prepareForReadability` and Readability 0.6.0 on a clone, then `cleanHtml` on its article) on 20 of Readability's own
+test pages and ten news-style pages written for the test (`js/test/fixtures/articles/`). Words are counted with
+repeats. On every Readability page it keeps 100% of the expected body and adds nothing. All ten news pages keep 100%
+of their body with the navigation, header, footer, asides, forms, comments and cookie notice gone. An advertisement
+placed inside the article's own text keeps its text (`lumen-leaf-ereader`).
+
+**Summary boxes (F10.1, Oct 23).** Readability alone kept 87% of `storm-warning-live`: it scores paragraphs, never
+list items, so it dropped the live page's "Key points" box (a heading and a list beside the entries). Readability.js
+stays pinned and unpatched; `clean-html.js` now has `prepareForReadability(clone)`, a step its callers run on the
+clone before Readability. It moves each summary box inside the article (key points, summaries, highlights, takeaways,
+"at a glance" lists, named so by class, id, aria-label or heading, and holding a list) into the element that holds the
+article's paragraphs, at its start when the box comes before it and at its end when after, and makes an `<aside>`
+box a `<div>`. It leaves alone what is not the article: anything in or named as navigation, related links, a
+newsletter, an advertisement or other furniture, a box that is mostly links or whose items are links or teasers, and
+a box with a form, an iframe or media. Its comment in `clean-html.js` has every rule. With it, `storm-warning-live`
+keeps 100% (Key points first, as on the page). It moves nothing on the 20 Readability pages or the other nine news
+pages (their articles are byte for byte Readability's), nor on any of the 128 pages of Readability 0.6.0's test suite
+but that one, measured with linkedom while writing it. Three more fixtures (`fixtures/articles/decoys/`) hold boxes
+named or titled like summaries that are navigation, related links, a newsletter and an advertisement: each stays out,
+and the test shows each would be kept if it were a plain summary box.
+
+**Clean article's call order (F10).** The extension's `captureArticle` (`extension/src/inject.js`) and
+`apple/Shared/ShareExtension/GetPage.js` run, in the page, on one clone:
+
+```js
+var clone = document.cloneNode(true);
+prepareForReadability(clone);                    // clean-html.js: summary boxes into the article's text
+var article = new Readability(clone).parse();    // Readability.js 0.6.0, unmodified
+var doc = document.implementation.createHTMLDocument('');
+doc.body.innerHTML = article.content;
+var content = cleanHtml(doc.body);               // then drop its '<!doctype html>\n<body>' and '</body>'
+```
+
+`prepareForReadability` must run on the clone Readability then parses, and before `new Readability(...)`; given the
+live `document` it returns 0 and changes nothing. It is in `clean-html.js`, which both callers already copy (the
+extension's `ARTICLE_FILES` inject it with Readability; `GetPage.js` inlines it between `// BEGIN clean-html` and
+`// END clean-html`), so `sync.mjs --check` fails on a copy from before it. Each consumer lane re-syncs its copy and
+adds the one call (6.3): until then its Clean article is Readability's alone, and a live page's Key points go.
 
 ### Still to check on a device
 
@@ -201,8 +232,9 @@ advertisement placed inside the article's own text keeps its text (`lumen-leaf-e
   Chrome release on the W1 device round.
 - DC-1 Inbox Setup check: the Reader's own name for its setting in `setup.steps.readerReadLater` ("allow pages from
   other apps"), on the W1 device round (LAB-PLAN 1.6 says so).
-- F10.1 on real pages: Clean article in Chrome and Safari on a live news page with a "Key points" or summary box, to
-  see whether Readability drops it there as it does in `storm-warning-live`.
+- F10.1 on real pages: Clean article in Chrome and Safari (and from Safari on an iPhone) on a live news page with a
+  "Key points" or summary box, once the extension and `GetPage.js` call `prepareForReadability`: the box is in the
+  article, where it was on the page, and the page's related links, newsletter sign-up and ads are not.
 
 ## Changelog
 
