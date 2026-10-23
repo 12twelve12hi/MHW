@@ -255,6 +255,88 @@ the one call (6.3): until then its Clean article is Readability's alone, and a l
   "Key points" or summary box, once the extension and `GetPage.js` call `prepareForReadability`: the box is in the
   article, where it was on the page, and the page's related links, newsletter sign-up and ads are not.
 
+## Lab (L2): the return lane (W2)
+
+LAB-PLAN 4.1.1's L2 card. `LAB-PROTOCOL.md` 2.4 is rewritten as the return lane (with 2.1 rule 3, 2.2.4's cap of 18,
+2.2.7's W2 tables, 2.3's return-lane extras and 2.7/2.8's W2 additions); `test-vectors.json` did not change, and
+`lab-vectors.json` gained `returnParse` and `returnLane` and one `labLedger` case (the return-only handover hello).
+
+**`daylight-share.js`, backward compatible** (without `lane`, the keys, rows and behaviour are W1's: a test runs the same
+exchange against the frozen W1 module and compares):
+
+- `Sender({…, lane: 'return', devices})` is the Daylight's return outbox (keys `lane/return/…`): `send(item, {to,
+  replaces})`, `checkAcks()` (device frames → `devices`, then delivery per device), `resendDue()` (7-day settling, the
+  24-hour no-device wait, first publishes with v1.1's back-off, presence re-sends on a device's own topic with
+  `x-to`, the follow-up), `tick()`, `noteRelayLimit(status)`, `noteRelayBytes(bytes)`, `budget()`. `send(item,
+  {replaces})` works on either lane.
+- `Receiver({…, lane: 'return', device: {dev, from}, kinds, combined})` is a device: one read of both topics (one
+  request: NTFY-FACTS "Multi-topic poll"), the `x-to` skip before dedupe, store before ack, unknown kinds acked and
+  dropped, then at most one device frame (`deviceFrameDue`); `hello({rx})`, `noteRelayLimit`, `frameState()`.
+- `Receiver.pollOnce()` returns `downloads` on either lane; `RelayClient.poll` takes a list of topics and tags entries
+  with `topic`; `buildItemFrames(…, {purpose, fields})`; `aadFor('lab-return-dev')`; `deriveReturnKeys`,
+  `returnDevTopic`; `applyPairingChange` also removes `lane/return/*`.
+- The rules as pure functions, for the ports and the vectors: `returnItemExtras`, `returnAck`, `buildReturnAckFrame`,
+  `copyUntil`, `returnDue`, `settleReturnRow`, `newReturnBudget`, `rollReturnBudget`, `returnLiveBytes`,
+  `returnBudgetCheck`, `chargeReturnBudget`, `limitReturnBudget`, `noteReturnBudgetBytes`, `newDeviceFrameState`,
+  `deviceAfterRead`, `deviceFrameDue`, `deviceFramePublished`, `deviceWantAt`; the constants `RETURN_*`.
+
+**`daylight-lab.js` (after the heading `// W2 (L2)`):** `ReturnDevices` (and `returnDevicesView`, its rules over a
+devices map), `newDeviceId`, `returnDeviceId(storage)`, `LAB_FRAMES_PER_DAY_RETURN`, and `returnDevTopic` and the
+`RETURN_*` constants again under the same names. `LabInbox` takes `framesPerDay` (a number or a function). No
+`LAB_TEXT` change: L2 shows no words. The same-name rule's "iPhone (2)" is `ReturnDevices`' `n`; L3 adds
+`sendBack.sameName` and the words that use it.
+
+**Choices the reference made where LAB-PROTOCOL leaves room** (the vectors pin them; ports follow):
+
+- The return lane's rules are pure functions in `daylight-share.js` (the module the `Sender` and `Receiver` live in),
+  and `daylight-lab.js` re-exports the names the L2 card lists there.
+- `got` holds the Daylight's time of a device's first ack. `x-rx: false` and a retired device settle a target; a row
+  whose every target opted out with nobody acking is `expired`. Rows are tried oldest first and a later row that fits
+  may go ahead of one that waits.
+- Before building a row's frames again, the budget is checked with its stored size (a device's copy is never smaller),
+  so a waiting 9 MB row is not re-encrypted at every pass.
+- **A re-send the budget holds back waits for the device to be heard again** (`copies[D]` becomes `heard(D)`, a pending
+  follow-up is dropped). This one is a change, not a choice: LAB-PROTOCOL 2.4.9 says so and why. Before it, the W2 soak
+  showed held-back re-sends going at UTC midnight on presence hours old, to an iPhone that was not reading, every day.
+- `returnAck`'s `from` is `cleanName(from)` (60 code points); a device keeps the name of its newest frame that had one.
+- `ReturnDevices` keeps 32 devices; names count only current devices, so a reinstalled iPhone is "iPhone" again once
+  the old id is retired.
+- A device's `pending` acks keep at most 500 ids; `deviceAfterRead` adds ids it stored or saw again, records
+  `storedAt` per topic (`shared`, `dev`) and `want` per topic.
+- `daylight-send return --dump [--wait[=secs]]` (R2.3): this computer as a device; its first run says hello; it prints
+  one JSON line per item, every return kind included, with `text` for text, JSON and XML contents up to 1 MB.
+
+**The W2 soak (L2.9), measured.** Both modes (polling every 15 minutes, Instant), 7 days, 5 devices, real sizes, the
+plan's busy day (2 PDFs of 1–5 parts and 3 links sent back a day, 30 items sent to the Daylight, the server lane's
+60 items with S0's 2-hour acks). Every bound holds: no `429`, no `413` for the bandwidth, at most 141 household
+messages a day (polling 114–128), attachment traffic at most 172 MB a day, Lab hellos and state frames 18, device
+frames at most 3 per device, F06 at most 12 frames and 60 MB a day, every pairing-lane item delivered. The 8-device
+run: no `429`, 114–135 messages a day. CI's run summary lists the counts.
+
+L2.9's last check does not hold for every device: **every F06 item reaches the devices that read all day** (Android's
+15-minute job, Chrome's tick), but an iPhone opened twice a day, Windows (08:00–23:00) and the Mac (two days off) miss
+some within 7 days (polling: iPhone 26/35, Windows 26/35, Mac 29/35; Instant: 23, 23, 29 of 35). The arithmetic is
+the plan's: the busy day's two PDFs of about 3 parts each count about 68 MB for five devices against 60 MB (4.1.1 says
+"10 MB to five"), so rows wait for the next UTC day and go at midnight, when only the always-on devices read; and the
+12 F06 frames a day, of which first publishes take 7–9, leave too few for the re-sends the others then need (an
+iPhone that only opens needs one for most files, since a copy lasts 3 hours, and gets the follow-up copy even after
+it has the item, because its ack waits 30 minutes). The soak asserts the always-on devices strictly and holds the
+others to 60% so a livelock shows. Options for the plan: fewer or smaller files on the busy day, caps that leave room
+for re-sends (count first publishes and re-sends apart), an ack that may go at once for an item the device asked
+for with `x-want`, or rows held to the next day going at a time the household reads.
+
+**Test hooks.** The mock relay answers multi-topic polls (`/{a},{b}/json`), an upload over the daily bandwidth with
+`413` `41301` and a download over it with `429`, logs downloads (`state.downloadLog`) and message ids
+(`publishLog[].id`), and records `status` on `state.limited`. `js/test/fixtures/w0` and `w1` are the W0 (8ac900c)
+and W1 (1c703c1) JS as shipped, for the skew suite. `SOAK_TRACE=1` prints a missed send-back's copies and the device's
+reads.
+
+### Still to check on a device (L2)
+
+L2 has no device item of its own. Its timing is checked on devices by the W2 round's F06.D3, F06.D5 and F06.D6
+(LAB-PLAN 4.1.1): the presence re-sends and the follow-up (2.4.8) on the real ntfy.sh relay with the Daylight's screen
+off. The upload-over-bandwidth `413` is ntfy's code, not measured (it takes 200 MB a day from one address).
+
 ## Changelog
 
 ### 1.1 (revision 1.1 of protocol version 1)

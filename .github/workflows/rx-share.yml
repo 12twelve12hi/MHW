@@ -1,7 +1,8 @@
 name: Reader experiment - share protocol
 
 # Tests the Daylight Share protocol's JavaScript reference implementation, its Lab additions (LAB-PROTOCOL.md) and their
-# vectors, the capture code, the daylight-send command line, the version-skew suite and the household soak, then does
+# vectors, the capture code, the daylight-send command line, the version-skew suite and the household soaks (W1's, and
+# W2's with the return lane at real sizes), then does
 # a live round trip through https://ntfy.sh to prove the relay behaves as the protocol assumes. A push publishes the
 # one-file daylight-send.mjs to the "reader-experiment-latest" release.
 on:
@@ -56,7 +57,7 @@ jobs:
           git diff --exit-code -- vectors/lab-vectors.json vectors/normalise.json || { echo "lab-vectors.json or normalise.json is stale: run node vectors/generate-lab.mjs"; exit 1; }
       - name: Capture code is the pinned source (Readability 0.6.0)
         run: node js/capture/sync.mjs --check js/capture/clean-html.js js/capture/Readability.js
-      - name: Unit, mock-relay, Lab, W1, command line, skew and soak tests
+      - name: Unit, mock-relay, Lab, W1, return-lane (W2), command line, skew and soak tests
         env:
           CI: 'true'
         run: node --test js/test/*.test.mjs 2>&1 | tee /tmp/test.log; test "${PIPESTATUS[0]}" -eq 0
