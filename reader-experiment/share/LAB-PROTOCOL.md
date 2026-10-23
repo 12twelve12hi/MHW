@@ -9,6 +9,10 @@ and 0.x, 1.x, 3.x–6.x are in `../LAB-PLAN.md`. "PROTOCOL" is `PROTOCOL.md` (re
 *Section 2.9 (W1's reference functions: smart intake, excerpts, Setup check, Use switches) was added by L1 on Oct 22,
 2026, with `vectors/normalise.json`.*
 
+*W2 (L2, Oct 23, 2026): LAB-PLAN 4.1.1's changes 5, 7 and 8 are written in here (2.1 rule 3, 2.2.4's cap, 2.2.7's
+tables, 2.3's return-lane extras, 2.4 rewritten as the return lane, 2.7 and 2.8's W2 additions), with changes 6 and 9
+as notes for K8 and S0 (2.4.14). L3 and L4 write changes 1, 2, 4, 10 and 11 when they start.*
+
 *The JavaScript reference is `js/daylight-lab.js` (2.7.2) with the 2.7.1 changes in `js/daylight-share.js`, and the
 vectors are `vectors/lab-vectors.json`, made by `vectors/generate-lab.mjs`. Where the reference had to choose
 something this text leaves open, the choice is listed in `README.md` › "Lab (L0)" and pinned by the vectors.*
@@ -25,7 +29,9 @@ something this text leaves open, the choice is listed in `README.md` › "Lab (L
    - frames on the ack topic whose `ids` is `[]` and that carry `x-inbox` and maybe `x-st` (2.2);
    - new derived topics with their own AAD (2.4);
    - the server lane, as DESIGN 5 specifies.
-3. An ack frame that lists ids never carries Lab fields, so the v1.1 size proof for acks stands.
+3. An ack frame that lists ids never carries Lab fields on the pairing lane's ack topic, so the v1.1 size proof for
+   acks stands. (On the return lane, device frames are acks that carry `x-dev`, `x-rx` and `x-want`, with a size bound
+   of their own: at most 60 ids, 2.4.4.)
 4. A v1.0 or v1.1 sender that reads a Lab frame finds `kind: "ack"` and `ids: []`, and nothing happens: JS
    `checkAcks` adds no id, Kotlin `AckHeader.idsOf` returns `[]` and Swift `AckHeader.ids(in:)` returns `[]`. The
    vectors prove it in all three (2.8).
@@ -121,8 +127,9 @@ sender.
   - **Giving way.** `flush()` publishes nothing, and keeps its entries, while the last poll's acks failed to
     publish, or within an hour of any `429` or `413` from the relay (`LabInbox.noteRelayLimit`). It runs again at
     the next flush point after that.
-  - **Daily cap.** At most 30 Lab frames (hellos and state frames) per UTC day. Past the cap, states wait for the
-    next state digest, and hellos for the next day.
+  - **Daily cap.** At most 30 Lab frames (hellos and state frames) per UTC day, and 18 while the Inbox's hello carries
+    the cap `return` (the return lane runs, 2.2.7; `LabInbox` takes `framesPerDay`, `LAB_FRAMES_PER_DAY_RETURN`).
+    Past the cap, states wait for the next state digest, and hellos for the next day.
   - **Never stalls.** If `buildLabFrame` refuses a batch as not small, `flush()` halves the batch and tries again,
     down to one entry. The 2.2.1 bound makes this unexpected. An entry that still does not fit is dropped and logged.
   - With no network, `flush()` schedules the WorkManager one-time job `lab-flush` with a `CONNECTED` constraint.
@@ -131,6 +138,8 @@ sender.
   - when Lab is turned on;
   - when `caps` or `app` changed since the last Lab frame;
   - at any flush when the last Lab frame is more than 11 hours old (so at most 3 a day while idle).
+
+  During a handover, Daylight Share's hello is the return-only one of 2.4.14 (K8).
 
   Every frame that carries states also carries `x-inbox` and counts as a hello. When Lab is turned off, the Inbox
   sends one frame with `lab: 0` and `caps: []`. For the next 48 hours, each v1.1 ack digest is followed by the same
@@ -142,8 +151,8 @@ sender.
   but not the daily cap.
 - **Order.** No order relative to acks is needed. A sender keeps states for ids it has not seen acked and uses them
   only once the row is delivered (2.2.6).
-- **Budget.** Idle: at most 3 hellos a day, plus 1 per Lab toggle. Busy: at most 30 Lab frames, plus 4 digest
-  frames. 2.2.7 has the whole household; the soak checks it (2.8).
+- **Budget.** Idle: at most 3 hellos a day, plus 1 per Lab toggle. Busy: at most 30 Lab frames (18 while the
+  return lane runs), plus 4 digest frames. 2.2.7 has the whole household; the soak checks it (2.8).
 
 **2.2.5 Parsing.** This is an exact algorithm: JS, Kotlin and Swift must produce the same result, and the
 `labParse` vectors pin every step.
@@ -231,8 +240,55 @@ server lane delivering 60 feed items.
 
 Return-lane traffic (W2 and the Reader work) must fit the same target before it ships. That covers F06 items, which
 the user starts (about 5 a day); R2 marks (≤ 6 batches); R3 manifests (≤ 8, 2.4); R4 progress (≤ 6); and each
-device's return acks. L2 adds these rows to this table and to the soak. While return traffic runs, the Lab state cap
-drops to 20.
+device's return acks. L2 added these rows below, with their soak (2.8).
+
+**With the return lane (W2; LAB-PLAN 4.1.1, written here by L2).** The tables below are the busy day while the return
+lane runs, that is while the Inbox's hello carries `return`. The Lab cap drops to 18 then (2.2.4), not 20. The busy day
+is the one above, plus a busy day of F06: five devices get items from the Daylight (iPhone, Mac, Android phone,
+Windows, and Chrome once its list has been opened), and the user sends back two PDFs and three links.
+
+| Traffic | Published by | Messages a day | What bounds it |
+|---|---|---|---|
+| Item frames, re-sends, pairing-lane acks, v1.1 ack digests | senders, DC-1 | ≤ 83 | As above: 40 + 5 + 30 + 8. LAN items add no ack (F13). |
+| Lab hellos and state frames | DC-1 | ≤ 20 | The Lab cap drops from 30 to 18 while the return lane runs. Up to 2 hellos a day for a new `lan` go outside the cap and count here (F13). During a handover the Lab Reader publishes these frames and Daylight Share only its return-only hellos (≤ 3 a day, 2.4.14), so the Lab Reader's `LabInbox` must take `framesPerDay` 15 while it receives. That is a one-line change asked of the Reader session with R2, the first R task after L2. Until then, a busy handover day on the lab tablet can reach 162, still under ntfy.sh's 250. |
+| Lab state digests | DC-1 | ≤ 4 | As above |
+| Server-lane acks and hellos (Wave S) | DC-1 | ≤ 15 | S0 batches its acks to one every **2 hours** (≤ 12), plus 3 hellos. This replaces the 15 minutes above; S0 has not started. The server re-sends after 11 hours and keeps presence as a state, not a timer (DESIGN 5.2, 5.5), so a 2-hour ack changes nothing it does. |
+| F06 frames: items and re-sends | DC-1 | ≤ 12 | `RETURN_FRAMES_PER_DAY`, with at most 6 re-sent frames a day for any one device (2.4.9). Past it, rows wait for the next UTC day. The busy day's 2 PDFs and 3 links take about 9. |
+| Device frames: return acks and hellos | phones, computers | ≤ 15 | 3 a day per device, the third kept for `x-want` (2.4.4); 5 devices. Each further device adds 3: 6 devices make 152, 8 make 158, both under ntfy.sh's 250. The web sender publishes nothing here. |
+| F13 | — | 0 | Frames go over the Wi-Fi. A LAN item's ack rides on an ack frame the Inbox publishes anyway. |
+| **Household total** | | **≤ 149** | **Target: ≤ 150**, with up to 5 devices |
+
+**Attachment traffic.** ntfy.sh allows 200 MB a day per address. An attachment counts against its uploader once for
+the upload and again for each download, wherever the download comes from (PROTOCOL 3.5). It also holds at most 20 MB
+of one uploader's attachments at a time (NTFY-FACTS). The phone at home and the Daylight share one address.
+
+| Traffic | MB a day | What bounds it |
+|---|---|---|
+| Pairing-lane files: 10 of 1–3 parts of 1.9 MB, each uploaded once and downloaded once by the Daylight | ≈ 76, at most 114 | The busy day above |
+| Pairing-lane re-sends | ≤ 19 | ≤ 5 re-sends |
+| F06 files | ≤ 60 | `RETURN_BYTES_PER_DAY`: each attachment frame counts its size once for the upload and once more for each device expected to download it (every target on the shared topic, one on a device's own topic). So about 15 MB of files a day go back to three devices, 10 MB to five, 30 MB to one. |
+| **Total** | **≈ 155, at most 193** | Under 200 |
+
+- **Re-sends go to one device.** `x-to`, the item id and the part number are inside the sealed frame, and for a file
+  part the sealed frame is the attachment (PROTOCOL 3.2). A re-send on the shared topic would be downloaded in full by
+  every reading device just to learn that it is not theirs. So every re-send, and every item meant for one device,
+  goes on that device's own topic (2.4.3), and only that device downloads it.
+- **At most 10 MB on the relay with F06.** An F06 attachment row waits until the attachment bytes the Daylight can see
+  on the relay (its own F06 uploads and the pairing-lane files it downloaded, from the last 3 hours) plus the row come
+  to at most 10 MB (`RETURN_LIVE_BYTES_MAX`, 2.4.9). The largest row, 9 MB, fits on its own. It counts the phone's
+  files too, because the Daylight can't tell whether the phone is at home. While an F06 file is on the relay, a phone
+  at home has about 10 MB of the 20: one 9 MB item still fits, and a second big item within 3 hours gets `413` and
+  waits, as v1.1 already handles (PROTOCOL 3.3). So PROTOCOL 3.5's "two copies fit" holds only while no F06 file is on
+  the relay. A phone can't see the Daylight's bytes, so nothing can promise more.
+- **Giving way.** For an hour after any `413` or `429` the Daylight gets on any publish, the return lane publishes
+  nothing, so no F06 attachment (2.4.9).
+- **Not measured.** The 250 messages, the 200 MB and the request bucket are ntfy.sh's documented values (NTFY-FACTS,
+  "Daily limits (docs)"). For the 20 MB at a time, the probe saw more accepted, so the plan keeps the docs' figure.
+  ntfy answers an upload over the daily bandwidth with `413` `41301` (the same answer as for a full attachment store,
+  NTFY-FACTS) and a download over it with `429` (ntfy's code; not measured). The soak uses the documented values, and
+  the mock relay answers so.
+- **R2–R4 do not fit yet.** Their ≤ 20 frames need room. Their acks already fit, because a device's frames are capped
+  per day, not per item. Each R task brings its own lever, and the soak decides (LAB-PLAN 5.4–5.6).
 
 ### 2.3 Item header fields (W1) and reserved names
 
@@ -253,56 +309,346 @@ Senders add these only with Lab on. Inboxes ignore an unknown value, and an `x-o
   with the item. Swift's `ItemHeader` does the same (A0) for parity. The Inbox stores the extras in `InboxItem` (K5).
   The `labHeaderExtras` vectors pin it.
 
-**Reserved** (no other use): `x-note`, `x-tags`, `x-dest`, `x-private`, `x-to`, `x-rk`, `x-dev`, `x-anchor`,
-`x-item`, `x-inbox`, `x-st`, and the server's `x-origin` and `x-about`.
+**On the return lane** (2.4, LAB-PLAN 4.1.1 change 8), `extras` also carry `rk` (`x-rk`, read from part 0) and `to`
+(`x-to`, read from every frame), as `returnItemExtras` parses them (2.4.5). The return `Receiver` passes them to
+`accept` with `x-cap` and `x-orig`.
 
-### 2.4 Return lane and control lane (specified now, built in W2 and W3)
+**Reserved** (no other use): `x-note`, `x-tags`, `x-dest`, `x-private`, `x-to`, `x-rk`, `x-dev`, `x-rx`, `x-want`,
+`x-anchor`, `x-item`, `x-inbox`, `x-st`, and the server's `x-origin` and `x-about`.
+
+### 2.4 Return lane and control lane (the return lane built in W2 by L2; the control lane reserved for W3)
+
+*Rewritten by L2 (Oct 23, 2026) from LAB-PLAN 4.1.1 ("Changes to sections 1 and 2", change 5, and "L2 Return
+lane"). The JavaScript reference is `js/daylight-share.js` (`Sender` and `Receiver` with `lane: 'return'`, the pure
+functions below) and `js/daylight-lab.js` (`ReturnDevices`, `newDeviceId`, `returnDeviceId`); the vectors are
+`returnLane` and `returnParse` in `vectors/lab-vectors.json`. Where this text leaves room, the reference's choice is
+listed in `README.md` › "Lab (L2)" and pinned by the vectors.*
 
 These carry what goes from the DC-1 back to phones and computers, beyond states: items shared from the Daylight
 (F06), highlights and notes (R2), the tablet's queue (R3), reading progress (R4) and, in the other direction,
 commands (F20, F21). Labels end in a `0x00` byte, like the server's (DESIGN 3.2):
 
 ```
-returnTopic     = "dls-" + hex(SHA-256("dlshare/v1/lab-return\0"      ‖ secret))[0:32]   AAD "dlshare/v1/lab-return"
-returnAckTopic  = "dls-" + hex(SHA-256("dlshare/v1/lab-return-ack\0"  ‖ secret))[0:32]   AAD "dlshare/v1/lab-return-ack"
-controlTopic    = "dls-" + hex(SHA-256("dlshare/v1/lab-control\0"     ‖ secret))[0:32]   AAD "dlshare/v1/lab-control"
-controlAckTopic = "dls-" + hex(SHA-256("dlshare/v1/lab-control-ack\0" ‖ secret))[0:32]   AAD "dlshare/v1/lab-control-ack"
-key             = the pairing key (PROTOCOL 1.4), as for the inbox and ack topics
+returnTopic         = "dls-" + hex(SHA-256("dlshare/v1/lab-return\0"      ‖ secret))[0:32]        AAD "dlshare/v1/lab-return"
+returnAckTopic      = "dls-" + hex(SHA-256("dlshare/v1/lab-return-ack\0"  ‖ secret))[0:32]        AAD "dlshare/v1/lab-return-ack"
+returnDevTopic(dev) = "dls-" + hex(SHA-256("dlshare/v1/lab-return-dev\0"  ‖ secret ‖ dev))[0:32]  AAD "dlshare/v1/lab-return-dev"
+controlTopic        = "dls-" + hex(SHA-256("dlshare/v1/lab-control\0"     ‖ secret))[0:32]        AAD "dlshare/v1/lab-control"
+controlAckTopic     = "dls-" + hex(SHA-256("dlshare/v1/lab-control-ack\0" ‖ secret))[0:32]        AAD "dlshare/v1/lab-control-ack"
+key                 = the pairing key (PROTOCOL 1.4), as for the inbox and ack topics
+dev                 = a device id (2.4.2): 16 lowercase hex digits, hashed as their 16 ASCII bytes
 ```
 
-- **Lane.** A *lane* is `{itemTopic, ackTopic, itemAad, ackAad}`. The v1 lane is
-  `{inboxTopic, ackTopic, "dlshare/v1/inbox", "dlshare/v1/ack"}`. The return lane runs the protocol's `Sender` (on
-  the Daylight) and `Receiver` (on phones and computers) with their own topics and AADs. Frames, chunking, re-sends,
-  acks, dedupe and every limit of PROTOCOL 2–4 apply as they are. It is not "unchanged", though: L2 adds three
-  things to `Sender` and `Receiver`:
-  - a `lane` option (topics and AADs);
-  - a storage prefix per lane (`lane/<name>/…` in JS storage; a `lane-<name>/` folder in Kotlin and Swift), so the
-    two outboxes never share keys;
-  - per-device delivery (below), because v1.1's `_checkAcks` counts any ack.
-- **Device ids.** Each phone and computer keeps a random 16-hex id, `x-dev`. It is stored locally, never synced, and
-  new after a reinstall. `from` is free text and often repeats ("iPhone"), so it cannot name a device. With Lab on, a
-  device puts `x-dev` in its item headers on the pairing lane (W2) and in its return-lane acks. The Daylight learns
-  its devices from them, keeping the 8 most recently heard.
-- **Return items** are ordinary item headers (PROTOCOL 2.1) plus two fields:
-  - `x-rk`: `"share"` (the user shared it on the DC-1, F06), `"marks"` (R2), `"queue"` (R3) or `"reading"` (R4);
-  - `x-to`: optional, one device's `x-dev`; absent means every known device.
+**AADs.** The protocol module's `aadFor` is an explicit map: `inbox`, `ack`, `lab-return`, `lab-return-ack`,
+`lab-return-dev` (added by L2), `lab-control`, `lab-control-ack`. L4 adds `lab-lan`. An unknown purpose throws
+`ShareError('purpose')`, as DESIGN 17.2 asks. The vectors pin the derived topics, `returnDevTopic`, and sealed frames
+of each return purpose, so every port derives them identically.
 
-  `marks`, `queue` and `reading` are `kind: "file"` with the MIME types `application/vnd.daylight.marks+json`,
-  `…queue+json` and `…reading+json` (5.4–5.6). A device acks every return item it reads, even one whose `x-rk` it
-  does not know (it drops that one).
-- **Delivery per device.** The Daylight's return outbox tracks each item per target device. The item is delivered to
-  a device when an ack carrying that device's `x-dev` lists it, and it is done when every target has acked, or after
-  7 days. Without `x-to`, the targets are the known devices at publish time (at most 8), so the first device's ack
-  no longer stops the re-sends another device still needs. An ack without `x-dev` counts for no device.
-- **Manifests replace each other.** A `queue` manifest (R3) is published only when its content hash changed, at most
-  once an hour. Publishing one removes every older, un-acked manifest from the return outbox, so a superseded
-  manifest is never re-sent for 7 days.
-- **Budget.** Every return-lane row is in 2.2.7 before it ships.
-- **Control frames** (W3) are reserved: `{v:1, kind:"cmd", id, cmd, args, sent, from}`, acked on `controlAckTopic`.
-- **AADs.** The protocol module's `aadFor` becomes an explicit map: `inbox`, `ack`, `lab-return`, `lab-return-ack`,
-  `lab-control`, `lab-control-ack`. An unknown purpose throws `ShareError('purpose')`, as DESIGN 17.2 asks. The
-  vectors pin the derived topics and one sealed return frame from W0, so every port derives them identically before
-  they are used.
+**2.4.1 Lanes.** A *lane* is `{itemTopic, ackTopic, itemAad, ackAad}` plus a storage prefix. `new Sender({…, lane})`
+and `new Receiver({…, lane})` take `'pairing'` (the default) or `'return'`:
+
+| Lane | Item topic, AAD | Ack topic, AAD | Storage |
+|---|---|---|---|
+| `pairing` | `inboxTopic`, `inbox` | `ackTopic`, `ack` | Today's keys, no prefix: `outbox`, `outbox/<id>`, `ackSince` (Sender); `inboxSince`, `seenItems`, `seenMsgs`, `incomplete` (Receiver) |
+| `return` | `returnTopic`, `lab-return`, for items to every target · `returnDevTopic(dev)`, `lab-return-dev`, for items and re-sends to one device | `returnAckTopic`, `lab-return-ack` | Keys under `lane/return/` (JS); the folder `lane-return/` next to the outbox (Kotlin, Swift) |
+
+The return lane's JS keys (`RETURN_STORAGE_KEYS`): the Daylight's `lane/return/outbox`, `lane/return/outbox/<id>`,
+`lane/return/ackSince`, `lane/return/budget` (2.4.9) and `lane/return/devices` (2.4.6); a device's
+`lane/return/inboxSince` (the shared topic's cursor), `lane/return/devSince` (its own topic's), `lane/return/seenItems`,
+`lane/return/seenMsgs`, `lane/return/incomplete`, `lane/return/device` (its frame state, 2.4.4) and
+`lane/return/devId` (2.4.2).
+
+- Without `lane`, both classes behave and store exactly as today, so an app that updates from W1 keeps its outbox and
+  cursors (L2.1). A pairing-lane and a return-lane `Sender` (or `Receiver`) on one storage object share no key.
+- Frames, chunking, the download rule, cursors, dedupe and every limit of PROTOCOL 2–4 apply on the return lane as
+  they are. What differs is listed here: who the targets are (2.4.6), delivery per device (2.4.7), re-sends that
+  follow presence instead of timers (2.4.8), daily caps (2.4.9), and acks that are device frames (2.4.4).
+- The Daylight runs the return `Sender`; phones and computers run the return `Receiver`, which reads `returnTopic` and
+  its own `returnDevTopic`. It reads both in one request (`/{returnTopic},{devTopic}/json?poll=1&since=…`, ntfy's
+  multi-topic form, with one time cursor `lane/return/inboxSince`): L2's probe found that ntfy.sh answers it with one
+  time cursor, every line naming its topic, in time order, attachments included (NTFY-FACTS.md, "Multi-topic poll";
+  `RETURN_POLL_COMBINED` true). A relay that refuses it can be read in two requests, each with its own cursor
+  (`combined: false`; the device's own topic then keeps `lane/return/devSince`). Either way each message is opened with
+  the AAD of the topic it came from (the `topic` of its JSON line).
+- The control lane (W3) is not built.
+
+**2.4.2 Device ids.** `x-dev` is 16 random lowercase hex digits (`newDeviceId()`), made on first use and kept per
+install. It is never synced and never in a backup:
+
+- Apple: minted and read only after `SharedStore.ready()`, so a process that starts on its private storage never
+  makes a second id. It lives in the file `lab-dev-id` in the store's container (the App Group's, or the process's
+  own), marked `isExcludedFromBackup`, so a backup restored to a new iPhone makes a new id instead of a clone.
+  `SharedStore`'s defaults are in backups, so they don't hold it.
+- Android: `labDevId` in `Prefs` (the app has `allowBackup="false"`).
+- JS: `lane/return/devId` (`returnDeviceId(storage)` reads it, or makes and stores one). Chrome's `storage.local` and
+  the web sender's IndexedDB are not synced.
+
+A missing id, or a new pairing secret, makes a new one. `from` is free text and often repeats ("iPhone"), so it
+cannot name a device; `x-dev` does. Pairing-lane items carry no `x-dev` in W2: it waits for a feature that needs it.
+
+**2.4.3 Return items.** Ordinary item headers (PROTOCOL 2.1) plus:
+
+- `x-rk`, on every frame (receivers read part 0's): `"share"` (the user shared it on the DC-1, F06), `"marks"` (R2),
+  `"queue"` (R3) or `"reading"` (R4). `marks`, `queue` and `reading` are `kind: "file"` with the MIME types
+  `application/vnd.daylight.marks+json`, `…queue+json` and `…reading+json` (LAB-PLAN 5.4–5.6). A W2 Daylight sends
+  `share` only.
+- `x-to`, on every frame of an item published on a device's own topic, and only there: that device's id.
+
+An item for every target is sealed with the AAD `lab-return` and published on `returnTopic`, with no `x-to`. An item
+for one device, and every re-send, is sealed with `lab-return-dev` and published on that device's `returnDevTopic`,
+with `x-to`. Nothing else differs from a pairing-lane item: the same sizes, chunks (`CHUNK`), compression and frames.
+
+A return row on the Daylight is an outbox row (PROTOCOL 3.3) plus `rk`, `to` (its targets: the device ids it waits
+for), `pick` (true when the user picked one device: `to` holds that one, and every frame goes on its topic), `got`
+(`x-dev` → the Daylight's time of that device's first ack, ms), `copies` (`x-dev` → `copyUntil`, a relay time in ms),
+`followUps` (`x-dev` → the Daylight's time of a follow-up re-send, ms, 2.4.8), `missing` (the targets that never
+acked, once the row is settled), `frames` and `attachmentBytes` (its frame count and the bytes of its attachment
+frames, from its first build), `wait` (why it did not go at the last pass: `''`, `no-device`, `yield`, `cap` or
+`relay`, 2.4.9) and `replaces` (2.4.11).
+
+```
+copyUntil(time, attachment) = time × 1000 + (attachment ? RETURN_COPY_ATTACH_MS (3 h) : RETURN_COPY_MSG_MS (12 h))
+   time: the relay time (s) in ntfy's answer to the first frame of a copy; attachment: any frame of the row is one
+```
+
+A publish answer without a numeric `time` uses the Daylight's clock instead (ntfy.sh always sends one).
+
+**2.4.4 Device frames.** A device acks return items on `returnAckTopic`, sealed with the AAD `lab-return-ack`:
+
+```json
+{"v":1,"kind":"ack","ids":["<item id>","…"],"sent":"2026-10-23T08:00:00.000Z","from":"Anjan’s iPhone","x-dev":"0f1e2d3c4b5a6978"}
+```
+
+plus `"x-want":true` or `"x-rx":false` where the rules below say. A frame with `ids: []` is a device hello. 2.1 rule 3
+does not apply to this topic (LAB-PLAN 4.1.1 change 8). `buildReturnAckFrame` refuses more than `RETURN_ACK_IDS` = 60
+ids and any frame that is not small. With 60 ids, the longest `from` (60 lone surrogates, 6 bytes each in JSON) and
+both `x-want` and `x-rx`, the header is 2,586 bytes, the frame 2,622 bytes and its base64 3,496 characters, under 3,800
+(the `returnLane.worstAck` vector).
+
+A device's frame state (`lane/return/device`; the same fields in Kotlin and Swift) is `{day, count, lastFrameAt,
+firstHello, pending, want, storedAt, helloDue, limitUntil, off}`: the UTC day (on the device's clock) and its frame
+count, the device time of its last frame, the relay time (ms) of its first frame, the ids it has to ack (at most 500,
+the oldest dropped first), per topic (`shared`, `dev`) the relay time (s) of an expired attachment it wants again and
+of the newest message it stored an item from, whether a first hello is due, until when it gives way, and whether it
+has said `x-rx: false`. `wantAt` below is the newest of `want`'s times (0: none).
+
+- **Only right after a read.** A device publishes only in the run that has just read both its return topics
+  successfully, so a frame always carries the acks for everything it could read. And only while F06 is on for it: Lab
+  on, F06's Use switch on, `capState('return')` is `on` (LAB-PLAN 4.1.1 change 10, L3). The app checks that; the
+  `Receiver` does not read or publish once it has said `x-rx: false`, until the next `hello()`.
+- **What a read collects** (`deviceAfterRead`). Every item it stores, and every duplicate it sees again, joins
+  `pending` (as v1.1's Receiver acks duplicates). An expired attachment (a `404` or `410`, PROTOCOL 3.2) on topic T,
+  whose message time is `t`, sets `want[T] = max(want[T], t)` when `t × 1000 > firstHello` and `t > storedAt[T]`, the
+  newest relay time (s) of a message on T it stored an item from (an older one is an earlier copy of something it has,
+  or something sent before it joined). A read that stores an item from a message newer than `want[T]` clears it.
+- **The decision** (`deviceFrameDue(state, now)`, after the read; the vectors pin it):
+
+  ```
+  rollover: state.day != UTC day of now -> day = that day, count = 0
+  off                                                                      -> nothing
+  now < limitUntil                                                         -> nothing (gives way)
+  wantAt > 0                    and count < 3 (RETURN_DEVICE_FRAMES_PER_DAY)  -> "want":  x-want true
+  helloDue                      and count < 2                               -> "first"
+  pending not empty and (lastFrameAt = 0 or now - lastFrameAt >= 30 min)
+                                and count < 2                               -> "acks"
+  lastFrameAt = 0 or now - lastFrameAt >= 24 h (RETURN_IDLE_HELLO_MS)
+                                and count < 2                               -> "idle"
+  else                                                                      -> nothing
+  ```
+
+  The frame carries the first 60 of `pending` (the rest wait for a later frame) and `x-want: true` for "want". When it
+  is published (`deviceFramePublished`): `count += 1`, `lastFrameAt = now`, `firstHello` = its relay time if it had
+  none, those ids leave `pending`, `helloDue` is cleared, and `want` is cleared when the frame carried `x-want`. So acks and hellos use at most 2 frames a day and the third is
+  kept for `x-want`; acks go at least 30 minutes apart; a device that has published nothing for 24 hours says hello
+  at its next read (targets age out after 14 days, so once a day is enough). A publish that fails keeps everything,
+  and a `429` or `413` sets `limitUntil = now + 1 h` (as Lab frames give way, 2.2.4); the app passes the `429`s and
+  `413`s of the device's other publishes too (`noteRelayLimit`).
+- **The first hello** (`hello()`) goes once when Lab or F06 is turned on, after pairing, and in Chrome when its From
+  your Daylight list is first opened: it sets `helloDue`, then reads and decides as above.
+- **`x-rx: false`** (`hello({rx: false})`): when Lab or F06's Use switch goes off, one frame with `x-rx: false` and the
+  first 60 of `pending`, at once, even past the cap or while giving way, and only if the device ever published a frame
+  (the web sender never does). Then `off`: nothing more until the next `hello()`.
+
+**2.4.5 Parsing (`returnParse`).** An exact algorithm, like 2.2.5. It never throws, and the `returnParse` vectors pin
+it in JS, Kotlin and Swift, junk included:
+
+```
+returnItemExtras(header) -> {rk, to}      for every frame on the return lane (both of its item topics)
+  header not an object                                          -> {rk: "unknown", to: "invalid"}
+  rk : x-rk is one of "share", "marks", "queue", "reading"      -> it; else "unknown" (absent included).
+       Read from part 0 (the Reassembler keeps part 0's).
+  to : no x-to key                                              -> null (every device)
+       x-to a string matching /^[0-9a-f]{16}$/                  -> it
+       x-to anything else (null, a number, other case or length) -> "invalid" (no device)
+       Read from every frame: every part repeats the header (PROTOCOL 2.3).
+
+returnAck(header) -> {ids, dev, from, rx, want} | null      for every frame on returnAckTopic
+  1. not an object, kind != "ack", or ids is not an array      -> null
+  2. ids  : of its first 60 elements, the strings matching /^[0-9a-f]{32}$/, in order; the rest are ignored
+  3. dev  : x-dev a string matching /^[0-9a-f]{16}$/ -> it; else null (the frame counts for no device)
+  4. from : a string -> cleanName(from) (PROTOCOL 2.1's 60 code points); else ""
+  5. rx   : false only for the JSON value false; else true
+  6. want : true only for the JSON value true; else false
+```
+
+A device checks `to` first. A frame whose `to` is not null and not this device's id is marked handled at once,
+before dedupe and reassembly, so it is never stored and never acked. (v1.1's Receiver acks duplicates, so the check
+must come before that.) An item whose `rk` the device does not know (R2–R4's in a W2 build: a W2 device knows `share`)
+is remembered and acked, and dropped: `accept` never sees it.
+
+**2.4.6 Targets (`ReturnDevices`, daylight-lab.js; storage `lane/return/devices`).** The Daylight keeps each device it
+hears on `returnAckTopic`: `{dev, from, first, heard, rx, want}`: the relay times (ms) of its first and newest frames,
+the `from` and `rx` of its newest frame (an empty `from` keeps the one before), and the relay time of its newest frame
+that had `x-want` (0: none). A frame with `dev` null counts for no device. A frame older than `heard` (a cursor overlap
+re-lists messages) changes only `first` and `want`. At most 32 devices are kept (`RETURN_DEVICES_KEPT`; the least
+recently heard go first).
+
+```
+retired(A, now) = some device B has B.from = A.from (not empty), B.first > A.heard, and now - B.first > 2 days
+                  (a new id arrived with A's name, and A has said nothing since, for 2 days: a reinstalled app or a
+                   restored phone; A comes back when it is heard again)
+current(A, now) = now - A.heard <= 14 days (RETURN_TARGET_STALE_MS) and not retired(A, now)
+targets(now)    = the current devices whose rx is true, by heard (newest first, then dev), at most 8
+                  (RETURN_TARGETS_MAX)
+settled(A, now) = A said x-rx: false in its newest frame, or retired(A, now)
+names           = the current devices in the order first heard (then dev); n = 1 for the first with its from,
+                  2 for the second, …: L3 shows n > 1 as "{name} ({n})" (sendBack.sameName)
+```
+
+`now` is the Daylight's clock against relay times here: the windows are days, so a clock some hours off changes
+nothing that matters. `targets` decides a new item's `to`; `settled` lets a row complete without that device (2.4.7).
+The web sender never publishes, so it is never a target. Chrome is one only after its list was first opened (F06).
+
+**2.4.7 Delivery per device.** The return `Sender` reads `returnAckTopic` (`checkAcks`, cursor `lane/return/ackSince`),
+and for each frame in poll order: `returnAck`, then `devices.record`, then each of its ids whose row has `dev` in `to`
+and not yet in `got` gets `got[dev] = now`. An ack without a valid `x-dev` counts for no device, and an ack from a
+device that is not in the row's `to` changes nothing. Then each pending row is settled (`settleReturnRow`):
+
+```
+settleReturnRow(row, now, settled) -> {status, missing} | null (unchanged)
+  open = the targets in row.to that are not in row.got and not settled(dev)
+  open is empty, row.got not empty                      -> {delivered, missing: []}
+  open is empty, row.got empty                          -> {expired, missing: []}    (every target opted out)
+  now - row.created > 7 days, row.got not empty         -> {delivered, missing: open}
+  now - row.created > 7 days, row.got empty             -> {expired, missing: open}
+  else                                                  -> null
+```
+
+Only rows that were published (status `sent`, or `sending`) are settled before 7 days; a row that never went waits
+for its first publish. A delivered row's content is dropped, as on the pairing lane. A row whose `to` is empty (no
+device yet, 2.4.9) is not settled; it is removed 24 hours after it was shared (`RETURN_NO_DEVICE_MS`).
+
+**2.4.8 Re-sends follow presence, not timers.** The relay forgets a message after 12 hours and an attachment after 3
+(PROTOCOL 3.3). Timed re-sends for a device that is away for a week would cost two messages a day per item for seven
+days. So a return row that is `sent` is never re-sent on a timer: it is re-sent to D only when D shows that it read
+its topics after its copy was gone, plus one follow-up after an `x-want`:
+
+```
+returnDue(row, D, heard, now) = D in row.to and D not in row.got and row.copies[D] exists
+              and ( heard(D) > row.copies[D]                 D read after its copy was gone (both relay times, ms)
+                    or row.followUps[D] <= now )             once, after a re-send that D's x-want caused
+```
+
+- A frame's acks are applied before `returnDue` is checked (`tick()` runs `checkAcks`, then `resendDue`), so a device
+  that acks the row in the same frame gets no re-send. A settled device (2.4.6) is not re-sent to.
+- Each re-send goes on D's own topic with `x-to: D`, so no other device downloads it, and sets `copies[D]` again from
+  its answer's relay time. It goes as soon as the Daylight hears D (its reads, F06).
+- **The follow-up.** A re-send that `heard(D) > copies[D]` caused, while D's newest frame had `x-want`
+  (`want = heard`), sets `followUps[D]` = the Daylight's time of that re-send + 185 minutes (`RETURN_FOLLOW_UP_MS`).
+  A re-send that the follow-up alone caused clears it, so there is one follow-up per `x-want`. An ack from D clears it
+  too. Why: an iPhone that finds an expired copy is often open for only a minute, and the Daylight may hear its
+  `x-want` only at its next 15-minute run. The follow-up keeps a copy on the relay for about 3 more hours, so the next
+  opening finds it (F06.14).
+- Both sides of `heard(D) > copies[D]` are relay times, so a Daylight clock that is hours off changes nothing (2.2.6
+  already distrusts it). `followUps` compares the Daylight's own clock with itself.
+- **First publishes** are as PROTOCOL 3.3: a row that has not gone yet (status `failed` for `network`, `full` or
+  `refused`; or `sending` for 15 minutes) keeps v1.1's back-off, which only gets the item onto the relay, three
+  `full`/`refused` failures in a row included. A re-send that fails leaves the row `sent`, with its `error` and `http`,
+  and is due again at the next pass.
+
+**2.4.9 Daily caps and giving way on the Daylight (`returnBudget`, storage `lane/return/budget`).** UTC days on its
+clock, as Lab frames. The budget is `{day, frames, bytes, resends, live, limitUntil}`: the day's F06 frames and bytes,
+re-sent frames per device, the attachment bytes it can see on the relay (`[{bytes, until}]`), and until when it gives
+way. Before a row goes (a first publish, or a re-send to D), with `n` frames whose attachment frames hold `a` bytes and
+are downloaded by `k` devices (every target on the shared topic; 1 on a device's own topic):
+
+```
+returnBudgetCheck(budget, {frames: n, attachmentBytes: a, downloaders: k, resendFor: D | null}, now)
+  now < limitUntil                                                  -> "yield"
+  (a new UTC day starts with frames, bytes and resends at 0)
+  frames + n > 12 (RETURN_FRAMES_PER_DAY)                           -> "cap"
+  resendFor D and resends[D] + n > 6 (RETURN_RESENDS_PER_DEVICE)    -> "cap"
+  bytes + a × (1 + k) > 60,000,000 (RETURN_BYTES_PER_DAY)           -> "cap"
+  a > 0 and live(now) + a > 10,000,000 (RETURN_LIVE_BYTES_MAX)      -> "relay"
+  else                                                              -> "ok"
+live(now) = the sum of live entries whose until > now
+```
+
+- Each published frame is charged: `frames += 1`; for a re-send `resends[D] += 1`; an attachment frame of `s` bytes
+  adds `s × (1 + k)` to `bytes` and `{bytes: s, until: now + 3 h}` to `live`. The app adds the pairing-lane files the
+  Daylight downloaded (`noteRelayBytes(bytes)`: the `Receiver`'s `downloads`), because they are on the relay under the
+  same address. It counts the phone's files too, because the Daylight can't tell whether the phone is at home.
+- **Whole rows.** A row goes whole or not at all: a 5-part row never sends 3 parts because the cap ran out. Rows are
+  tried oldest first; a row that does not fit waits (its `wait` says why), and a later row that fits may go. A
+  first publish that waits is `failed` with `errorCode` `cap`, `relay` or `yield`, and is tried again at every pass.
+- **A re-send that does not fit waits for the device, not for the budget.** The row stays `sent`, `copies[D]` becomes
+  `heard(D)`, and a pending follow-up for D is dropped, so the row goes to D the next time D is heard after that, with
+  room in the budget. (*Added by L2, Oct 23, after the W2 soak: a re-send held back until the next UTC day went at
+  midnight on presence hours old, while an iPhone that is only opened was away; it used that device's re-sends for
+  the day and expired before the next opening, every day. Presence decides when; the budget only says not now.*)
+- **Giving way.** For an hour after any `413` or `429` the Daylight gets on any publish (its own, and through
+  `noteRelayLimit` the Inbox's acks and Lab frames), the return lane publishes nothing: so no F06 attachment, and the
+  phone's own sends to the Daylight keep the room they need (L2.7).
+- **No device yet.** A row shared while `targets` is empty is stored `failed` with `errorCode` `no-device` and
+  publishes nothing. At the first pass where `targets` is not empty (within 24 hours), `to` becomes those targets and it
+  goes; after 24 hours it is removed, with its content. The F06 card first reads `returnAckTopic` once (`checkAcks`),
+  so a device that said hello a moment ago counts.
+
+These bound the budget's F06 rows (2.2.7): at most 12 frames, at most 6 re-sent frames for any one device (so a device
+that is often away can't use up another's), at most 60 MB of attachment traffic, and at most 10 MB of F06 attachments
+on the relay at once with what the Daylight downloaded.
+
+**2.4.10 Storing.** Store before ack (PROTOCOL 3.4): the app's `accept` writes the item to its From your Daylight store
+(F06), then the id is remembered and joins `pending`. An unknown `x-rk` is acked and dropped (2.4.5). Parts of a first
+publish and of a re-send combine, because their content and `sha256` are the same: the Reassembler collects parts by
+id across both topics.
+
+**2.4.11 Manifests replace each other** (for R3). A `queue` manifest is published only when its content hash changed,
+at most once an hour. `send(item, {replaces: key})` removes every older row with that key that is not `delivered`,
+with its content, so a superseded manifest is never re-sent for 7 days. (`replaces` works on either lane's `Sender`;
+only the return lane needs it.)
+
+**2.4.12 Pairing changes.** A different secret removes `lane/return/*` (the `lane-return/` folder in Kotlin and Swift)
+and the device id, with the pairing lane's keys (`applyPairingChange`). The From your Daylight store holds the user's
+files, so it stays. The same secret keeps everything.
+
+**2.4.13 Who sees what.** Nothing changes for an app that is not W2:
+
+| App | Pairing lane | Ack topic | Return topics | LAN path |
+|---|---|---|---|---|
+| v1.0 or v1.1 sender | Unchanged | Lab frames ignored (`ids: []`, 2.1 rule 4) | Never derived | Never used |
+| v1.0 or v1.1 Inbox | Unchanged: W2 senders add no field to its items | Publishes no Lab frame, so W2 senders show `needs-inbox` | — | W2 senders refuse big files as v1.1 does |
+| W0 or W1 Lab sender | Unchanged | `return`, `return-off`, `lan` and `lan-off` kept as unknown caps; `x-inbox.lan` ignored (2.2.5 reads only known fields) | Never derived | Never used |
+| W0 or W1 Lab Inbox | Unchanged | Its hello has none of the four caps, so W2 senders show `needs-inbox` for F06 and F13 | — | — |
+
+The skew suite proves the first four rows against the shipped v1.0 and v1.1 modules and frozen copies of the W0 and W1
+JS (`js/test/fixtures/w0`, `w1`), 2.8.
+
+**2.4.14 Notes for other cards.**
+
+- **Handover (K8 carries it out; LAB-PLAN 4.1.1 change 6, 5.3.4 step 3).** While the Lab Reader receives and Daylight
+  Share's Lab is on, Daylight Share's handover hello is `lab: 1` with `poll` null and caps `["return"]`
+  (`["return-off"]` when its `F06inbox` switch is off), not `lab: 0`. It claims none of the receive caps, so senders
+  still read the Lab Reader's (2.2.6), and phones keep reading the return topics. It repeats on 2.2.4's 11-hour
+  cadence, sent from the 15-minute job, since no pairing-lane poll runs then. With Lab off it stays `lab: 0`. The
+  `labLedger` vectors pin how a sender reads it ("handover with the return-only hello").
+- **Server lane (S0; change 9).** The server-lane hello leaves out `lan` and the caps `return`, `return-off`, `lan`
+  and `lan-off`. They mean nothing there, and the user's Worker can open that hello (it is sealed with `boxKey`), so
+  the server never learns the Daylight's home address. S0's integration test checks it. S0 batches its acks to one
+  every 2 hours (2.2.7), and the W2 soak models it so.
+- **Caps (L3, L4; change 1).** `return` and `return-off` (L3), `lan` and `lan-off` (L4) leave the reserved list of
+  2.2.2 when those cards write them. L2 uses `return` only to choose `LabInbox`'s `framesPerDay` (2.2.4).
+
+**Control frames** (W3) are reserved: `{v:1, kind:"cmd", id, cmd, args, sent, from}`, acked on `controlAckTopic`.
 
 ### 2.5 Delivery timeline text
 
@@ -471,7 +817,27 @@ must not change:
 - `Receiver.pollOnce()` returns `limited`: `429` or `413` when the relay refused the poll's ack publish for its
   limits, else `429` when it answered an attachment download with `429`, else `0`. It is the receive side's report
   of "any `429` or `413` from the relay" (2.2.4): the Inbox passes it to `LabInbox.noteRelayLimit` (F17, K1).
-- W2 (L2): `Sender` and `Receiver` take `lane` (2.4).
+- W2 (L2), the return lane (2.4):
+  - `aadFor('lab-return-dev')` (`PURPOSE_LAB_RETURN_DEV`); `deriveReturnKeys(secret)` → `{key, keyBytes,
+    returnTopic, returnAckTopic}`; `returnDevTopic(secret, dev)`.
+  - `buildItemFrames(keys, item, {purpose, fields})`: `purpose` is the AAD (default `inbox`), and `fields` are header
+    fields written on every part (the return lane's `x-rk` and `x-to`). Without them, frames are exactly as before.
+  - `new Sender({…, lane: 'return', devices})`: `devices` is a `ReturnDevices` (daylight-lab.js, 2.4.6).
+    `send(item, {to, replaces})` (`item.rk`, default `share`; `to`: one device's id, or every target); `checkAcks()`
+    reads `returnAckTopic` (2.4.7); `resendDue()` runs 2.4.7–2.4.9; `tick()` does both; `noteRelayLimit(status)` and
+    `noteRelayBytes(bytes)` (2.4.9); `budget()` reads the day's budget. `send(item, {replaces})` works on either lane
+    (2.4.11).
+  - `new Receiver({…, lane: 'return', device: {dev, from}, kinds = ['share']})`: `pollOnce()` reads both return topics,
+    skips frames for other devices before dedupe, stores, then publishes at most one device frame (2.4.4) and returns
+    `{items, acked, frame, want, …}`; `hello({rx})`; `noteRelayLimit(status)`; `frameState()`.
+  - `Receiver.pollOnce()` also returns `downloads: [{bytes, time}]` on either lane: the attachments it downloaded, for
+    the Daylight's `noteRelayBytes` (2.4.9). `RelayClient.poll(topics, …)` takes one topic or a list (ntfy's
+    multi-topic form), and each entry carries its `topic`.
+  - Pure functions for the ports and the vectors: `returnItemExtras` and `returnAck` (2.4.5), `buildReturnAckFrame`
+    (2.4.4), `copyUntil` (2.4.3), `returnDue` (2.4.8), `settleReturnRow` (2.4.7), `returnBudgetCheck` and
+    `chargeReturnBudget` (2.4.9), `deviceFrameDue` (2.4.4), and the constants `RETURN_*`.
+  - `applyPairingChange` also removes `lane/return/*` (`RETURN_STORAGE_KEYS`, the rows' content, and any other
+    `lane/` key when the storage has `keys()`) when the secret differs.
 
 **2.7.2 New `share/js/daylight-lab.js`.** No dependencies but `daylight-share.js`. The extension, web and Windows
 builds copy it, as they copy the protocol module. W0 exports:
@@ -535,6 +901,18 @@ W1 additions (L1):
   `sync.mjs` (6.3);
 - then the CLI `share/js/bin/daylight-send.mjs` (F09).
 
+W2 additions (L2):
+- `ReturnDevices` (2.4.6: `record`, `entry`, `list`, `targets`, `settled`, `heard`), `newDeviceId()`,
+  `returnDeviceId(storage)`, and `returnDevTopic` and the `RETURN_*` constants of `daylight-share.js` again under the
+  same names, so an app can take the whole return lane's API from this module;
+- `new LabInbox({…, framesPerDay})`: a number or a function read at each flush (default `LAB_FRAMES_PER_DAY`, 30;
+  `LAB_FRAMES_PER_DAY_RETURN`, 18, while the hello carries `return`, 2.2.4);
+- the command line's `daylight-send return --dump` (R2.3): it runs a return `Receiver` as a device and prints what
+  arrives.
+
+The W2 exports come after the heading `// W2 (L2)` in `daylight-lab.js`, so a lane's `lab-wave` check can tell them
+from W1's.
+
 **2.7.3 Ports.** Same names, same behaviour, same vectors:
 
 | JS | Swift (`DaylightShareKit`) | Kotlin (`share-core`, package `com.daylight.share.core.lab`) |
@@ -549,6 +927,11 @@ W1 additions (L1):
 | Sender hook | `ShareSender(…, onAckHeader:)` | `Outbox(…, onAckHeader = …)` |
 | W1: `normaliseShare`, excerpt builders | `ShareNormaliser`, `Excerpt` | `Normalise`, `Excerpt` |
 | server W0 subset (2.6), `noteError` included | `DaylightServer`, `ServerCode`, `ServerMessages` (folder `Server/`) | package `…core.server` |
+| W2: `Sender({lane: 'return', devices})` | — (the Daylight is Android) | `Outbox(lane = …)` with `FileOutboxStore(dir/lane-return)` |
+| W2: `Receiver({lane: 'return', device})` | `ShareReceiver` (A6) | `Receiver(lane = …, device = …)` |
+| W2: `ReturnDevices`, `returnDevTopic`, `newDeviceId` | `DeviceId` (A6; the id only) | `ReturnDevices`, `ReturnTopics.devTopic`, `DeviceId` |
+| W2: `returnItemExtras`, `returnAck`, `buildReturnAckFrame` | `ReturnParse`, `ReturnAckFrame` | `ReturnParse`, `ReturnAckFrame` |
+| W2: `returnDue`, `settleReturnRow`, `returnBudgetCheck`, `chargeReturnBudget`, `deviceFrameDue` | `deviceFrameDue` (a device only) | `ReturnLane` (the same names) |
 
 ### 2.8 Vectors and CI
 
@@ -566,6 +949,8 @@ the protocol vectors' secret:
 | `labRowText` | (row, now, ctx) → `{label, sentence, action, stepLine, final}` for every row of 2.5 and the v1.1 fall-throughs |
 | `labText` | Every string id → text (a list joined with ","), with the per-platform variants of 1.6 and the short states of 1.4; `serverSection.steps` is the five setup steps as an array of five strings, the form to pin (four contain commas, so the joined form can't be split) |
 | `v1Safety` | The `labFrames` frames as a v1.1 ack reader sees them: no ids. Kotlin's and Swift's `VectorTests` also assert `idsOf` / `ids(in:)` = `[]` and no delivered row. |
+| `returnParse` (W2) | `returnItemExtras` and `returnAck` on headers stored as JSON text, junk included: `x-to` of 15 or 17 digits, upper case, a number or null, absent; unknown `x-rk`; `x-rx` as `0` or `"false"`; `x-want` as `1`; 61 ids; ids that are not strings; a `from` that is not a string |
+| `returnLane` (W2) | `topics` (`returnDevTopic` for several secrets and devices, and one sealed frame of each return purpose); `keys` (the storage keys of each lane's `Sender` and `Receiver` after the same exchange); `due` (`returnDue` at the window edges: 2.9 and 3.1 hours for an attachment row, 11.9 and 12.1 for a message row, exactly at `copyUntil`, the follow-up at 185 minutes and after an ack, each again with the Daylight's clock 5 hours off); `settle` (`settleReturnRow`); `devices` (`ReturnDevices` sequences: names with the same-name rule, targets, staleness, `x-rx: false`, a reinstalled device); `budget` (`returnBudgetCheck` and `chargeReturnBudget` sequences: the 13th frame, a device's 7th re-sent frame, a 5-part row with 4 frames left, 60 MB, 10 MB on the relay, a new day, giving way); `cadence` (`deviceFrameDue` sequences: the cap of 3 with the third kept for `x-want`, acks 30 minutes apart, the idle hello at 24 hours, a first hello, giving way); `worstAck` (the longest device frame: 60 ids, 60 lone surrogates in `from`, `x-want` and `x-rx`) and `ackFrames` (sealed device frames with fixed nonces) |
 
 **W1 additions:**
 
@@ -577,6 +962,9 @@ the protocol vectors' secret:
 - A `diagnostics` section: a log fixture → its redacted text (F26). Its `rowHttp` part (Oct 22) runs a Sender against
   scripted relay answers and pins each row's `status`, `errorCode` and `http` after every step, with the activity line
   of each row the step returned.
+
+**W2 additions (L2):** `returnParse` and `returnLane` (above), and a `labLedger` case for Daylight Share's return-only
+handover hello (2.4.14). `test-vectors.json` does not change, and the sections before them do not either.
 
 **`server/vectors/server-vectors.json`** (server lane, SV0) gains `serverState`: status JSON or error JSON in,
 `{state, message}` out.
@@ -603,6 +991,24 @@ the protocol vectors' secret:
   Instant delivery. It asserts: no 429; at most 150 messages from the household on any day; Lab frames within their
   cap; and no ack delayed by a Lab frame. A second run adds a forced 429 and checks that Lab frames give way for an
   hour.
+- **W2 (L2).** `return-lane.test.mjs` (the `returnLane` and `returnParse` vectors, and the return `Sender` and
+  `Receiver` through the mock relay: L2.1–L2.8). In `lab-skew.test.mjs`:
+  - the return matrix: {v1.0, v1.1, W0, W1, W2 senders} × {v1.0 and v1.1 Receivers, W0, W1 and W2 Lab Daylights (a W2
+    Daylight also runs the return lane with W2 devices)} × {url, page, file}. W0 and W1 are the JS as it shipped
+    (`js/test/fixtures/w0`, `w1`). Every pairing-lane item is delivered; return-lane traffic never reaches an old peer;
+    a W2 device reads nothing from a W0 or W1 Daylight (no `return` cap); keys without `lane` are W1's;
+  - the W2 soak (L2.9): 7 days, one visitor address, 5 devices (an iPhone that reads only when it is opened, twice a
+    day; a Mac that is offline for 2 of the days; an Android phone on its 15-minute job; Windows every 2 minutes; Chrome
+    every 15 minutes), polling and Instant, chunks of 1,900,544 bytes and F06 files of 1–5 parts, S0 as 2-hour acks.
+    It checks: no `429`; at most 150 messages a day; attachment traffic at most 193 MB a day, with no `413` for the
+    daily bandwidth; Lab hellos and state frames at most 20, device frames at most 3 per device, F06 frames at most 12
+    and F06 bytes at most 60 MB a day; every pairing-lane item delivered, none at its third `413`; every F06 item at
+    every target that came online within 7 days. A second run with 8 devices: no `429`, and the day's count reported.
+    *Measured by L2: every bound holds, but the last check holds only for the devices that read all day; the busy day
+    does not leave room in 60 MB and 12 frames for the re-sends that a device opened twice a day, or off at midnight,
+    needs (README, "Lab (L2)", with the figures). The soak asserts the always-on devices and reports the others;*
+  - the mock relay answers an upload over the daily bandwidth with `413` `41301`, as ntfy.sh does, and a download over
+    it with `429` (ntfy's code; not measured).
 - **Server (SV0, `rx-server.yml`).** `pollAcks` in v1 mode with Lab frames (`ids: []`, with `x-st`, and `lab: 0`) on
   the pairing ack topic: they deliver nothing and change no row. That they count as presence in v1 mode is harmless,
   and DESIGN 5.5 is updated to say so. Wave S adds the server ack topic in Lab mode (4.2).

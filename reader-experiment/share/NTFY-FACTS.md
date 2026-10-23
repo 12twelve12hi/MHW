@@ -2,7 +2,10 @@
 
 What the public relay actually does where the protocol depends on it. Measured by
 `reader-experiment/tools/probe-ntfy.mjs` from a GitHub Actions runner on 2026-10-20
-(run https://github.com/12twelve12hi/MHW/actions/runs/39373282479), and from the ntfy docs' limits table.
+(run https://github.com/12twelve12hi/MHW/actions/runs/39373282479), and from the ntfy docs' limits table. The
+multi-topic poll was measured on 2026-10-23 for the return lane (L2; runs
+https://github.com/12twelve12hi/MHW/actions/runs/39916108184 and https://github.com/12twelve12hi/MHW/actions/runs/39917929098),
+which also measured the rows above again with the same answers.
 
 | Question | Answer on ntfy.sh |
 |---|---|
@@ -18,3 +21,5 @@ What the public relay actually does where the protocol depends on it. Measured b
 | Daily limits (docs) | 250 messages and 200 MB of bandwidth per visitor per day (attachment up/downloads and poll replays count). Phone and Daylight on the same Wi-Fi share one public IP. |
 | Requests (docs) | Bursts of 60, then one every 5 s, per visitor. No rate-limit headers are sent. |
 | CORS | Preflight `200`, `Access-Control-Allow-Origin: *`, `Allow-Headers: *` (includes `Authorization`), methods `GET, PUT, POST, PATCH, DELETE`. |
+| Multi-topic poll `/{a},{b}/json?poll=1&since=…` | **One time cursor works for both topics.** `since=t` filters every topic by time (inclusive), the lines come in time order across the topics, and each line's `topic` names its topic; an attachment line on either topic has an `https://` URL. `since=<message id>` also works across the topics: it returns what was stored after that message, whichever topic it was on. So a return-lane device reads the shared return topic and its own in one request (LAB-PROTOCOL 2.4.1, `RETURN_POLL_COMBINED`). |
+| Bandwidth over the daily limit | Not measured (it takes 200 MB). ntfy's code answers an **upload** over it with `413` `41301` (the same answer as a full attachment store, above) and a **download** over it with `429`; the mock relay does the same. |
