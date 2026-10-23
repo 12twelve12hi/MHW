@@ -6,19 +6,23 @@ import assert from 'node:assert/strict';
 import * as ds from '../../share/js/daylight-share.js';
 import * as srv from '../client/daylight-server.js';
 import { buildInboxInfo } from '../../share/js/daylight-lab.js';
-import { setup, SERVER, RELAY_ORIGIN, NOON } from './helpers.mjs';
+import { setup, ticking, SERVER, RELAY_ORIGIN, NOON } from './helpers.mjs';
 
 const HOUR = 3600_000;
 const MINUTE = 60_000;
+// Every Worker here runs on a clock that starts at T0, and the tests step it from T0. Config frames go out once per
+// 6-hour UTC slot (00:03, 06:03, 12:03 and 18:03) and the ntfy budget is per UTC day, so a T0 from Date.now() made
+// "not again within the slot" fail whenever the file loaded in the minute before a slot began.
+const T0 = NOON;
 let t;
 let failNext = null; // status for the next publish to the item topic
 before(async () => {
-  t = await setup({ knobs: { ntfyPerDay: 40 }, relayOptions: { failPublish: () => { const s = failNext; failNext = null; return s; } } });
+  t = await setup({ clock: ticking(T0), knobs: { ntfyPerDay: 40 }, relayOptions: { failPublish: () => { const s = failNext; failNext = null; return s; } } });
 });
 after(async () => { await t?.close(); });
 
-const enqueue = async (tt, item, now = Date.now()) => (await tt.dispatch(`${SERVER}/__test/enqueue`, { method: 'POST', body: JSON.stringify(item), headers: { 'X-DLS-Test-Now': String(now) } })).json();
-const T0 = Date.now();
+/** Enqueues a server item at `now`, else at the Worker's clock. */
+const enqueue = async (tt, item, now) => (await tt.dispatch(`${SERVER}/__test/enqueue`, { method: 'POST', body: JSON.stringify(item), headers: now === undefined ? {} : { 'X-DLS-Test-Now': String(now) } })).json();
 
 test('config: the first Cron run publishes it; the client discovers, checks and pins it; announce lists it', async () => {
   assert.equal(await t.client.discover(), null, 'nothing published yet');
@@ -31,9 +35,11 @@ test('config: the first Cron run publishes it; the client discovers, checks and 
   assert.equal(d.config.delivery, 'lab');
   assert.equal((await t.client.discover()).source, 'cache');
   assert.deepEqual(await t.client.storage.get('server/pin'), { origin: SERVER, fingerprint: t.values.fingerprint });
-  const a = await t.api('POST', '/v1/admin/announce', { json: {} });
+  // Announce stores the slot of its own time: give it one in T0's slot (the clock reaches 12:03, the next slot, 3
+  // minutes after setup).
+  const a = await t.api('POST', '/v1/admin/announce', { json: {}, now: T0 + 1000 });
   assert.deepEqual(a.json, { published: 200, listed: true });
-  assert.equal((await t.api('POST', '/v1/admin/announce', { json: {} })).status, 429, 'at most once a minute');
+  assert.equal((await t.api('POST', '/v1/admin/announce', { json: {}, now: T0 + 60_000 })).status, 429, 'at most once a minute');
   assert.equal((await t.cron(T0 + 60_000)).steps.config, undefined, 'not again within the 6-hour slot');
   const frames = t.relay.messages(t.values.configTopic);
   assert.ok(frames.length >= 2);
@@ -149,9 +155,9 @@ test('relay answers: 429 backs off and retries later; another 4xx rejects the it
 });
 
 test('the daily ntfy budget holds frames in the outbox', async () => {
-  const small = await setup({ knobs: { ntfyPerDay: 3 } });
+  const small = await setup({ clock: ticking(T0), knobs: { ntfyPerDay: 3 } });
   try {
-    const T = NOON; // one UTC day: from T0, T0 + 60 s could be the next day, with a fresh budget
+    const T = T0; // one UTC day: the budget starts again at 00:00 UTC
     await small.cron(T); // the config frame uses one
     for (let i = 0; i < 4; i++) await enqueue(small, { origin: `test:b${i}`, kind: 'url', url: `https://example.com/${i}` }, T);
     const r = await small.cron(T + 60_000);
@@ -163,7 +169,7 @@ test('the daily ntfy budget holds frames in the outbox', async () => {
 });
 
 test('junk on the ack topic: attachments never downloaded, 256 KiB and 200 messages per poll, 20 bad frames in a row stop it', async () => {
-  const j = await setup({ web: new Map([['evil.example', () => { throw new Error('the server must never download this'); }]]) });
+  const j = await setup({ clock: ticking(T0), web: new Map([['evil.example', () => { throw new Error('the server must never download this'); }]]) });
   try {
     const post = (body, headers = {}) => j.relay.handle(`${RELAY_ORIGIN}/${j.values.ackTopic}`, { method: 'POST', body, headers });
     await post('dls1', { Attach: 'https://evil.example/frame.bin', Filename: 'dls1.bin' });
@@ -182,7 +188,7 @@ test('junk on the ack topic: attachments never downloaded, 256 KiB and 200 messa
 });
 
 test('v1 delivery: server items reach any Inbox under the pairing key, acks come on the pairing ack topic', async () => {
-  const v1 = await setup({ delivery: 'v1' });
+  const v1 = await setup({ clock: ticking(T0), delivery: 'v1' });
   try {
     const s = (await v1.api('GET', '/v1/status')).json;
     assert.equal(s.delivery, 'v1');
@@ -207,7 +213,7 @@ test('v1 delivery: server items reach any Inbox under the pairing key, acks come
 test('v1 delivery: Lab frames on the pairing ack topic deliver nothing and change no row; presence only, which lab: 0 ends (DESIGN 5.5)', async () => {
   // LAB-PLAN 2.2.1: a Lab frame is sealed like an ack, with ids [] and x-inbox, and maybe x-st (item states). In v1
   // mode the server reads this topic for its acks; the Lab Inbox's frames there must not deliver anything.
-  const v1 = await setup({ delivery: 'v1' });
+  const v1 = await setup({ clock: ticking(T0), delivery: 'v1' });
   try {
     const ids = [
       (await enqueue(v1, { origin: 'lab:url', kind: 'url', url: 'https://example.com/lab', title: 'Lab link' })).id,
@@ -259,7 +265,7 @@ test('v1 delivery: Lab frames on the pairing ack topic deliver nothing and chang
 test('Lab delivery (S0): Lab frames on the server ack topic; lab: 0 ends a publisher’s presence, x-st delivers nothing', async () => {
   // LAB-PLAN 4.2 S0: the Lab Inbox's server lane acks on the server ack topic (box key, AAD server-ack) and says hello
   // there with x-inbox exactly as buildInboxInfo makes it for the pairing lane, lab: 0 included.
-  const lab = await setup();
+  const lab = await setup({ clock: ticking(T0) });
   try {
     const status = async (now) => (await lab.api('GET', '/v1/status', { now })).json;
     const sent = new Date(T0).toISOString();
@@ -367,7 +373,7 @@ test('re-pairing: the old token locks the server; a new Server code expires data
   await t.restart({ DAYLIGHT_SERVER_CODE: code });
   // Earlier tests in this file left the relay backing off at their (later) test clock.
   await t.db.prepare("DELETE FROM settings WHERE k = 'relay'").run();
-  const report = await t.cron(Date.now());
+  const report = await t.cron();
   assert.equal(report.steps.config, '200', `the new server announces itself: ${JSON.stringify(report.steps)}`);
   const rows = await t.rows('SELECT state FROM outbox WHERE id = ?', id);
   assert.equal(rows[0].state, 'expired');
