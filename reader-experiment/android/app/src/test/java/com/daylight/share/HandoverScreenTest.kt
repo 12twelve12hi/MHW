@@ -234,9 +234,10 @@ class HandoverScreenTest {
         waitForText(receiveHere)
         assertEquals(Handover.LAB_READER, app.handover.receivingElsewhere())
         compose.onNode(hasText(receiveHere) and hasClickAction()).performScrollTo().performClick()
-        compose.waitUntil(10_000) { app.handover.receivingElsewhere() == null }
-        compose.waitForIdle()
-        assertTrue(gone(elsewhere))
+        // The setting goes first and the screen's state after it (Handover.end), so the line is waited for, not read
+        // the moment the setting is gone.
+        compose.waitUntil(10_000) { app.handover.receivingElsewhere() == null && gone(elsewhere) }
+        assertNull(app.handover.receivingElsewhere())
         // Settings: with Lab off, the Lab card holds only its switch (no handover row).
         openSettings()
         assertTrue(gone(let))

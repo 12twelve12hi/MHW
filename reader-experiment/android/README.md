@@ -539,6 +539,12 @@ artifacts (`daylight-share-apk` and `daylight-share-debug-apk`, the latter conta
 the F27 screenshots (`daylight-share-f27-screenshots`) and any re-recorded Lab-off trees;
 `publish` puts `daylight-share.apk` on the release once both passed. Android is not held by the Lab release gate.
 
+The app's tests wait up to 10 s for what a tap brings (What's in Lab's notes, Setup check's lines, the activity log);
+a wait that runs out says what was on screen (`LabKit.waitForText`). The test JVM logs its collections
+(`app/build/test-gc/`), and the `app` job prints its heap, its longest pauses and the slowest tests, so a wait that
+runs out can be told apart from a JVM that stopped (on Oct 23 a whole run had a 512 MB heap and 118 pauses, none over
+46 ms).
+
 ### Screen tests (accessibility and Lab-off parity)
 
 `MainScreen` (`app/src/test/.../ScreenKit.kt`) shows each main screen of the real app in a fixed state: the role
@@ -636,7 +642,7 @@ hello's `cap-kind`.
 
 | Test | Covers |
 |---|---|
-| `HandoverTest` | LAB-PLAN 5.3.4 with a fake provider on each side (the Lab Reader's `ShareInboxProvider`, and Daylight Share's provider as a named calling package reaches it): the authorities and the manifest's `<queries>`; the pairing only while armed (2 minutes; a clock set back), with Lab on, on the Inbox, only to the Lab Reader, used up, nothing to an unnamed caller; then no poll, no 15-minute job's poll, no live connection, Instant delivery stopped and stopping itself, health not "stopped", one `lab: 0` frame and no hello through Lab off and on; the resume rule: a "not receiving" answer or an uninstall resumes, and an **invisible provider while the package is installed** (none, throwing SecurityException, IllegalArgumentException or another, no Boolean answer) never does; Receive here again asks first; the cursor skips what the Lab Reader took, in relay time (a DC-1 clock 2 hours fast skips nothing that came after); the `lab: 0` repeat every 11 hours for 48 hours while polls are skipped; the cursor in the answer; a new pairing ends it; Lab off keeps it; a new process reads it back |
+| `HandoverTest` | LAB-PLAN 5.3.4 with a fake provider on each side (the Lab Reader's `ShareInboxProvider`, and Daylight Share's provider as a named calling package reaches it): the authorities and the manifest's `<queries>`; the pairing only while armed (2 minutes; a clock set back), with Lab on, on the Inbox, only to the Lab Reader, used up, nothing to an unnamed caller; then no poll, no 15-minute job's poll, no live connection, Instant delivery stopped and stopping itself, health not "stopped", one `lab: 0` frame and no hello through Lab off and on; the resume rule: a "not receiving" answer or an uninstall resumes, and an **invisible provider while the package is installed** (none, throwing SecurityException, IllegalArgumentException or another, no Boolean answer) never does; Receive here again asks first; the cursor skips what the Lab Reader took, in relay time (a DC-1 clock 2 hours fast skips nothing that came after; one set right during the handover takes nothing again, the relay's clock read as it resumes); the `lab: 0` repeat every 11 hours for 48 hours while polls are skipped; the cursor in the answer; a new pairing ends it; Lab off keeps it; a new process reads it back |
 | `HandoverScreenTest` | the five sentences are LAB_TEXT's (5.3.4's words); the Lab card without the Lab Reader (no row); Let Daylight Reader (lab) receive and its step; the handed-over line in Settings and on the Inbox; "Can’t reach …" with no button; Receive here again once the Reader said false, which resumes; with Lab off the Inbox keeps the line and Receive here again (1.3); F27 checks for each (as shipped, and Comfort at 200 % on a 360 dp phone) with `lab-handover-*.png` |
 
 ### Layout
